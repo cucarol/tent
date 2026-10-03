@@ -1,0 +1,59 @@
+# Tent Agent 插件
+
+插件提供四个 Skill、SessionStart 与请求异步执行的 Stop Hook，以及同包 CLI。Node、Role、Card 的读写规则在 Core；Skill 按工作需要提供操作指引。
+
+## 构建与安装
+
+需要 Node.js 22.19+ 和 Git。可从 [0.1.0 Release](https://github.com/cucarol/vibe-tent/releases/tag/0.1.0) 下载 `tent-plugin-0.1.0.zip`，解压到准备保留的目录。交付根目录下应同时有 `.agents/plugins/marketplace.json` 和 `plugins/tent/`；使用下方 marketplace 命令安装，无需 npm install。插件运行时只使用 JavaScript、Node 内置模块与静态资源，同一个包可在支持的 Windows、macOS 和 Linux 环境运行。
+
+从源码构建时执行：
+
+```sh
+npm ci --ignore-scripts
+npm run plugin:build
+```
+
+`release/plugins/tent/` 是完整插件；`plugins/tent/` 是源模板。可指定另一个尚不存在的输出目录，如 `release/local/plugins/tent`。构建不会覆盖已有交付或注册全局配置。运行依赖随包携带，安装后不依赖源码仓库的 node_modules、全局 Tent 或下载媒体工具。
+
+交付根目录包含本地 marketplace，可通过宿主的插件流程安装：
+
+```sh
+codex plugin marketplace add "<交付根目录的绝对路径>"
+codex plugin add tent@tent-local
+```
+
+插件清单位于 `.codex-plugin/plugin.json`，Hook 定义位于 `hooks/hooks.json`。新安装或修改后的 Hook 需要宿主信任审查；不要手写信任值。安装后在实际宿主中检查发现、启用和事件投递，配置文件存在不代表已经生效。
+
+Release 中的 `vibe-tent-0.1.0.tgz` 是单独的 npm CLI 包，需使用 `npm install -g "<下载文件的路径>"` 安装依赖后使用 `tent` 命令。它不是完整的 Codex 插件交付目录。
+
+## 按需入口
+
+| 工作 | Skill | CLI |
+| --- | --- | --- |
+| 新建空 Tent 和独立本地 Git | tent-init | new |
+| 查找、读取、维护有用事实 | tent-node | node |
+| 创建、读取、维护持久工作方向 | tent-role | role |
+| 记录、预览、接收一次输入 | tent-card | card |
+
+普通工作不要求创建 Role 或 Card。Role 可以独立建立；没有 Role 的 Session 也可接收无 target 的 Card，有 target 时必须指定对应 Role。初始化不分析项目或生成首批 Node；当前 Agent 在工作中按需维护相关事实，没有额外 Return。
+
+Agent 从 Skill 的实际安装位置调用同包入口：
+
+```sh
+node "<插件目录>/skill-resources/scripts/tent.mjs" new "<工作区目录>"
+node "<插件目录>/skill-resources/scripts/tent.mjs" node list --workspace "<工作区目录>" --json
+```
+
+Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.tent/` 的目录是唯一工作区；其他 cwd 通过 `--workspace` 明确指定。路径从声明它的 Markdown 解析。真实文件、图片、网页等由宿主已有工具读取，Tent 不提供应用或格式适配。
+
+包内包含 CLI 与 Web UI 静态资源。运行同包 `cli.mjs ui --workspace <工作区路径>` 可打开界面（例如 `node <插件路径>/cli.mjs ui --workspace <工作区路径>`）；`--no-open` 只打印地址。服务仅在当前终端前台运行，Ctrl+C 退出，不注册 Session。其他命令直接读写文档和 Git，无需启动 UI 服务。
+
+## Hook 边界
+
+SessionStart 提供可用工作区、当前包入口与构建身份。Stop 对可归属的文件变化给出有限机械提示：最多五个匹配 Node，最多 2 KiB；取消或明确只读时静默，归属无法确认时说明未证实。不扫描所有正文、不建立 PromptSubmit 基线，处理器不返回阻断或续作决策。配置请求异步执行；实际宿主须验证该能力和输出投递，不支持时保持 Stop 禁用，使用 Start 和正常 CLI。
+
+提示可能显示在界面或后续轮次，不能证明本次交付已维护上下文。Card 的自动中断尚未通过真实宿主资格验证；当前使用显式 `card interrupt/continue`。Role 通过命令参数明确选择，没有隐式 Session 绑定。
+
+更新插件时保留项目 `.tent/`、真实材料及无关宿主设置。验收分别记录包结构、安装发现、实际 CLI 操作与宿主 Hook 投递；手工输入 Hook JSON 不算真实事件验证。
+
+`tent --version` 显示版本、提交与构建会话开始时间；`tent version --json` 同时提供 dirty 状态和实际 runtime 路径。身份嵌入 CLI，移动安装位置或修改旁边的 package.json 不会改变它；源码入口的 `builtAt` 为 null，watch 重建沿用会话开始时的身份。SessionStart 会展示身份，并在工作区明确是 Tent 源码 checkout 时提示提交不一致。提交不同不代表哪份更旧，外部安装也不会联网检查更新。

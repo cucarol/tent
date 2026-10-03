@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, matching package.json and manifest.json version
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-pack:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must be x.y.z without a v prefix: $tag" >&2
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run check
+
+      - name: Validate release version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const tag = process.env.RELEASE_TAG;
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
+
+          if (pkg.version !== manifest.version || pkg.version !== tag) {
+            console.error(`Version mismatch: package.json=${pkg.version}, manifest.json=${manifest.version}, tag=${tag}`);
+            process.exit(1);
+          }
+
+          console.log(`Release version verified: ${tag}`);
+          NODE
+
+      - name: Pack CLI and complete Codex plugin
+        shell: bash
+        run: |
+          npm run plugin:build
+          mkdir -p release/assets
+          tarball="$(npm pack --ignore-scripts)"
+          mv "$tarball" release/assets/
+          (cd release && zip -r "assets/tent-plugin-${{ steps.release.outputs.tag }}.zip" .agents plugins)
+          cp docs/RELEASE.md release/assets/RELEASE_NOTES.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: release/assets/*
+          if-no-files-found: error
+
+  publish-github-release:
+    needs: [verify-and-pack]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.verify-and-pack.outputs.tag }}
+          name: ${{ needs.verify-and-pack.outputs.tag }}
+          body_path: release-assets/RELEASE_NOTES.md
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/*.tgz
+            release-assets/*.zip

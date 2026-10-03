@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tent Role"
+  short_description: "Maintain a persistent work direction"
+  default_prompt: "Use $tent-role to create or maintain the requested work direction."

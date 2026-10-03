@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tent Card"
+  short_description: "Record and receive prompt input"
+  default_prompt: "Use $tent-card to record or receive the requested prompt input."

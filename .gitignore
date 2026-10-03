@@ -1,0 +1,18 @@
+temp/
+node_modules/
+release/
+output/
+/cli.mjs
+/graphify-out/
+*.tgz
+.DS_Store
+Thumbs.db
+.claude/settings.local.json
+.zed/settings.json
+
+# Local planning and review material; docs/SPEC.md is the public contract.
+docs/plans/
+.tent/
+/.worktrees/
+/.scratch/
+/ui-dist/

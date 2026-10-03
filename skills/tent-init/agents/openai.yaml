@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tent Init"
+  short_description: "Set up a graph and its host access"
+  default_prompt: "Use $tent-init for the requested Tent workflow."

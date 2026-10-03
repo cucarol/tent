@@ -1,0 +1,18 @@
+{
+  "name": "tent",
+  "version": "0.1.0",
+  "description": "Maintain a local context graph and exchange prompt-and-context Cards from your existing Agent workflow.",
+  "author": {
+    "name": "cucarol"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Tent",
+    "shortDescription": "Maintain project context through Skills, Hooks and a bundled CLI.",
+    "longDescription": "Read and maintain persistent Nodes, Roles and recorded prompt Cards from your existing Agent workflow, using bundled Skills, lightweight hooks and a local CLI.",
+    "developerName": "cucarol",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": ["Set up Tent context in this project.", "Read the relevant Tent Nodes for this work."]
+  }
+}

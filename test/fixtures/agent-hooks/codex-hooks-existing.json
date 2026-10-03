@@ -1,0 +1,43 @@
+{
+  "description": "Existing Codex hooks",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tent session session-start --host codex",
+            "timeout": 30,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo pre-existing-codex-hook"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tent session session-end --host codex",
+            "timeout": 30,
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "echo foreign-codex-stop"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tent Node"
+  short_description: "Read and maintain useful project context"
+  default_prompt: "Use $tent-node to find and maintain the context relevant to this work."

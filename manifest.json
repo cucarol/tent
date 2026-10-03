@@ -1,0 +1,8 @@
+{
+  "id": "tent",
+  "name": "Vibe Tent",
+  "version": "0.1.0",
+  "description": "Maintain durable Node context, persistent Roles, and recorded prompt Cards in one local workspace.",
+  "author": "cucarol",
+  "authorUrl": "https://github.com/cucarol"
+}

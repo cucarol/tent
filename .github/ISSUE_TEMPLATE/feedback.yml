@@ -1,0 +1,31 @@
+name: Trouble using Tent
+description: Tell us where Tent helped, got in the way, or failed.
+title: "[Feedback]: "
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: What were you trying to do?
+      description: Describe the task and where Tent fitted into it.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Version and environment
+      description: Tent version, operating system, and agent or host (if any).
+      placeholder: "Tent 0.1.0, Windows 11, Codex"
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include the steps or commands, what you expected, and where you got stuck.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Small example or relevant output
+      description: Optional. Share a minimal example, screenshot, or error message with private project content removed.

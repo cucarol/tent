@@ -1,0 +1,870 @@
+import { parseArgs } from "node:util";
+import { isNodeId } from "../core/id.js";
+// Agent-facing parsing and rendering; document semantics and locking belong to Core.
+
+import { materialFields } from "../core/material.js";
+import { normalizeOptionalNodeType, NODE_TYPE_PRESETS } from "../core/node-type.js";
+import { normalizeTagName } from "../core/tags.js";
+import { nodeWriteInputSchema } from "../core/node-write.js";
+import {
+  writeNodesBatch,
+  nodeWriteBatchInputSchema,
+  NodeBatchWriteError,
+} from "../core/node-write-batch.js";
+import { NodeFs, SystemClock } from "../fs/node-fs.js";
+import { resolveWorkspacePaths } from "./workspace-path.js";
+import { readWorkspaceSettings } from "../core/workspace-settings.js";
+import {
+  readNode,
+  readNodeForEdit,
+  readFullNodeTree,
+  listNodes,
+  searchNodes,
+  relatedNodes,
+} from "../core/node-query.js";
+import { prepareNodeBatch } from "../core/node-batch.js";
+import { nodeNotePath } from "../core/paths.js";
+import { readDocumentDiff } from "../core/document-diff.js";
+import { materialCheck } from "../core/material-check.js";
+import { observeMaterialResource } from "../fs/source-observation.js";
+import {
+  createNode,
+  renameNode,
+  moveNode,
+  archiveNode,
+  restoreNode,
+  deleteNode,
+} from "../core/ops.js";
+import { writeNodeDocument, NodeWriteError } from "../core/node-document-write.js";
+import { NodeLifecycleError } from "../core/node-lifecycle.js";
+import { ContextReader } from "../core/context-reader.js";
+import { documentLifecycle } from "../core/document-status.js";
+import { parseFrontmatter } from "../core/frontmatter.js";
+import { loadNodeCatalog } from "../core/node-catalog.js";
+import {
+  readerListSchema,
+  readerReadSchema,
+  readerRelationsSchema,
+  readerSearchSchema,
+} from "../core/context-reader.js";
+import { readerFlags } from "./reader-flags.js";
+import { readerBatchSchema } from "../core/reader-batch.js";
+import {
+  pageItems,
+  pageText,
+  formatTextPage,
+  compactItem,
+  incompleteNodeRead,
+} from "./reader-page.js";
+import { canonicalSha256 } from "../core/canonical-digest.js";
+import { nodeReadRevisionEtag } from "../core/node-read-basis.js";
+
+export type NodeCommandOptions = {
+  workspace?: string;
+  cwd?: string;
+  json?: boolean;
+  stdin?: string;
+};
+
+export type NodeCommandResult = {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+};
+
+type NodeProjection = {
+  nodeId: string;
+  name: string;
+  path: string;
+  type?: string;
+  tags?: string[];
+  text?: string;
+  etag?: string;
+  status?: string | null;
+  children?: NodeProjection[];
+};
+
+export async function runNodeCommand(
+  sub: string,
+  args: string[],
+  globals: NodeCommandOptions = {},
+): Promise<NodeCommandResult> {
+  try {
+    const { positionals, flags } = parseFlags(args);
+    if (flags.help === "true" || ["help", "--help", "-h"].includes(sub)) {
+      return { exitCode: 0, stdout: nodeHelpText(sub), stderr: "" };
+    }
+    if (!Object.prototype.hasOwnProperty.call(NODE_COMMAND_HELP, sub)) return usage(nodeHelpText());
+    if (flags.start !== undefined && sub !== "read-many")
+      return usage("--start is only valid for node read-many");
+    if (flags["archive-commit"] !== undefined && sub !== "restore")
+      return usage("--archive-commit is only valid for node restore");
+    if (flags["sources-json"] !== undefined && sub !== "create")
+      return usage(
+        "--sources-json is only valid for node create; write standard fields through --input-json frontmatter",
+      );
+    if (flags.resource !== undefined && !["create", "search"].includes(sub))
+      return usage("--resource is only valid for node create or search");
+    if (flags.body === "-" && flags["sources-json"] === "-")
+      return usage("Only one input can read stdin");
+    if (flags["version-json"] !== undefined && (sub !== "get" || flags.full === "true"))
+      return usage("Historical versions require node get without --full");
+    if (flags["input-json"] !== undefined && !["write", "write-many", "check"].includes(sub))
+      return usage("--input-json is only valid for node write, write-many or check");
+    if (flags["read-back"] !== undefined && sub !== "write")
+      return usage("--read-back is only valid for node write");
+    if (
+      flags["input-json"] !== undefined &&
+      ["body", "base-etag", "read-back"].some((key) => flags[key] !== undefined)
+    ) {
+      return usage("--input-json supplies the entire write; do not combine it with write fields");
+    }
+    const json = globals.json === true || flags.json === "true";
+    const { systemRoot, workspaceRoot } = await resolveWorkspacePaths({
+      cwd: globals.cwd,
+      workspace: flags.workspace ?? globals.workspace,
+    });
+    const fs = new NodeFs(systemRoot, "cli");
+    const { workspaceId } = await readWorkspaceSettings(fs);
+    if (!workspaceId)
+      throw new Error(
+        "Tent workspace identity is missing; explicitly initialize or convert this workspace",
+      );
+    const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot: systemRoot };
+
+    switch (sub) {
+      case "write-many": {
+        if (positionals.length || flags["input-json"] === undefined)
+          return usage(nodeHelpText("write-many"));
+        if (Object.keys(flags).some((key) => !["input-json", "json", "workspace"].includes(key)))
+          return usage(nodeHelpText("write-many"));
+        const input = nodeWriteBatchInputSchema.parse(
+          JSON.parse(
+            flags["input-json"] === "-"
+              ? (globals.stdin ?? (await readStdin()))
+              : flags["input-json"],
+          ),
+        );
+        const result = await writeNodesBatch(env, input);
+        return print(result, json, () =>
+          result.results.map((item) => `${item.nodeId}  ${item.path}  ${item.etag}`).join("\n"),
+        );
+      }
+      case "check": {
+        const target = oneTarget(
+          positionals,
+          "tent node check <nodeId> [--input-json <JSON|->] [--json]",
+        );
+        if (typeof target !== "string") return target;
+        const data =
+          flags["input-json"] === undefined
+            ? {}
+            : JSON.parse(
+                flags["input-json"] === "-"
+                  ? (globals.stdin ?? (await readStdin()))
+                  : flags["input-json"],
+              );
+        const result = await materialCheck(
+          fs,
+          {
+            ...data,
+            nodeId: nodeRef(target),
+            action: flags["input-json"] === undefined ? "inspect" : "confirm",
+          },
+          (resource, documentPath) =>
+            observeMaterialResource(workspaceRoot, documentPath, resource),
+        );
+        return print(incompleteNodeRead(result), json, (value) => JSON.stringify(value, null, 2));
+      }
+      case "diff": {
+        if (positionals.length || !flags["from-json"] || !flags["to-json"])
+          return usage(nodeHelpText("diff"));
+        const diff = await readDocumentDiff(fs, {
+          from: JSON.parse(flags["from-json"]),
+          to: JSON.parse(flags["to-json"]),
+        });
+        const result = pageText(
+          { ...diff, etag: canonicalSha256(diff.text), view: "diff", total: diff.length },
+          "node.diff",
+          { cursor: flags.cursor },
+        );
+        return print(result, json, formatTextPage);
+      }
+      case "history": {
+        const target = oneTarget(
+          positionals,
+          "tent node history <nodeId> [--limit <n>] [--cursor <cursor>] [--json]",
+        );
+        if (typeof target !== "string") return target;
+        const nodeId = nodeRef(target);
+        const items = await (
+          fs.history as typeof fs.history & { nodeVersions(nodeId: string): Promise<unknown[]> }
+        ).nodeVersions(nodeId);
+        const result = pageItems(
+          { items, revision: canonicalSha256(items) },
+          `node.history:${nodeId}`,
+          { limit: numberFlag(flags, "limit"), cursor: flags.cursor },
+        );
+        return print(result, json, formatReader);
+      }
+      case "list": {
+        if (positionals.length > 0) return usage("tent node list [--full] [--json]");
+        if (flags.full === "true") {
+          if (Object.keys(readerFlags(flags)).length)
+            return usage("--full cannot be combined with reader filters or paging.");
+          const nodes = (await readFullNodeTree(fs, { capture: true })) as NodeProjection[];
+          return print({ source: { kind: "live" }, workspaceId, nodes }, json, () =>
+            formatTree(nodes),
+          );
+        }
+        const result = pageItems(
+          await listNodes(fs, workspaceId, readerListSchema.parse(coreReaderFlags(flags))),
+          "node.list",
+          { limit: numberFlag(flags, "limit"), cursor: flags.cursor },
+        );
+        return print(result, json, formatReader);
+      }
+      case "get": {
+        const target = oneTarget(positionals, "tent node get <nodeId> [--full] [--json]");
+        if (typeof target !== "string") return target;
+        const ref = nodeRef(target);
+        if (flags.full === "true") {
+          const { view, ...filters } = readerFlags(flags);
+          if (
+            Object.keys(filters).length ||
+            (view !== undefined && view !== "body" && view !== "raw")
+          )
+            return usage("--full cannot be combined with reader filters or paging.");
+          if (view === "raw")
+            return print(
+              await readNode(fs, workspaceId, { nodeId: ref, view: "raw", capture: true }),
+              json,
+              formatReader,
+            );
+          const edit = await readNodeForEdit(fs, ref, { capture: true });
+          if (edit.frontmatter.id !== undefined && edit.frontmatter.id !== edit.nodeId) {
+            throw new Error(`Node editing read returned mismatched Node id for ${ref}.`);
+          }
+          if (
+            edit.frontmatter.type !== undefined &&
+            normalizeOptionalNodeType(edit.frontmatter.type) !== edit.type
+          ) {
+            throw new Error(`Node editing read returned mismatched Node type for ${ref}.`);
+          }
+          return print(
+            {
+              source: { kind: "live" },
+              workspaceId,
+              node: {
+                nodeId: edit.nodeId,
+                path: edit.path,
+                name: edit.name,
+                type: edit.type,
+                tags: stringList(edit.frontmatter.tags, "tags"),
+                ...materialFields(edit.frontmatter),
+                text: edit.body,
+                etag: edit.etag,
+                ...(edit.version ? { version: edit.version } : {}),
+                status: edit.status,
+                ...(edit.statusDiagnostic ? { statusDiagnostic: edit.statusDiagnostic } : {}),
+                archived: edit.archived,
+              },
+            },
+            json,
+            (value) => formatNode(value),
+          );
+        }
+        const { nodeId, ...options } = readerReadSchema.parse({
+          nodeId: ref,
+          ...coreReaderFlags(flags),
+        });
+        const observed = await readNode(fs, workspaceId, { nodeId, ...options });
+        if (observed.node.view !== "summary")
+          pageText(observed.node, `node.get:${nodeId}`, {
+            cursor: flags.cursor,
+            maxBytes: 16 * 1024 - 256,
+          });
+        const result =
+          observed.node.view === "summary"
+            ? observed
+            : flags["version-json"]
+              ? observed
+              : await readNode(fs, workspaceId, {
+                  nodeId,
+                  ...options,
+                  expectedEtag: observed.node.etag,
+                  capture: true,
+                });
+        const output =
+          result.node.view === "summary"
+            ? { ...result, node: compactItem(result.node) }
+            : {
+                ...result,
+                node: pageText(result.node, `node.get:${nodeId}`, {
+                  cursor: flags.cursor,
+                  maxBytes: 16 * 1024 - 256,
+                }),
+              };
+        return print(output, json, formatReader);
+      }
+      case "read-many": {
+        if (flags.full === "true") return usage("read-many uses paged output");
+        const input = readerBatchSchema.parse({ nodeIds: positionals, view: flags.view });
+        const start = numberFlag(flags, "start") ?? 0;
+        if (!Number.isSafeInteger(start) || start < 0 || start > input.nodeIds.length)
+          return usage("Invalid --start for read-many");
+        if (start === input.nodeIds.length)
+          return print({ workspaceId, items: [], page: { hasMore: false } }, json, formatReader);
+        const prepared = await prepareNodeBatch(fs, workspaceId);
+        const selected: Array<Awaited<ReturnType<typeof prepared.read>>> = [];
+        const make = (items: unknown[], next: number) => ({
+          workspaceId,
+          source: prepared.source,
+          items,
+          page: {
+            hasMore: next < input.nodeIds.length,
+            ...(next < input.nodeIds.length ? { nextIndex: next } : {}),
+          },
+        });
+        const planned: unknown[] = [];
+        for (const nodeId of input.nodeIds.slice(start, start + 20)) {
+          const entry = await prepared.read(nodeId, input.view);
+          const item = entry.item;
+          const next = start + selected.length + 1;
+          const reserved = {
+            ...item,
+            version: { commit: "f".repeat(64), path: nodeNotePath(entry.document.path) },
+          };
+          const candidate = pageText(
+            { ...reserved, source: { kind: "git", workspaceId, version: reserved.version } },
+            `node.get:${item.nodeId}`,
+            { maxBytes: 10 * 1024 },
+          );
+          if (Buffer.byteLength(JSON.stringify(make([...planned, candidate], next))) > 16 * 1024)
+            break;
+          selected.push(entry);
+          planned.push(candidate);
+        }
+        if (!selected.length)
+          throw new Error("First Node exceeds CLI batch metadata budget; use node get");
+        const captured = await prepared.capture(selected);
+        const items = captured.map((item, index) =>
+          pageText(
+            {
+              ...item,
+              source: item.version
+                ? { kind: "git", workspaceId, version: item.version }
+                : item.source,
+            },
+            `node.get:${item.nodeId}`,
+            {
+              pageEnd: (planned[index] as { range: { end: number } }).range.end,
+              maxBytes: 10 * 1024,
+            },
+          ),
+        );
+        const result = make(items, start + selected.length);
+        return print(result, json, formatReader);
+      }
+      case "search": {
+        if (positionals.length > 1)
+          return usage("tent node search [query | --resource <address>] [--json]");
+        const input = readerSearchSchema.parse({
+          ...(positionals[0] !== undefined ? { query: positionals[0] } : {}),
+          ...coreReaderFlags(flags),
+        });
+        const result = pageItems(await searchNodes(fs, workspaceId, input), "node.search", {
+          limit: numberFlag(flags, "limit"),
+          cursor: flags.cursor,
+        });
+        return print(result, json, formatReader);
+      }
+      case "relations":
+      case "backlinks": {
+        const target = oneTarget(
+          positionals,
+          `tent node ${sub} <nodeId> [--direction parent|children|outgoing|incoming] [--json]`,
+        );
+        if (typeof target !== "string") return target;
+        const options = coreReaderFlags(flags);
+        if (sub === "backlinks" && options.direction && options.direction !== "incoming")
+          return usage("backlinks only supports incoming relations.");
+        const input = readerRelationsSchema.parse({
+          ...options,
+          nodeId: target === "root" ? null : nodeRef(target),
+          ...(sub === "backlinks" ? { direction: "incoming" } : {}),
+        });
+        const result = pageItems(await relatedNodes(fs, workspaceId, input), `node.${sub}`, {
+          limit: numberFlag(flags, "limit"),
+          cursor: flags.cursor,
+        });
+        return print(result, json, formatReader);
+      }
+      case "create": {
+        const materials = materialFields({
+          resource: flags.resource,
+          sources:
+            flags["sources-json"] === undefined
+              ? undefined
+              : JSON.parse(
+                  flags["sources-json"] === "-"
+                    ? (globals.stdin ?? (await readStdin()))
+                    : flags["sources-json"],
+                ),
+        });
+        const name = oneTarget(
+          positionals,
+          "tent node create <name> --type <type> [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--json]",
+        );
+        if (typeof name !== "string") return name;
+        const type = flagValue(flags, "type");
+        if (type === undefined) {
+          return usage("tent node create requires --type <type>");
+        }
+        let body = flagValue(flags, "body");
+        if (body === "-") body = globals.stdin ?? (await readStdin());
+        const parentPath =
+          !flags.parent || flags.parent === "root"
+            ? ""
+            : await selectedPath(fs, nodeRef(flags.parent));
+        const tags = parseCsv(flags.tags).map(normalizeTagName);
+        const created = await createNode(env, {
+          name,
+          type,
+          parentPath,
+          ...(body !== undefined
+            ? { body: body && !body.endsWith("\n") ? body + "\n" : body }
+            : {}),
+          ...materials,
+          ...(tags.length > 0 ? { tags } : {}),
+        });
+        const result = await readNode(fs, workspaceId, { nodeId: created, capture: true });
+        const output = {
+          ...result,
+          node:
+            "text" in result.node
+              ? pageText(result.node, `node.get:${created}`, { maxBytes: 16 * 1024 - 256 })
+              : compactItem(result.node),
+        };
+        return print(output, json, (value) => `Created ${formatNode(value)}`);
+      }
+      case "write": {
+        const target = oneTarget(
+          positionals,
+          "tent node write <nodeId> --input-json <JSON>|- | --body <text>|- --base-etag <etag> [--read-back] [--json]",
+        );
+        if (typeof target !== "string") return target;
+        let body = flagValue(flags, "body");
+        const supplied = flags["input-json"];
+        if (
+          supplied === undefined &&
+          (body === undefined || !flagValue(flags, "base-etag")?.trim())
+        ) {
+          return usage(
+            "tent node write <nodeId> --body <text>|- --base-etag <etag> [--read-back] [--json]",
+          );
+        }
+        if (body === "-") body = globals.stdin ?? (await readStdin());
+        const input = nodeWriteInputSchema.parse(
+          supplied !== undefined
+            ? JSON.parse(supplied === "-" ? (globals.stdin ?? (await readStdin())) : supplied)
+            : {
+                body,
+                baseEtag: flagValue(flags, "base-etag"),
+                ...(flags["read-back"] === "true" ? { readBack: true } : {}),
+              },
+        );
+        const ref = nodeRef(target);
+        const frontmatter = input.frontmatter ?? {};
+        const saved = await writeNodeDocument(fs, ref, {
+          body: input.body,
+          frontmatter,
+          baseEtag: input.baseEtag,
+        });
+        const readBackCore = new ContextReader(
+          { kind: "live", workspaceId },
+          [
+            {
+              nodeId: ref,
+              name: saved.name,
+              path: saved.path,
+              raw: saved.raw,
+              etag: saved.etag,
+              archived: documentLifecycle(parseFrontmatter(saved.raw).data).status === "deprecated",
+              invalid: false,
+              parentNodeId: null,
+              childNodeIds: [],
+            },
+          ],
+          [ref],
+        ).read({ nodeId: ref });
+        const savedResult = {
+          workspaceId,
+          nodeId: ref,
+          path: saved.path,
+          etag: saved.etag,
+          written: "node-document",
+          changed: saved.changed,
+          ...(saved.version ? { version: saved.version } : {}),
+        };
+        const readBack =
+          input.readBack && "text" in readBackCore
+            ? pageText(readBackCore, `node.get:${ref}`, {
+                maxBytes:
+                  16 * 1024 -
+                  Buffer.byteLength(
+                    JSON.stringify({
+                      ...incompleteNodeRead(savedResult),
+                      readBack: null,
+                    }),
+                  ) +
+                  4,
+              })
+            : undefined;
+        const result = { ...savedResult, ...(readBack ? { readBack } : {}) };
+        const output = (readBack ? readBack.partial : input.body === undefined)
+          ? incompleteNodeRead(result)
+          : result;
+        return print(output, json, () =>
+          input.readBack ? JSON.stringify(output, null, 2) : `Updated ${ref}`,
+        );
+      }
+      case "rename": {
+        if (positionals.length !== 2) return usage("tent node rename <nodeId> <new-name> [--json]");
+        const result = await renameNode(env, nodeRef(positionals[0]), positionals[1]);
+        return print(result, json, (value) => `Renamed ${formatNode(value)}`);
+      }
+      case "move": {
+        const target = oneTarget(
+          positionals,
+          "tent node move <nodeId> --parent <nodeId|root> [--json]",
+        );
+        if (typeof target !== "string" || !isNodeId(target)) {
+          return typeof target === "string"
+            ? usage("tent node move requires a stable node- id")
+            : target;
+        }
+        if (!Object.prototype.hasOwnProperty.call(flags, "parent")) {
+          return usage("tent node move <nodeId> --parent <nodeId|root> [--json]");
+        }
+        const expectedPath = await selectedPath(fs, target);
+        const parent = flags.parent;
+        const newParentId = !parent || parent === "root" ? null : parent;
+        if (newParentId && !isNodeId(newParentId)) {
+          return usage("tent node move --parent must be root or a stable node- id");
+        }
+        const result = await moveNode(env, target, newParentId, { mode: "inside" }, expectedPath);
+        return print(result, json, () => `Moved ${target}`);
+      }
+      case "archive":
+      case "restore": {
+        const target = oneTarget(positionals, `tent node ${sub} <nodeId> [--json]`);
+        if (typeof target !== "string") return target;
+        const archiveCommit = flagValue(flags, "archive-commit");
+        if (sub === "restore" && !archiveCommit)
+          return usage("tent node restore <nodeId> --archive-commit <commit> [--json]");
+        const result =
+          sub === "archive"
+            ? await archiveNode(env, nodeRef(target))
+            : await restoreNode(env, nodeRef(target), archiveCommit!);
+        return print(
+          result,
+          json,
+          () => `${sub === "archive" ? "Archived" : "Restored"} ${target}`,
+        );
+      }
+      case "delete": {
+        const target = oneTarget(positionals, "tent node delete <nodeId> [--json]");
+        if (typeof target !== "string") return target;
+        const result = await deleteNode(env, nodeRef(target));
+        return print(result, json, () => `Deleted ${target}`);
+      }
+      case "type": {
+        const baseEtag = flagValue(flags, "base-etag");
+        if (positionals.length !== 2 || !baseEtag?.trim())
+          return usage("tent node type <nodeId> <type> --base-etag <live-etag> [--json]");
+        const ref = nodeRef(positionals[0]);
+        const saved = await writeNodeDocument(fs, ref, {
+          baseEtag,
+          frontmatter: { type: positionals[1] },
+        });
+        const result = { nodeId: ref, etag: saved.etag, version: saved.version };
+        return print(incompleteNodeRead(result), json, () => `Updated type for ${ref}`);
+      }
+      case "tags": {
+        const action = positionals[0];
+        const target = positionals[1];
+        const baseEtag = flagValue(flags, "base-etag");
+        if (!baseEtag?.trim()) return usage("tent node tags requires --base-etag <live-etag>");
+        if (!action || !target || !["set", "add", "remove"].includes(action)) {
+          return usage(
+            "tent node tags set|add|remove <nodeId> <tag[,tag...]> --base-etag <live-etag> [--json]",
+          );
+        }
+        const values = parseCsv(positionals.slice(2).join(",")).map(normalizeTagName);
+        if (values.length === 0 && action !== "set") {
+          return usage(
+            "tent node tags set|add|remove <nodeId> <tag[,tag...]> --base-etag <live-etag> [--json]",
+          );
+        }
+        const ref = nodeRef(target);
+        const edit = await readNodeForEdit(fs, ref);
+        if (edit.etag !== nodeReadRevisionEtag(baseEtag))
+          throw new Error("Node ETag conflict; reread and reconcile before changing tags.");
+        const current = Array.isArray(edit.frontmatter.tags)
+          ? (edit.frontmatter.tags as string[])
+          : [];
+        const tags =
+          action === "set"
+            ? values
+            : action === "add"
+              ? [...new Set([...current, ...values])]
+              : current.filter((tag) => !values.includes(tag));
+        const saved = await writeNodeDocument(fs, ref, { baseEtag, frontmatter: { tags } });
+        const result = { nodeId: ref, etag: saved.etag, version: saved.version };
+        return print(incompleteNodeRead(result), json, () => `Updated tags for ${target}`);
+      }
+      default:
+        return usage(nodeHelpText());
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const details =
+      error instanceof NodeWriteError ||
+      error instanceof NodeLifecycleError ||
+      error instanceof NodeBatchWriteError
+        ? incompleteNodeRead(error.details)
+        : undefined;
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: message + (details ? `\n${JSON.stringify(details)}` : "") + "\n",
+    };
+  }
+}
+
+const NODE_COMMAND_HELP: Record<string, string[]> = {
+  list: [
+    "tent node list [--parent <nodeId|root>] [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
+    "tent node list --full [--json]",
+  ],
+  get: [
+    "tent node get <nodeId> [--version-json <JSON>] [--view summary|body|raw] [--range <JSON>] [--expected-etag <etag>] [--cursor <cursor>] [--json]",
+    "tent node get <nodeId> --full [--view body|raw] [--json]",
+  ],
+  "read-many": ["tent node read-many <nodeId> [...] [--view body|raw] [--start <index>] [--json]"],
+  diff: ["tent node diff --from-json <version> --to-json <version> [--cursor <cursor>] [--json]"],
+  history: ["tent node history <nodeId> [--limit <n>] [--cursor <cursor>] [--json]"],
+  check: ["tent node check <nodeId> [--input-json <JSON|->] [--json]"],
+  search: [
+    "tent node search [query | --resource <address>] [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
+  ],
+  relations: [
+    "tent node relations <nodeId|root> --direction parent|children|outgoing|incoming [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
+  ],
+  backlinks: [
+    "tent node backlinks <nodeId> [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
+  ],
+  create: [
+    "tent node create <name> --type <type> [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--json]",
+  ],
+  write: [
+    "tent node write <nodeId> --body <text>|- --base-etag <etag> [--read-back] [--json]",
+    "tent node write <nodeId> --input-json <JSON>|- [--json]",
+  ],
+  "write-many": ["tent node write-many --input-json <JSON|-> [--json]"],
+  rename: ["tent node rename <nodeId> <new-name> [--json]"],
+  move: ["tent node move <nodeId> --parent <nodeId|root> [--json]"],
+  archive: ["tent node archive <nodeId> [--json]"],
+  restore: ["tent node restore <nodeId> --archive-commit <commit> [--json]"],
+  delete: ["tent node delete <nodeId> [--json]"],
+  type: ["tent node type <nodeId> <type> --base-etag <live-etag> [--json]"],
+  tags: ["tent node tags set|add|remove <nodeId> <tag[,tag...]> --base-etag <live-etag> [--json]"],
+};
+export function nodeHelpText(sub?: string): string {
+  const commands = NODE_COMMAND_HELP;
+  const notes: Record<string, string> = {
+    list: "Default reads scan headers and return bounded metadata without full-document ETags. --full explicitly reads the complete tree.",
+    get: 'All body/raw reads return text, including --full; view chooses the content, never the field name. Before replacing body/raw content, read --full or --view raw --full. Incomplete reads expose read:<etag> for continuation and metadata-only edits, never content replacement. Range JSON uses {"unit":"utf16","start":0,"end":10}. Continue a cursor with the same source, expected ETag and query. --version-json reads the captured Git document even after live edits/deletion.',
+    "read-many":
+      "All items share 16 KiB. Resume the input list using page.nextIndex as --start with the same Node IDs. A partial item has its own cursor: continue with node get --version-json <item.version> --cursor <item.page.nextCursor> and the same view. Each new batch observes current live documents.",
+    check:
+      "Omit input to inspect. Confirm JSON: {expectedPath,expectedEtag,materials:[{resource,canonicalPath,observedVersion}]}. resource is an explicit path relative to the Node document, / from .tent, or a file: URI. canonicalPath is the absolute file path and observedVersion is its SHA-256. Include only files actually checked against this Node.",
+    search:
+      "resource is an explicit path from .tent (for example /Node/Node.md or ../src/file.ts) or an absolute URI. Exact resource matching preserves query/fragment identity and does not infer bare source text.",
+    create: `Body, resource, ordered sources and tags are saved together. Suggested types: ${NODE_TYPE_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; explicit relative paths resolve from the new Node document, / from .tent. Inspect an uncertain result before retrying.`,
+    write:
+      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"../../src/file.ts","sources":[{"resource":"../Other/Other.md"}]},"readBack":true}. Omitted fields are preserved. A read:<etag> basis permits metadata-only edits; replacing body requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
+    "write-many":
+      'Batch JSON: {"items":[{"op":"create","ref":"rules","name":"Rules","type":"prompt","body":"..."},{"op":"update","nodeId":"node-existing","baseEtag":"<complete-read etag>","body":"..."}]}. Create parent is null/omitted, an existing Node ID or @ref. @ref also works in Markdown links and material addresses, including forward references. All items validate before saving under one lock and one Tent commit; failures roll back the batch. Ordered results contain nodeId, path and etag. Existing Node updates require a complete read ETag; read: bases are rejected.',
+  };
+  const selected =
+    sub && Object.prototype.hasOwnProperty.call(commands, sub) ? [sub] : Object.keys(commands);
+  return [
+    `tent node — direct Core operations`,
+    "",
+    ...selected.flatMap((key) => commands[key]),
+    "",
+    ...new Set(selected.map((key) => notes[key]).filter(Boolean)),
+    "All commands accept --workspace <path>. Options accept --key=value; use -- to end options.",
+    "Use --body - or --prompt - where supported to read stdin. Mutations use the Workspace lock and capture selected Git versions.",
+  ].join("\n");
+}
+
+function nodeRef(value: string): string {
+  if (!isNodeId(value)) throw new Error(`Expected canonical Node id (node-*): ${value}`);
+  return value;
+}
+
+async function selectedPath(fs: NodeFs, id: string) {
+  const node = (await loadNodeCatalog(fs)).byId.get(id);
+  if (!node) throw new Error(`Node not found: ${id}`);
+  return node.path;
+}
+
+function oneTarget(positionals: string[], help: string): string | NodeCommandResult {
+  return positionals.length === 1 ? positionals[0] : usage(help);
+}
+
+function flagValue(flags: Record<string, string>, name: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(flags, name) ? flags[name] : undefined;
+}
+
+function parseCsv(value: string | undefined): string[] {
+  return [
+    ...new Set(
+      (value ?? "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function stringList(value: unknown, label: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`Node editing read ${label} must be a string array.`);
+  }
+  return value;
+}
+
+function parseFlags(args: string[]): { positionals: string[]; flags: Record<string, string> } {
+  const { positionals, values } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      help: { type: "boolean", short: "h" },
+      ...Object.fromEntries(
+        ["json", "full", "include-archived", "read-back"].map((name) => [
+          name,
+          { type: "boolean" as const },
+        ]),
+      ),
+      ...Object.fromEntries(
+        [
+          "workspace",
+          "parent",
+          "limit",
+          "cursor",
+          "view",
+          "range",
+          "start",
+          "expected-etag",
+          "version-json",
+          "from-json",
+          "to-json",
+          "resource",
+          "direction",
+          "type",
+          "body",
+          "sources-json",
+          "tags",
+          "base-etag",
+          "archive-commit",
+          "input-json",
+        ].map((name) => [name, { type: "string" as const }]),
+      ),
+    },
+  });
+  const flags = Object.fromEntries(
+    Object.entries(values).map(([name, value]) => [name, String(value)]),
+  );
+  return { positionals, flags };
+}
+
+function numberFlag(flags: Record<string, string>, key: string) {
+  return flags[key] === undefined ? undefined : Number(flags[key]);
+}
+
+function coreReaderFlags(flags: Record<string, string>) {
+  const { cursor: _cursor, limit: _limit, ...core } = readerFlags(flags);
+  return core;
+}
+
+function formatReader(value: unknown): string {
+  const result = value as {
+    node?: { nodeId: string; name?: string; description?: string; text?: string; view?: string };
+    items?: Array<{
+      nodeId?: string;
+      name?: string;
+      description?: string;
+      title?: string;
+      text?: string;
+      commit?: string;
+      operation?: string;
+      time?: string;
+    }>;
+    page?: { hasMore: boolean; nextCursor?: string; nextIndex?: number };
+  };
+  if (result.node)
+    return result.node.text !== undefined
+      ? `${result.node.nodeId}  ${result.node.view}\n${formatTextPage(result.node)}`
+      : `${result.node.nodeId}  ${result.node.name ?? ""}\n${result.node.description ?? ""}`;
+  if (result.items)
+    return (
+      `${result.items.map((item) => (item.text !== undefined ? `${item.nodeId}\n${formatTextPage(item)}` : [item.commit, item.time, item.operation, item.nodeId, item.name ?? item.title, item.description].filter(Boolean).join("  "))).join("\n")}${result.page?.hasMore ? `\nNext: ${result.page.nextCursor ?? result.page.nextIndex}` : ""}` ||
+      "(empty)"
+    );
+  return JSON.stringify(value, null, 2);
+}
+
+function print(
+  value: unknown,
+  json: boolean,
+  format: (value: unknown) => string,
+): NodeCommandResult {
+  return {
+    exitCode: 0,
+    stdout: json ? JSON.stringify(value) + "\n" : format(value).trimEnd() + "\n",
+    stderr: "",
+  };
+}
+
+function usage(text: string): NodeCommandResult {
+  return { exitCode: 1, stdout: "", stderr: text.trimEnd() + "\n" };
+}
+
+function formatNode(value: unknown): string {
+  const node = (value as { node?: NodeProjection }).node;
+  if (!node) return JSON.stringify(value);
+  return `${node.nodeId}  ${node.type}  ${node.path}`;
+}
+
+function formatTree(nodes: NodeProjection[]): string {
+  const lines: string[] = [];
+  const visit = (node: NodeProjection, depth: number) => {
+    lines.push(`${"  ".repeat(depth)}${node.nodeId}  ${node.type}  ${node.name}`);
+    for (const child of node.children ?? []) visit(child, depth + 1);
+  };
+  for (const node of nodes) visit(node, 0);
+  return lines.length > 0 ? lines.join("\n") : "(no nodes)";
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}

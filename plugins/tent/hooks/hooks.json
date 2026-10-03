@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.PLUGIN_ROOT,'hooks','session.mjs')).href)\" -- stop",
+        "async": true,
+        "timeout": 60,
+        "statusMessage": "Checking Tent context updates"
+      }]
+    }],
+    "SessionStart": [{
+      "hooks": [{
+        "type": "command",
+        "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.PLUGIN_ROOT,'hooks','session.mjs')).href)\" -- start",
+        "timeout": 60,
+        "statusMessage": "Locating Tent workspace"
+      }]
+    }]
+  }
+}
