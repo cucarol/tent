@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import test from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
@@ -78,3 +80,63 @@ test("export validates standard bundle materials and reports external and unreso
   );
   await assert.rejects(fs.stat(path.join(result.outputDir, "outside.txt")), { code: "ENOENT" });
 });
+
+for (const outcome of ["success", "failure"]) {
+  test(
+    `Windows export publication retries sharing errors with ${outcome} and leaves no staging directory`,
+    { skip: process.platform !== "win32" },
+    async (t) => {
+      const scratch = path.resolve(".scratch");
+      await fs.mkdir(scratch, { recursive: true });
+      const workspace = await fs.mkdtemp(path.join(scratch, "export-rename-"));
+      t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+      await scaffoldInWorkspace(new NodeFs(workspace), { name: "rename retry" });
+      const systemRoot = path.join(workspace, ".tent"),
+        destination = path.join(workspace, "output", "bundle"),
+        mount = {
+          workspaceRoot: workspace,
+          systemRoot,
+          workspaceId: "ws-export-rename",
+          env: { fs: new NodeFs(systemRoot) },
+        },
+        originalRename = fsPromises.rename,
+        failure = Object.assign(new Error("export directory occupied"), { code: "EBUSY" });
+      let attempts = 0;
+      const mocked = t.mock.method(
+        fsPromises,
+        "rename",
+        async (...args: Parameters<typeof originalRename>) => {
+          const [from, to] = args;
+          if (to === destination && (++attempts <= 2 || outcome === "failure")) throw failure;
+          return originalRename(from, to);
+        },
+      );
+      syncBuiltinESMExports();
+      try {
+        const publication = exportGraph(mount, { outputDir: "output/bundle" });
+        if (outcome === "failure") await assert.rejects(publication, (error) => error === failure);
+        else assert.equal((await publication).outputDir, destination);
+      } finally {
+        mocked.mock.restore();
+        syncBuiltinESMExports();
+      }
+      assert.equal(attempts, outcome === "success" ? 3 : 10);
+      assert.deepEqual(
+        await fs.readdir(path.dirname(destination)),
+        outcome === "success" ? ["bundle"] : [],
+      );
+      if (outcome === "failure") {
+        await assert.rejects(fs.stat(destination), { code: "ENOENT" });
+        await exportGraph(mount, { outputDir: "output/bundle" });
+      }
+      const manifest = JSON.parse(
+        await fs.readFile(path.join(destination, "tent-export.json"), "utf8"),
+      );
+      assert.equal(manifest.workspaceId, mount.workspaceId);
+      assert.deepEqual(
+        await fs.readFile(path.join(destination, ".tent", "settings.json")),
+        await fs.readFile(path.join(systemRoot, "settings.json")),
+      );
+    },
+  );
+}

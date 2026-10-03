@@ -9,6 +9,7 @@ import { checkedSourceFile } from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { GitDocumentHistory, type CaptureMetadata } from "../core/git-history.js";
 import { isHistoryDocument } from "../core/document-history.js";
+import { renameWithRetry } from "./rename-with-retry.js";
 
 export class NodeFs implements FsAdapter {
   private root: string;
@@ -157,26 +158,10 @@ export class NodeFs implements FsAdapter {
     const tmp = `${abs}.tmp-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     try {
       await fs.writeFile(tmp, data, encoding);
-      await this.renameReplacingWithRetry(tmp, abs);
+      await renameWithRetry(tmp, abs);
     } catch (err) {
       await fs.rm(tmp, { force: true }).catch(() => undefined);
       throw err;
-    }
-  }
-
-  private async renameReplacingWithRetry(from: string, to: string): Promise<void> {
-    const attempts = process.platform === "win32" ? 10 : 1;
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      try {
-        await fs.rename(from, to);
-        return;
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        const transient = code === "EPERM" || code === "EACCES" || code === "EBUSY";
-        if (!transient || attempt === attempts - 1) throw err;
-        const delayMs = Math.min(10 * 2 ** attempt, 100);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
     }
   }
 

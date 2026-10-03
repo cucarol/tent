@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import test from "node:test";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
@@ -81,3 +83,84 @@ test("scaffold failure remains retryable and initialization preserves existing u
   assert.equal(await fs.readFile(path.join(workspace, "user.txt"), "utf8"), "keep");
   assert.equal(await fs.readFile(path.join(workspace, ".tent/user.md"), "utf8"), "keep too");
 });
+
+test(
+  "Windows initialization publishes a complete Tent after two EPERM rename failures",
+  { skip: process.platform !== "win32" },
+  async (t) => {
+    const scratch = path.resolve(".scratch");
+    await fs.mkdir(scratch, { recursive: true });
+    const workspace = await fs.mkdtemp(path.join(scratch, "init-rename-retry-"));
+    t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+    const systemRoot = path.join(workspace, ".tent"),
+      originalRename = fsPromises.rename;
+    let attempts = 0;
+    const mocked = t.mock.method(
+      fsPromises,
+      "rename",
+      async (...args: Parameters<typeof originalRename>) => {
+        const [from, to] = args;
+        if (to === systemRoot && ++attempts <= 2)
+          throw Object.assign(new Error("staging directory briefly occupied"), { code: "EPERM" });
+        return originalRename(from, to);
+      },
+    );
+    syncBuiltinESMExports();
+    try {
+      await initializeTentWorkspace(workspace);
+    } finally {
+      mocked.mock.restore();
+      syncBuiltinESMExports();
+    }
+    assert.equal(attempts, 3);
+    assert.ok((await fs.stat(path.join(systemRoot, ".git"))).isDirectory());
+    assert.equal((await loadTent(new NodeFs(systemRoot))).byId.size, 0);
+    assert.equal(
+      (await fs.readdir(workspace)).some((entry) => entry.startsWith(".tent-init-")),
+      false,
+    );
+  },
+);
+
+for (const code of ["EIO", "EPERM"]) {
+  test(
+    `initialization preserves a terminal ${code} publication error, cleans staging and can be retried`,
+    { skip: code === "EPERM" && process.platform !== "win32" },
+    async (t) => {
+      const scratch = path.resolve(".scratch");
+      await fs.mkdir(scratch, { recursive: true });
+      const workspace = await fs.mkdtemp(path.join(scratch, "init-rename-failure-"));
+      t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+      await fs.writeFile(path.join(workspace, "user.txt"), "keep");
+      const systemRoot = path.join(workspace, ".tent"),
+        originalRename = fsPromises.rename,
+        failure = Object.assign(new Error("publication denied"), { code });
+      let attempts = 0;
+      const mocked = t.mock.method(
+        fsPromises,
+        "rename",
+        async (...args: Parameters<typeof originalRename>) => {
+          const [from, to] = args;
+          if (to === systemRoot) {
+            attempts++;
+            throw failure;
+          }
+          return originalRename(from, to);
+        },
+      );
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(initializeTentWorkspace(workspace), (error) => error === failure);
+      } finally {
+        mocked.mock.restore();
+        syncBuiltinESMExports();
+      }
+      assert.equal(attempts, code === "EPERM" ? 10 : 1);
+      assert.deepEqual((await fs.readdir(workspace)).sort(), [".gitignore", "user.txt"]);
+      assert.equal(await fs.readFile(path.join(workspace, "user.txt"), "utf8"), "keep");
+      await assert.rejects(fs.stat(systemRoot), { code: "ENOENT" });
+      await initializeTentWorkspace(workspace);
+      assert.ok((await fs.stat(path.join(systemRoot, ".git"))).isDirectory());
+    },
+  );
+}

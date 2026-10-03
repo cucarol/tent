@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { scaffoldTent, ensureWorkspaceGitignore } from "../core/scaffold.js";
 import { TENT_SYSTEM_DIR } from "../core/paths.js";
 import { NodeFs } from "./node-fs.js";
+import { renameWithRetry } from "./rename-with-retry.js";
 
 const execute = promisify(execFile);
 
@@ -35,7 +36,7 @@ export async function initializeTentWorkspace(workspaceRoot: string): Promise<vo
     await scaffoldTent(new NodeFs(staging), { name: path.basename(root) });
     await ensureWorkspaceGitignore(new NodeFs(root));
     // Publish a complete, verified Tent. Failed preparation never creates a ready marker.
-    await fs.rename(staging, systemRoot);
+    await renameWithRetry(staging, systemRoot);
   } catch (error) {
     if (path.dirname(staging) !== root || !path.basename(staging).startsWith(".tent-init-"))
       throw error;

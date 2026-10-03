@@ -17,6 +17,7 @@ import { extractAttachmentReferences } from "../markdown/attachment-refs.js";
 import { liveContextReader } from "../core/context-reader-factory.js";
 import type { FsAdapter } from "../core/adapter.js";
 import { verifyCardSourceVersion } from "../core/card-document.js";
+import { renameWithRetry } from "./rename-with-retry.js";
 
 export type GraphExportSource = {
   workspaceRoot: string;
@@ -241,7 +242,7 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
     await locked(async () => {
       if (JSON.stringify(await capture()) !== JSON.stringify(files))
         throw new Error("Graph changed before export publication; retry");
-      await fs.rename(candidate, destination);
+      await renameWithRetry(candidate, destination);
     });
     return {
       workspaceId: mount.workspaceId,
