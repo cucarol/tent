@@ -93,7 +93,7 @@ test("Node creation rejects occupied paths without changing identities, descenda
   );
 });
 
-test("Node fallback order uses deterministic code-unit tie breakers", async () => {
+test("Node fallback order uses deterministic code-unit tie breakers", async (t) => {
   const root = await makeTent();
   const fs = new NodeFs(root);
   await fs.writeFile(
@@ -104,6 +104,12 @@ test("Node fallback order uses deterministic code-unit tie breakers", async () =
     nodeNotePath("goal/é"),
     serializeFrontmatter({ id: "node-order002", type: "goal" }, "# composed\n"),
   );
+  // APFS treats the two spellings as one name, so only one directory exists there.
+  const stored = (await fs.listDir("goal")).filter((e) => e.name.normalize("NFC") === "é");
+  if (stored.length < 2) {
+    t.skip("the filesystem stores both spellings under one name");
+    return;
+  }
   const names = (await loadTent(fs)).byId
     .get("node-goalzone")!
     .children.map((node) => node.name)

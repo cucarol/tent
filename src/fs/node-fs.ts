@@ -21,7 +21,9 @@ export class NodeFs implements FsAdapter {
   }
 
   private abs(p: string): string {
-    const resolved = nodePath.resolve(this.root, p);
+    // Tent paths use "/". Treat "\" as a separator everywhere, so a path that
+    // escapes on Windows also escapes on POSIX instead of naming one odd file.
+    const resolved = nodePath.resolve(this.root, p.replace(/\\/g, "/"));
     const root = process.platform === "win32" ? this.root.toLowerCase() : this.root;
     const candidate = process.platform === "win32" ? resolved.toLowerCase() : resolved;
     if (candidate !== root && !candidate.startsWith(root + nodePath.sep)) {
