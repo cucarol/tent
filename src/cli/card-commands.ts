@@ -179,6 +179,7 @@ Sources keep their order. Selected Node/Role sources retain commit/path; externa
 Show is a preview; take records reception and returns an input page. A replay is not a new execution.
 Use page.next for long input. Put requirements in Nodes; a Card briefly points to them. Update Nodes when requirements change.
 Targeted Cards require their Role; untargeted Cards can be received without one.
+Progress counts outputs attached or confirmed after publication anywhere in each referenced goal's subtree, including outputs without a resource.
 Only published pending Cards can move. Requirements awaiting a decision belong in Nodes marked status: draft.
 Cancelled published tasks can be deprecated without changing their input or reception. Deprecated Cards are excluded from lists by default.
 `;
@@ -191,6 +192,7 @@ function formatCard(value: unknown, sub: string) {
       progress?: string | null;
       goalCount?: number;
       totalGoalCount?: number;
+      diagnostic?: string;
       notice?: string;
       currentReferences?: Array<{ kind: string; id: string; path: string }>;
       currentReferencesDiagnostic?: string;
@@ -206,6 +208,7 @@ function formatCard(value: unknown, sub: string) {
         .filter(Boolean)
         .join("  "),
       result.notice,
+      result.diagnostic,
       result.currentReferences?.map((ref) => `${ref.kind} ${ref.id}  ${ref.path}`).join("\n"),
       result.currentReferencesDiagnostic,
       formatTextPage(value),
@@ -224,6 +227,7 @@ function formatCard(value: unknown, sub: string) {
         totalGoalCount?: number;
         title?: string;
         publishedAt?: string;
+        diagnostic?: string;
       }>;
       page: { hasMore: boolean; next?: unknown };
     };
@@ -238,6 +242,7 @@ function formatCard(value: unknown, sub: string) {
             item.status === "deprecated" ? item.status : undefined,
             item.title,
             item.publishedAt,
+            item.diagnostic,
           ]
             .filter(Boolean)
             .join("  "),

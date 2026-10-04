@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test from "node:test";
@@ -101,6 +103,10 @@ test("batched first timestamps retain publication across edits, removal and re-a
     assert.equal(merged.get(name), await history.commitTime(first.commit));
     const last = (await history.pathVersions(name)).latest!;
     assert.equal(latestMerged.get(name), await history.commitTime(last.commit));
+    assert.equal(
+      last.commit,
+      git("--literal-pathspecs", "log", "--full-history", "-1", "--format=%H", "--", name),
+    );
   }
 
   const renamed = "cards/card-renamed.md";
@@ -112,6 +118,129 @@ test("batched first timestamps retain publication across edits, removal and re-a
     const first = (await history.pathVersions(name)).first!;
     assert.equal(afterRename.get(name), await history.commitTime(first.commit));
   }
+});
+
+test("one HEAD shares a single history traversal, durable hits skip replay, and resets invalidate", async (t) => {
+  const { root, git, history } = await fixture(t);
+  const file = "Goal/Goal.md",
+    nodeId = "node-cache";
+  const raw = `---\nid: ${nodeId}\ntype: goal\n---\nfirst\n`;
+  const first = await history.captureUnlocked([{ path: file, raw }]);
+  const calls: string[][] = [];
+  const original = childProcess.spawn;
+  const mocked = t.mock.method(childProcess, "spawn", (...args: Parameters<typeof original>) => {
+    calls.push(args[1] as string[]);
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  let builds = 0;
+  const query = async (reader: GitDocumentHistory) => {
+    const [events, times, records, reads, index] = await Promise.all([
+      reader.changesInRange(),
+      reader.firstCommitTimes([file]),
+      reader.nodeRecords(),
+      reader.readVersions(first.versions),
+      reader.derived("test-progress", 1, async () => {
+        builds++;
+        return { events: (await reader.changesInRange()).length };
+      }),
+    ]);
+    assert.ok(!(reads[0] instanceof Error));
+    assert.equal(reads[0]!.raw, raw);
+    assert.equal(times.get(file), events[0]!.time);
+    assert.deepEqual(records, {});
+    assert.equal(index.events, events.length);
+    return events;
+  };
+  assert.equal((await query(history)).length, 1);
+  assert.equal(calls.filter((args) => args.includes("log")).length, 1);
+  assert.equal(calls.filter((args) => args.includes("cat-file")).length, 1);
+  calls.length = 0;
+  const warm = new GitDocumentHistory(root);
+  const internal = warm as unknown as {
+    snapshot(head: string): Promise<{ records: unknown[] }>;
+  };
+  const snapshot = internal.snapshot.bind(warm);
+  internal.snapshot = async (head) => {
+    const retained = await snapshot(head);
+    retained.records = new Proxy(retained.records, {
+      get(target, key, receiver) {
+        if (key === Symbol.iterator)
+          throw new Error("A warm query must not replay history records");
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    return retained;
+  };
+  assert.equal((await query(warm)).length, 1);
+  assert.equal(calls.length, 0);
+  assert.equal(builds, 1);
+
+  const second = await history.captureUnlocked([{ path: file, raw: raw + "second\n" }]);
+  calls.length = 0;
+  assert.equal((await query(new GitDocumentHistory(root))).length, 2);
+  assert.equal(calls.filter((args) => args.includes("log")).length, 1);
+  assert.equal(builds, 2);
+  git("update-ref", "HEAD", first.commit!);
+  calls.length = 0;
+  assert.equal((await query(new GitDocumentHistory(root))).length, 1);
+  assert.equal(calls.filter((args) => args.includes("log")).length, 1);
+  assert.equal(builds, 3);
+  const racing = new GitDocumentHistory(root);
+  const bound = await racing.derived("moving-head", 1, async (head) => {
+    git("update-ref", "HEAD", second.commit!);
+    const events = await racing.changesInRange();
+    const reads = await racing.readVersions(first.versions);
+    assert.ok(!(reads[0] instanceof Error));
+    assert.equal(reads[0]!.changedSince, false);
+    return { head, last: events.at(-1)!.commit };
+  });
+  assert.deepEqual(bound, { head: first.commit, last: first.commit });
+  assert.equal(await racing.currentCommit(), second.commit);
+  await racing.derived("current-head", 1, async () => (await racing.changesInRange()).length);
+  const retainedPromises = (racing as unknown as { derivedPromises: Map<string, unknown> })
+    .derivedPromises;
+  assert.ok([...retainedPromises.keys()].every((key) => key.endsWith(`:${second.commit}`)));
+  const outer = new GitDocumentHistory(root),
+    currentCommit = outer.currentCommit.bind(outer);
+  git("update-ref", "HEAD", first.commit!);
+  outer.currentCommit = async () => {
+    const head = await currentCommit();
+    git("update-ref", "HEAD", second.commit!);
+    return head;
+  };
+  assert.equal((await outer.pathVersions(file)).latest!.commit, first.commit);
+  const newHeadReader = new GitDocumentHistory(root);
+  assert.equal((await newHeadReader.pathVersions(file)).latest!.commit, second.commit);
+  await newHeadReader.readVersions(second.versions);
+  git("update-ref", "HEAD", first.commit!);
+  assert.deepEqual(
+    await new GitDocumentHistory(root).derived("moving-head", 1, async () => {
+      throw new Error("Exact old HEAD must reuse its correctly bound value");
+    }),
+    bound,
+  );
+  await query(new GitDocumentHistory(root));
+  const cache = path.join(root, ".git/tent-derived-test-progress.json");
+  const damaged = JSON.parse(await fs.readFile(cache, "utf8"));
+  damaged.value = { events: 900 };
+  await fs.writeFile(cache, JSON.stringify(damaged));
+  calls.length = 0;
+  assert.equal((await query(new GitDocumentHistory(root))).length, 1);
+  assert.equal(calls.length, 0);
+  assert.equal(builds, 4);
+  const snapshotFile = path.join(root, ".git/tent-history-index.json");
+  const damagedSnapshot = JSON.parse(await fs.readFile(snapshotFile, "utf8"));
+  damagedSnapshot.blobs[Object.keys(damagedSnapshot.blobs)[0]!] = "valid JSON, wrong Git bytes";
+  await fs.writeFile(snapshotFile, JSON.stringify(damagedSnapshot));
+  calls.length = 0;
+  const reads = await new GitDocumentHistory(root).readVersions(first.versions);
+  assert.ok(!(reads[0] instanceof Error));
+  assert.equal(calls.filter((args) => args.includes("log")).length, 1);
 });
 
 test("captures selected raw Markdown without touching the user index or unrelated files", async (t) => {

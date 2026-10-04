@@ -299,8 +299,11 @@ async function checkedCard(fs: FsAdapter, id: string) {
       "UNPUBLISHED",
       "Card has no retained publication; create a Card through Tent",
     );
-  const published = parseCardDocument(id, await history.read(versions.first));
-  const latest = parseCardDocument(id, await history.read(versions.latest));
+  const retained = await history.readVersions([versions.first, versions.latest]);
+  if (retained[0] instanceof Error) throw retained[0];
+  if (retained[1] instanceof Error) throw retained[1];
+  const published = parseCardDocument(id, retained[0]!.raw);
+  const latest = parseCardDocument(id, retained[1]!.raw);
   validateRetainedCard(current, published, latest);
   return { current, publishedVersion: versions.first, version: versions.latest, history };
 }
@@ -789,13 +792,14 @@ export type ReceivedCardSourceDiagnostic = {
 export async function inspectReceivedCardSourceChanges(
   fs: FsAdapter,
   options: { roleId?: string } = {},
+  listedCards?: Awaited<ReturnType<typeof listCardDocuments>>,
 ) {
   const items: ReceivedCardSourceChange[] = [];
   const diagnostics: ReceivedCardSourceDiagnostic[] = [];
   const readonly = readOnlyFs(fs);
   try {
     if (!(await readonly.exists(CARDS_DIR))) return { items, diagnostics };
-    const listed = await listCardDocuments(readonly, options);
+    const listed = listedCards ?? (await listCardDocuments(readonly, options));
     for (const item of listed.items) {
       if (item.diagnostic)
         diagnostics.push({ cardId: String(item.cardId), message: String(item.diagnostic) });
@@ -804,17 +808,21 @@ export async function inspectReceivedCardSourceChanges(
     if (!candidates.length) return { items, diagnostics };
     const history = await historyOf(readonly);
     // One identity/history scan and two source batches serve the whole query.
-    const changes = await history.changesInRange();
-    const first = new Map<string, DocumentVersion>();
-    const latest = new Map<string, DocumentVersion>();
-    for (const commit of changes)
-      for (const change of commit.changes) {
-        if (!change.objectId) continue;
-        if (change.after) {
-          if (!first.has(change.objectId)) first.set(change.objectId, change.after);
-          latest.set(change.objectId, change.after);
-        } else latest.delete(change.objectId);
-      }
+    const identities = await history.derived("identity-versions", 1, async () => {
+      const first: Record<string, DocumentVersion> = {};
+      const latest: Record<string, DocumentVersion> = {};
+      for (const commit of await history.changesInRange())
+        for (const change of commit.changes) {
+          if (!change.objectId) continue;
+          if (change.after) {
+            first[change.objectId] ??= change.after;
+            latest[change.objectId] = change.after;
+          } else delete latest[change.objectId];
+        }
+      return { first, latest };
+    });
+    const first = new Map(Object.entries(identities.first));
+    const latest = new Map(Object.entries(identities.latest));
     const requested = candidates.flatMap((item) => {
       const id = String(item.cardId),
         published = first.get(id),
@@ -822,15 +830,24 @@ export async function inspectReceivedCardSourceChanges(
       return published && current ? [published, current] : [];
     });
     const retained = await history.readVersions(requested);
-    const selected: Array<{ card: CardDocument; owner: string; source: MaterialSource }> = [];
+    type SelectedSource = { card: CardDocument; owner: string; source: MaterialSource };
+    const retainedById = new Map<string, typeof retained>();
     let offset = 0;
     for (const item of candidates) {
       const id = String(item.cardId);
+      if (first.has(id) && latest.has(id))
+        retainedById.set(id, retained.slice(offset, (offset += 2)));
+    }
+    const validateCard = async (item: Record<string, unknown>) => {
+      const id = String(item.cardId),
+        selected: SelectedSource[] = [];
+      let diagnostic: ReceivedCardSourceDiagnostic | undefined;
       try {
         if (!first.has(id) || !latest.has(id))
           throw new Error("Card publication history is unavailable");
-        const published = retained[offset++]!,
-          previous = retained[offset++]!;
+        const versions = retainedById.get(id)!;
+        const published = versions[0]!,
+          previous = versions[1]!;
         if (published instanceof Error) throw published;
         if (previous instanceof Error) throw previous;
         const current = await liveCard(readonly, id);
@@ -844,7 +861,7 @@ export async function inspectReceivedCardSourceChanges(
           current.data.state === "pending" ||
           (options.roleId && current.data.receivedBy !== options.roleId)
         )
-          continue;
+          return { selected };
         for (const source of current.data.sources) {
           if (!source.version) continue;
           const version = sourceVersion(current.path, source);
@@ -852,12 +869,26 @@ export async function inspectReceivedCardSourceChanges(
             selected.push({ card: current, owner: current.path, source });
         }
       } catch (error) {
-        diagnostics.push({
+        diagnostic = {
           cardId: id,
           message: error instanceof Error ? error.message : String(error),
-        });
+        };
       }
-    }
+      return { selected, diagnostic };
+    };
+    const checked: Awaited<ReturnType<typeof validateCard>>[] = new Array(candidates.length);
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(4, candidates.length) }, async () => {
+        for (;;) {
+          const index = next++;
+          if (index >= candidates.length) return;
+          checked[index] = await validateCard(candidates[index]!);
+        }
+      }),
+    );
+    const selected = checked.flatMap((entry) => entry.selected);
+    for (const entry of checked) if (entry.diagnostic) diagnostics.push(entry.diagnostic);
     if (!selected.length) return { items, diagnostics };
     const sources = await verifyCardSourceVersions(readonly, selected);
     const catalog = await loadNodeCatalog(readonly);

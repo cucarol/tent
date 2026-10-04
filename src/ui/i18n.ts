@@ -65,9 +65,9 @@ const zh = {
   },
   cardProgress: {
     pending: "待接收",
-    "received-no-output": "已接收，尚无产出",
+    "received-no-output": "已接收，还没有产出",
     "has-output": "已有产出",
-    partial: "产出未齐",
+    partial: "产出还不全",
   },
   cardReception: { pending: "待接收", consumed: "已接收" },
   side: {

@@ -64,8 +64,10 @@ before acting.
 Reply normally, and keep lasting facts in [Nodes](../tent-node/SKILL.md).
 
 Progress follows the referenced goals: pending, received without all outputs,
-or has outputs for every goal. Only outputs added or confirmed after publication
-count; multiple goals show a completed/total count. Cards with no goal sources
-show reception only. Check each output's current goal basis and actual result.
+or has outputs for every goal. Each goal includes its entire subtree, including
+nested goals and outputs without a resource. Only outputs attached to that
+subtree or confirmed after publication count; multiple goals show a completed/total
+count. Cards with no goal sources show reception only. Check each output's
+current goal basis and actual result.
 A pending Card can be transferred
 with `card move`; its destination is fixed after reception.

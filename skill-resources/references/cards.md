@@ -36,8 +36,9 @@ work instead of repeating it. Finished Cards stay consumed.
 
 Progress follows goals referenced in the Card's `sources`: `pending`,
 `received-no-output`, or `has-output` when every referenced goal has an output
-added or confirmed after publication. `goalCount` and `totalGoalCount` report
-completed and total goals; `outputNodeIds` identifies results. Cards without
+anywhere in its subtree, attached there or confirmed after publication. Nested
+goals and outputs without a `resource` count too. `goalCount` and `totalGoalCount`
+report completed and total goals; `outputNodeIds` identifies results. Cards without
 goal sources have `progress: null` and show reception only.
 
 Use `node link-output` under the goal. This existing hierarchy supplies the

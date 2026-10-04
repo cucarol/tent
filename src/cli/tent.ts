@@ -149,7 +149,7 @@ Run from a Workspace containing .tent/, or select one with --workspace.
   tent workspace export --output <dir>  Export the context graph and its Git history.
   tent workspace check --json        Inspect links and material addresses without edits.
   tent workspace brief --json        Read current Node states, inputs and outputs (4 KiB).
-  tent workspace drift --json        Inspect unlinked outputs and changed requirements.
+  tent workspace drift --json        Inspect ahead and behind Nodes.
   tent ui [--workspace <path>] [--port <n>] [--no-open]
                                      Open the local Web UI; Ctrl+C closes its server.
   tent hook start|stop --host codex   Native dynamic entry and mechanical advice.

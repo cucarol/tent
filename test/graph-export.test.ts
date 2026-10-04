@@ -53,6 +53,9 @@ test("export validates standard bundle materials and reports external and unreso
   );
   await adapter.writeFile("version-leases/version-leases.md", ordinaryNode);
   await adapter.writeFile("mutation.lock.guard.stale-test/owner.json", '{"pid":1}');
+  await adapter.writeFile(".git/tent-history-index.json", '{"disposable":true}');
+  await adapter.writeFile(".git/tent-derived-card-progress.json", '{"disposable":true}');
+  await adapter.writeFile(".git/tent-derived-card-progress.json.pending.tmp", "incomplete");
   const result = await exportGraph(mount, { outputDir: "output/valid" });
   const manifest = JSON.parse(
     await fs.readFile(path.join(result.outputDir, "tent-export.json"), "utf8"),
@@ -63,6 +66,13 @@ test("export validates standard bundle materials and reports external and unreso
     [0, 2, 3],
   );
   assert.equal(manifest.unresolvedMaterials[0].resource, "population scope");
+  assert.equal(
+    manifest.files.some((file: { path: string }) => file.path.startsWith(".git/tent-")),
+    false,
+  );
+  await assert.rejects(fs.stat(path.join(result.outputDir, ".tent/.git/tent-history-index.json")), {
+    code: "ENOENT",
+  });
   assert.equal(
     await fs.readFile(path.join(result.outputDir, ".tent/Material/Material.md"), "utf8"),
     raw,

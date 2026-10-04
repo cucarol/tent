@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -162,10 +163,11 @@ async function runGit(
 
 type RawHistoryCommit = {
   commit: string;
+  parents: string[];
   parent?: string;
   time: string;
   message: string;
-  files: Array<{ path: string; beforeBlob?: string; afterBlob?: string }>;
+  files: Array<{ path: string; status: string; beforeBlob?: string; afterBlob?: string }>;
 };
 
 /** NUL framing keeps multiline messages and non-ASCII paths out of the raw-diff grammar. */
@@ -183,6 +185,7 @@ function parseHistoryLog(bytes: Buffer): RawHistoryCommit[] {
       const parent = parents.split(" ")[0];
       current = {
         commit: token,
+        parents: parents.split(" ").filter(Boolean),
         ...(parent ? { parent: oid(parent) } : {}),
         time: new Date(time).toISOString(),
         message,
@@ -194,9 +197,9 @@ function parseHistoryLog(bytes: Buffer): RawHistoryCommit[] {
     const row = /^:[0-7]{6} [0-7]{6} ([a-f0-9]+) ([a-f0-9]+) ([AMDT])$/.exec(token);
     if (!current || !row) throw new Error("Invalid Git history record");
     const file = documentPath(fields[i++]!);
-    if (row[3] === "T" || !isHistoryDocument(file)) continue;
     current.files.push({
       path: file,
+      status: row[3]!,
       ...(row[3] !== "A" ? { beforeBlob: oid(row[1]!) } : {}),
       ...(row[3] !== "D" ? { afterBlob: oid(row[2]!) } : {}),
     });
@@ -295,6 +298,32 @@ async function readBlobs<T>(
   }
 }
 
+const historySnapshotSchema = z.object({
+  version: z.literal(2),
+  head: z.string().regex(oidPattern),
+  digest: z.string(),
+  records: z.array(
+    z.object({
+      commit: z.string().regex(oidPattern),
+      parents: z.array(z.string().regex(oidPattern)),
+      parent: z.string().regex(oidPattern).optional(),
+      time: z.string(),
+      message: z.string(),
+      files: z.array(
+        z.object({
+          path: z.string(),
+          status: z.string(),
+          beforeBlob: z.string().regex(oidPattern).optional(),
+          afterBlob: z.string().regex(oidPattern).optional(),
+        }),
+      ),
+    }),
+  ),
+  blobs: z.record(z.string(), z.string()),
+  frontmatters: z.record(z.string(), z.record(z.string(), z.unknown())),
+});
+type HistorySnapshot = z.infer<typeof historySnapshotSchema>;
+
 /** Git plumbing for selected Markdown documents. Caller holds the Tent mutation lock for captureUnlocked. */
 export class GitDocumentHistory {
   private readonly root: string;
@@ -305,26 +334,220 @@ export class GitDocumentHistory {
   private records: Record<string, NodeBasisRecord> = {};
   private firstTimesHead: string | null | undefined;
   private firstTimes = new Map<string, string>();
+  private snapshotHead?: string;
+  private snapshotPromise?: Promise<HistorySnapshot>;
+  private snapshotRecordsPromise?: Promise<RawHistoryCommit[]>;
+  private derivedPromises = new Map<string, Promise<unknown>>();
+  private derivedHead: string | null | undefined;
+  private derivedScope = new AsyncLocalStorage<{ head: string | null }>();
+
+  private async retainedHead() {
+    const scope = this.derivedScope.getStore();
+    return scope ? scope.head : this.currentCommit();
+  }
+
+  /** Disposable, exact-HEAD indexes. A hit never invokes the history replay builder. */
+  async derived<T>(
+    name: string,
+    schemaVersion: number,
+    compute: (head: string | null) => Promise<T>,
+  ): Promise<T> {
+    return this.derivedAtHead(name, schemaVersion, await this.retainedHead(), compute);
+  }
+
+  private async derivedAtHead<T>(
+    name: string,
+    schemaVersion: number,
+    head: string | null,
+    compute: (head: string | null) => Promise<T>,
+  ): Promise<T> {
+    if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error("Invalid derived history index name");
+    if (this.derivedHead !== head) {
+      this.derivedPromises.clear();
+      this.derivedHead = head;
+    }
+    const key = `${name}:${schemaVersion}:${head}`;
+    let pending = this.derivedPromises.get(key) as Promise<T> | undefined;
+    if (!pending) {
+      pending = (async () => {
+        const file = path.join(this.root, ".git", `tent-derived-${name}.json`);
+        try {
+          const saved = JSON.parse(await fs.readFile(file, "utf8"));
+          if (
+            saved.version === schemaVersion &&
+            saved.head === head &&
+            "value" in saved &&
+            saved.digest === createHash("sha256").update(JSON.stringify(saved.value)).digest("hex")
+          )
+            return saved.value as T;
+        } catch {
+          /* A missing or damaged disposable cache is rebuilt. */
+        }
+        const value = await this.derivedScope.run({ head }, () => compute(head));
+        await this.saveCache(file, {
+          version: schemaVersion,
+          head,
+          value,
+          digest: createHash("sha256").update(JSON.stringify(value)).digest("hex"),
+        });
+        return value;
+      })();
+      this.derivedPromises.set(key, pending);
+      pending.catch(() => {
+        if (this.derivedPromises.get(key) === pending) this.derivedPromises.delete(key);
+      });
+    }
+    return structuredClone(await pending);
+  }
+
+  private async saveCache(file: string, value: unknown) {
+    const temporary = `${file}.${randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(temporary, JSON.stringify(value));
+      await fs.rename(temporary, file);
+    } catch {
+      // Derived state is optional; an unwritable cache never prevents a query.
+    } finally {
+      await fs.rm(temporary, { force: true }).catch(() => {});
+    }
+  }
+
+  /** One complete reachable graph and blob batch serve every consumer at this HEAD. */
+  private async snapshot(head: string): Promise<HistorySnapshot> {
+    if (this.snapshotHead !== head || !this.snapshotPromise) {
+      this.snapshotHead = head;
+      let resolveRecords!: (records: RawHistoryCommit[]) => void;
+      let rejectRecords!: (error: unknown) => void;
+      this.snapshotRecordsPromise = new Promise((resolve, reject) => {
+        resolveRecords = resolve;
+        rejectRecords = reject;
+      });
+      this.snapshotRecordsPromise.catch(() => {});
+      this.snapshotPromise = (async () => {
+        const file = path.join(this.root, ".git", "tent-history-index.json");
+        try {
+          const saved = historySnapshotSchema.parse(JSON.parse(await fs.readFile(file, "utf8")));
+          if (saved.head === head && saved.digest === this.snapshotDigest(saved)) {
+            resolveRecords(saved.records);
+            return saved;
+          }
+        } catch {
+          /* Derived history can always be reconstructed from Git. */
+        }
+        const records = parseHistoryLog(
+          await runGit(this.root, [
+            "log",
+            "--full-history",
+            "--reverse",
+            "--raw",
+            "-z",
+            "--root",
+            "--no-renames",
+            "--no-abbrev",
+            "--no-color",
+            "--no-show-signature",
+            "--diff-merges=separate",
+            "--always",
+            "--format=%x00%H%x00%P%x00%cI%x00%B%x00",
+            head,
+          ]),
+        );
+        const objects = new Set<string>();
+        resolveRecords(records);
+        for (const record of records)
+          for (const entry of record.files) {
+            if (!isHistoryDocument(entry.path) || entry.status === "T") continue;
+            if (entry.beforeBlob) objects.add(entry.beforeBlob);
+            if (entry.afterBlob) objects.add(entry.afterBlob);
+          }
+        const blobs: Record<string, string> = {};
+        for (const [object, raw] of await readBlobs(this.root, objects, (raw) => raw)) {
+          if (raw instanceof Error) throw raw;
+          blobs[object] = raw;
+        }
+        const frontmatters: Record<string, Record<string, unknown>> = {};
+        for (const [object, raw] of Object.entries(blobs)) {
+          try {
+            frontmatters[object] = parseFrontmatter(raw).data;
+          } catch {
+            /* Invalid headers have no retained identity. */
+          }
+        }
+        const result: HistorySnapshot = {
+          version: 2,
+          head,
+          records,
+          blobs,
+          frontmatters,
+          digest: "",
+        };
+        result.digest = this.snapshotDigest(result);
+        await this.saveCache(file, result);
+        return result;
+      })();
+      this.snapshotPromise.catch((error) => {
+        rejectRecords(error);
+        if (this.snapshotHead === head) this.snapshotPromise = undefined;
+      });
+    }
+    return this.snapshotPromise;
+  }
+
+  private async snapshotRecords(head: string) {
+    // Message/path consumers can start live inspection while the blob batch runs.
+    void this.snapshot(head).catch(() => {});
+    return this.snapshotRecordsPromise!;
+  }
+
+  private snapshotDigest(snapshot: HistorySnapshot) {
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          head: snapshot.head,
+          records: snapshot.records,
+          blobs: snapshot.blobs,
+          frontmatters: snapshot.frontmatters,
+        }),
+      )
+      .digest("hex");
+  }
+
+  private firstParentRecords(
+    snapshot: Pick<HistorySnapshot, "head" | "records">,
+    head = snapshot.head,
+  ): RawHistoryCommit[] {
+    const byCommit = new Map<string, RawHistoryCommit>();
+    for (const record of snapshot.records)
+      if (!byCommit.has(record.commit)) byCommit.set(record.commit, record);
+    const records: RawHistoryCommit[] = [];
+    for (let commit: string | undefined = head; commit;) {
+      const record: RawHistoryCommit = byCommit.get(commit)!;
+      records.push(record);
+      commit = record.parent;
+    }
+    return records.reverse();
+  }
 
   /** Latest declarations on the retained first-parent lineage; a reset rolls records back too. */
   async nodeRecords(): Promise<Record<string, NodeBasisRecord>> {
     await this.ensureRepository();
-    const head = await this.currentCommit();
+    const head = await this.retainedHead();
     if (this.recordHead !== head) {
-      const records: Record<string, NodeBasisRecord> = {};
-      if (head) {
-        const log = (
-          await runGit(this.root, ["log", "--first-parent", "--format=%B%x00", head])
-        ).toString("utf8");
-        for (const message of log.split("\0"))
-          for (const line of message.split("\n")) {
-            if (!line.startsWith("Tent-Node-Record: ")) continue;
-            const [id, record] = JSON.parse(line.slice("Tent-Node-Record: ".length));
-            if (!isNodeId(id)) throw new Error("Invalid retained Node record id");
-            if (!(id in records)) records[id] = nodeBasisRecordSchema.parse(record);
-          }
-      }
-      this.records = records;
+      this.records = await this.derivedAtHead("node-records", 1, head, async () => {
+        const records: Record<string, NodeBasisRecord> = {};
+        if (head)
+          for (const event of this.firstParentRecords({
+            head,
+            records: await this.snapshotRecords(head),
+          }).reverse())
+            for (const line of event.message.split("\n")) {
+              if (!line.startsWith("Tent-Node-Record: ")) continue;
+              const [id, record] = JSON.parse(line.slice("Tent-Node-Record: ".length));
+              if (!isNodeId(id)) throw new Error("Invalid retained Node record id");
+              if (!(id in records)) records[id] = nodeBasisRecordSchema.parse(record);
+            }
+        return records;
+      });
       this.recordHead = head;
     }
     return structuredClone(this.records);
@@ -334,15 +557,21 @@ export class GitDocumentHistory {
   async firstNodeTime(nodeId: string): Promise<string | undefined> {
     if (!isNodeId(nodeId)) throw new Error("Invalid Node id");
     await this.ensureRepository();
-    const head = await this.currentCommit();
+    const head = await this.retainedHead();
     if (!head) return undefined;
     if (this.firstTimesHead !== head) {
-      const times = new Map<string, string>();
-      for (const event of await this.changesInRange())
-        for (const change of event.changes)
-          if (change.objectId && !times.has(change.objectId))
-            times.set(change.objectId, event.time);
-      this.firstTimes = times;
+      this.firstTimes = new Map(
+        Object.entries(
+          await this.derivedAtHead("identity-times", 1, head, async () => {
+            const times: Record<string, string> = {};
+            for (const event of await this.changesInRange())
+              for (const change of event.changes)
+                if (change.objectId && !(change.objectId in times))
+                  times[change.objectId] = event.time;
+            return times;
+          }),
+        ),
+      );
       this.firstTimesHead = head;
     }
     return this.firstTimes.get(nodeId);
@@ -356,7 +585,7 @@ export class GitDocumentHistory {
   async available(): Promise<boolean> {
     try {
       await this.ensureRepository();
-      await runGit(this.root, ["rev-parse", "--git-dir"]);
+      await this.currentCommit();
       return true;
     } catch {
       return false;
@@ -618,87 +847,106 @@ export class GitDocumentHistory {
   }
 
   /** Verify many retained sources against one HEAD, preserving per-source failures. */
-  async readVersions(
-    versions: readonly DocumentVersion[],
-  ): Promise<Array<{ version: DocumentVersion; raw: string; changedSince: boolean } | Error>> {
+  async readVersions(versions: readonly DocumentVersion[]): Promise<
+    Array<
+      | {
+          version: DocumentVersion;
+          raw: string;
+          changedSince: boolean;
+          frontmatter?: Record<string, unknown>;
+        }
+      | Error
+    >
+  > {
     if (!versions.length) return [];
-    const head = await this.currentCommit();
+    const head = await this.retainedHead();
     if (!head) return versions.map(() => new Error("Tent Git history is empty"));
-    // Retain changes against every merge parent, just as --full-history path
-    // queries do. Keep the whole parent graph for version reachability/exclusion.
-    const fields = (
-      await runGit(this.root, [
-        "log",
-        "--full-history",
-        "--raw",
-        "-z",
-        "--root",
-        "--no-renames",
-        "--no-abbrev",
-        "--no-color",
-        "--no-show-signature",
-        "--diff-merges=separate",
-        "--always",
-        "--format=%x00%H%x00%P%x00",
-        head,
-      ])
-    )
-      .toString("utf8")
-      .split("\0");
-    const commits = new Map<string, { parents: string[]; paths: Set<string> }>();
-    let current: { parents: string[]; paths: Set<string> } | undefined;
-    for (let i = 0; i < fields.length;) {
-      const token = fields[i++]!.replace(/^\n/, "");
-      if (!token) continue;
-      if (oidPattern.test(token)) {
-        const parents = fields[i++]!.split(" ").filter(Boolean);
-        current = commits.get(token) ?? { parents, paths: new Set() };
-        commits.set(token, current);
-      } else if (current && token.startsWith(":")) {
-        current.paths.add(fields[i++]!);
-      } else throw new Error("Invalid Git source history record");
-    }
-    const ancestors = new Map<string, Set<string>>();
-    function excluded(commit: string) {
-      const cached = ancestors.get(commit);
-      if (cached) return cached;
-      const seen = new Set<string>(),
-        pending = [commit];
-      while (pending.length) {
-        const next = pending.pop()!;
-        if (seen.has(next)) continue;
-        seen.add(next);
-        pending.push(...(commits.get(next)?.parents ?? []));
-      }
-      ancestors.set(commit, seen);
-      return seen;
-    }
+    const snapshot = await this.snapshot(head);
+    const index = await this.versionReadIndex(head);
     const checked = versions.map((version) => {
       try {
         oid(version.commit);
         documentPath(version.path);
-        if (!commits.has(version.commit))
+        if (!(version.commit in index.trees))
           throw new Error(`Git version is not reachable: ${version.commit}`);
         return version;
       } catch (error) {
         return error instanceof Error ? error : new Error(String(error));
       }
     });
-    const objects = new Set(
-      checked.flatMap((version) =>
-        version instanceof Error ? [] : [`${version.commit}:${version.path}`],
-      ),
-    );
-    const blobs = await readBlobs(this.root, objects, (raw) => raw);
+    const rawByVersion = new Map<string, string | Error>();
+    const dataByVersion = new Map<string, Record<string, unknown>>();
+    const missing = new Set<string>();
+    for (const version of checked) {
+      if (version instanceof Error) continue;
+      const key = `${version.commit}:${version.path}`;
+      const blob = index.trees[version.commit]![version.path];
+      if (!blob) rawByVersion.set(key, new Error(`Git document is unavailable: ${key}`));
+      else if (blob in snapshot.blobs) {
+        rawByVersion.set(key, snapshot.blobs[blob]!);
+        const data = snapshot.frontmatters[blob];
+        if (data) dataByVersion.set(key, data);
+      } else missing.add(key);
+    }
+    for (const [key, raw] of await readBlobs(this.root, missing, (raw) => raw))
+      rawByVersion.set(key, raw);
     return checked.map((version) => {
       if (version instanceof Error) return version;
-      const raw = blobs.get(`${version.commit}:${version.path}`)!;
+      const raw = rawByVersion.get(`${version.commit}:${version.path}`)!;
       if (raw instanceof Error) return raw;
-      const before = excluded(version.commit);
-      const changedSince = [...commits].some(
-        ([commit, entry]) => !before.has(commit) && entry.paths.has(version.path),
-      );
-      return { version, raw, changedSince };
+      const changedSince = index.changed[version.commit]!.includes(version.path);
+      const data = dataByVersion.get(`${version.commit}:${version.path}`);
+      return {
+        version,
+        raw,
+        changedSince,
+        ...(data ? { frontmatter: structuredClone(data) } : {}),
+      };
+    });
+  }
+
+  private async versionReadIndex(head: string) {
+    return this.derivedAtHead("version-reads", 1, head, async () => {
+      const snapshot = await this.snapshot(head);
+      const graph = new Map<string, { record: RawHistoryCommit; paths: Set<string> }>();
+      for (const record of snapshot.records) {
+        const entry = graph.get(record.commit) ?? { record, paths: new Set<string>() };
+        for (const file of record.files) entry.paths.add(file.path);
+        graph.set(record.commit, entry);
+      }
+      const trees: Record<string, Record<string, string>> = {};
+      for (const commit of graph.keys()) {
+        const pending: RawHistoryCommit[] = [];
+        for (let next: string | undefined = commit; next && !trees[next];) {
+          const record: RawHistoryCommit = graph.get(next)!.record;
+          pending.push(record);
+          next = record.parent;
+        }
+        for (const record of pending.reverse()) {
+          const tree = { ...(record.parent ? trees[record.parent] : {}) };
+          for (const file of record.files) {
+            if (file.afterBlob) tree[file.path] = file.afterBlob;
+            else delete tree[file.path];
+          }
+          trees[record.commit] = tree;
+        }
+      }
+      const changed: Record<string, string[]> = {};
+      for (const commit of graph.keys()) {
+        const ancestors = new Set<string>(),
+          pending = [commit];
+        while (pending.length) {
+          const next = pending.pop()!;
+          if (ancestors.has(next)) continue;
+          ancestors.add(next);
+          pending.push(...graph.get(next)!.record.parents);
+        }
+        const paths = new Set<string>();
+        for (const [next, entry] of graph)
+          if (!ancestors.has(next)) for (const file of entry.paths) paths.add(file);
+        changed[commit] = [...paths];
+      }
+      return { trees, changed };
     });
   }
 
@@ -740,33 +988,12 @@ export class GitDocumentHistory {
     const times = new Map<string, string>();
     if (!selected.size) return times;
     await this.ensureRepository();
-    const head = await this.currentCommit();
+    const head = await this.retainedHead();
     if (!head) return times;
-    const log = await runGit(this.root, [
-      "--literal-pathspecs",
-      "log",
-      "--full-history",
-      ...(first ? ["--reverse", "--diff-filter=A"] : ["--diff-merges=separate"]),
-      // A single-path query sees the destination as an addition, not a rename.
-      "--no-renames",
-      "--format=%cI",
-      "-z",
-      "--name-only",
-      head,
-      "--",
-      ...selected,
-    ]);
-    let time: string | undefined;
-    for (const token of log.toString("utf8").split("\0")) {
-      // Git separates a commit header from its first path with a newline.
-      // Document paths cannot contain control characters; -z leaves names unquoted.
-      const value = token.replace(/^\n/, "");
-      // ISO dates contain colons, which documentPath rejects in filenames.
-      if (value.includes(":")) {
-        time = new Date(value).toISOString();
-      } else if (time && selected.has(value) && !times.has(value)) {
-        times.set(value, time);
-      }
+    const entries = await this.pathIndex(head);
+    for (const file of selected) {
+      const entry = entries[file];
+      if (entry) times.set(file, first ? entry.firstTime : entry.latestTime);
     }
     return times;
   }
@@ -774,67 +1001,72 @@ export class GitDocumentHistory {
   /** Publication and current retained state are derived from this path's reachable history. */
   async pathVersions(file: string): Promise<{ first?: DocumentVersion; latest?: DocumentVersion }> {
     documentPath(file);
-    await this.ensureRepository();
-    if (!(await this.head())) return {};
-    const first = (
-      await runGit(this.root, [
-        "--literal-pathspecs",
-        "log",
-        "--full-history",
-        "--reverse",
-        "--diff-filter=A",
-        "--format=%H",
-        "--",
-        file,
-      ])
-    )
-      .toString("ascii")
-      .trim()
-      .split("\n")[0];
-    const latest = (
-      await runGit(this.root, [
-        "--literal-pathspecs",
-        "log",
-        "--full-history",
-        "-1",
-        "--format=%H",
-        "--",
-        file,
-      ])
-    )
-      .toString("ascii")
-      .trim();
-    return {
-      ...(first ? { first: { commit: oid(first), path: file } } : {}),
-      ...(latest ? { latest: { commit: oid(latest), path: file } } : {}),
-    };
+    const head = await this.retainedHead();
+    if (!head) return {};
+    const entry = (await this.pathIndex(head))[file];
+    return entry
+      ? { first: { commit: entry.first, path: file }, latest: { commit: entry.latest, path: file } }
+      : {};
+  }
+
+  private async pathIndex(head: string) {
+    return this.derivedAtHead<
+      Record<string, { first: string; firstTime: string; latest: string; latestTime: string }>
+    >("path-versions", 1, head, async () => {
+      const result: Record<
+        string,
+        { first: string; firstTime: string; latest: string; latestTime: string }
+      > = {};
+      for (const record of await this.snapshotRecords(head))
+        for (const file of record.files) {
+          const previous = result[file.path];
+          if (!previous && file.status !== "A") continue;
+          result[file.path] = {
+            first: previous?.first ?? record.commit,
+            firstTime: previous?.firstTime ?? record.time,
+            latest: record.commit,
+            latestTime: record.time,
+          };
+        }
+      return result;
+    });
   }
 
   /** Changes from an exclusive ancestor to an inclusive descendant, oldest first. */
   async changesInRange(range: { from?: string; to?: string } = {}): Promise<HistoryCommit[]> {
+    if (!range.from && !range.to)
+      return this.derived("identity-events", 1, () => this.buildChangesInRange(range));
+    return this.buildChangesInRange(range);
+  }
+
+  private async buildChangesInRange(range: {
+    from?: string;
+    to?: string;
+  }): Promise<HistoryCommit[]> {
     await this.ensureRepository();
-    const head = await this.currentCommit();
+    const head = await this.retainedHead();
     if (!head) return [];
     const to = range.to ? oid(range.to) : head;
-    if (to !== head) await runGit(this.root, ["merge-base", "--is-ancestor", to, head]);
     const from = range.from ? oid(range.from) : undefined;
-    if (from) await runGit(this.root, ["merge-base", "--is-ancestor", from, to]);
-    const records = parseHistoryLog(
-      await runGit(this.root, [
-        "log",
-        "--first-parent",
-        "--reverse",
-        "--raw",
-        "-z",
-        "--no-renames",
-        "--root",
-        "--no-abbrev",
-        "--no-color",
-        "--no-show-signature",
-        "--diff-merges=first-parent",
-        "--format=%x00%H%x00%P%x00%cI%x00%B%x00",
-        from ? `${from}..${to}` : to,
-      ]),
+    const retained = await this.snapshot(head);
+    const byCommit = new Map(retained.records.map((record) => [record.commit, record]));
+    if (!byCommit.has(to)) throw new Error(`Git version is not reachable: ${to}`);
+    const ancestors = (start: string) => {
+      const seen = new Set<string>(),
+        pending = [start];
+      while (pending.length) {
+        const commit = pending.pop()!;
+        if (seen.has(commit)) continue;
+        seen.add(commit);
+        pending.push(...(byCommit.get(commit)?.parents ?? []));
+      }
+      return seen;
+    };
+    if (from && !ancestors(to).has(from))
+      throw new Error(`Git version is not an ancestor: ${from}`);
+    const excluded = from ? ancestors(from) : new Set<string>();
+    const records = this.firstParentRecords(retained, to).filter(
+      (record) => !excluded.has(record.commit),
     );
     const objects = new Set<string>();
     const initial: Array<{ path: string; blob: string }> = [];
@@ -856,13 +1088,14 @@ export class GitDocumentHistory {
     }
     for (const record of records)
       for (const file of record.files) {
+        if (!isHistoryDocument(file.path) || file.status === "T") continue;
         if (file.beforeBlob) objects.add(file.beforeBlob);
         if (file.afterBlob) objects.add(file.afterBlob);
       }
     const identities = new Map<string, string | undefined>();
-    for (const [object, result] of await readBlobs(this.root, objects, identity)) {
-      if (result instanceof Error) throw result;
-      identities.set(object, result);
+    for (const object of objects) {
+      const id = retained.frontmatters[object]?.id;
+      identities.set(object, typeof id === "string" && isHistoryId(id) ? id : undefined);
     }
     const result: HistoryCommit[] = [];
     const live = new Map<string, string>();
@@ -884,7 +1117,8 @@ export class GitDocumentHistory {
       );
       const changes: HistoryChange[] = [];
       const byId = new Map<string, HistoryChange>();
-      for (const { path: file, beforeBlob, afterBlob } of files) {
+      for (const { path: file, status, beforeBlob, afterBlob } of files) {
+        if (!isHistoryDocument(file) || status === "T") continue;
         const before = parent && beforeBlob ? { commit: parent, path: file } : undefined;
         const after = afterBlob ? { commit, path: file } : undefined;
         const beforeId = beforeBlob ? identities.get(beforeBlob) : undefined;

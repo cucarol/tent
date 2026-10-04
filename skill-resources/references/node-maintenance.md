@@ -183,7 +183,8 @@ escapes `.tent`; from `.tent/A/B/B.md`, use `../../../spec/x.md` instead.
 After maintaining Nodes, run `tent workspace check --json` once instead of
 writing a checking script. It reports unresolved links, invalid material
 addresses and missing local material files across Nodes, Roles and Cards.
-It changes no files and does not decide whether a fact is still current.
+It changes no documents or Git history and does not decide whether a fact is
+still current. Reads may populate disposable indexes in `.tent/.git`.
 
 Creating and saving automatically observe new local material versions. A plain
 save retains existing versions when material changed or became unavailable;

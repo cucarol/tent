@@ -44,6 +44,8 @@ async function bytes(directory: string, prefix = ""): Promise<Record<string, str
   )) {
     const file = path.join(directory, entry.name);
     const key = `${prefix}${entry.name}`;
+    // Disposable history indexes may be populated by an otherwise read-only query.
+    if (/\/\.git\/tent-(?:history-index|derived-[a-z0-9-]+)\.json$/.test(key)) continue;
     if (entry.isDirectory()) Object.assign(result, await bytes(file, `${key}/`));
     else result[key] = (await fs.readFile(file)).toString("base64");
   }
@@ -184,7 +186,7 @@ test("invalid documents and malformed declarations remain visible and inspectabl
   );
 });
 
-test("retained Card source versions survive live moves and deletion without filesystem or history writes", async (t) => {
+test("retained Card source versions survive live moves and deletion without document or history writes", async (t) => {
   const { root, workspace, systemRoot, adapter, write, fileExists } = await fixture(t);
   await git(systemRoot, "init");
   await write("Original/Original.md", { id: "node-original" }, "retained source");

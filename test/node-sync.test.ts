@@ -67,8 +67,12 @@ test("link-output accepts Workspace paths, bundle addresses, Node IDs and URIs w
     "../out/page.html",
   );
   assert.equal((await inspectNodeSync(fs, linked.nodeId)).materials[0]!.state, "current");
+  const retainedHead = await fs.history.currentCommit();
   await writeFile(path.join(workspace, "out", "page.html"), "changed");
   assert.equal((await inspectNodeSync(fs, linked.nodeId)).state, "behind");
+  const freshSync = await inspectWorkspaceSync(new NodeFs(root));
+  assert.equal(freshSync.nodes.find((node) => node.nodeId === linked.nodeId)!.state, "behind");
+  assert.equal(await fs.history.currentCommit(), retainedHead);
   const duplicate = await linkNodeOutput(fs, goal, { resource: "./out/page.html" });
   assert.equal(duplicate.path, "Parent/Goal/page.html 2");
   const explicit = await linkNodeOutput(fs, goal, { resource: "out/page.html", name: "Selected" });
@@ -143,6 +147,36 @@ test("link-output rejects missing, unreadable and directory materials before lea
   assert.equal(await fs.readFile("order.json"), order);
   assert.equal(await fs.history.currentCommit(), head);
   assert.deepEqual(await fs.history.nodeRecords(), records);
+});
+
+test("workspace inspection keeps catalog order and isolates each Node's conflict retries", async (t) => {
+  const { fs, create } = await fixture(t, false);
+  const changed = await create("A"),
+    racing = await create("B"),
+    steady = await create("C");
+  const read = fs.readFile.bind(fs);
+  const counts = new Map<string, number>();
+  fs.readFile = async (file) => {
+    const raw = await read(file);
+    if (file !== "A/A.md" && file !== "B/B.md") return raw;
+    const count = (counts.get(file) ?? 0) + 1;
+    counts.set(file, count);
+    if (file === "A/A.md" && count === 2) {
+      await fs.writeFile(file, raw + "updated\n");
+      return raw + "updated\n";
+    }
+    return file === "B/B.md" && count % 2 === 0 ? raw + "racing\n" : raw;
+  };
+  const result = await inspectWorkspaceSync(fs);
+  assert.deepEqual(
+    result.nodes.map((node) => node.nodeId),
+    [changed, racing, steady],
+  );
+  assert.equal(result.nodes[0]!.uncertain, undefined);
+  assert.equal(result.nodes[1]!.uncertain, true);
+  assert.equal(result.nodes[2]!.uncertain, undefined);
+  assert.equal(counts.get("A/A.md"), 4);
+  assert.equal(counts.get("B/B.md"), 4);
 });
 
 test("goal and hierarchical output follow the two-stage production and confirmation cycle", async (t) => {

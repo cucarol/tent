@@ -429,7 +429,7 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .mcard-face.is-old > :is(.pet, .pub-face) { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px var(--warn) !important; }
 .face-env { position: absolute; right: -5px; bottom: -4px; display: grid; place-items: center; width: 12px; height: 12px; border-radius: 50%; background: var(--new); color: #fff; box-shadow: 0 0 0 1.5px var(--bg); }
 .face-env .icon { stroke-width: 3; }
-.face-progress { width: auto; min-width: 22px; padding: 0 3px; border-radius: 5px; font-size: 8px; font-style: normal; }
+.face-env.is-working { background: var(--text-3); }
 .mcard-face.is-old .face-env { background: var(--warn); }
 .mcard-more { flex: none; margin-left: 4px; font-size: 11px; color: var(--text-3); }
 /* Its number in the draft being written, pinned to the corner like the tree's. */

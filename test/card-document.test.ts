@@ -353,9 +353,29 @@ test("Received Card source inspection compares live content, follows Node identi
   assert.equal(filtered.items[0]!.state, "changed");
   assert.equal(filtered.items[0]!.path, "Main/Main.md");
   assert.equal(filtered.diagnostics.length, 0);
+  const readBinary = adapter.readBinary.bind(adapter),
+    completed: string[] = [];
+  let releaseOther!: () => void;
+  const otherCanFinish = new Promise<void>((resolve) => {
+    releaseOther = resolve;
+  });
+  const fallback = setTimeout(releaseOther, 200);
+  const reads = t.mock.method(adapter, "readBinary", async (file: string) => {
+    if (file === otherRole.path) await otherCanFinish;
+    const raw = await readBinary(file);
+    if (file === received.path) {
+      completed.push(received.cardId);
+      releaseOther();
+    } else if (file === otherRole.path) completed.push(otherRole.cardId);
+    return raw;
+  });
+  const ordered = await inspectReceivedCardSourceChanges(adapter);
+  clearTimeout(fallback);
+  reads.mock.restore();
+  assert.deepEqual(completed, [received.cardId, otherRole.cardId]);
   assert.deepEqual(
-    (await inspectReceivedCardSourceChanges(adapter)).items.map((item) => item.cardId).sort(),
-    [received.cardId, otherRole.cardId].sort(),
+    ordered.items.map((item) => item.cardId),
+    [otherRole.cardId, received.cardId],
   );
   assert.equal(await adapter.history.currentCommit(), head);
   assert.equal(capture.mock.callCount(), 0);
@@ -387,6 +407,11 @@ test("Received Card source inspection compares live content, follows Node identi
   const failed = await inspectReceivedCardSourceChanges(adapter, { roleId: "role-a" });
   assert.deepEqual(failed.items, []);
   assert.match(failed.diagnostics[0]!.message, /retained history unavailable/);
+  const failedAll = await inspectReceivedCardSourceChanges(adapter);
+  assert.deepEqual(
+    failedAll.diagnostics.map((item) => item.cardId),
+    [otherRole.cardId, received.cardId],
+  );
 });
 
 test("filtered Card lists skip history and keep malformed-header diagnostics", async (t) => {

@@ -32,6 +32,7 @@ type FileEntry =
   | { kind: "directory"; path: string };
 const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const excluded = (relative: string) =>
+  /^\.git\/tent-(?:history-index|derived-[a-z0-9-]+)\.json(?:\.[^/]+\.tmp)?$/.test(relative) ||
   relative === MUTATION_LOCK_PATH ||
   relative.startsWith(`${MUTATION_LOCK_PATH}.`) ||
   relative === TEMP_DIR ||
@@ -222,6 +223,14 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
       mount.workspaceId,
       files,
     );
+    // Validating retained Card sources may build disposable indexes in the copy.
+    const copiedGit = path.join(candidate, ".tent", ".git");
+    const gitEntries = await fs.readdir(copiedGit).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    for (const name of gitEntries)
+      if (excluded(`.git/${name}`)) await fs.rm(path.join(copiedGit, name), { force: true });
     const manifest = {
       schemaVersion: 1,
       workspaceId: mount.workspaceId,
@@ -231,6 +240,7 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
       excluded: [
         "machine state, credentials, launch settings, running sessions",
         "locks and temporary files",
+        "disposable Git history indexes",
         "external project/URL bytes",
       ],
       restore: "Use this directory as the same Workspace; external material bytes are not included",

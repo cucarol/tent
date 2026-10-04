@@ -60,6 +60,12 @@ test("direct export preserves published Git sources after live rename/deletion a
   const exported = parse(
     await runWorkspaceCommand("export", ["--output", "output/context"], globals),
   );
+  assert.equal(
+    (await fs.readdir(path.join(exported.outputDir, ".tent/.git"))).some((name) =>
+      /^tent-(?:history-index|derived-.*)\.json/.test(name),
+    ),
+    false,
+  );
   const restored = new NodeFs(path.join(exported.outputDir, ".tent"));
   assert.equal(
     await restored.readFile(`cards/${card.cardId}.md`),

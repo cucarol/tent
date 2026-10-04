@@ -112,13 +112,14 @@ export async function inspectCurrentContext(
   workspaceRoot: string,
   options: { roleId?: string } = {},
 ) {
+  const cardsPromise = listCardDocuments(fs, {
+    ...(options.roleId ? { roleId: options.roleId, includeOpen: true } : {}),
+  });
   const [sync, observations, cards, sourceChanges] = await Promise.all([
     inspectWorkspaceSync(fs),
     readSessionObservations(fs),
-    listCardDocuments(fs, {
-      ...(options.roleId ? { roleId: options.roleId, includeOpen: true } : {}),
-    }),
-    inspectReceivedCardSourceChanges(fs, options),
+    cardsPromise,
+    cardsPromise.then((cards) => inspectReceivedCardSourceChanges(fs, options, cards)),
   ]);
   const unlinkedOutputs = findUnlinkedOutputs(sync, observations.events, workspaceRoot);
   const aheadIds = new Set(sync.nodes.filter((node) => node.ahead).map((node) => node.nodeId));

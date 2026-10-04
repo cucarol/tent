@@ -71,9 +71,9 @@ async function inspectCatalogNodes(
   explicitNodeId?: string,
 ) {
   const records = await retainedNodeRecords(fs);
-  const nodes: NodeSyncInspection[] = [];
   const goalMismatch = new Set<string>();
-  for (let current of selected) {
+  const inspect = async (current: CatalogNode) => {
+    let nodeCatalog = catalog;
     let result: NodeSyncInspection | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -81,7 +81,13 @@ async function inspectCatalogNodes(
         const { data, body } = parseFrontmatter(raw);
         const path = nodeNotePath(current.path);
         const record = records[current.nodeId];
-        const observations = await observeNodeMaterials(fs, data, path, undefined, catalog.byId);
+        const observations = await observeNodeMaterials(
+          fs,
+          data,
+          path,
+          undefined,
+          nodeCatalog.byId,
+        );
         const materials: NodeSyncInspection["materials"] = observations.map((observation) => {
           const recordedVersion = record?.materials.find(
             (m) => m.identity === observation.identity,
@@ -101,7 +107,7 @@ async function inspectCatalogNodes(
             ...(observation.reason ? { reason: observation.reason } : {}),
           };
         });
-        const goal = isOutputNode(data) ? nearestGoal(current, catalog.byId) : undefined;
+        const goal = isOutputNode(data) ? nearestGoal(current, nodeCatalog.byId) : undefined;
         if (goal) {
           const { raw: goalRaw } = await readCatalogDocument(fs, goal);
           const parsed = parseFrontmatter(goalRaw);
@@ -109,7 +115,7 @@ async function inspectCatalogNodes(
             parsed.data,
             parsed.body,
             nodeNotePath(goal.path),
-            catalog.byId,
+            nodeCatalog.byId,
           );
           const recordedVersion =
             record?.goal?.nodeId === goal.nodeId ? record.goal.version : undefined;
@@ -158,8 +164,8 @@ async function inspectCatalogNodes(
         )
           throw error;
         if (attempt === 0) {
-          catalog = await loadNodeCatalog(fs);
-          const refreshed = catalog.byId.get(current.nodeId);
+          nodeCatalog = await loadNodeCatalog(fs);
+          const refreshed = nodeCatalog.byId.get(current.nodeId);
           if (
             refreshed &&
             !refreshed.invalid &&
@@ -186,8 +192,19 @@ async function inspectCatalogNodes(
         };
       }
     }
-    nodes.push(result!);
-  }
+    return result!;
+  };
+  const nodes: NodeSyncInspection[] = new Array(selected.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(4, selected.length) }, async () => {
+      for (;;) {
+        const index = next++;
+        if (index >= selected.length) return;
+        nodes[index] = await inspect(selected[index]!);
+      }
+    }),
+  );
   const outputNodes = nodes
     .filter((n) => isOutputNode(n))
     .map((n) => ({

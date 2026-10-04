@@ -170,8 +170,9 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
 
 /**
  * The lanes a Node went to in published Cards, up to three faces: a Role, or the public area. One still
- * waiting to be received has a blue ring and an envelope, amber when that Card pinned an older version.
- * A Role's face selects the Role.
+ * waiting to be received has a blue ring and an envelope, amber when that Card pinned an older version;
+ * one received but without outputs for all its goals has a grey ellipsis. Finished lanes stay quiet, and
+ * the tooltip counts the goals. A Role's face selects the Role.
  */
 function Faces({ graph, hands }: { graph: Graph; hands: Hand[] }) {
   const { activeRole, onRole } = useContext(MapActions);
@@ -197,16 +198,10 @@ function Faces({ graph, hands }: { graph: Graph; hands: Hand[] }) {
           ) : (
             <Pet id={h.lane} size={16} />
           );
-        const envelope = (h.waiting > 0 || h.totalGoalCount > 0) && (
-          <i className={`face-env${h.totalGoalCount > 1 ? " face-progress" : ""}`}>
-            {h.totalGoalCount > 1 ? (
-              `${h.goalCount}/${h.totalGoalCount}`
-            ) : (
-              <Icon
-                name={h.waiting > 0 ? "mail" : h.goalCount === h.totalGoalCount ? "check" : "clock"}
-                size={8}
-              />
-            )}
+        const working = !h.waiting && h.goalCount < h.totalGoalCount;
+        const envelope = (h.waiting > 0 || working) && (
+          <i className={`face-env${working ? " is-working" : ""}`}>
+            <Icon name={working ? "working" : "mail"} size={8} />
           </i>
         );
         return role ? (
