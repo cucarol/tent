@@ -4,7 +4,6 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import * as path from "node:path";
-import { AnnotationWriteError, readAnnotations, writeAnnotations } from "../core/annotations.js";
 import {
   createCardDocument,
   createCardDraft,
@@ -48,7 +47,7 @@ export type UiServer = {
 };
 
 const MB = 1024 * 1024;
-const BODY_LIMIT = { document: 2 * MB, annotations: 5 * MB };
+const BODY_LIMIT = { document: 2 * MB };
 const FILE_LIMIT = 20 * MB;
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -67,17 +66,13 @@ const STATIC_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".json": "application/json",
   ".map": "application/json",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
   ...IMAGE_TYPES,
 };
-// Excalidraw styles elements inline; Markdown may show images from the web.
+// Map positions use inline styles; Markdown may show images from the web.
 const PAGE_POLICY = [
   "default-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' blob: data: http: https:",
-  "font-src 'self' data:",
-  "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'none'",
   "frame-ancestors 'none'",
@@ -267,30 +262,6 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       });
     }
     if (route === "GET /api/files") return file(res, url.searchParams.get("path") ?? "");
-    if (route === "GET /api/annotations") return json(res, 200, await readAnnotations(fs));
-    if (route === "PUT /api/annotations") {
-      const input = record(await readJson(req, BODY_LIMIT.annotations));
-      if (input.baseEtag !== null && typeof input.baseEtag !== "string")
-        throw new HttpError(422, "INVALID_INPUT", "baseEtag must be text or null");
-      try {
-        return json(
-          res,
-          200,
-          await serial(() =>
-            writeAnnotations(fs, {
-              baseEtag: input.baseEtag as string | null,
-              document: input.document,
-            }),
-          ),
-        );
-      } catch (error) {
-        if (error instanceof AnnotationWriteError && error.code === "ETAG_CONFLICT")
-          throw new HttpError(409, error.code, error.message, {
-            current: await readAnnotations(fs).catch(() => undefined),
-          });
-        throw error;
-      }
-    }
     throw new HttpError(404, "NOT_FOUND", `No such endpoint: ${route}`);
   }
 
@@ -510,8 +481,6 @@ function httpError(error: unknown): HttpError {
       message,
       error.details,
     );
-  if (error instanceof AnnotationWriteError)
-    return new HttpError(error.code === "ETAG_CONFLICT" ? 409 : 422, error.code, message);
   if (error instanceof Error && error.name === "ZodError")
     return new HttpError(422, "INVALID_INPUT", message);
   // Another Tent writer (the CLI, say) holds the lock; nothing was written, so the page retries.

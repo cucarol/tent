@@ -2,7 +2,6 @@ import type { CSSProperties } from "react";
 import {
   ArrowDown,
   ArrowUpRight,
-  Brush,
   Check,
   ChevronDown,
   ChevronRight,
@@ -152,7 +151,6 @@ const icons = {
   refs: Spline,
   lens: Waypoints,
   clock: History,
-  canvas: Brush,
   help: CircleHelp,
   play: Play,
   pause: Pause,

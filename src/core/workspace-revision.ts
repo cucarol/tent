@@ -8,7 +8,6 @@ import {
   OPERATIONAL_TOP_LEVEL,
   ORDER_PATH,
   WORKSPACE_SETTINGS_PATH,
-  ANNOTATIONS_PATH,
 } from "./paths.js";
 
 /** Scan filenames only, including malformed identity documents so edits remain observable. */
@@ -37,7 +36,7 @@ export async function workspaceDocumentPaths(fs: FsAdapter): Promise<string[]> {
 /** No document parsing, Git diff, capture or watcher; hash the bytes used by the UI. */
 export async function readWorkspaceRevision(fs: FsAdapter): Promise<string> {
   const files = new Set(await workspaceDocumentPaths(fs));
-  for (const file of [ORDER_PATH, WORKSPACE_SETTINGS_PATH, ANNOTATIONS_PATH])
+  for (const file of [ORDER_PATH, WORKSPACE_SETTINGS_PATH])
     if (await fs.exists(file)) files.add(file);
   const digest = createHash("sha256");
   for (const file of [...files].sort()) {

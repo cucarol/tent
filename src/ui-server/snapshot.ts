@@ -1,6 +1,5 @@
 // Build the Web UI read model (src/ui/data/types.ts) from Core.
 import { readOnlyFs, type FsAdapter } from "../core/adapter.js";
-import { readAnnotations } from "../core/annotations.js";
 import { listHistoryChanges } from "../core/history-query.js";
 import { listWorkspaceRelations, type WorkspaceRelation } from "../core/workspace-relations.js";
 import { isNodeId, isRoleId, isCardId } from "../core/id.js";
@@ -183,15 +182,12 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
   for (const n of nodes) n.incoming = incoming.get(n.id) ?? [];
   for (const r of roles) r.incoming = incoming.get(r.id) ?? [];
 
-  // An unreadable annotations file shows as none here; the annotation layer reports the error.
-  const saved = await readAnnotations(fs).catch(() => ({ etag: null, document: null }));
   return {
     workspace: {
       ...source.workspace,
       revision: source.revision,
       generatedAt: new Date().toISOString(),
     },
-    annotations: { etag: saved.etag, count: saved.document?.map.elements.length ?? 0 },
     nodes,
     roles,
     cards,

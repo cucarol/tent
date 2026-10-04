@@ -31,7 +31,11 @@ test(
     await assert.rejects(fs.access(path.join(bundle, "node_modules")), { code: "ENOENT" });
     assert.ok((await fs.stat(path.join(bundle, "cli.mjs"))).size > 0);
     assert.ok((await fs.stat(path.join(bundle, "ui-dist/app.js"))).size > 0);
-    assert.ok((await fs.readdir(path.join(bundle, "ui-dist/fonts/Xiaolai"))).length > 0);
+    await assert.rejects(fs.access(path.join(bundle, "ui-dist/fonts")), { code: "ENOENT" });
+    assert.doesNotMatch(
+      await fs.readFile(path.join(bundle, "ui-dist/THIRD_PARTY_NOTICES.txt"), "utf8"),
+      /excalidraw/i,
+    );
     await assert.rejects(fs.access(path.join(bundle, "ui-dist/snapshot.json")), { code: "ENOENT" });
     const catalogue = JSON.parse(
       await fs.readFile(path.join(fixture, ".agents/plugins/marketplace.json"), "utf8"),

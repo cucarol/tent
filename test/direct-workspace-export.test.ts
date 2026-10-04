@@ -8,7 +8,6 @@ import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { writeAnnotations } from "../src/core/annotations.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { git } from "./helpers.js";
 
@@ -57,22 +56,11 @@ test("direct export preserves published Git sources after live rename/deletion a
   await fs.unlink(path.join(tentRoot, "roles", `${role.roleId}.md`));
   await adapter.writeFile("temp/not-exported.json", "runtime only");
   await fs.writeFile(path.join(workspace, "external.txt"), "external bytes stay external");
-  await writeAnnotations(adapter, {
-    baseEtag: null,
-    document: {
-      schemaVersion: 1,
-      map: { elements: [{ id: "stroke", type: "freedraw" }], anchors: {} },
-    },
-  });
   const before = await git(tentRoot, "status", "--porcelain");
   const exported = parse(
     await runWorkspaceCommand("export", ["--output", "output/context"], globals),
   );
   const restored = new NodeFs(path.join(exported.outputDir, ".tent"));
-  assert.equal(
-    await restored.readFile("annotations.json"),
-    await adapter.readFile("annotations.json"),
-  );
   assert.equal(
     await restored.readFile(`cards/${card.cardId}.md`),
     await adapter.readFile(`cards/${card.cardId}.md`),

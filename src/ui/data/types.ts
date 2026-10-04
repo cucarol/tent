@@ -97,8 +97,6 @@ export type SnapshotCommit = {
 
 export type Snapshot = {
   workspace: { id: string; name: string; revision: string; generatedAt: string };
-  /** The saved annotations, fetched separately; this tells whether to load and when to refetch. */
-  annotations: { etag: string | null; count: number };
   nodes: SnapshotNode[];
   roles: SnapshotRole[];
   cards: SnapshotCard[];

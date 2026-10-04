@@ -25,6 +25,5 @@ export * from "./session-observations.js";
 export * from "./context-brief.js";
 export * from "./history-query.js";
 export * from "./document-diff.js";
-export * from "./annotations.js";
 export * from "./workspace-revision.js";
 export * from "./workspace-relations.js";

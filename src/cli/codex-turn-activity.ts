@@ -126,12 +126,7 @@ export async function readCodexTurnActivity(
           .some((part) => ARTIFACT_EXCLUDED.includes(part))
       ) {
         const document = relative!.slice(".tent/".length);
-        if (
-          isHistoryDocument(document) &&
-          document !== "annotations.json" &&
-          !document.startsWith("roles/")
-        )
-          nodeOrCardChanged = true;
+        if (isHistoryDocument(document) && !document.startsWith("roles/")) nodeOrCardChanged = true;
       }
       if (inside && relative!.split("/").some((part) => ARTIFACT_EXCLUDED.includes(part))) return;
       if (inside && !relative) return;

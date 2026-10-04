@@ -1,10 +1,9 @@
 import type { FsAdapter } from "./adapter.js";
 import type { CaptureMetadata, DocumentVersion } from "./git-history.js";
-import { isOperationalPath, nodeNotePath, MUTATION_LOCK_PATH, ANNOTATIONS_PATH } from "./paths.js";
+import { isOperationalPath, nodeNotePath, MUTATION_LOCK_PATH } from "./paths.js";
 
-/** Identity documents and workspace annotations participate; operational caches do not. */
+/** Identity documents participate; operational caches do not. */
 export function isHistoryDocument(file: string): boolean {
-  if (file === ANNOTATIONS_PATH) return true;
   if (/^roles\/role-[^/]+\.md$/.test(file)) return true;
   if (/^cards\/card-[^/]+\.md$/.test(file)) return true;
   if (isOperationalPath(file)) return false;

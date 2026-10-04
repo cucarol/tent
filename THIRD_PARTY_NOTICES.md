@@ -10,4 +10,4 @@ The Tent npm package ships the direct CLI and Skills. Its third-party runtime de
 
 The standalone Agent plugin bundles its runtime dependencies and generates their complete license notices during `npm run plugin:build`.
 
-The bundled Web UI includes its own dependency notices at `ui-dist/THIRD_PARTY_NOTICES.txt` in both npm and plugin distributions. UI code, editor/sketch chunks and self-hosted fonts are built together; the development workspace snapshot is excluded.
+The bundled Web UI includes its own dependency notices at `ui-dist/THIRD_PARTY_NOTICES.txt` in both npm and plugin distributions. UI code and editor chunks are built together; the development workspace snapshot is excluded.

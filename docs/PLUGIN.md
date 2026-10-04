@@ -46,6 +46,8 @@ node "<插件目录>/skill-resources/scripts/tent.mjs" node list --workspace "<�
 
 Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.tent/` 的目录是唯一工作区；其他 cwd 通过 `--workspace` 明确指定。路径从声明它的 Markdown 解析。真实文件、图片、网页等由宿主已有工具读取，Tent 不提供应用或格式适配。
 
+需要画草图时，用 Excalidraw 本身保存工作区文件，再由 Node 引用该文件。
+
 包内包含 CLI 与 Web UI 静态资源。运行同包 `cli.mjs ui --workspace <工作区路径>` 可打开界面（例如 `node <插件路径>/cli.mjs ui --workspace <工作区路径>`）；`--no-open` 只打印地址。服务仅在当前终端前台运行，Ctrl+C 退出，不注册 Session。其他命令直接读写文档和 Git，无需启动 UI 服务。
 
 ## Hook 边界

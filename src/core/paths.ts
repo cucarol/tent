@@ -7,7 +7,6 @@ export const TENT_SYSTEM_DIR = ".tent";
 /** Role Markdown documents (operational, not Nodes). */
 export const ROLES_DIR = "roles";
 export const ORDER_PATH = "order.json";
-export const ANNOTATIONS_PATH = "annotations.json";
 export const MUTATION_LOCK_PATH = "mutation.lock";
 export const NODE_MOVE_PENDING_PATH = "node-move.pending.json";
 export const DELETE_PENDING_PATH = "delete.pending.json";
@@ -50,7 +49,6 @@ export function cardRecordPath(cardId: string): string {
 /** 系统注册表文件名（非 Node）。 */
 export const SYSTEM_REGISTRY_FILES = new Set([
   ORDER_PATH,
-  ANNOTATIONS_PATH,
   MUTATION_LOCK_PATH,
   NODE_MOVE_PENDING_PATH,
   DELETE_PENDING_PATH,

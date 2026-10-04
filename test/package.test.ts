@@ -234,7 +234,10 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
   assert.ok(packedPaths.includes("cli.mjs"));
   for (const file of ["index.html", "app.js", "app.css", "favicon.svg", "THIRD_PARTY_NOTICES.txt"])
     assert.ok(packedPaths.includes(`ui-dist/${file}`), `UI asset is packed: ${file}`);
-  assert.ok(packedPaths.some((file: string) => file.startsWith("ui-dist/fonts/Xiaolai/")));
+  assert.equal(
+    packedPaths.some((file: string) => file.startsWith("ui-dist/fonts/")),
+    false,
+  );
   assert.equal(packedPaths.includes("ui-dist/snapshot.json"), false);
   assert.equal(
     packedPaths.some((file: string) => file.startsWith("ui-dist/") && file.endsWith(".map")),
@@ -251,11 +254,7 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
     packedPaths.includes("third_party/licenses/agentclientprotocol-sdk-1.4.0-LICENSE"),
     false,
   );
-  for (const license of [
-    "react-aria-components-1.21.0-LICENSE",
-    "libavoid-js-0.4.5-LICENSE",
-    "excalidraw-0.18.1-LICENSE",
-  ]) {
+  for (const license of ["react-aria-components-1.21.0-LICENSE", "libavoid-js-0.4.5-LICENSE"]) {
     assert.ok(
       !packedPaths.includes(`third_party/licenses/${license}`),
       `npm package excludes archived Desktop license ${license}`,

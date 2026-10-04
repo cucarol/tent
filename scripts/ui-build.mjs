@@ -22,46 +22,8 @@ export async function buildUi(buildRoot = root, { watch = false, outputDir } = {
     path.join(root, "assets/icons/tent-mark-transparent-flat.svg"),
     path.join(out, "favicon.svg"),
   );
-  // Excalidraw loads its fonts from EXCALIDRAW_ASSET_PATH; serve them locally.
-  await fs.cp(
-    path.join(root, "node_modules/@excalidraw/excalidraw/dist/prod/fonts"),
-    path.join(out, "fonts"),
-    { recursive: true },
-  );
-
-  // Excalidraw's zh-CN pack leaves some strings in English. Serve it through a module that fills them in from
-  // src/ui/map/excalidrawZh.ts and re-exports every section by name, since Excalidraw reads the pack's named exports.
-  const LOCALE = "excalidraw-zh-cn";
-  const excalidrawZh = {
-    name: LOCALE,
-    setup(build) {
-      build.onResolve({ filter: /[\\/]locales[\\/]zh-CN-\w+\.js$/ }, (args) => {
-        if (args.namespace === LOCALE || !args.importer.includes("@excalidraw")) return undefined;
-        return { path: path.join(args.resolveDir, args.path), namespace: LOCALE };
-      });
-      build.onLoad({ filter: /.*/, namespace: LOCALE }, async (args) => {
-        const dir = path.dirname(args.path);
-        const en = (await fs.readdir(dir)).find((f) => /^en-\w+\.js$/.test(f));
-        const sections = Object.keys(
-          (await import(pathToFileURL(path.join(dir, en)).href)).default,
-        );
-        return {
-          resolveDir: root,
-          contents: [
-            `import * as upstream from ${JSON.stringify(args.path)};`,
-            `import { withMissing } from "./src/ui/map/excalidrawZh.ts";`,
-            "const pack = withMissing(upstream);",
-            "export default pack;",
-            `export const { ${sections.join(", ")} } = pack;`,
-          ].join("\n"),
-        };
-      });
-    },
-  };
-
   const options = {
     absWorkingDir: root,
-    plugins: [excalidrawZh],
     entryPoints: { app: "src/ui/main.tsx" },
     bundle: true,
     format: "esm",
@@ -72,7 +34,6 @@ export async function buildUi(buildRoot = root, { watch = false, outputDir } = {
     target: "es2022",
     conditions: [watch ? "development" : "production"],
     define: { "process.env.NODE_ENV": JSON.stringify(watch ? "development" : "production") },
-    loader: { ".woff2": "file", ".ttf": "file", ".png": "file" },
     sourcemap: watch,
     minify: !watch,
     logLevel: "info",
@@ -84,11 +45,7 @@ export async function buildUi(buildRoot = root, { watch = false, outputDir } = {
     await context.watch();
   } else {
     const result = await esbuild.build(options);
-    await writeDependencyNotices(
-      root,
-      out,
-      Object.keys(result.metafile.inputs).filter((input) => !input.startsWith(LOCALE + ":")),
-    );
+    await writeDependencyNotices(root, out, Object.keys(result.metafile.inputs));
   }
 }
 

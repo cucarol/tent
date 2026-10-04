@@ -1,7 +1,6 @@
 // Client for the `tent ui` service (contract: Tent Node "Web界面服务接口").
 // The token arrives once in the URL fragment and is kept for this tab only.
 import { t } from "../i18n.js";
-import type { AnnotationDocument } from "../map/annotations.js";
 import type { DocumentVersion, Snapshot } from "./types.js";
 
 const TOKEN_KEY = "tent-token";
@@ -125,7 +124,6 @@ export type SavedNode = {
   body: string;
   version?: DocumentVersion;
 };
-export type SavedAnnotations = { etag: string | null; document: AnnotationDocument | null };
 export type CardSourceInput = { resource: string; title?: string; [key: string]: unknown };
 /** What a draft holds: its prompt, ordered sources and the lane it sits in (no target = the public area). */
 export type DraftInput = {
@@ -187,17 +185,10 @@ export const api = {
     ),
   document: (version: DocumentVersion) =>
     call<{ raw: string }>(`/api/history/document?at=${at(version)}`),
-  annotations: () => call<SavedAnnotations>("/api/annotations"),
   workspaces: () => call<{ workspaces: KnownWorkspace[] }>("/api/workspaces"),
   /** Starts or finds the service for another workspace; the page then goes to its address. */
   openWorkspace: (path: string) =>
     call<{ url: string; portTaken?: number }>("/api/workspaces/open", send("POST", { path })),
-  /** `keepalive` lets a small save finish while the page closes. */
-  saveAnnotations: (baseEtag: string | null, document: AnnotationDocument, keepalive = false) =>
-    call<{ etag: string }>("/api/annotations", {
-      ...send("PUT", { baseEtag, document }),
-      keepalive,
-    }),
   diff: (from: DocumentVersion, to: DocumentVersion) =>
     call<{ text: string; pathChanged: boolean }>(`/api/history/diff?from=${at(from)}&to=${at(to)}`),
 };

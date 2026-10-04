@@ -74,7 +74,6 @@ function graphOf(nodes: SnapshotNode[], roles: SnapshotRole[] = [], cards: Snaps
   for (const n of nodes) n.childIds = nodes.filter((c) => c.parentId === n.id).map((c) => c.id);
   const snapshot: Snapshot = {
     workspace: { id: "ws-test", name: "test", revision: "r0", generatedAt: "" },
-    annotations: { etag: null, count: 0 },
     nodes,
     roles,
     cards,

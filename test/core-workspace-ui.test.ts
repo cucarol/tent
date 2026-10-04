@@ -5,15 +5,9 @@ import path from "node:path";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { createNode, renameNode } from "../src/core/ops.js";
-import {
-  readAnnotations,
-  writeAnnotations,
-  AnnotationWriteError,
-} from "../src/core/annotations.js";
 import { readWorkspaceRevision } from "../src/core/workspace-revision.js";
 import { listWorkspaceRelations } from "../src/core/workspace-relations.js";
-import { listHistoryChanges } from "../src/core/history-query.js";
-import { readDocumentVersion, readDocumentDiff } from "../src/core/document-diff.js";
+import { readDocumentVersion } from "../src/core/document-diff.js";
 import { createCardDocument } from "../src/core/card-document.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { testScratchRoot } from "./scratch.js";
@@ -37,121 +31,6 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
   return { workspace, root, adapter, env };
 }
 
-const drawing = () => ({
-  schemaVersion: 1,
-  map: {
-    elements: [
-      JSON.parse(
-        '{"id":"a","type":"freedraw","points":[[0,0],[2,3]],"customData":{"__proto__":{"kept":true}}}',
-      ),
-      { id: "b", type: "arrow", isDeleted: true },
-    ],
-    anchors: { a: { node: "node-gone", x: 2, y: 4 }, b: { node: "node-gone", x: 3, y: 5 } },
-  },
-});
-
-test("annotations share CAS/history, retain unknown JSON, and record stroke-sized diffs without no-op commits", async (t) => {
-  const { adapter } = await fixture(t);
-  assert.deepEqual(await readAnnotations(adapter), { etag: null, document: null });
-  const first = await writeAnnotations(adapter, { baseEtag: null, document: drawing() });
-  const read = await readAnnotations(adapter);
-  assert.equal(read.etag, first.etag);
-  assert.equal(read.document!.map.elements.length, 1);
-  assert.equal(read.document!.map.anchors.a!.node, "node-gone");
-  assert.equal(read.document!.map.anchors.b, undefined);
-  assert.deepEqual(
-    read.document!.map.elements[0]!.customData as object,
-    JSON.parse('{"__proto__":{"kept":true}}'),
-  );
-  const firstRaw = await adapter.readFile("annotations.json");
-  assert.equal(firstRaw.split("\n").filter((l) => l.includes('"id":')).length, 1);
-  await writeAnnotations(adapter, { baseEtag: first.etag, document: drawing() });
-  assert.equal((await listHistoryChanges(adapter)).length, 1);
-  const updated = drawing();
-  updated.map.elements[0].x = 80;
-  const second = await writeAnnotations(adapter, { baseEtag: first.etag, document: updated });
-  await assert.rejects(
-    () => writeAnnotations(adapter, { baseEtag: first.etag, document: drawing() }),
-    (e: unknown) => e instanceof AnnotationWriteError && e.code === "ETAG_CONFLICT",
-  );
-  await assert.rejects(
-    () => writeAnnotations(adapter, { baseEtag: null, document: drawing() }),
-    /Annotations changed/,
-  );
-  const history = await listHistoryChanges(adapter);
-  assert.deepEqual(
-    history.map((h) => [h.operation, h.entry, h.objectIds]),
-    [
-      ["annotations.write", "ui", []],
-      ["annotations.write", "ui", []],
-    ],
-  );
-  assert.ok(history.every((h) => h.time === new Date(h.time).toISOString()));
-  const from = history[0]!.changes[0]!.after!,
-    to = history[1]!.changes[0]!.after!;
-  assert.equal((await readDocumentVersion(adapter, from)).raw, firstRaw);
-  assert.equal(
-    (await readDocumentDiff(adapter, { from, to })).text
-      .split("\n")
-      .filter((l) => /^[+-]\s+\{"/.test(l)).length,
-    2,
-  );
-  assert.equal(second.etag, (await readAnnotations(adapter)).etag);
-  const card = await createCardDocument(adapter, {
-    prompt: "Read annotations",
-    sources: [{ resource: "/annotations.json" }],
-  });
-  const sources = parseFrontmatter(await adapter.readFile(card.path)).data.sources as Array<{
-    version?: unknown;
-  }>;
-  assert.equal(
-    sources[0]!.version,
-    undefined,
-    "annotations are a material pointer, not a captured Node/Role source",
-  );
-  await assert.rejects(
-    () => readDocumentVersion(adapter, { ...from, path: "settings.json" }),
-    /Not a Tent history document/,
-  );
-});
-
-test("invalid annotations fail before mutation and concurrent writers cannot both use one basis", async (t) => {
-  const { adapter, root } = await fixture(t);
-  for (const document of [
-    {},
-    { ...drawing(), schemaVersion: 2 },
-    {
-      schemaVersion: 1,
-      map: {
-        elements: [
-          { id: "same", type: "line" },
-          { id: "same", type: "text" },
-        ],
-        anchors: {},
-      },
-    },
-    {
-      schemaVersion: 1,
-      map: { elements: [{ id: "x", type: "text", value: Infinity }], anchors: {} },
-    },
-  ]) {
-    await assert.rejects(
-      async () => writeAnnotations(adapter, { baseEtag: null, document }),
-      (e: unknown) => e instanceof AnnotationWriteError && e.code === "INVALID_INPUT",
-    );
-    assert.equal(await adapter.exists("annotations.json"), false);
-  }
-  const result = await Promise.allSettled([
-    writeAnnotations(adapter, { baseEtag: null, document: drawing() }),
-    writeAnnotations(new NodeFs(root, "ui"), { baseEtag: null, document: drawing() }),
-  ]);
-  assert.equal(result.filter((r) => r.status === "fulfilled").length, 1);
-  assert.equal((await listHistoryChanges(adapter)).length, 1);
-  await adapter.writeFile("annotations.json", "broken");
-  await assert.rejects(() => readAnnotations(adapter), /Invalid annotations JSON/);
-  assert.equal(await adapter.readFile("annotations.json"), "broken");
-});
-
 test("workspace revision observes exact external bytes, identity paths, registries and HEAD without capturing", async (t) => {
   const { adapter, env, root } = await fixture(t);
   const revisions = [await readWorkspaceRevision(adapter)];
@@ -168,7 +47,6 @@ test("workspace revision observes exact external bytes, identity paths, registri
     ["roles/role-view.md", "a"],
     ["cards/card-view.md", "a"],
     ["order.json", "{}"],
-    ["annotations.json", "{}"],
   ]) {
     await adapter.writeFile(file!, raw!);
     revisions.push(await readWorkspaceRevision(adapter));

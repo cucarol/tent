@@ -8,7 +8,7 @@ export const documentDiffSchema = z.strictObject({
   to: documentVersionSchema,
 });
 
-/** Read retained bytes for a Node, Role, Card or workspace annotation document. */
+/** Read retained bytes for a Node, Role or Card document. */
 export async function readDocumentVersion(fs: FsAdapter, input: unknown) {
   const version = documentVersionSchema.parse(input);
   if (!fs.history || !isHistoryDocument(version.path))

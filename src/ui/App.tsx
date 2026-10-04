@@ -58,9 +58,6 @@ function loadVisits(snapshot: Snapshot): Visits {
   return fresh;
 }
 
-/** Excalidraw has its own single-letter keys while someone draws on the map. */
-const drawing = () => !!document.querySelector(".sketch.is-drawing");
-
 /** ?mode=doc opens the selected object expanded for reading. */
 const startsExpanded = () => new URLSearchParams(location.search).get("mode") === "doc";
 
@@ -281,7 +278,7 @@ export function App() {
       else if (!typing && e.key === "/") {
         e.preventDefault();
         setOverlay({ kind: "palette" });
-      } else if (!typing && !mod && !e.altKey && !overlay && !drawing()) {
+      } else if (!typing && !mod && !e.altKey && !overlay) {
         // Single letters: C starts a Card in the public area, E edits the selected Node's text.
         const key = e.key.toLowerCase();
         if (key === "c") {
@@ -489,7 +486,6 @@ export function App() {
                 <MapView
                   graph={graph}
                   selected={selected}
-                  theme={theme}
                   collapsed={collapsed}
                   draft={draftIds}
                   hotLane={hotLane}
@@ -501,7 +497,6 @@ export function App() {
                     setEditOnExpand(false);
                     setExpanded(true);
                   }}
-                  onToast={showToast}
                 />
               </ReactFlowProvider>
             </Boundary>

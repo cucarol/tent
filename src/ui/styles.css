@@ -379,7 +379,6 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .map.is-morphing .react-flow__node { transition: transform .42s cubic-bezier(.215, .61, .355, 1), opacity .25s ease; }
 .map .react-flow__edges { transition: opacity .2s ease; }
 .map.is-morphing .react-flow__edges { opacity: 0; transition: none; }
-.map.is-lens .sketch { opacity: 0; pointer-events: none; }
 
 .edge-handle { width: 1px !important; height: 1px !important; min-width: 0 !important; min-height: 0 !important; opacity: 0; border: 0 !important; background: none !important; pointer-events: none; }
 
@@ -476,10 +475,9 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .tool:hover { background: var(--hover); color: var(--text); }
 .tool[aria-pressed="false"] { color: var(--text-3); }
 .tool[aria-pressed="false"] .glyph { filter: grayscale(1); opacity: .45; }
-.tool[aria-pressed="true"]:not(.tool-lens, .tool-time, .tool-draw) .icon { color: var(--text); }
+.tool[aria-pressed="true"]:not(.tool-lens, .tool-time) .icon { color: var(--text); }
 .tool-lens[aria-pressed="true"], .tool-time[aria-pressed="true"], .tool[aria-expanded="true"] { background: var(--bg-emphasis); color: var(--text); }
-.tool-lens[aria-pressed="false"]:not(:disabled), .tool-time[aria-pressed="false"], .tool-draw[aria-pressed="false"] { color: var(--text-2); }
-.tool-draw[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.tool-lens[aria-pressed="false"]:not(:disabled), .tool-time[aria-pressed="false"] { color: var(--text-2); }
 .tool:disabled { color: color-mix(in srgb, var(--text-3) 60%, transparent) !important; cursor: default; }
 .tool:disabled:hover { background: none; }
 .tool-sep { flex: none; width: 1px; height: 18px; margin: 0 5px; background: var(--border); }
@@ -531,32 +529,6 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .timebar-when { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .timebar-when .muted { font-weight: 400; }
 .timebar-what { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-/* ---------- drawing layer over the map ---------- */
-/* Browsing: marks show but every click reaches the map. Drawing: Excalidraw takes the pointer. */
-.sketch { position: absolute; inset: 0; z-index: 4; }
-.sketch:not(.is-drawing), .sketch:not(.is-drawing) * { pointer-events: none !important; }
-.sketch .floatbar, .sketch .floatbar * { pointer-events: auto !important; }
-.sketch:not(.is-drawing) .layer-ui__wrapper { display: none; }
-.sketch .excalidraw, .sketch .excalidraw.theme--dark {
-  --color-primary: var(--accent); --color-primary-darker: var(--accent-hover); --color-primary-darkest: var(--accent-hover); --color-primary-light: var(--accent-soft); --color-primary-hover: var(--accent-hover);
-  --color-surface-primary-container: var(--accent-soft); --color-on-primary-container: var(--accent);
-  --ui-font: var(--font-sans);
-}
-/* The map toolbar already zooms and the workspace keeps the file; keep Excalidraw to its drawing tools. */
-.sketch .layer-ui__wrapper__footer-left, .sketch .layer-ui__wrapper__footer-right, .sketch .layer-ui__wrapper__top-right, .sketch .main-menu-trigger { display: none; }
-.sketch.is-drawing { cursor: crosshair; }
-/* Tool hints float over the cards; give them a surface so they stay readable. */
-.sketch .HintViewer > span {
-  align-self: center; padding: 3px 10px; border-radius: 999px;
-  background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow-md); color: var(--text-2);
-}
-.floatbar { position: absolute; z-index: 6; left: 50%; bottom: 72px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px); padding: 6px 6px 6px 14px; border-radius: 11px; background: var(--bg); border: 1px solid var(--border); color: var(--text); box-shadow: var(--shadow-lg); }
-.floatbar button { height: 28px; padding: 0 11px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); font-size: 12.5px; font-weight: 500; white-space: nowrap; box-shadow: var(--shadow-xs); }
-.floatbar button:hover { background: var(--bg-subtle); border-color: var(--border-strong); }
-.floatbar button.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); }
-.floatbar button.primary:hover { background: var(--accent-hover); }
-.floatbar b { font-weight: 600; }
 
 /* ---------- details beside the map ---------- */
 .detail { grid-column: 2; position: relative; display: flex; min-width: 0; background: var(--bg); border-left: 1px solid var(--border); }

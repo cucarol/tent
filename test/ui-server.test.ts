@@ -181,57 +181,16 @@ test("the service answers only its own page, with the printed token", async (t) 
   );
 });
 
-test("annotations are saved whole, against the version they started from", async (t) => {
-  const { call } = await fixture(t);
-  assert.deepEqual(json(await call("GET", "/api/annotations")), { etag: null, document: null });
-  const document = (x: number) => ({
-    schemaVersion: 1,
-    map: {
-      elements: [
-        {
-          id: "el-1",
-          type: "freedraw",
-          x,
-          y: 0,
-          points: [
-            [0, 0],
-            [4, 2],
-          ],
-        },
-      ],
-      anchors: { "el-1": { node: "node-main", x: 10, y: 20 } },
-    },
-  });
-  const first = await call("PUT", "/api/annotations", {
-    json: { baseEtag: null, document: document(1) },
-  });
-  assert.equal(first.status, 200);
-  const { etag } = json<{ etag: string }>(first);
-  assert.equal(
-    (await call("PUT", "/api/annotations", { json: { baseEtag: etag, document: document(2) } }))
-      .status,
-    200,
-  );
-  const stale = await call("PUT", "/api/annotations", {
-    json: { baseEtag: etag, document: document(3) },
-  });
-  assert.equal(stale.status, 409);
-  const current = json<{
-    error: { details: { current: { document: { map: { elements: Array<{ x: number }> } } } } };
-  }>(stale);
-  assert.equal(current.error.details.current.document.map.elements[0]!.x, 2);
-  const invalid = document(4);
-  invalid.map.anchors["el-1"]!.node = "not-a-node";
-  const rejected = await call("PUT", "/api/annotations", {
-    json: {
-      baseEtag: json<{ etag: string }>(await call("GET", "/api/annotations")).etag,
-      document: invalid,
-    },
-  });
-  assert.equal(rejected.status, 422);
-
-  const commits = json<Snapshot>(await call("GET", "/api/snapshot")).commits;
-  assert.equal(commits.filter((c) => c.operation === "annotations.write").length, 2);
+test("retired drawing files remain untouched and have no UI API or snapshot state", async (t) => {
+  const { call, tent } = await fixture(t);
+  const before = json<Snapshot>(await call("GET", "/api/snapshot"));
+  await tent.writeFile("annotations.json", "old drawing bytes, no longer parsed");
+  assert.equal((await call("GET", "/api/annotations")).status, 404);
+  assert.equal((await call("PUT", "/api/annotations", { json: { document: {} } })).status, 404);
+  const after = json<Snapshot>(await call("GET", "/api/snapshot"));
+  assert.equal("annotations" in after, false);
+  assert.equal(after.workspace.revision, before.workspace.revision);
+  assert.equal(await tent.readFile("annotations.json"), "old drawing bytes, no longer parsed");
 });
 
 test("the snapshot is built from Core and revalidates by revision", async (t) => {

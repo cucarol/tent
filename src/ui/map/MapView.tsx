@@ -1,7 +1,5 @@
 import {
-  Suspense,
   createContext,
-  lazy,
   memo,
   useCallback,
   useContext,
@@ -21,6 +19,7 @@ import {
   type EdgeProps,
   type Node,
   type NodeProps,
+  type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { primaryOf, suffixOf, type Graph, type Hand, type Primary } from "../data/store.js";
@@ -35,20 +34,6 @@ import { routeLinks, type Route } from "./route.js";
 import { Timeline } from "./Timeline.js";
 import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
-import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
-import type { Viewport } from "./SketchLayer.js";
-
-// The drawing layer is large; load it only once there is something to draw or show.
-const loadSketch = () => import("./SketchLayer.js");
-const SketchLayer = lazy(loadSketch);
-const hasSketch = () => {
-  try {
-    return !!JSON.parse(localStorage.getItem("tent-map-sketch-v1") ?? "null")?.elements?.length;
-  } catch {
-    return false;
-  }
-};
-const close = (a: number, b: number) => Math.abs(a - b) < 0.01;
 const ZOOM = { min: 0.25, max: 2 };
 // Below this, card names get too small to read at a glance; views the map picks by itself stay above it.
 const READABLE = 0.9;
@@ -308,7 +293,6 @@ type Filters = { types: Record<Primary, boolean>; allRefs: boolean };
 type MapProps = {
   graph: Graph;
   selected: SnapshotRef | null;
-  theme: "light" | "dark";
   collapsed: ReadonlySet<string>;
   /** The draft being written: its sources in order (null for an address outside Tent). */
   draft: (string | null)[];
@@ -320,13 +304,11 @@ type MapProps = {
   onSelect: (ref: SnapshotRef | null) => void;
   onFold: (id: string, expand?: boolean) => void;
   onExpand: () => void;
-  onToast: (text: string) => void;
 };
 
 export function MapView({
   graph,
   selected,
-  theme,
   collapsed,
   draft,
   hotLane,
@@ -335,7 +317,6 @@ export function MapView({
   onSelect,
   onFold,
   onExpand,
-  onToast,
 }: MapProps) {
   const [filters, setFilters] = useState<Filters>(() => {
     const stored = readStored<Partial<Filters>>("tent-map-filters-v2", {});
@@ -354,18 +335,9 @@ export function MapView({
   useEffect(() => () => clearTimeout(hoverTimer.current), []);
   const [peek, setPeek] = useState<Peek | null>(null);
   const [keyOpen, setKeyOpen] = useState(false);
-  const [drawing, setDrawing] = useState(false);
-  const [sketchOn, setSketchOn] = useState(
-    () => hasSketch() || graph.snapshot.annotations.count > 0,
-  );
-  // Marks saved from another page load the layer here too.
-  useEffect(() => {
-    if (graph.snapshot.annotations.count > 0) setSketchOn(true);
-  }, [graph.snapshot.annotations.count]);
   const [lens, setLens] = useState(false);
   const [outside, setOutside] = useState(0);
   const [ready, setReady] = useState(false);
-  const sketch = useRef<ExcalidrawImperativeAPI | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const range = useRef<HTMLInputElement>(null);
   const flow = useReactFlow();
@@ -412,7 +384,6 @@ export function MapView({
   }, [playing, time, last]);
   const openTime = () => {
     setLens(false);
-    setDrawing(false);
     setTime(last);
   };
   const closeTime = () => {
@@ -835,7 +806,7 @@ export function MapView({
   // A short look at a card's summary once the pointer has rested on it.
   useEffect(() => {
     setPeek(null);
-    if (!hover || hover === selected?.id || drawing) return;
+    if (!hover || hover === selected?.id) return;
     const t = setTimeout(() => {
       const el = box.current?.querySelector<HTMLElement>(
         `.react-flow__node[data-id="${CSS.escape(hover)}"]`,
@@ -878,16 +849,16 @@ export function MapView({
       });
     }, 450);
     return () => clearTimeout(t);
-  }, [hover, selected?.id, drawing]);
+  }, [hover, selected?.id]);
 
   // ---------- keyboard ----------
-  const latest = useRef({ view, selected, lensId, collapsed, visible, drawing, timeOpen });
-  latest.current = { view, selected, lensId, collapsed, visible, drawing, timeOpen };
+  const latest = useRef({ view, selected, lensId, collapsed, visible, timeOpen });
+  latest.current = { view, selected, lensId, collapsed, visible, timeOpen };
   useEffect(() => {
     if (!keys) return;
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
-      const { view, selected, lensId, collapsed, visible, drawing, timeOpen } = latest.current;
+      const { view, selected, lensId, collapsed, visible, timeOpen } = latest.current;
       // Esc leaves the map's modes first, even from the time slider.
       if (e.key === "Escape" && (lensId || timeOpen)) {
         e.preventDefault();
@@ -907,8 +878,8 @@ export function MapView({
         e.altKey
       )
         return;
-      // Keys belong to the map only while attention is on it, and to Excalidraw while drawing.
-      if (drawing || !(el === document.body || el.closest(".map, .sidebar"))) return;
+      // Keys belong to the map only while attention is on it.
+      if (!(el === document.body || el.closest(".map, .sidebar"))) return;
       const onControl = !!el.closest("button, a, [role=radio]");
       const node = selected?.kind === "node" ? graph.nodes.get(selected.id) : undefined;
       if (e.key === " " && !onControl) {
@@ -956,38 +927,6 @@ export function MapView({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [keys, graph, onSelect, onFold, onExpand]);
 
-  // ---------- drawing layer ----------
-  // Cards in map coordinates, for anchoring marks and for arrows that connect two cards.
-  const rects = useMemo(
-    () => new Map<string, Rect>([...base.placed.values()].map((p) => [p.id, rectOf(p)])),
-    [base],
-  );
-  // Map and drawing share coordinates: Excalidraw's scroll is the map's offset divided by zoom.
-  const pushToSketch = useCallback((v: Viewport) => {
-    const api = sketch.current;
-    if (!api) return;
-    const s = api.getAppState(),
-      sx = v.x / v.zoom,
-      sy = v.y / v.zoom;
-    if (close(s.scrollX, sx) && close(s.scrollY, sy) && close(s.zoom.value, v.zoom)) return;
-    api.updateScene({ appState: { scrollX: sx, scrollY: sy, zoom: { value: v.zoom } } as never });
-  }, []);
-  const pullFromSketch = useCallback(
-    (v: Viewport) => {
-      const zoom = Math.min(ZOOM.max, Math.max(ZOOM.min, v.zoom));
-      const cur = flow.getViewport();
-      if (!(close(cur.x, v.x) && close(cur.y, v.y) && close(cur.zoom, zoom)))
-        void flow.setViewport({ x: v.x, y: v.y, zoom });
-      if (zoom !== v.zoom) pushToSketch({ ...v, zoom });
-    },
-    [flow, pushToSketch],
-  );
-  const toggleDrawing = () => {
-    setLens(false);
-    closeTime();
-    setSketchOn(true);
-    setDrawing((d) => !d);
-  };
   const toggleType = (t: Primary) =>
     setFilters((f) => ({ ...f, types: { ...f.types, [t]: !f.types[t] } }));
 
@@ -1043,7 +982,6 @@ export function MapView({
           onInit={() => setReady(true)}
           onMove={(_, v) => {
             trackZoom(v.zoom);
-            pushToSketch(v);
           }}
           onMoveStart={() => setPeek(null)}
           onMoveEnd={countOutside}
@@ -1058,26 +996,6 @@ export function MapView({
         />
       </MapActions.Provider>
 
-      {sketchOn && (
-        <Suspense fallback={null}>
-          <SketchLayer
-            graph={graph}
-            rects={rects}
-            drawing={drawing}
-            theme={theme}
-            initial={flow.getViewport()}
-            onToast={onToast}
-            onReady={(api) => {
-              sketch.current = api;
-              pushToSketch(flow.getViewport());
-            }}
-            onViewport={(v) => {
-              if (drawing) pullFromSketch(v);
-            }}
-          />
-        </Suspense>
-      )}
-
       {peek && <PeekCard graph={graph} peek={peek} />}
       {lensName ? (
         <div className="panel map-hint">
@@ -1089,8 +1007,7 @@ export function MapView({
           </button>
         </div>
       ) : (
-        outside > 0 &&
-        !drawing && (
+        outside > 0 && (
           <div className="panel map-hint">
             <span className="map-hint-text">{t.map.outside(outside)}</span>
             <button type="button" onClick={() => fitRects(related)}>
@@ -1199,18 +1116,6 @@ export function MapView({
         >
           <Icon name="clock" size={15} />
           <span className="lbl">{t.map.time}</span>
-        </button>
-        <button
-          type="button"
-          className="tool tool-draw"
-          aria-pressed={drawing}
-          onClick={toggleDrawing}
-          onPointerEnter={() => void loadSketch()}
-          aria-label={drawing ? t.map.sketchDone : t.map.sketch}
-          data-tip={drawing ? t.map.sketchDoneTitle : t.map.sketchTitle}
-        >
-          <Icon name="canvas" size={15} />
-          <span className="lbl">{drawing ? t.map.sketchDone : t.map.sketch}</span>
         </button>
         <span className="tool-sep" />
         <button

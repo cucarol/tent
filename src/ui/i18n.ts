@@ -13,7 +13,7 @@ const phrase = (...parts: ReactNode[]) => createElement(Fragment, null, ...parts
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 const zh = {
-  /** BCP 47 tag for dates, <html lang> and Excalidraw. */
+  /** BCP 47 tag for dates, <html lang>. */
   code: "zh-CN",
   /** The switch names the other language in that language. */
   switchTo: "en" as Lang,
@@ -144,10 +144,6 @@ const zh = {
     lensNeedsNode: "先选中一个 Node",
     time: "时间",
     timeTitle: "时间回放：看图谱随着提交一步步长出来",
-    sketch: "批注",
-    sketchDone: "完成",
-    sketchTitle: "在图谱上写写画画",
-    sketchDoneTitle: "结束批注，回到浏览",
     zoomOut: "缩小",
     zoomIn: "放大",
     zoomReset: "缩放到 100%",
@@ -383,18 +379,6 @@ const zh = {
     placeholder: "搜索 Node、Role、Card，名字或正文里的词",
     empty: "没有找到，换个词试试。",
   },
-  sketch: {
-    /** Excalidraw's own language code. */
-    excalidraw: "zh-CN",
-    suggest: (from: ReactNode, to: ReactNode) =>
-      phrase("箭头从「", from, "」指向「", to, "」。要把它记成引用吗？"),
-    asReference: "记成引用",
-    justDrawing: "只是画的",
-    recorded: (to: string, from: string) => `已把「${to}」加进「${from}」的 sources。`,
-    migrate: "这个浏览器里还有以前画的批注，要存进工作区吗？",
-    migrateKeep: "存进工作区",
-    migrateDrop: "不要了",
-  },
 };
 
 export type Messages = typeof zh;
@@ -534,10 +518,6 @@ const en: Messages = {
     lensNeedsNode: "Select a Node first",
     time: "Time",
     timeTitle: "Time replay: watch the map grow commit by commit",
-    sketch: "Annotate",
-    sketchDone: "Done",
-    sketchTitle: "Draw and write on the map",
-    sketchDoneTitle: "Finish annotating and go back to browsing",
     zoomOut: "Zoom out",
     zoomIn: "Zoom in",
     zoomReset: "Zoom to 100%",
@@ -779,17 +759,6 @@ const en: Messages = {
     label: "Search",
     placeholder: "Search Nodes, Roles and Cards by name or text",
     empty: "Nothing found. Try another word.",
-  },
-  sketch: {
-    excalidraw: "en",
-    suggest: (from, to) =>
-      phrase("The arrow points from ", from, " to ", to, ". Record it as a reference?"),
-    asReference: "Record as reference",
-    justDrawing: "Just a drawing",
-    recorded: (to, from) => `Added "${to}" to the sources of "${from}".`,
-    migrate: "This browser still has annotations drawn earlier. Save them in the workspace?",
-    migrateKeep: "Save them",
-    migrateDrop: "Discard",
   },
 };
 

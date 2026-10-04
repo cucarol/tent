@@ -2,13 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { withTentMutation, type FsAdapter } from "./adapter.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { isCardId, isRoleId, makeCardId } from "./id.js";
-import {
-  CARDS_DIR,
-  cardRecordPath,
-  roleDocumentPath,
-  MUTATION_LOCK_PATH,
-  ANNOTATIONS_PATH,
-} from "./paths.js";
+import { CARDS_DIR, cardRecordPath, roleDocumentPath, MUTATION_LOCK_PATH } from "./paths.js";
 import { contentEtag } from "./etag.js";
 import { documentLifecycle } from "./document-status.js";
 import { documentVersionSchema, type DocumentVersion } from "./git-history.js";
@@ -188,7 +182,6 @@ function sourceVersion(owner: string, source: MaterialSource) {
     version.path === ".." ||
     version.path.startsWith("../") ||
     version.path.startsWith(CARDS_DIR + "/") ||
-    version.path === ANNOTATIONS_PATH ||
     !isHistoryDocument(version.path)
   )
     invalid("A source Git version must address its selected Tent Node or Role");
@@ -263,7 +256,6 @@ async function captureSources(fs: FsAdapter, owner: string, sources: MaterialSou
       file !== ".." &&
       !file.startsWith("../") &&
       !file.startsWith(CARDS_DIR + "/") &&
-      file !== ANNOTATIONS_PATH &&
       isHistoryDocument(file);
     if (source.version !== undefined) {
       await verifyCardSourceVersion(fs, owner, source);
