@@ -28,7 +28,7 @@ async function fixture(t: TestContext) {
   await promisify(execFile)("git", ["-C", root, "init", "--initial-branch=main"], {
     windowsHide: true,
   });
-  const env = { fs, clock: { now: () => "fixture" }, tentName: "Batch" };
+  const env = { fs, clock: { now: () => "2026-10-04T00:00:00.000Z" }, tentName: "Batch" };
   const id = await createNode(env, {
     name: "Existing",
     parentPath: "",

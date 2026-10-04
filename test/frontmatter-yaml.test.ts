@@ -179,10 +179,19 @@ test("Core and Docs edits retain unknown YAML and refuse invalid writes without 
   await writeNodeDocument(systemFs, created.nodeId, { baseEtag: snapshot.etag, body: "body\r\n" });
   const saved = parseFrontmatter(await systemFs.readFile(notePath));
   assert.equal(saved.body, "body\r\n");
-  const { sync, ...savedMetadata } = saved.data;
-  assert.deepEqual(savedMetadata, expected);
-  assert.deepEqual(sync, { materials: [{ resource: "https://example.com/a#section" }] });
-  expected.sync = sync;
+  const assertSavedMetadata = (
+    actual: Record<string, unknown>,
+    expectedMetadata: Record<string, unknown>,
+  ) => {
+    const { generated, ...actualUnknown } = actual;
+    const { generated: _old, ...expectedUnknown } = expectedMetadata;
+    assert.deepEqual(actualUnknown, expectedUnknown);
+    assert.match((generated as { by: string }).by, /^tent\//);
+    assert.ok(Number.isFinite(Date.parse((generated as { at: string }).at)));
+  };
+  assertSavedMetadata(saved.data, expected);
+  assert.notDeepEqual(saved.data.generated, expected.generated);
+  assert.equal(saved.data.sync, undefined);
   assert.match(await systemFs.readFile(notePath), /# preserved document comment/);
   snapshot = await readNodeForEdit(systemFs, created.nodeId);
   await writeNodeDocument(systemFs, created.nodeId, {
@@ -190,7 +199,7 @@ test("Core and Docs edits retain unknown YAML and refuse invalid writes without 
     frontmatter: { extra: { array: [{ value: true }] } },
   });
   snapshot = await readNodeForEdit(systemFs, created.nodeId);
-  assert.deepEqual(snapshot.frontmatter, { ...expected, extra: { array: [{ value: true }] } });
+  assertSavedMetadata(snapshot.frontmatter, { ...expected, extra: { array: [{ value: true }] } });
   await writeNodeDocument(systemFs, created.nodeId, { baseEtag: snapshot.etag, body: "Docs\r\n" });
   snapshot = await readNodeForEdit(systemFs, created.nodeId);
   await writeNodeDocument(systemFs, created.nodeId, {
@@ -198,7 +207,7 @@ test("Core and Docs edits retain unknown YAML and refuse invalid writes without 
     frontmatter: { other: false },
   });
   snapshot = await readNodeForEdit(systemFs, created.nodeId);
-  assert.deepEqual(snapshot.frontmatter, {
+  assertSavedMetadata(snapshot.frontmatter, {
     ...expected,
     extra: { array: [{ value: true }] },
     other: false,

@@ -18,6 +18,8 @@ import { executeDeleteUnlocked, type DeleteWrite } from "./delete-recovery.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import type { CaptureMetadata } from "./git-history.js";
 import { prepareNodeSyncSave } from "./node-sync-record.js";
+import { prepareNodeProvenanceSave } from "./node-provenance.js";
+import { captureDocumentUnlocked } from "./document-history.js";
 
 export type { OpsEnv } from "./ops-context.js";
 export { renameNode, type RenameNodeResult } from "./rename-ops.js";
@@ -33,7 +35,7 @@ export interface NewNodeInput extends MaterialFields {
   type: NodeType;
   body?: string;
   tags?: string[];
-  planned?: boolean;
+  by?: string;
 }
 
 export async function createNode(env: OpsEnv, input: NewNodeInput): Promise<string> {
@@ -42,7 +44,7 @@ export async function createNode(env: OpsEnv, input: NewNodeInput): Promise<stri
   });
 }
 
-async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Promise<string> {
+export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Promise<string> {
   const materials = materialFields(input as unknown as Record<string, unknown>);
   assertNotTempPath(input.parentPath);
   const name = validateNodeName(input.name, input.parentPath);
@@ -65,11 +67,10 @@ async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Promise<str
   const notePath = nodeNotePath(path);
   validateMaterialAddresses(fm, notePath);
   const body = await canonicalDocumentReferences(env.fs, notePath, fm, input.body ?? "");
-  const content = await prepareNodeSyncSave(
-    env.fs,
-    notePath,
+  const content = prepareNodeProvenanceSave(
     serializeFrontmatter(fm, body, NODE_FRONTMATTER_KEY_ORDER),
-    input.planned,
+    null,
+    input.by,
     env.clock.now(),
   );
   if (await env.fs.exists(path)) {
@@ -78,6 +79,7 @@ async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Promise<str
   if (existing.has(id)) {
     throw new Error(`Node id already exists: ${id}.`);
   }
+  const beforeOrder = await env.fs.readFile(ORDER_PATH).catch(() => null);
   try {
     await ensureDir(env.fs, path);
     await env.fs.writeFile(notePath, content);
@@ -87,8 +89,15 @@ async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Promise<str
     const siblings = order[parentKey] ?? [];
     order[parentKey] = siblings.includes(id) ? siblings : [...siblings, id];
     await saveOrder(env.fs, order);
+    const prepared = await prepareNodeSyncSave(env.fs, notePath, content);
+    await captureDocumentUnlocked(env.fs, notePath, prepared.raw, {
+      operation: "node.create",
+      nodeRecords: { [id]: prepared.record },
+    });
   } catch (error) {
     await env.fs.remove(path);
+    if (beforeOrder === null) await env.fs.remove(ORDER_PATH);
+    else await env.fs.writeFile(ORDER_PATH, beforeOrder);
     throw error;
   }
   return id;

@@ -17,7 +17,7 @@ test("Node names follow filenames; writes synchronize existing titles and retain
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const adapter = new NodeFs(root);
   await scaffoldTent(adapter, { name: "Title" });
-  const env = { fs: adapter, tentName: "Title", clock: { now: () => "2026-09-27" } };
+  const env = { fs: adapter, tentName: "Title", clock: { now: () => "2026-10-04T00:00:00.000Z" } };
   const id = await createNode(env, {
     name: "Scoped",
     parentPath: "",

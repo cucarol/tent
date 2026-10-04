@@ -274,35 +274,5 @@ export function rewriteMaterialPaths(
     }
     changed = true;
   }
-  // Current system version descriptors and output relationships move with the
-  // same declaring Node. Historical Cards remain outside this helper.
-  const rewriteRecord = (record: Record<string, unknown>, field: "resource" | "materials") => {
-    const descriptor =
-      field === "resource" ? { resource: record.resource } : { sources: record.materials };
-    if (!rewriteMaterialPaths(descriptor, fromDocument, toDocument, moves)) return;
-    record[field] =
-      field === "resource" ? descriptor.resource : (descriptor as { sources: unknown }).sources;
-    changed = true;
-  };
-  if (data.sync && typeof data.sync === "object") {
-    const sync = structuredClone(data.sync) as Record<string, unknown>;
-    if (Array.isArray(sync.materials)) rewriteRecord(sync, "materials");
-    if (sync.implemented && typeof sync.implemented === "object") {
-      const basis = sync.implemented as Record<string, unknown>;
-      if (Array.isArray(basis.materials)) rewriteRecord(basis, "materials");
-    }
-    data.sync = sync;
-  }
-  if (Array.isArray(data.outputs)) {
-    data.outputs = data.outputs.map((value: Record<string, unknown>) => {
-      const output = structuredClone(value);
-      if (typeof output.resource === "string") rewriteRecord(output, "resource");
-      if (output.basis && typeof output.basis === "object") {
-        const basis = output.basis as Record<string, unknown>;
-        if (Array.isArray(basis.materials)) rewriteRecord(basis, "materials");
-      }
-      return output;
-    });
-  }
   return changed;
 }

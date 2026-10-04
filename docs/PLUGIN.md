@@ -50,11 +50,17 @@ Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.ten
 
 包内包含 CLI 与 Web UI 静态资源。运行同包 `cli.mjs ui --workspace <工作区路径>` 可打开界面（例如 `node <插件路径>/cli.mjs ui --workspace <工作区路径>`）；`--no-open` 只打印地址。服务仅在当前终端前台运行，Ctrl+C 退出，不注册 Session。其他命令直接读写文档和 Git，无需启动 UI 服务。
 
+## 作者与确认
+
+Node 正文或语义元数据变化时记录 OKF 原生 `generated: {by, at}`；确认时记录 `verified: [{by, at}]`，按 actor 保留最新一项。确认不改正文或生成时间，内容修改也不抹掉既有复核记录。读取、无变化保存和生命周期修改不刷新生成时间。`stale_after` 到期使 Node 落后；`status: deprecated` 的 Node 不进入当前上下文。
+
+写入与确认支持 `--by`，JSON 写入和批量条目支持 `by`。已知身份使用 `human:<id>`、`process:<id>` 或 `<producer>/<version>`；无法取得可靠宿主身份时写实际运行的 `tent/<version>`，不猜模型或冒充人工。只有 `human:` 验证者显示为人工复核，其余是机器确认，无验证者则未验证。Web 保存和确认默认使用本机用户名，可显式覆盖。信任档位由验证记录推导，不是权限控制。
+
 ## Hook 边界
 
 SessionStart 提供可用工作区、当前包入口、构建身份和 `workspace brief` 提示，不注入完整简报。Stop 从本轮已有会话记录提取确证的文件提供、读取和修改事件，在本地记录地址、轮次、时间和 Stop 时观察到的哈希；不保存文件或会话正文。随后最多用英文提出三个带候选答案的具体问题：未关联产出服务于哪条需求、材料变化后 Node 判断是否仍成立、是否有新需求或决定需要保存。意图信号只认“决定、确认、改成、新增需求”等明确表述，普通“请、需要、fix”不触发；本轮已改 Node 或 Card 时不再问意图。完整 JSON 不超过 2 KiB。重复 Stop 静默；取消保留已观察事实但不提问。配置请求异步执行，处理器不返回阻断或续作决策；实际宿主须验证该能力和输出投递，不支持时保持 Stop 禁用，使用 Start 和正常 CLI。
 
-`workspace brief` 在 4 KiB 内用英文展示四种同步状态计数、落后 Node、领先时长、最近输入和产出、未关联产出与输入 Card。未关联产出仅列过去 7 天内最近 3 个 session 的文件，以及过去 7 天有 Git 修改记录的 output Node；更早的只计数。`workspace drift` 分页保留完整待检查关系。即使没有 Hook，这两个命令也会重新观察 Node 已声明的本地材料版本。保存 Node 时自动记录新材料版本，已变化或读不到的旧材料保留原基线，普通保存不能清除落后。用 `node check` 查看，复核判断后用 `node confirm`；修正正文可用 `node write --confirm` 同时确认，write-many 更新条目也支持 `confirm: true`。用 `node link-output` 将产出关联到需求并标明依据。详见 Node Skill；同步状态不改变 OKF `status`。
+`workspace brief` 在 4 KiB 内用英文展示四种同步状态计数、落后 Node、领先时长、最近输入和产出、未关联产出与输入 Card。未关联产出仅指 session 写入、但尚未被任何 output Node 记录的文件；未关联产出列表只列过去 7 天内最近 3 个 session 的观察，更早的只计数。独立 output Node 不算未记录产物。`workspace drift` 分页保留完整待检查关系。即使没有 Hook，这两个命令也会重新观察 Node 已声明的本地材料版本。保存 Node 时自动记录新材料版本，已变化或读不到的旧材料保留原基线，普通保存不能清除落后。用 `node check` 查看，复核判断后用 `node confirm`；修正正文可用 `node write --confirm` 同时确认，write-many 更新条目也支持 `confirm: true`。用 `node link-output` 在目标下新建 output Node；最近的 goal 祖先提供隐式来源。目标变化会使其产物落后，更新并确认产物后解除。基线按 Node ID 与文档保存在同一 Git 提交，Markdown 不增加同步或哈希字段。已接收 Card 的 Node 来源变化会在 brief 中提示重读；取消任务用 `card deprecate`，默认列表和简报会隐藏它，显式查看或接收仍会给出警告与现行引用。详见 Node/Card Skill；同步状态不改变 OKF `status`。
 
 提示可能显示在界面或后续轮次，不能证明本次交付已维护上下文。Card 的自动中断尚未通过真实宿主资格验证；当前使用显式 `card interrupt/continue`。Role 通过命令参数明确选择，没有隐式 Session 绑定。
 

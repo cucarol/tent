@@ -334,20 +334,20 @@ test("batch writes share a commit, Role reads capture explicitly, and Git failur
   assert.equal(await adapter.history!.read(roleRead.document.version), roleRead.document.raw);
   const original = await readNodeForEdit(adapter, "node-alpha");
   const capture = adapter.history!.captureUnlocked.bind(adapter.history);
-  adapter.history!.captureUnlocked = async (changes) => {
+  adapter.history!.captureUnlocked = async (changes, metadata) => {
     if (changes.some((c) => c.raw?.includes("Capture failure")))
       throw new Error("injected Git failure");
-    return capture(changes);
+    return capture(changes, metadata);
   };
   await assert.rejects(
     writeNodeDocument(adapter, original.nodeId, {
       baseEtag: original.etag,
       body: "Capture failure",
     }),
-    /may already be saved.*Git capture failed/,
+    /injected Git failure/,
   );
   adapter.history!.captureUnlocked = capture;
-  assert.match(await adapter.readFile("A/A.md"), /Capture failure/);
+  assert.equal(await adapter.readFile("A/A.md"), original.raw);
   const retry = await readNodeForEdit(adapter, original.nodeId, { capture: true });
   assert.ok(retry.version);
   assert.equal(await adapter.history!.read(retry.version), retry.raw);
@@ -391,20 +391,18 @@ test("material versions are automatic, body-preserving, local and captured with 
     "checking one Node must not read unrelated bodies",
   );
   node = await readNodeForEdit(adapter, node.nodeId);
-  const firstHash = String(
-    (parseFrontmatter(node.raw).data.sync as { materials: { version: string }[] }).materials[0]
-      .version,
-  );
+  const firstRecord = (await adapter.history.nodeRecords())[node.nodeId]!;
+  const firstHash = firstRecord.materials[0]!.version!;
   assert.match(firstHash, /^[a-f0-9]{64}$/);
-  await confirmNodeSync(adapter, node.nodeId, { baseEtag: node.etag });
-  assert.equal(
-    await adapter.readFile("A/A.md"),
-    node.raw,
-    "no-op confirmation keeps its recorded versions",
-  );
+  assert.equal(parseFrontmatter(node.raw).data.sync, undefined);
+  const firstConfirmed = await confirmNodeSync(adapter, node.nodeId, { baseEtag: node.etag });
+  assert.equal(parseFrontmatter(firstConfirmed.raw).body, originalBody);
+  assert.deepEqual(parseFrontmatter(firstConfirmed.raw).data.generated, node.frontmatter.generated);
+  assert.ok(parseFrontmatter(firstConfirmed.raw).data.verified);
+  assert.deepEqual((await adapter.history.nodeRecords())[node.nodeId], firstRecord);
   await adapter.writeFile(target, "material two");
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "behind");
-  const confirmed = await confirmNodeSync(adapter, node.nodeId, { baseEtag: node.etag });
+  const confirmed = await confirmNodeSync(adapter, node.nodeId, { baseEtag: firstConfirmed.etag });
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
   assert.equal(parseFrontmatter(confirmed.raw).body, originalBody);
   await assert.rejects(
@@ -421,7 +419,11 @@ test("material versions are automatic, body-preserving, local and captured with 
       windowsHide: true,
     })
   ).stdout;
-  assert.match(retained, /sync:/);
+  assert.equal(parseFrontmatter(retained).data.sync, undefined);
+  assert.notEqual(
+    (await adapter.history.nodeRecords())[node.nodeId]!.materials[0]!.version,
+    firstHash,
+  );
   assert.equal(parseFrontmatter(retained).body, originalBody);
   adapter.readFile = readFile;
 });

@@ -14,7 +14,8 @@ import { assertStatusEdit } from "./document-status.js";
 import { ReaderError } from "./context-reader.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "./node-read-basis.js";
-import { assertSyncMetadataRetained, prepareNodeSyncSave } from "./node-sync-record.js";
+import { assertNodeRecordFields, prepareNodeSyncSave } from "./node-sync-record.js";
+import { prepareNodeProvenanceSave, assertNodeProvenanceEdit } from "./node-provenance.js";
 
 export class NodeWriteError extends Error {
   constructor(
@@ -38,8 +39,8 @@ export type NodeDocumentEdit = {
   raw?: string;
   body?: string;
   frontmatter?: Record<string, unknown>;
-  planned?: boolean;
   confirm?: boolean;
+  by?: string;
 };
 
 /** Shared Core entry for direct CLI and other hosts. */
@@ -101,13 +102,12 @@ export async function savePreparedNodeDocumentUnlocked(
   operation: string,
 ) {
   const nodeId = node.id;
-  const raw = await prepareNodeSyncSave(
+  const now = new Date().toISOString();
+  const { raw, record } = await prepareNodeSyncSave(
     fs,
     nodeNotePath(node.path),
-    preparedRaw,
-    input.planned,
-    undefined,
-    input.confirm,
+    prepareNodeProvenanceSave(preparedRaw, diskRaw, input.by, now),
+    { now, confirm: input.confirm, by: input.by },
   );
   const changed = raw !== diskRaw;
   const path = nodeNotePath(node.path);
@@ -125,11 +125,16 @@ export async function savePreparedNodeDocumentUnlocked(
       },
     );
   if (changed) await fs.writeFile(path, raw);
-  const version = await captureDocumentUnlocked(fs, path, raw, { operation }).catch((error) => {
-    throw new Error(
-      `Node may already be saved, but Git capture failed; reread before retrying: ${String(error)}`,
-    );
-  });
+  let version;
+  try {
+    version = await captureDocumentUnlocked(fs, path, raw, {
+      operation,
+      nodeRecords: { [nodeId]: record },
+    });
+  } catch (error) {
+    if (changed && (await fs.readFile(path)) === raw) await fs.writeFile(path, diskRaw);
+    throw error;
+  }
   return {
     nodeId,
     name: node.name,
@@ -185,6 +190,7 @@ export function prepareNodeDocumentWrite(
     // The Node id is the document identity and cannot be changed here.
     assertRawDocsWriteReserved(diskParsed.data, nextParsed.data);
     validateSyncMetadata(diskParsed.data, nextParsed.data);
+    assertNodeProvenanceEdit(diskParsed.data, nextParsed.data);
     assertStatusEdit(diskParsed.data, nextParsed.data);
     normalizeOptionalNodeType(nextParsed.data.type);
     if (nextParsed.data.tags !== undefined) normalizeTagList(nextParsed.data.tags);
@@ -202,7 +208,6 @@ export function prepareNodeDocumentWrite(
 
     if (
       body === undefined &&
-      input.planned === undefined &&
       input.confirm !== true &&
       (!frontmatter || Object.keys(frontmatter).length === 0)
     ) {
@@ -214,6 +219,7 @@ export function prepareNodeDocumentWrite(
     const current = parseFrontmatter(diskRaw);
     const merged = { ...current.data, ...frontmatter };
     validateSyncMetadata(current.data, merged);
+    assertNodeProvenanceEdit(current.data, merged);
     assertStatusEdit(current.data, merged);
     if (frontmatter && "type" in frontmatter)
       merged.type = normalizeOptionalNodeType(frontmatter.type);
@@ -236,7 +242,7 @@ export function prepareNodeDocumentWrite(
 
 function validateSyncMetadata(previous: Record<string, unknown>, next: Record<string, unknown>) {
   try {
-    assertSyncMetadataRetained(previous, next);
+    assertNodeRecordFields(next);
   } catch (error) {
     throw new NodeWriteError("INVALID_EDIT", String(error));
   }

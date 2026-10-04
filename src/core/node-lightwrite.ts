@@ -23,8 +23,13 @@ export class NodeSectionError extends Error {
   }
 }
 
-export type NodeAppendInput = { body: string; heading?: string };
-export type NodeSectionWriteInput = { heading: string; baseEtag: string; body: string };
+export type NodeAppendInput = { body: string; heading?: string; by?: string };
+export type NodeSectionWriteInput = {
+  heading: string;
+  baseEtag: string;
+  body: string;
+  by?: string;
+};
 
 type Section = { start: number; end: number; depth: number; text: string };
 
@@ -55,7 +60,7 @@ export function appendNodeBody(fs: FsAdapter, nodeId: string, input: NodeAppendI
           end: prefix.length + addition.length,
         },
       );
-      return saveBody(fs, current, body, "node.append");
+      return saveBody(fs, current, body, "node.append", input.by);
     },
     { operation: "node.append" },
   );
@@ -113,7 +118,7 @@ export function writeNodeSection(fs: FsAdapter, nodeId: string, input: NodeSecti
         current.body.slice(0, section.start) + replacement + remainder,
         { start: section.start, end: section.start + replacement.length },
       );
-      return saveBody(fs, current, body, "node.write-section");
+      return saveBody(fs, current, body, "node.write-section", input.by);
     },
     { operation: "node.write-section" },
   );
@@ -135,9 +140,10 @@ async function saveBody(
   current: Awaited<ReturnType<typeof readNodeForEdit>>,
   body: string,
   operation: string,
+  by?: string,
 ) {
   const node = { id: current.nodeId, path: current.path, name: current.name };
-  const input = { baseEtag: current.etag, body };
+  const input = { baseEtag: current.etag, body, by };
   const prepared = prepareNodeDocumentWrite(node, current.raw, input);
   const parsed = parseFrontmatter(prepared);
   // Canonicalize material addresses without rewriting Markdown outside the changed range.

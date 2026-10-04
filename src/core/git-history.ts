@@ -6,6 +6,8 @@ import * as z from "zod/v4";
 import { parseFrontmatter } from "./frontmatter.js";
 import { isCardId, isNodeId, isRoleId } from "./id.js";
 import { isHistoryDocument } from "./document-history.js";
+import { isDeepStrictEqual } from "node:util";
+import { nodeBasisRecordSchema, type NodeBasisRecord } from "./node-basis-record.js";
 
 export type DocumentVersion = { commit: string; path: string };
 export type DocumentChange = { path: string; raw: string | null };
@@ -18,6 +20,7 @@ export type CaptureMetadata = {
   operation: string;
   objectIds?: readonly string[];
   entry?: "cli" | "ui" | "core";
+  nodeRecords?: Record<string, NodeBasisRecord>;
 };
 export type HistoryChange = {
   objectId?: string;
@@ -87,7 +90,13 @@ function commitMessage(metadata: CaptureMetadata, objectIds: readonly string[]):
   return (
     `Tent: ${metadata.operation}\n\nTent-Operation: ${metadata.operation}` +
     objectIds.map((id) => `\nTent-Object: ${id}`).join("") +
-    (metadata.entry ? `\nTent-Entry: ${metadata.entry}` : "")
+    (metadata.entry ? `\nTent-Entry: ${metadata.entry}` : "") +
+    Object.entries(metadata.nodeRecords ?? {})
+      .map(([id, record]) => {
+        if (!isNodeId(id)) throw new Error(`Invalid Node record id: ${id}`);
+        return `\nTent-Node-Record: ${JSON.stringify([id, nodeBasisRecordSchema.parse(record)])}`;
+      })
+      .join("")
   );
 }
 
@@ -292,6 +301,52 @@ export class GitDocumentHistory {
   private readonly defaultEntry: CaptureMetadata["entry"];
   private knownHead: string | null | undefined;
   private knownEntries = new Map<string, string>();
+  private recordHead: string | null | undefined;
+  private records: Record<string, NodeBasisRecord> = {};
+  private firstTimesHead: string | null | undefined;
+  private firstTimes = new Map<string, string>();
+
+  /** Latest declarations on the retained first-parent lineage; a reset rolls records back too. */
+  async nodeRecords(): Promise<Record<string, NodeBasisRecord>> {
+    await this.ensureRepository();
+    const head = await this.currentCommit();
+    if (this.recordHead !== head) {
+      const records: Record<string, NodeBasisRecord> = {};
+      if (head) {
+        const log = (
+          await runGit(this.root, ["log", "--first-parent", "--format=%B%x00", head])
+        ).toString("utf8");
+        for (const message of log.split("\0"))
+          for (const line of message.split("\n")) {
+            if (!line.startsWith("Tent-Node-Record: ")) continue;
+            const [id, record] = JSON.parse(line.slice("Tent-Node-Record: ".length));
+            if (!isNodeId(id)) throw new Error("Invalid retained Node record id");
+            if (!(id in records)) records[id] = nodeBasisRecordSchema.parse(record);
+          }
+      }
+      this.records = records;
+      this.recordHead = head;
+    }
+    return structuredClone(this.records);
+  }
+
+  /** First retained identity event, independent of its current filename. */
+  async firstNodeTime(nodeId: string): Promise<string | undefined> {
+    if (!isNodeId(nodeId)) throw new Error("Invalid Node id");
+    await this.ensureRepository();
+    const head = await this.currentCommit();
+    if (!head) return undefined;
+    if (this.firstTimesHead !== head) {
+      const times = new Map<string, string>();
+      for (const event of await this.changesInRange())
+        for (const change of event.changes)
+          if (change.objectId && !times.has(change.objectId))
+            times.set(change.objectId, event.time);
+      this.firstTimes = times;
+      this.firstTimesHead = head;
+    }
+    return this.firstTimes.get(nodeId);
+  }
 
   constructor(systemRoot: string, entry: CaptureMetadata["entry"] = "core") {
     this.root = path.resolve(systemRoot);
@@ -393,7 +448,15 @@ export class GitDocumentHistory {
     }
     const gitDir = await this.ensureRepository();
     const before = await this.head();
-    if (changes.length === 0) return { commit: before, created: false, versions: [] };
+    const records = Object.keys(metadata.nodeRecords ?? {}).length ? await this.nodeRecords() : {};
+    const recordChanges = Object.fromEntries(
+      Object.entries(metadata.nodeRecords ?? {}).filter(
+        ([id, record]) => !isDeepStrictEqual(records[id], record),
+      ),
+    );
+    metadata = { ...metadata, nodeRecords: recordChanges };
+    if (changes.length === 0 && !Object.keys(recordChanges).length)
+      return { commit: before, created: false, versions: [] };
 
     // HEAD is the cache key, never mtime or a process-local "already saved" flag.
     // Cache object identities only; comparison uses Git's exact blob digest.
@@ -427,6 +490,7 @@ export class GitDocumentHistory {
       }),
     );
     if (
+      !Object.keys(recordChanges).length &&
       changes.every((change) => this.knownEntries.get(change.path) === expected.get(change.path))
     ) {
       if ((await this.head()) !== before)

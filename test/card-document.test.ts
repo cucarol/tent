@@ -13,6 +13,8 @@ import {
   writeCardDraft,
   deleteCardDraft,
   moveCardDocument,
+  deprecateCardDocument,
+  inspectReceivedCardSourceChanges,
 } from "../src/core/card-document.js";
 import { createRoleContext, editRoleContext } from "../src/core/role-context.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
@@ -40,6 +42,252 @@ async function fixture(t: TestContext) {
 }
 const code = (expected: string) => (error: unknown) =>
   (error as { code?: string }).code === expected;
+
+test("Card source inspection needs no Git for empty directories or unpublished drafts", async (t) => {
+  const scratch = path.resolve(".scratch");
+  await fs.mkdir(scratch, { recursive: true });
+  const root = await fs.mkdtemp(path.join(scratch, "card-nohistory-"));
+  t.after(async () => {
+    assert.equal(path.dirname(root), scratch);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const adapter = new NodeFs(root);
+  await adapter.mkdir("cards");
+  assert.deepEqual(await inspectReceivedCardSourceChanges(adapter), { items: [], diagnostics: [] });
+  await adapter.writeFile(
+    "cards/card-draft.md",
+    serializeFrontmatter(
+      { type: "card", id: "card-draft", schemaVersion: 3, state: "pending", sources: [] },
+      "not ready",
+    ),
+  );
+  assert.deepEqual(await inspectReceivedCardSourceChanges(adapter), { items: [], diagnostics: [] });
+});
+
+test("Card deprecation preserves input and reception, checks CAS, and replays without capture", async (t) => {
+  const { adapter } = await fixture(t);
+  const created = await createCardDocument(adapter, {
+    prompt: "Read the Node.",
+    sources: [{ resource: "node-main" }],
+    target: "role-a",
+  });
+  const taken = await transitionCardDocument(adapter, created.cardId, "role-a", "take");
+  const before = parseFrontmatter(await adapter.readFile(created.path));
+  const head = await adapter.history.currentCommit();
+  await assert.rejects(
+    () => deprecateCardDocument(adapter, created.cardId, created.etag),
+    code("STATE_CHANGED"),
+  );
+  assert.equal(await adapter.history.currentCommit(), head);
+  const deprecated = await deprecateCardDocument(adapter, created.cardId, taken.etag);
+  const after = parseFrontmatter(await adapter.readFile(created.path));
+  assert.deepEqual(after.data, { ...before.data, status: "deprecated" });
+  assert.equal(after.body, before.body);
+  assert.equal(deprecated.status, "deprecated");
+  assert.equal(deprecated.state, "consumed");
+  const cancelledHead = await adapter.history.currentCommit();
+  assert.deepEqual(
+    await deprecateCardDocument(adapter, created.cardId, deprecated.etag),
+    deprecated,
+  );
+  assert.equal(await adapter.history.currentCommit(), cancelledHead);
+  assert.equal((await listCardDocuments(adapter, { roleId: "role-a" })).items.length, 0);
+  assert.equal(
+    (
+      await listCardDocuments(adapter, {
+        roleId: "role-a",
+        state: "consumed",
+        includeDeprecated: true,
+      })
+    ).items.length,
+    1,
+  );
+  const replay = await transitionCardDocument(adapter, created.cardId, "role-a", "take");
+  assert.equal(replay.text, before.body);
+  assert.equal((replay as Record<string, unknown>).replayed, true);
+  assert.match(String((replay as Record<string, unknown>).notice), /deprecated/);
+  await assert.rejects(
+    () => transitionCardDocument(adapter, created.cardId, "role-b", "take"),
+    code("RECEPTION_CONFLICT"),
+  );
+  const draft = await createCardDraft(adapter, { prompt: "not decided" });
+  await assert.rejects(
+    () => deprecateCardDocument(adapter, draft.cardId, draft.etag),
+    code("UNPUBLISHED"),
+  );
+});
+
+test("Card deprecation rejects manual input and management edits without changing bytes or history", async (t) => {
+  const { adapter } = await fixture(t);
+  const card = await createCardDocument(adapter, { prompt: "fixed input" });
+  const original = await adapter.readFile(card.path),
+    head = await adapter.history.currentCommit();
+  for (const [raw, expected] of [
+    [original.replace("fixed input", "edited input"), "INPUT_CHANGED"],
+    [original.replace("state: pending", "state: consumed"), "STATE_CHANGED"],
+    [original.replace("state: pending", "state: pending\nstatus: deprecated"), "STATE_CHANGED"],
+  ]) {
+    await adapter.writeFile(card.path, raw!);
+    await assert.rejects(
+      () => deprecateCardDocument(adapter, card.cardId, contentEtag(raw!)),
+      code(expected!),
+    );
+    assert.equal(await adapter.readFile(card.path), raw);
+    assert.equal(await adapter.history.currentCommit(), head);
+  }
+});
+
+test("Deprecated Card reads and takes expose live Node, Role and published Card references", async (t) => {
+  const { adapter } = await fixture(t);
+  const card = await createCardDocument(adapter, {
+    cardId: "card-cancelled",
+    prompt: "original input",
+    target: "role-a",
+  });
+  await adapter.writeFile(
+    "Other/Other.md",
+    serializeFrontmatter(
+      { id: "node-other", type: "prompt", sources: [{ resource: "/cards/card-cancelled.md" }] },
+      "see task",
+    ),
+  );
+  await createRoleContext(adapter, {
+    roleId: "role-reference",
+    title: "Reference",
+    body: "[task](../cards/card-cancelled.md)",
+  });
+  await createCardDocument(adapter, {
+    cardId: "card-reference",
+    prompt: "[task](./card-cancelled.md)",
+  });
+  const old = await createCardDocument(adapter, {
+    cardId: "card-oldref",
+    prompt: "[task](./card-cancelled.md)",
+  });
+  await deprecateCardDocument(adapter, old.cardId, old.etag);
+  await createCardDraft(adapter, {
+    cardId: "card-draftref",
+    prompt: "[task](./card-cancelled.md)",
+  });
+  await deprecateCardDocument(adapter, card.cardId, card.etag);
+  const shown = (await readCardDocument(adapter, card.cardId)) as Record<string, unknown>;
+  assert.equal(shown.text, "original input");
+  assert.match(String(shown.notice), /deprecated/);
+  assert.deepEqual(shown.currentReferences, [
+    { kind: "node", id: "node-other", path: "Other/Other.md" },
+    { kind: "role", id: "role-reference", path: "roles/role-reference.md" },
+    { kind: "card", id: "card-reference", path: "cards/card-reference.md" },
+  ]);
+  await assert.rejects(
+    () => transitionCardDocument(adapter, card.cardId, undefined, "take"),
+    code("RECEPTION_CONFLICT"),
+  );
+  const taken = (await transitionCardDocument(adapter, card.cardId, "role-a", "take")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(taken.state, "consumed");
+  assert.deepEqual(taken.currentReferences, shown.currentReferences);
+});
+
+test("Received Card source inspection compares live content, follows Node identity and never writes", async (t) => {
+  const { root, adapter, node } = await fixture(t);
+  const received = await createCardDocument(adapter, {
+    cardId: "card-received",
+    prompt: "Read node",
+    sources: [
+      { resource: "node-main" },
+      { resource: "/roles/role-a.md" },
+      { resource: "https://example.invalid/requirements" },
+    ],
+    target: "role-a",
+  });
+  const receivedPage = await transitionCardDocument(adapter, received.cardId, "role-a", "take");
+  await transitionCardDocument(
+    adapter,
+    received.cardId,
+    "role-a",
+    "interrupt",
+    (receivedPage as Record<string, unknown>).version as DocumentVersion,
+  );
+  const pending = await createCardDocument(adapter, {
+    cardId: "card-pendingsource",
+    prompt: "Read node",
+    sources: [{ resource: "node-main" }],
+    target: "role-a",
+  });
+  const otherRole = await createCardDocument(adapter, {
+    cardId: "card-otherrole",
+    prompt: "Read node",
+    sources: [{ resource: "node-main" }],
+    target: "role-b",
+  });
+  await transitionCardDocument(adapter, otherRole.cardId, "role-b", "take");
+  const cancelled = await createCardDocument(adapter, {
+    cardId: "card-cancelledsource",
+    prompt: "Read node",
+    sources: [{ resource: "node-main" }],
+  });
+  const taken = await transitionCardDocument(adapter, cancelled.cardId, undefined, "take");
+  await deprecateCardDocument(adapter, cancelled.cardId, taken.etag);
+  await createCardDraft(adapter, { prompt: "not published", sources: [{ resource: "node-main" }] });
+  // These publications have changed HEAD, without changing the selected Node.
+  assert.deepEqual(await inspectReceivedCardSourceChanges(adapter), { items: [], diagnostics: [] });
+  const head = await adapter.history.currentCommit();
+  const capture = t.mock.method(adapter.history, "captureUnlocked", async () => {
+    throw new Error("query must not capture");
+  });
+  const write = t.mock.method(adapter, "writeFile", async () => {
+    throw new Error("query must not write");
+  });
+  await fs.writeFile(
+    path.join(root, "Main/Main.md"),
+    node.replace("exact fact", "new requirement"),
+  );
+  const filtered = await inspectReceivedCardSourceChanges(adapter, { roleId: "role-a" });
+  assert.deepEqual(
+    filtered.items.map((item) => item.cardId),
+    [received.cardId],
+  );
+  assert.equal(filtered.items[0]!.nodeId, "node-main");
+  assert.equal(filtered.items[0]!.state, "changed");
+  assert.equal(filtered.items[0]!.path, "Main/Main.md");
+  assert.equal(filtered.diagnostics.length, 0);
+  assert.deepEqual(
+    (await inspectReceivedCardSourceChanges(adapter)).items.map((item) => item.cardId).sort(),
+    [received.cardId, otherRole.cardId].sort(),
+  );
+  assert.equal(await adapter.history.currentCommit(), head);
+  assert.equal(capture.mock.callCount(), 0);
+  assert.equal(write.mock.callCount(), 0);
+  capture.mock.restore();
+  write.mock.restore();
+  await adapter.writeFile("Main/Main.md", node);
+  assert.equal((await inspectReceivedCardSourceChanges(adapter)).items.length, 0);
+  await adapter.mkdir("Renamed");
+  await adapter.move("Main/Main.md", "Renamed/Renamed.md");
+  await adapter.removeEmptyDir("Main");
+  // A path-only move with identical retained bytes is unchanged.
+  assert.equal((await inspectReceivedCardSourceChanges(adapter)).items.length, 0);
+  await adapter.writeFile("Renamed/Renamed.md", node.replace("exact fact", "moved and changed"));
+  const moved = await inspectReceivedCardSourceChanges(adapter, { roleId: "role-a" });
+  assert.equal(moved.items[0]!.path, "Renamed/Renamed.md");
+  assert.equal(moved.items[0]!.state, "changed");
+  await adapter.remove("Renamed");
+  const missing = await inspectReceivedCardSourceChanges(adapter, { roleId: "role-a" });
+  assert.equal(missing.items[0]!.state, "missing");
+  assert.match(missing.items[0]!.reason, /missing/);
+  assert.equal(
+    (await listCardDocuments(adapter, { state: "pending" })).items[0]!.cardId,
+    pending.cardId,
+  );
+  t.mock.method(adapter.history, "readVersions", async (versions: readonly DocumentVersion[]) =>
+    versions.map(() => new Error("retained history unavailable")),
+  );
+  const failed = await inspectReceivedCardSourceChanges(adapter, { roleId: "role-a" });
+  assert.deepEqual(failed.items, []);
+  assert.match(failed.diagnostics[0]!.message, /retained history unavailable/);
+});
 
 test("filtered Card lists skip history and keep malformed-header diagnostics", async (t) => {
   const { adapter } = await fixture(t);

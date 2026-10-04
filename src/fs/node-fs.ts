@@ -12,12 +12,19 @@ import { isHistoryDocument } from "../core/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 import { observeMaterialResource } from "./source-observation.js";
 import { workspaceRootFromSystemRoot } from "../core/paths.js";
-import { UnanchoredMaterialError } from "../core/node-sync-record.js";
+import {
+  prepareNodeSyncSave,
+  relocateNodeRecord,
+  retainedNodeRecords,
+} from "../core/node-sync-record.js";
+import { parseFrontmatter } from "../core/frontmatter.js";
+import { loadNodeCatalog } from "../core/node-catalog.js";
 
 export class NodeFs implements FsAdapter {
   private root: string;
   readonly history: GitDocumentHistory;
   private historyWrites = new AsyncLocalStorage<Map<string, string | null>>();
+  private historyPreimages = new AsyncLocalStorage<Map<string, string | null>>();
 
   constructor(root: string, entry: CaptureMetadata["entry"] = "core") {
     this.root = nodePath.resolve(root);
@@ -27,15 +34,14 @@ export class NodeFs implements FsAdapter {
   async observeMaterial(resource: string, documentPath: string) {
     const workspaceRoot = workspaceRootFromSystemRoot(this.root);
     if (!workspaceRoot) throw new Error("Material observation requires a Workspace .tent root");
-    const observed = await observeMaterialResource(workspaceRoot, documentPath, resource);
+    const cacheDir = (await this.exists(".git")) ? this.abs(".git/tent-material-cache") : undefined;
+    const observed = await observeMaterialResource(workspaceRoot, documentPath, resource, cacheDir);
     const relative = nodePath.relative(this.root, observed.canonicalPath);
     const inside =
       relative !== ".." &&
       !relative.startsWith(`..${nodePath.sep}`) &&
       !nodePath.isAbsolute(relative);
     const systemPath = inside ? relative.split(nodePath.sep).join("/") : undefined;
-    if (systemPath === documentPath)
-      throw new UnanchoredMaterialError("A Node cannot anchor its own embedded material version");
     return { ...observed, ...(systemPath ? { systemPath } : {}) };
   }
 
@@ -223,26 +229,79 @@ export class NodeFs implements FsAdapter {
 
   async withDocumentHistory<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T> {
     if (!(await this.exists(".git"))) return action();
-    return this.historyWrites.run(new Map(), async () => {
-      const result = await action();
-      const changes = [...this.historyWrites.getStore()!].map(([path, raw]) => ({ path, raw }));
-      try {
-        for (const change of changes) {
-          const current = await this.readFile(change.path).catch((error) => {
-            if (error.code === "ENOENT") return null;
-            throw error;
-          });
-          if (current !== change.raw)
-            throw new Error(`Document changed during save: ${change.path}`);
+    return this.historyPreimages.run(new Map(), () =>
+      this.historyWrites.run(new Map(), async () => {
+        const result = await action();
+        const changes = [...this.historyWrites.getStore()!].map(([path, raw]) => ({ path, raw }));
+        try {
+          for (const change of changes) {
+            const current = await this.readFile(change.path).catch((error) => {
+              if (error.code === "ENOENT") return null;
+              throw error;
+            });
+            if (current !== change.raw)
+              throw new Error(`Document changed during save: ${change.path}`);
+          }
+          if (changes.length) {
+            const nodeRecords = { ...metadata?.nodeRecords };
+            if (metadata?.operation === "node.move" || metadata?.operation === "node.rename") {
+              const nodes = (await loadNodeCatalog(this)).byId,
+                beforeNodes = new Map(nodes),
+                retained = await retainedNodeRecords(this);
+              const originals = new Map<string, { path: string; raw: string }>();
+              for (const [path, raw] of this.historyPreimages.getStore()!) {
+                if (raw === null || !isHistoryDocument(path)) continue;
+                const id = parseFrontmatter(raw).data.id;
+                if (typeof id !== "string" || !nodes.has(id)) continue;
+                const originalPath = path.slice(0, path.lastIndexOf("/"));
+                beforeNodes.set(id, { ...nodes.get(id)!, path: originalPath });
+                originals.set(id, { path, raw });
+              }
+              for (const change of changes) {
+                if (
+                  change.raw === null ||
+                  !isHistoryDocument(change.path) ||
+                  change.path.startsWith("roles/") ||
+                  change.path.startsWith("cards/")
+                )
+                  continue;
+                const id = parseFrontmatter(change.raw).data.id;
+                if (typeof id !== "string" || !nodes.has(id)) continue;
+                const original = originals.get(id),
+                  previous = retained[id];
+                const relocated =
+                  previous && original
+                    ? relocateNodeRecord(
+                        previous,
+                        original.raw,
+                        original.path,
+                        change.raw,
+                        change.path,
+                        beforeNodes,
+                        nodes,
+                      )
+                    : previous;
+                const prepared = await prepareNodeSyncSave(this, change.path, change.raw, {
+                  nodes,
+                  previous: relocated,
+                });
+                if (typeof id === "string") nodeRecords[id] = prepared.record;
+              }
+            }
+            await this.history.captureUnlocked(changes, {
+              operation: metadata?.operation ?? "document.capture",
+              ...metadata,
+              nodeRecords,
+            });
+          }
+        } catch (error) {
+          throw new Error(
+            `Tent files may already be saved, but Git capture failed; reread before retrying: ${String(error)}`,
+          );
         }
-        if (changes.length) await this.history.captureUnlocked(changes, metadata);
-      } catch (error) {
-        throw new Error(
-          `Tent files may already be saved, but Git capture failed; reread before retrying: ${String(error)}`,
-        );
-      }
-      return result;
-    });
+        return result;
+      }),
+    );
   }
 
   private async beforeHistoryChange(paths: string[]) {
@@ -259,6 +318,7 @@ export class NodeFs implements FsAdapter {
         throw new Error(`Document changed before save: ${path}; reread before retrying`);
       expected.set(path, raw);
       if (tracked.has(path)) continue;
+      this.historyPreimages.getStore()!.set(path, raw);
       tracked.set(path, raw);
       if (raw !== null) before.push({ path, raw });
     }

@@ -49,7 +49,7 @@ Write for an Agent or person who arrives without this conversation:
 ## Create
 
 ```text
-tent node create <name> --type <type> [--parent <node-id>] [--body -] [--resource <path>] [--sources-json <JSON>] [--tags a,b] [--planned] --json
+tent node create <name> --type <type> [--parent <node-id>] [--body -] [--resource <path>] [--sources-json <JSON>] [--tags a,b] --json
 ```
 
 The name becomes the folder and file name. Body, type, resource, sources and
@@ -119,9 +119,6 @@ tent node write <node-id> --input-json - --json
 ```
 
 - Omitted body and fields stay unchanged, and unknown metadata is kept.
-- Use top-level `planned: true` for intended but unfinished work, or
-  `planned: false` to remove that explicit intent marker. It is independent
-  of OKF lifecycle status and supported by batch inputs too.
 - `sources` replaces the whole list: send every entry in order, and
   `sources: []` to clear it.
 - For a body-only edit, use
@@ -190,8 +187,9 @@ It changes no files and does not decide whether a fact is still current.
 Creating and saving automatically observe new local material versions. A plain
 save retains existing versions when material changed or became unavailable;
 it cannot clear `behind`, even when part of the body changed. Do not
-enter hashes or edit generated `sync` and `outputs` metadata. An old Node
-without a recorded version remains unanchored until saved or confirmed.
+enter hashes. Material and goal bases live in Git by Node ID, outside the
+Markdown. An old Node without a recorded version remains unanchored until
+saved or confirmed.
 Remote sources and conversation-only decisions can remain unanchored.
 
 ```text
@@ -203,9 +201,10 @@ tent workspace drift --json
 Check reports `synced`, `ahead`, `behind` or `unanchored`, plus the material
 and output evidence. It is read-only and proves version agreement, not
 correctness. All `goal` Nodes are requirements regardless of suffix. A saved
-goal without an output or explicit implementation confirmation is ahead;
-an explicit plan records the first known start time. Material changes or
-changed output bases require review.
+goal with no output anywhere in its subtree is ahead. Each output implicitly
+depends on its nearest goal ancestor. A changed goal makes its own outputs
+behind and keeps the goal ahead until those outputs are reviewed and
+confirmed. Generation timestamps do not substitute for goal versions.
 
 After reading the complete live Node and the changed material, choose:
 
@@ -213,40 +212,58 @@ After reading the complete live Node and the changed material, choose:
 - Judgment changed: review the changed material and drifted outputs, then save
   the corrected Node with `node write --confirm` (or `confirm: true` in write
   JSON or a write-many update item), or follow the save with `node confirm`.
-- Intent remains unfinished: write `planned: true`. Changed material still
-  requires review and confirmation; a plan alone does not clear `behind`.
-- Implementation is verified by declared local material but has no separate
-  output: add `--implemented` to confirmation. This clears an explicit plan.
 
-Confirmation records the current basis without rewriting the body. It does
-not clear an explicit plan unless `--implemented` is supplied. Both commands
-require an ETag from a complete live read; a summary or old Card is not an
+Confirmation records the current material and implicit goal basis without
+rewriting the body. Both commands require an ETag from a complete live read; a summary or old Card is not an
 edit basis. Material that still cannot be read retains its known old version
 and remains behind even after confirmation.
 
-## Associate an output with its requirement
+## Record authorship and review
 
-Read the goal and use one command to record the association:
+Content changes record OKF `generated: {by, at}`. Confirmation records
+`verified: [{by, at}]`, retaining one latest timestamp per actor, without
+rewriting the body or generation record. An edit preserves earlier reviews;
+review history and content authorship answer different questions.
+
+Use `--by human:<id>`, `--by process:<id>` or `--by <producer>/<version>`
+when the actual actor is known; write JSON and batch items take `by`.
+Otherwise the command records its actual `tent/<version>` runtime. Never
+guess a model identity or claim a human review for an Agent confirmation.
+Only `human:` verification is human-reviewed; other verifiers are
+machine-confirmed. No verification means unverified.
+
+`stale_after` is an ISO timestamp with an explicit timezone. Expiry makes a
+Node behind even when it has a matching material version or verification.
+Reads, no-op saves and lifecycle edits do not change its generation time.
+
+## Record an output under its goal
+
+Read the goal and create an output Node for the actual result:
 
 ```text
-tent node link-output <goal-id> --resource <path-or-node-id> --provenance inferred --base-etag <etag> --json
+tent node link-output <goal-id> --resource <path-or-node-id> [--name <name>] [--by <actor>] --json
 ```
 
-Use `recorded` for a linkage supported by observed records, `inferred` for
-your reasoned attribution, and `confirmed` for an explicitly confirmed
-association. Paths resolve from the requirement Node's Markdown; Node ids
-are converted to relative paths. The command stores the output address and
-current requirement/material basis in the goal and records the save in Git.
-Requirement or material changes can make an associated output
-`possiblyDrifted`; linking it again does not acknowledge that requirement
-change. Review and confirm explicitly.
+Relative file paths resolve from the Workspace root, so `out/page.html`
+points to the workspace's `out` directory. `/` addresses resolve from `.tent`;
+Node IDs and absolute URIs are also supported. Local files must exist and be
+readable. The default Node name is the file name, numbered on collision;
+`--name` overrides it. The saved address is relative to the new child.
+The command returns the output Node ID; it does not edit the goal.
+Describe independently useful results in that output Node. Existing outputs
+can be moved under the appropriate goal. The nearest goal supplies the
+implicit source and recorded goal version without extra frontmatter.
 
-`workspace drift` reports unlinked outputs, changed output bases and goals
-without output associations. Stop can suggest likely goals from this turn's
-observed files, but never associates or confirms on your behalf. Treat a
-possible intent signal as a question; save only a real confirmed requirement
-or decision. Session observations contain addresses and versions, not file
-or conversation contents.
+When the goal changes, review the affected output and confirm it, updating
+its body if needed. Ordinary output edits retain the old goal basis.
+
+`workspace drift` reports session-written files not recorded by any output
+Node, behind outputs and goals with no output in their subtree. An independent
+output Node is already recorded even when it has no goal ancestor. Stop can
+suggest likely goals from this turn's observed files, but never creates or
+confirms on your behalf. Save only actual confirmed intent and real results.
+Session observations contain addresses and versions, not file or conversation
+contents.
 
 ## Structure and lifecycle
 

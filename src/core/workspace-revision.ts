@@ -5,7 +5,7 @@ import { isHistoryDocument } from "./document-history.js";
 import {
   CARDS_DIR,
   ROLES_DIR,
-  OPERATIONAL_TOP_LEVEL,
+  isOperationalPath,
   ORDER_PATH,
   WORKSPACE_SETTINGS_PATH,
 } from "./paths.js";
@@ -19,7 +19,7 @@ export async function workspaceDocumentPaths(fs: FsAdapter): Promise<string[]> {
       if (entry.isDir) {
         if (
           !dir &&
-          OPERATIONAL_TOP_LEVEL.has(entry.name) &&
+          isOperationalPath(entry.name) &&
           entry.name !== ROLES_DIR &&
           entry.name !== CARDS_DIR
         )

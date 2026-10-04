@@ -26,6 +26,7 @@ test("material checks observe generic bytes while software/format adapters have 
   assert.deepEqual(observation, {
     canonicalPath: await fs.realpath(filename),
     observedVersion: expected,
+    cacheHit: false,
   });
   assert.deepEqual(
     await observeMaterialResource(root, "Node/Node.md", "../../materials/opaque.pen"),

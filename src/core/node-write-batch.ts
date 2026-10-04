@@ -14,8 +14,6 @@ import {
   resourceSchema,
   sourcesSchema,
   validateMaterialAddresses,
-  materialLocator,
-  materialOccurrences,
 } from "./material.js";
 import { loadNodeCatalog, readCatalogDocument } from "./node-catalog.js";
 import { NodeWriteError, prepareNodeDocumentWrite } from "./node-document-write.js";
@@ -30,11 +28,13 @@ import { rewriteMarkdownDestinations } from "../markdown/links.js";
 import { ReaderError } from "./context-reader.js";
 import { recoverPendingNodeMoveUnlocked } from "./node-move-recovery.js";
 import { recoverPendingDeleteUnlocked } from "./delete-recovery.js";
+import { prepareNodeSyncSave, type NodeBasisRecord } from "./node-sync-record.js";
+
 import {
-  prepareNodeSyncSave,
-  UnanchoredMaterialError,
-  isRequirementNode,
-} from "./node-sync-record.js";
+  prepareNodeProvenanceSave,
+  nodeActorSchema,
+  recordNodeVerification,
+} from "./node-provenance.js";
 
 const localRef = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*$/);
 const nodeId = z.string().refine(isNodeId, "Expected a canonical node-* id");
@@ -51,7 +51,7 @@ const createItem = z.strictObject({
   tags: z.array(z.string()).optional(),
   resource: resourceSchema.optional(),
   sources: sourcesSchema.optional(),
-  planned: z.boolean().optional(),
+  by: nodeActorSchema.optional(),
 });
 const updateItem = z
   .strictObject({
@@ -61,15 +61,14 @@ const updateItem = z
     raw: z.string().optional(),
     body: z.string().optional(),
     frontmatter: z.record(z.string(), z.unknown()).optional(),
-    planned: z.boolean().optional(),
     confirm: z.boolean().optional(),
+    by: nodeActorSchema.optional(),
   })
   .refine(
     (p) =>
       p.raw !== undefined
         ? p.body === undefined && p.frontmatter === undefined
-        : p.planned !== undefined ||
-          p.confirm === true ||
+        : p.confirm === true ||
           p.body !== undefined ||
           (p.frontmatter !== undefined && Object.keys(p.frontmatter).length > 0),
     "Supply raw alone, or body and/or frontmatter",
@@ -89,8 +88,8 @@ type PlannedNode = {
   before: string | null;
   raw: string;
   parentId?: string;
-  planned?: boolean;
   confirm?: boolean;
+  by?: string;
 };
 
 export class NodeBatchWriteError extends Error {
@@ -238,7 +237,7 @@ async function writeNodesBatchUnlocked(
         before: null,
         raw: serializeFrontmatter(data, body, NODE_FRONTMATTER_KEY_ORDER),
         parentId: entry.parentId,
-        planned: item.planned,
+        by: item.by,
       });
     } else {
       const node = catalog.byId.get(item.nodeId);
@@ -268,57 +267,46 @@ async function writeNodesBatchUnlocked(
         path: node.path,
         before: document.raw,
         raw,
-        planned: item.planned,
+        by: item.by,
         confirm: item.confirm,
       });
     }
   }
-  // A batch cannot embed hashes of its own mutually-referencing final identity
-  // documents. Preserve honesty rather than recording a preimage as current.
-  const changedDocuments = new Set(
-    planned
-      .filter((n) => {
-        const data = parseFrontmatter(n.raw).data;
-        return (
-          n.before !== n.raw ||
-          n.planned !== undefined ||
-          n.confirm === true ||
-          materialOccurrences(data).length > 0 ||
-          (isRequirementNode(data) && data.sync === undefined)
-        );
-      })
-      .map((n) => nodeNotePath(n.path)),
-  );
-  const batchObserver = new Proxy(fs, {
-    get(target, key) {
-      if (key === "observeMaterial")
-        return async (resource: string, documentPath: string) => {
-          const locator = materialLocator(resource, documentPath, true);
-          if (locator.kind === "path" && changedDocuments.has(locator.target))
-            throw new UnanchoredMaterialError(
-              "Material identity is being replaced in this batch; confirm its saved version afterwards",
-            );
-          if (!target.observeMaterial) throw new Error("Material observer is unavailable");
-          const observation = await target.observeMaterial(resource, documentPath);
-          if (observation.systemPath && changedDocuments.has(observation.systemPath))
-            throw new UnanchoredMaterialError(
-              "Material identity is being replaced in this batch; confirm its saved version afterwards",
-            );
-          return observation;
-        };
-      const value: unknown = Reflect.get(target, key);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
+  const now = env.clock.now();
+  const finalDocuments = new Map<string, string>();
+  const nodes = new Map(catalog.byId);
+  const nodeRecords: Record<string, NodeBasisRecord> = {};
   for (const node of planned) {
-    node.raw = await prepareNodeSyncSave(
-      batchObserver,
-      nodeNotePath(node.path),
-      node.raw,
-      node.planned,
-      env.clock.now(),
-      node.confirm,
-    );
+    node.raw = prepareNodeProvenanceSave(node.raw, node.before, node.by, now);
+    if (node.confirm) {
+      const parsed = parseFrontmatter(node.raw);
+      recordNodeVerification(parsed.data, node.by, now);
+      node.raw = serializeFrontmatter(parsed.data, parsed.body, parsed.keyOrder);
+    }
+    finalDocuments.set(nodeNotePath(node.path), node.raw);
+    const parsed = parseFrontmatter(node.raw);
+    nodes.set(node.nodeId, {
+      nodeId: node.nodeId,
+      name: node.path.split("/").at(-1)!,
+      path: node.path,
+      type: parsed.data.type as string,
+      header: node.raw.slice(0, node.raw.length - parsed.body.length),
+      parentNodeId: node.parentId ?? nodes.get(node.nodeId)?.parentNodeId ?? null,
+      childNodeIds: [],
+      archived: false,
+      invalid: false,
+    });
+  }
+  for (const node of planned) {
+    const prepared = await prepareNodeSyncSave(fs, nodeNotePath(node.path), node.raw, {
+      now,
+      confirm: node.confirm,
+      by: node.by,
+      nodes,
+      finalDocuments,
+    });
+    node.raw = prepared.raw;
+    nodeRecords[node.nodeId] = prepared.record;
   }
   const beforeOrder = (await fs.exists(ORDER_PATH)) ? await fs.readFile(ORDER_PATH) : null;
   const order = await loadOrder(readOnlyFs(fs));
@@ -368,7 +356,7 @@ async function writeNodesBatchUnlocked(
       fs.history && (await fs.exists(".git"))
         ? await fs.history.captureUnlocked(
             planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
-            { operation: "node.write-many" },
+            { operation: "node.write-many", nodeRecords },
           )
         : undefined;
     return {

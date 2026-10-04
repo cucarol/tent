@@ -1,8 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
-import { withTentMutation, type FsAdapter } from "./adapter.js";
+import { readOnlyFs, withTentMutation, type FsAdapter } from "./adapter.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { isCardId, isRoleId, makeCardId } from "./id.js";
-import { CARDS_DIR, cardRecordPath, roleDocumentPath, MUTATION_LOCK_PATH } from "./paths.js";
+import {
+  CARDS_DIR,
+  cardRecordPath,
+  roleDocumentPath,
+  MUTATION_LOCK_PATH,
+  nodeNotePath,
+} from "./paths.js";
 import { contentEtag } from "./etag.js";
 import { documentLifecycle } from "./document-status.js";
 import { documentVersionSchema, type DocumentVersion } from "./git-history.js";
@@ -13,6 +19,8 @@ import { boundary, ReaderError, type ReaderRange } from "./context-reader.js";
 import { canonicalSha256 } from "./canonical-digest.js";
 import { canonicalIdentityError } from "./tree.js";
 import { canonicalDocumentReferences } from "./document-links.js";
+import { loadNodeCatalog, readCatalogDocument } from "./node-catalog.js";
+import { listWorkspaceRelations, type DocumentRef } from "./workspace-relations.js";
 
 export type CardDocumentState = "pending" | "consumed" | "interrupted";
 type CardFields = Record<string, unknown> & {
@@ -101,6 +109,7 @@ function stateOf(document: CardDocument) {
     state: document.data.state,
     receivedBy: document.data.receivedBy,
     target: document.data.target,
+    status: document.data.status,
   };
 }
 function requireInput(card: CardDocument) {
@@ -299,8 +308,16 @@ async function checkedCard(fs: FsAdapter, id: string) {
   if (!versions.first || !versions.latest)
     throw new CardDocumentError("UNPUBLISHED", "Handwritten Card requires explicit publish");
   const published = parseCardDocument(id, await history.read(versions.first));
-  requireInput(published);
   const latest = parseCardDocument(id, await history.read(versions.latest));
+  validateRetainedCard(current, published, latest);
+  return { current, publishedVersion: versions.first, version: versions.latest, history };
+}
+function validateRetainedCard(
+  current: CardDocument,
+  published: CardDocument,
+  latest: CardDocument,
+) {
+  requireInput(published);
   if (published.data.state !== "pending") invalid("Initial Card publication is not pending");
   if (
     !isDeepStrictEqual(inputOf(current), inputOf(published)) ||
@@ -308,14 +325,13 @@ async function checkedCard(fs: FsAdapter, id: string) {
   )
     throw new CardDocumentError(
       "INPUT_CHANGED",
-      "Published Card input changed; preserve it and create a new Card",
+      "Published Card input changed; restore it and edit the requirement Nodes",
     );
   if (!isDeepStrictEqual(stateOf(current), stateOf(latest)))
     throw new CardDocumentError(
       "STATE_CHANGED",
       "Card management fields differ from retained state; inspect the diff before reconciling",
     );
-  return { current, publishedVersion: versions.first, version: versions.latest, history };
 }
 
 export function createCardDocument(
@@ -540,6 +556,81 @@ export function publishCardDocument(fs: FsAdapter, id: string, expectedEtag: str
   return withCardLock(fs, publish);
 }
 
+/** Cancel a published task without altering its recorded input or reception. */
+export function deprecateCardDocument(fs: FsAdapter, id: string, expectedEtag: string) {
+  return withTentMutation(
+    fs,
+    async () => {
+      const { current, history, version } = await checkedCard(fs, id);
+      checkEtag(current, expectedEtag);
+      const raw =
+        current.data.status === "deprecated"
+          ? current.raw
+          : serializeFrontmatter(
+              { ...current.data, status: "deprecated" },
+              current.body,
+              current.keyOrder,
+            );
+      await checkUnchanged(fs, current);
+      let savedVersion = version;
+      if (raw !== current.raw) {
+        await fs.writeFile(current.path, raw);
+        savedVersion = (
+          await history.captureUnlocked([{ path: current.path, raw }], {
+            operation: "card.deprecate",
+          })
+        ).versions[0]!;
+      }
+      return {
+        cardId: id,
+        path: current.path,
+        etag: contentEtag(raw),
+        ...stateOf(current),
+        status: "deprecated" as const,
+        version: savedVersion,
+      };
+    },
+    { operation: "card.deprecate" },
+  );
+}
+
+async function deprecatedCardNotice(fs: FsAdapter, card: CardDocument) {
+  if (documentLifecycle(card.data).status !== "deprecated") return {};
+  const notice =
+    "This Card is deprecated; its task was cancelled. Review current references before acting.";
+  try {
+    const catalog = await loadNodeCatalog(fs);
+    const references = new Map<string, DocumentRef & { path: string }>();
+    const relations = await listWorkspaceRelations(fs);
+    const published = new Set(
+      (await listCardDocuments(fs, { includeDeprecated: true })).items
+        .filter((item) => !item.draft && !item.diagnostic)
+        .map((item) => item.cardId),
+    );
+    for (const relation of relations) {
+      if (relation.target.kind !== "card" || relation.target.id !== card.data.id) continue;
+      const { from } = relation;
+      if (from.kind === "card" && !published.has(from.id)) continue;
+      const path =
+        from.kind === "node"
+          ? nodeNotePath(catalog.byId.get(from.id)!.path)
+          : from.kind === "role"
+            ? roleDocumentPath(from.id)
+            : cardPath(from.id);
+      const data = parseFrontmatter(await fs.readFile(path)).data;
+      const status = documentLifecycle(data).status;
+      if (status !== "stable" && status !== "draft") continue;
+      references.set(`${from.kind}:${from.id}`, { ...from, path });
+    }
+    return { notice, currentReferences: [...references.values()] };
+  } catch (error) {
+    return {
+      notice,
+      currentReferencesDiagnostic: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 type PageOptions = {
   view?: "body" | "raw";
   range?: ReaderRange;
@@ -621,6 +712,7 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
       state: current.data.state,
       receivedBy: current.data.receivedBy,
       ...documentLifecycle(current.data),
+      ...(await deprecatedCardNotice(fs, current)),
     };
     const page = cardPage(id, raw, options, metadata);
     if (!options.capture) return { ...page, version: checked.version };
@@ -645,7 +737,7 @@ export function transitionCardDocument(
       const { current, history, version, publishedVersion } = await checkedCard(fs, id);
       if (roleId !== undefined) await roleAvailable(fs, roleId);
       const status = documentLifecycle(current.data).status;
-      if (status !== "stable" && status !== "draft")
+      if (status !== "stable" && status !== "draft" && status !== "deprecated")
         throw new CardDocumentError("RECEPTION_CONFLICT", "Card is not current");
       if (current.data.target && roleId === undefined)
         throw new CardDocumentError(
@@ -706,6 +798,8 @@ export function transitionCardDocument(
         receivedBy: roleId,
         replayed,
         automaticInterrupt: "unavailable",
+        ...documentLifecycle(current.data),
+        ...(await deprecatedCardNotice(fs, current)),
       };
       // Qualification/history reads above can yield to an external editor. Do not let
       // the filesystem writer adopt those newer bytes as the basis for this decision.
@@ -731,6 +825,7 @@ export async function listCardDocuments(
     includeOpen?: boolean;
     state?: CardDocumentState;
     includeDrafts?: boolean;
+    includeDeprecated?: boolean;
   } = {},
 ) {
   if (options.roleId) await roleAvailable(fs, options.roleId);
@@ -748,6 +843,7 @@ export async function listCardDocuments(
       if (data.id !== id || data.type !== "card" || data.schemaVersion !== 3)
         invalid("Card header identity mismatch");
       const state = data.state;
+      if (!options.includeDeprecated && documentLifecycle(data).status === "deprecated") continue;
       if (options.state && state !== options.state) continue;
       if (
         options.roleId &&
@@ -794,4 +890,170 @@ export async function listCardDocuments(
     return !item.draft || (options.includeDrafts && !options.state);
   });
   return { revision: canonicalSha256(visible), items: visible };
+}
+
+export type ReceivedCardSourceChange = {
+  cardId: string;
+  title?: string;
+  receivedBy?: string;
+  nodeId: string;
+  resource: string;
+  path?: string;
+  state: "changed" | "missing";
+  publishedVersion: DocumentVersion;
+  currentEtag?: string;
+  reason: string;
+};
+export type ReceivedCardSourceDiagnostic = {
+  cardId?: string;
+  nodeId?: string;
+  resource?: string;
+  message: string;
+};
+
+/** Compare pinned Node bytes with live content. Queries never capture or recover documents. */
+export async function inspectReceivedCardSourceChanges(
+  fs: FsAdapter,
+  options: { roleId?: string } = {},
+) {
+  const items: ReceivedCardSourceChange[] = [];
+  const diagnostics: ReceivedCardSourceDiagnostic[] = [];
+  const readonly = readOnlyFs(fs);
+  try {
+    if (!(await readonly.exists(CARDS_DIR))) return { items, diagnostics };
+    const listed = await listCardDocuments(readonly, options);
+    for (const item of listed.items) {
+      if (item.diagnostic)
+        diagnostics.push({ cardId: String(item.cardId), message: String(item.diagnostic) });
+    }
+    const candidates = listed.items.filter(
+      (item) =>
+        !item.diagnostic &&
+        !item.draft &&
+        (item.state === "consumed" || item.state === "interrupted"),
+    );
+    if (!candidates.length) return { items, diagnostics };
+    const history = await historyOf(readonly);
+    // One identity/history scan and two source batches serve the whole query.
+    const changes = await history.changesInRange();
+    const first = new Map<string, DocumentVersion>();
+    const latest = new Map<string, DocumentVersion>();
+    for (const commit of changes)
+      for (const change of commit.changes) {
+        if (!change.objectId) continue;
+        if (change.after) {
+          if (!first.has(change.objectId)) first.set(change.objectId, change.after);
+          latest.set(change.objectId, change.after);
+        } else latest.delete(change.objectId);
+      }
+    const requested = candidates.flatMap((item) => {
+      const id = String(item.cardId),
+        published = first.get(id),
+        current = latest.get(id);
+      return published && current ? [published, current] : [];
+    });
+    const retained = await history.readVersions(requested);
+    const selected: Array<{ card: CardDocument; owner: string; source: MaterialSource }> = [];
+    let offset = 0;
+    for (const item of candidates) {
+      const id = String(item.cardId);
+      try {
+        if (!first.has(id) || !latest.has(id))
+          throw new Error("Card publication history is unavailable");
+        const published = retained[offset++]!,
+          previous = retained[offset++]!;
+        if (published instanceof Error) throw published;
+        if (previous instanceof Error) throw previous;
+        const current = await liveCard(readonly, id);
+        validateRetainedCard(
+          current,
+          parseCardDocument(id, published.raw),
+          parseCardDocument(id, previous.raw),
+        );
+        if (
+          documentLifecycle(current.data).status === "deprecated" ||
+          current.data.state === "pending" ||
+          (options.roleId && current.data.receivedBy !== options.roleId)
+        )
+          continue;
+        for (const source of current.data.sources) {
+          if (!source.version) continue;
+          const version = sourceVersion(current.path, source);
+          if (!version.path.startsWith("roles/"))
+            selected.push({ card: current, owner: current.path, source });
+        }
+      } catch (error) {
+        diagnostics.push({
+          cardId: id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (!selected.length) return { items, diagnostics };
+    const sources = await verifyCardSourceVersions(readonly, selected);
+    const catalog = await loadNodeCatalog(readonly);
+    const observed = new Map<string, Awaited<ReturnType<typeof readCatalogDocument>> | Error>();
+    for (const [index, entry] of selected.entries()) {
+      const { card, source } = entry;
+      let nodeId: string | undefined;
+      try {
+        const pinned = sources[index]!;
+        if (pinned instanceof Error) throw pinned;
+        nodeId = String(parseFrontmatter(pinned.raw).data.id);
+        const node = catalog.byId.get(nodeId);
+        const base = {
+          cardId: card.data.id,
+          title: card.data.title,
+          receivedBy: card.data.receivedBy,
+          nodeId,
+          resource: source.resource,
+          publishedVersion: pinned.version,
+        };
+        if (!node) {
+          if (
+            [...catalog.byPath.values()].some(
+              (value) =>
+                value.nodeId === nodeId ||
+                (value.invalid && nodeNotePath(value.path) === pinned.version.path),
+            )
+          )
+            throw new Error("Source Node exists but its identity is invalid or duplicated");
+          items.push({
+            ...base,
+            state: "missing",
+            reason: "Source Node is missing from the current workspace",
+          });
+          continue;
+        }
+        if (!observed.has(nodeId)) {
+          try {
+            observed.set(nodeId, await readCatalogDocument(readonly, node));
+          } catch (error) {
+            observed.set(nodeId, error instanceof Error ? error : new Error(String(error)));
+          }
+        }
+        const current = observed.get(nodeId)!;
+        if (current instanceof Error) throw current;
+        if (current.raw === pinned.raw) continue;
+        items.push({
+          ...base,
+          path: nodeNotePath(node.path),
+          state: "changed",
+          currentEtag: current.etag,
+          reason:
+            "Current Node content differs from the source version retained at Card publication",
+        });
+      } catch (error) {
+        diagnostics.push({
+          cardId: card.data.id,
+          nodeId,
+          resource: source.resource,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  } catch (error) {
+    diagnostics.push({ message: error instanceof Error ? error.message : String(error) });
+  }
+  return { items, diagnostics };
 }

@@ -1,12 +1,12 @@
 import { constants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { open, realpath, readFile, writeFile, mkdir, rename, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { checkedSourceFile } from "./checked-source-file.js";
 import { materialLocator, localMaterialPath } from "../core/material.js";
 
 /** Mechanical byte identity only. Material interpretation belongs to the caller's tools. */
-export async function observeSourceFile(root: string, filename: string) {
+export async function observeSourceFile(root: string, filename: string, cacheDir?: string) {
   await checkedSourceFile(root, filename);
   const canonicalPath = await realpath(filename);
   const handle = await open(
@@ -18,6 +18,35 @@ export async function observeSourceFile(root: string, filename: string) {
       current = await checkedSourceFile(root, filename);
     if (!before.isFile() || before.dev !== current.dev || before.ino !== current.ino)
       throw new Error("Material changed while opening");
+    const signature = {
+      size: before.size,
+      mtime: before.mtimeMs,
+      ctime: before.ctimeMs,
+      dev: before.dev,
+      ino: before.ino,
+    };
+    const cachePath = cacheDir
+      ? path.join(cacheDir, createHash("sha256").update(canonicalPath).digest("hex") + ".json")
+      : undefined;
+    if (cachePath) {
+      const cached = await readFile(cachePath, "utf8")
+        .then(JSON.parse)
+        .catch(() => undefined);
+      const after = await handle.stat();
+      if (
+        cached &&
+        JSON.stringify(cached.signature) === JSON.stringify(signature) &&
+        /^[a-f0-9]{64}$/.test(cached.version) &&
+        after.size === before.size &&
+        after.mtimeMs === before.mtimeMs &&
+        after.ctimeMs === before.ctimeMs
+      ) {
+        const final = await checkedSourceFile(root, filename);
+        if (final.dev !== before.dev || final.ino !== before.ino)
+          throw new Error("Material changed during cache lookup");
+        return { canonicalPath, observedVersion: cached.version as string, cacheHit: true };
+      }
+    }
     const hash = createHash("sha256"),
       buffer = Buffer.alloc(64 * 1024);
     let position = 0;
@@ -43,7 +72,18 @@ export async function observeSourceFile(root: string, filename: string) {
     ) {
       throw new Error("Material changed while observing");
     }
-    return { canonicalPath, observedVersion: hash.digest("hex") };
+    const observedVersion = hash.digest("hex");
+    if (cachePath) {
+      const temp = `${cachePath}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`;
+      try {
+        await mkdir(cacheDir!, { recursive: true });
+        await writeFile(temp, JSON.stringify({ signature, version: observedVersion }));
+        await rename(temp, cachePath);
+      } catch {
+        await rm(temp, { force: true }).catch(() => undefined);
+      }
+    }
+    return { canonicalPath, observedVersion, cacheHit: false };
   } finally {
     await handle.close();
   }
@@ -54,6 +94,7 @@ export async function observeMaterialResource(
   workspaceRoot: string,
   documentPath: string,
   resource: string,
+  cacheDir?: string,
 ) {
   const locator = materialLocator(resource, documentPath, true);
   const filename = localMaterialPath(locator, workspaceRoot);
@@ -62,5 +103,5 @@ export async function observeMaterialResource(
   // An absolute file URI explicitly addresses another location. Check every path
   // segment from its filesystem root; relative addresses remain in this workspace.
   const root = locator.kind === "uri" ? path.parse(filename).root : workspaceRoot;
-  return observeSourceFile(root, filename);
+  return observeSourceFile(root, filename, cacheDir);
 }

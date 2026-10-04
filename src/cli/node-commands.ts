@@ -102,6 +102,20 @@ export async function runNodeCommand(
     if (!Object.prototype.hasOwnProperty.call(NODE_COMMAND_HELP, sub)) return usage(nodeHelpText());
     if (flags.heading !== undefined && !["append", "get-section", "write-section"].includes(sub))
       return usage("--heading is only valid for node append, get-section or write-section");
+    if (
+      flags.by !== undefined &&
+      ![
+        "create",
+        "write",
+        "append",
+        "write-section",
+        "confirm",
+        "link-output",
+        "type",
+        "tags",
+      ].includes(sub)
+    )
+      return usage("--by is only valid for content writes and node confirm");
     if (flags.start !== undefined && sub !== "read-many")
       return usage("--start is only valid for node read-many");
     if (flags["archive-commit"] !== undefined && sub !== "restore")
@@ -112,14 +126,10 @@ export async function runNodeCommand(
       );
     if (flags.resource !== undefined && !["create", "search", "link-output"].includes(sub))
       return usage("--resource is only valid for node create, search or link-output");
-    if (flags.planned !== undefined && !["create", "write"].includes(sub))
-      return usage("--planned is only valid for node create or write");
-    if (flags.implemented !== undefined && sub !== "confirm")
-      return usage("--implemented is only valid for node confirm");
     if (flags.confirm !== undefined && sub !== "write")
       return usage("--confirm is only valid for node write");
-    if (flags.provenance !== undefined && sub !== "link-output")
-      return usage("--provenance is only valid for node link-output");
+    if (flags.name !== undefined && sub !== "link-output")
+      return usage("--name is only valid for node link-output");
     if (flags.body === "-" && flags["sources-json"] === "-")
       return usage("Only one input can read stdin");
     if (flags["version-json"] !== undefined && (sub !== "get" || flags.full === "true"))
@@ -130,9 +140,7 @@ export async function runNodeCommand(
       return usage("--read-back is only valid for node write");
     if (
       flags["input-json"] !== undefined &&
-      ["body", "base-etag", "read-back", "planned", "confirm"].some(
-        (key) => flags[key] !== undefined,
-      )
+      ["body", "base-etag", "read-back", "confirm", "by"].some((key) => flags[key] !== undefined)
     ) {
       return usage("--input-json supplies the entire write; do not combine it with write fields");
     }
@@ -158,35 +166,34 @@ export async function runNodeCommand(
         const result = await inspectNodeSync(fs, nodeRef(target));
         return print(result, json, (value) => JSON.stringify(value, null, 2));
       }
-      case "confirm":
       case "link-output": {
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
-        const allowed = [
-          "json",
-          "workspace",
-          "base-etag",
-          ...(sub === "confirm" ? ["implemented"] : ["resource", "provenance"]),
-        ];
+        const allowed = ["json", "workspace", "resource", "name", "by"];
+        if (Object.keys(flags).some((key) => !allowed.includes(key)) || !flags.resource)
+          return usage(nodeHelpText(sub));
+        const result = await linkNodeOutput(fs, nodeRef(target), {
+          resource: flags.resource,
+          name: flags.name,
+          by: flags.by,
+        });
+        return print(
+          result,
+          json,
+          () => `Created ${result.nodeId}  ${result.path}  ${result.etag}`,
+        );
+      }
+      case "confirm": {
+        const target = oneTarget(positionals, nodeHelpText(sub));
+        if (typeof target !== "string") return target;
+        const allowed = ["json", "workspace", "base-etag", "by"];
         if (Object.keys(flags).some((key) => !allowed.includes(key)) || !flags["base-etag"])
           return usage(nodeHelpText(sub));
         const nodeId = nodeRef(target);
-        if (
-          sub === "link-output" &&
-          (!flags.resource || !["recorded", "inferred", "confirmed"].includes(flags.provenance))
-        )
-          return usage(nodeHelpText(sub));
-        const saved =
-          sub === "confirm"
-            ? await confirmNodeSync(fs, nodeId, {
-                baseEtag: flags["base-etag"],
-                ...(flags.implemented === "true" ? { implemented: true } : {}),
-              })
-            : await linkNodeOutput(fs, nodeId, {
-                baseEtag: flags["base-etag"],
-                resource: flags.resource,
-                provenance: flags.provenance as "recorded" | "inferred" | "confirmed",
-              });
+        const saved = await confirmNodeSync(fs, nodeId, {
+          baseEtag: flags["base-etag"],
+          by: flags.by,
+        });
         const result = {
           nodeId,
           path: saved.path,
@@ -473,7 +480,7 @@ export async function runNodeCommand(
             ? { body: body && !body.endsWith("\n") ? body + "\n" : body }
             : {}),
           ...materials,
-          ...(flags.planned === "true" ? { planned: true } : {}),
+          ...(flags.by !== undefined ? { by: flags.by } : {}),
           ...(tags.length > 0 ? { tags } : {}),
         });
         const result = await readNode(fs, workspaceId, { nodeId: created, capture: true });
@@ -495,7 +502,7 @@ export async function runNodeCommand(
           "json",
           "workspace",
           "heading",
-          ...(sub === "get-section" ? [] : ["body"]),
+          ...(sub === "get-section" ? [] : ["body", "by"]),
           ...(sub === "write-section" ? ["base-etag"] : []),
         ];
         if (
@@ -513,11 +520,12 @@ export async function runNodeCommand(
         const body = flags.body === "-" ? (globals.stdin ?? (await readStdin())) : flags.body;
         const saved =
           sub === "append"
-            ? await appendNodeBody(fs, nodeId, { body, heading: flags.heading })
+            ? await appendNodeBody(fs, nodeId, { body, heading: flags.heading, by: flags.by })
             : await writeNodeSection(fs, nodeId, {
                 heading: flags.heading,
                 baseEtag: flags["base-etag"],
                 body,
+                by: flags.by,
               });
         const result = {
           workspaceId,
@@ -539,7 +547,7 @@ export async function runNodeCommand(
         const supplied = flags["input-json"];
         if (
           supplied === undefined &&
-          ((body === undefined && flags.planned === undefined && flags.confirm === undefined) ||
+          ((body === undefined && flags.confirm === undefined) ||
             !flagValue(flags, "base-etag")?.trim())
         ) {
           return usage(
@@ -553,8 +561,8 @@ export async function runNodeCommand(
             : {
                 body,
                 baseEtag: flagValue(flags, "base-etag"),
-                ...(flags.planned === "true" ? { planned: true } : {}),
                 ...(flags.confirm === "true" ? { confirm: true } : {}),
+                ...(flags.by !== undefined ? { by: flags.by } : {}),
                 ...(flags["read-back"] === "true" ? { readBack: true } : {}),
               },
         );
@@ -564,8 +572,8 @@ export async function runNodeCommand(
           body: input.body,
           frontmatter,
           baseEtag: input.baseEtag,
-          planned: input.planned,
           confirm: input.confirm,
+          by: input.by,
         });
         const readBackCore = new ContextReader(
           { kind: "live", workspaceId },
@@ -673,6 +681,7 @@ export async function runNodeCommand(
         const saved = await writeNodeDocument(fs, ref, {
           baseEtag,
           frontmatter: { type: positionals[1] },
+          by: flags.by,
         });
         const result = { nodeId: ref, etag: saved.etag, version: saved.version };
         return print(incompleteNodeRead(result), json, () => `Updated type for ${ref}`);
@@ -706,7 +715,11 @@ export async function runNodeCommand(
             : action === "add"
               ? [...new Set([...current, ...values])]
               : current.filter((tag) => !values.includes(tag));
-        const saved = await writeNodeDocument(fs, ref, { baseEtag, frontmatter: { tags } });
+        const saved = await writeNodeDocument(fs, ref, {
+          baseEtag,
+          frontmatter: { tags },
+          by: flags.by,
+        });
         const result = { nodeId: ref, etag: saved.etag, version: saved.version };
         return print(incompleteNodeRead(result), json, () => `Updated tags for ${target}`);
       }
@@ -743,9 +756,9 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
   diff: ["tent node diff --from-json <version> --to-json <version> [--cursor <cursor>] [--json]"],
   history: ["tent node history <nodeId> [--limit <n>] [--cursor <cursor>] [--json]"],
   check: ["tent node check <nodeId> [--json]"],
-  confirm: ["tent node confirm <nodeId> --base-etag <complete-live-etag> [--implemented] [--json]"],
+  confirm: ["tent node confirm <nodeId> --base-etag <complete-live-etag> [--by <actor>] [--json]"],
   "link-output": [
-    "tent node link-output <nodeId> --resource <address> --provenance recorded|inferred|confirmed --base-etag <complete-live-etag> [--json]",
+    "tent node link-output <goalId> --resource <address> [--name <name>] [--by <actor>] [--json]",
   ],
   search: [
     "tent node search [query | --resource <address>] [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
@@ -757,16 +770,16 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
     "tent node backlinks <nodeId> [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
   ],
   create: [
-    "tent node create <name> --type <type> [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--planned] [--json]",
+    "tent node create <name> --type <type> [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--by <actor>] [--json]",
   ],
   write: [
-    "tent node write <nodeId> [--body <text>|-] [--planned] [--confirm] --base-etag <etag> [--read-back] [--json]",
+    "tent node write <nodeId> [--body <text>|-] [--confirm] --base-etag <etag> [--by <actor>] [--read-back] [--json]",
     "tent node write <nodeId> --input-json <JSON>|- [--json]",
   ],
-  append: ["tent node append <nodeId> --body <text|-> [--heading <title>] [--json]"],
+  append: ["tent node append <nodeId> --body <text|-> [--heading <title>] [--by <actor>] [--json]"],
   "get-section": ["tent node get-section <nodeId> --heading <title> [--json]"],
   "write-section": [
-    "tent node write-section <nodeId> --heading <title> --base-etag <section-etag> --body <complete-section|-> [--json]",
+    "tent node write-section <nodeId> --heading <title> --base-etag <section-etag> --body <complete-section|-> [--by <actor>] [--json]",
   ],
   "write-many": ["tent node write-many --input-json <JSON|-> [--json]"],
   rename: ["tent node rename <nodeId> <new-name> [--json]"],
@@ -774,8 +787,10 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
   archive: ["tent node archive <nodeId> [--json]"],
   restore: ["tent node restore <nodeId> --archive-commit <commit> [--json]"],
   delete: ["tent node delete <nodeId> [--json]"],
-  type: ["tent node type <nodeId> <type> --base-etag <live-etag> [--json]"],
-  tags: ["tent node tags set|add|remove <nodeId> <tag[,tag...]> --base-etag <live-etag> [--json]"],
+  type: ["tent node type <nodeId> <type> --base-etag <live-etag> [--by <actor>] [--json]"],
+  tags: [
+    "tent node tags set|add|remove <nodeId> <tag[,tag...]> --base-etag <live-etag> [--by <actor>] [--json]",
+  ],
 };
 export function nodeHelpText(sub?: string): string {
   const commands = NODE_COMMAND_HELP;
@@ -787,14 +802,14 @@ export function nodeHelpText(sub?: string): string {
     check:
       "Inspect the computed synchronization state and output drift against current local material versions; no Hook or manual hash is needed.",
     confirm:
-      "After reviewing the complete live Node and its evidence, confirm that it remains valid. Tent records current local versions. --implemented explicitly confirms a planned requirement has been implemented and needs a local material anchor. This does not prove semantic correctness.",
+      "After reviewing the complete live Node and its evidence, confirm that it remains valid. Tent records current material versions and, for an output, its nearest goal's current version. This does not prove semantic correctness.",
     "link-output":
-      "Link an output address to the requirement Node using its complete live-read ETag. Tent records the output version and requirement basis. Choose provenance honestly: recorded event, inferred Agent judgment, or confirmed by the user. Paths resolve from this Node document; remote addresses are never fetched.",
+      "Create an output child of the selected goal. Relative file paths resolve from the Workspace root; / addresses resolve from .tent, and Node IDs and absolute URIs are supported. Local files must exist and be readable. The default name is the file name. Remote addresses are never fetched. The returned nodeId identifies the new output.",
     search:
       "resource is an explicit path from .tent (for example /Node/Node.md or ../src/file.ts) or an absolute URI. Exact resource matching preserves query/fragment identity and does not infer bare source text.",
-    create: `Body, resource, ordered sources and tags are saved together. Local material versions are observed automatically. --planned marks unfinished intent independently of lifecycle status. Suggested types: ${NODE_TYPE_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; explicit relative paths resolve from the new Node document, / from .tent. Inspect an uncertain result before retrying.`,
+    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output inherits its nearest goal ancestor as an implicit source. Suggested types: ${NODE_TYPE_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; explicit relative paths resolve from the new Node document, / from .tent. Inspect an uncertain result before retrying.`,
     write:
-      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"../../src/file.ts","sources":[{"resource":"../Other/Other.md"}]},"planned":true,"confirm":true,"readBack":true}. Omitted fields are preserved. planned is an intent flag, independent of lifecycle status; set false to clear it. Ordinary saves retain recorded material baselines and observe new declarations. --confirm or confirm:true confirms the final saved content and refreshes material and output bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. sync and outputs are generated metadata. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
+      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"../../src/file.ts","sources":[{"resource":"../Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields are preserved. Ordinary saves retain recorded material and goal baselines and observe new declarations. --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
     append:
       "Append under the Workspace lock without a prior read or ETag. --heading adds a level-two Markdown heading. Existing and new content are separated by one blank line; the saved body ends with one newline. Ordinary saves retain material baselines.",
     "get-section":
@@ -813,6 +828,7 @@ export function nodeHelpText(sub?: string): string {
     "",
     ...new Set(selected.map((key) => notes[key]).filter(Boolean)),
     "All commands accept --workspace <path>. Options accept --key=value; use -- to end options.",
+    "Content writes and confirmations accept --by <actor>; JSON writes accept by in the input. Use human:<id> for a person. Without a known actor, Tent records tent/<version>.",
     "Use --body - or --prompt - where supported to read stdin. Mutations use the Workspace lock and capture selected Git versions.",
   ].join("\n");
 }
@@ -862,9 +878,10 @@ function parseFlags(args: string[]): { positionals: string[]; flags: Record<stri
     options: {
       help: { type: "boolean", short: "h" },
       ...Object.fromEntries(
-        ["json", "full", "include-archived", "read-back", "planned", "implemented", "confirm"].map(
-          (name) => [name, { type: "boolean" as const }],
-        ),
+        ["json", "full", "include-archived", "read-back", "confirm"].map((name) => [
+          name,
+          { type: "boolean" as const },
+        ]),
       ),
       ...Object.fromEntries(
         [
@@ -880,7 +897,8 @@ function parseFlags(args: string[]): { positionals: string[]; flags: Record<stri
           "from-json",
           "to-json",
           "resource",
-          "provenance",
+          "name",
+          "by",
           "direction",
           "type",
           "body",

@@ -79,17 +79,15 @@ export function questionsForObservedTurn(
         (output) =>
           output.address &&
           observationAddressKey(workspaceRoot, file.address) ===
-            (output.nodeId && output.path
-              ? materialAddressKey(workspaceRoot, nodeNotePath(output.path), output.address)
-              : observationAddressKey(workspaceRoot, output.address)),
+            observationAddressKey(workspaceRoot, output.address),
       ),
   );
   if (newOutput)
     questions.push({
       kind: "unlinked-output",
-      question: `This turn produced ${literal(newOutput.address)} without a requirement link. Which requirement does it serve?`,
+      question: `This turn produced ${literal(newOutput.address)} without an output Node. Which goal should record it?`,
       answers: [
-        ...candidates.map((node) => `Link to ${node.nodeId} (inferred)`),
+        ...candidates.map((node) => `Create an output Node under ${node.nodeId}`),
         ...(candidates.length ? [] : ["Find or create a confirmed goal first"]),
         "Leave unlinked for now",
       ],
@@ -112,8 +110,7 @@ export function questionsForObservedTurn(
           material.state !== "current" &&
           material.state !== "unanchored" &&
           matches(material.resource),
-      ) ||
-      node.outputs.some((output) => output.possiblyDrifted && matches(output.resource))
+      )
     );
   });
   if (behind)
@@ -123,7 +120,7 @@ export function questionsForObservedTurn(
       answers: [
         "Still holds: read it fully, then node confirm",
         "Changed: update the Node and confirm",
-        "Intent retained but not implemented: review material, confirm and mark planned",
+        "Keep the goal; review the affected output before confirming",
       ],
     });
   if (event.signals.length && !event.nodeOrCardChanged)

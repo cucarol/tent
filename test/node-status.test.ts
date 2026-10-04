@@ -64,7 +64,7 @@ async function fixture(t: TestContext) {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await git(root, "init");
   const adapter = new NodeFs(root);
-  const env = { fs: adapter, clock: { now: () => "test" }, tentName: "test" };
+  const env = { fs: adapter, clock: { now: () => "2026-10-04T00:00:00.000Z" }, tentName: "test" };
   await adapter.writeFile("A/A.md", raw("node-root"));
   await adapter.writeFile("A/B/B.md", raw("node-draft", "status: draft\r\n"));
   await adapter.writeFile("A/C/C.md", raw("node-deprecated", "status: deprecated\r\n"));

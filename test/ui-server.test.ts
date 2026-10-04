@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import http from "node:http";
+import { userInfo } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
@@ -90,6 +91,64 @@ async function fixture(t: TestContext) {
 }
 
 const json = <T>(reply: Reply) => JSON.parse(reply.body) as T;
+
+test("Web confirmation records the local human or explicit actor with full-document CAS", async (t) => {
+  const { tent, call } = await fixture(t);
+  const target = "/api/nodes/node-main";
+  const read = async () =>
+    json<{ etag: string; body: string; trustTier: string }>(await call("GET", target));
+  const initial = await read();
+  assert.equal(initial.trustTier, "unverified");
+  const saved = await call("PUT", target, {
+    json: { baseEtag: initial.etag, body: "A reviewed fact." },
+  });
+  assert.equal(saved.status, 200, saved.body);
+  const before = parseFrontmatter(await tent.readFile("Main/Main.md"));
+  assert.equal((before.data.generated as { by: string }).by, `human:${userInfo().username}`);
+  const editing = await read();
+  const confirmed = await call("POST", `${target}/confirm`, { json: { baseEtag: editing.etag } });
+  assert.equal(confirmed.status, 200, confirmed.body);
+  assert.equal(json<{ trustTier: string }>(confirmed).trustTier, "human-reviewed");
+  const after = parseFrontmatter(await tent.readFile("Main/Main.md"));
+  assert.equal(after.body, before.body);
+  assert.deepEqual(after.data.generated, before.data.generated);
+  assert.equal((after.data.verified as { by: string }[])[0]!.by, `human:${userInfo().username}`);
+  assert.equal((await read()).trustTier, "human-reviewed");
+  for (let i = 0; i < 2; i++) {
+    const reply = await call("POST", `${target}/confirm`, {
+      json: { baseEtag: (await read()).etag, by: "human:reviewer" },
+    });
+    assert.equal(reply.status, 200, reply.body);
+  }
+  const latest = await tent.readFile("Main/Main.md");
+  const verified = parseFrontmatter(latest).data.verified as { by: string }[];
+  assert.equal(verified.filter((entry) => entry.by === "human:reviewer").length, 1);
+  const stale = await call("POST", `${target}/confirm`, { json: { baseEtag: editing.etag } });
+  assert.equal(stale.status, 409, stale.body);
+  assert.equal(json<{ error: { code: string } }>(stale).error.code, "ETAG_CONFLICT");
+  const incomplete = await call("POST", `${target}/confirm`, {
+    json: { baseEtag: incompleteNodeReadEtag(contentEtag(latest)) },
+  });
+  assert.equal(incomplete.status, 422, incomplete.body);
+  assert.equal(json<{ error: { code: string } }>(incomplete).error.code, "INCOMPLETE_READ");
+  for (const input of [
+    {},
+    { baseEtag: (await read()).etag, by: "" },
+    { baseEtag: (await read()).etag, by: 1 },
+  ]) {
+    assert.equal((await call("POST", `${target}/confirm`, { json: input })).status, 422);
+  }
+  assert.equal(
+    (
+      await call("POST", `${target}/confirm`, {
+        json: { baseEtag: (await read()).etag },
+        token: null,
+      })
+    ).status,
+    401,
+  );
+  assert.equal(await tent.readFile("Main/Main.md"), latest);
+});
 
 test("Web Node edits retain legacy material addresses and reject changed addresses with a repair", async (t) => {
   const { tent, call } = await fixture(t);

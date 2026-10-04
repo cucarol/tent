@@ -13,7 +13,7 @@ test("retired names are ordinary Nodes and grouping folders stay transparent", a
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const adapter = new NodeFs(root);
   await scaffoldTent(adapter, { name: "names" });
-  const env = { fs: adapter, clock: { now: () => "fixture" }, tentName: "names" };
+  const env = { fs: adapter, clock: { now: () => "2026-10-04T00:00:00.000Z" }, tentName: "names" };
   for (const name of [
     "notes",
     "returns",

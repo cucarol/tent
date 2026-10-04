@@ -41,7 +41,7 @@ export async function loadTent(fs: FsAdapter): Promise<LoadedTent> {
   );
   for (const entry of top) {
     if (!entry.isDir) continue;
-    if (OPERATIONAL_TOP_LEVEL.has(entry.name)) continue;
+    if (isOperationalPath(entry.name)) continue;
     if (isSystemNoteName(entry.name)) continue;
     await loadNodeInto(fs, entry.name, null, roots);
   }

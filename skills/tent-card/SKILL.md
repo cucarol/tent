@@ -5,9 +5,9 @@ description: "Record a prompt and its context references as a Tent Card for a Ro
 
 # Tent Card
 
-A Card is one recorded input: a prompt with ordered references, optionally
-addressed to a Role. Published input stays fixed; its destination can move
-until reception. Use the
+A Card records a short task instruction pointing to the Nodes that hold its
+requirements, optionally addressed to a Role. Published input stays fixed;
+its destination can move until reception. Use the
 [bundled CLI](../../skill-resources/references/access.md) and
 [Card commands](../../skill-resources/references/cards.md).
 
@@ -15,15 +15,19 @@ until reception. Use the
 
 When the user asks to hand work to a Role or save a request for later:
 
-1. Write a prompt that stands alone: the request, the expected result and
-   anything already decided. The receiver starts without this conversation.
-2. Add the Nodes, Roles and files the receiver should read as sources, most
-   important first. Selected Nodes and Roles are pinned at their current
-   version.
+1. Write the concrete requirements, expected result and decisions in Nodes.
+   The receiver starts without this conversation, so those Nodes must contain
+   the context needed to act.
+2. Keep the Card prompt to one or two sentences directing the receiver to
+   those Nodes, and add them as sources in reading order. Selected Nodes and
+   Roles are pinned at their current version.
 3. Address it with `--target <role-id>` when the work belongs to a Role.
 
 Creating a Card does not start another Agent; the receiver takes it later.
-To change a published request, create a new Card.
+Keep undecided requests as unpublished drafts, and publish only when ready
+for reception. When requirements change, edit their Nodes. Cancel a published
+task with `tent card deprecate <card-id> --base-etag <observed-etag>`; its
+input and reception record remain intact.
 
 ## Check on a Card
 
@@ -43,10 +47,17 @@ targeted Card.
 1. Preview with `tent card show <card-id>`. Previewing does not receive it.
 2. When you start acting on it, run `tent card take <card-id>`, adding
    `--role <role-id>` for a targeted Card. Take returns the input.
-3. Read its sources at their pinned versions.
+3. Read its sources at their pinned versions. Check the brief's received Card
+   source-change reminders, then read the current Node when a source has
+   changed. A missing source or diagnostic needs inspection before relying
+   on the old requirements.
 4. To pause, `interrupt` it; to resume, `continue` it. Both take the Card
    version you last observed and the same Role choice as the take.
 
 `replayed: true` from take means the Card was already received: continue the
 existing work instead of starting it again. A finished Card stays `consumed`.
+Deprecated Cards are hidden from normal lists. `--include-deprecated` reveals
+them; `show` and `take` retain their original input and warn that the task was
+cancelled, with current documents that still refer to it. Review that notice
+before acting.
 Reply normally, and keep lasting facts in [Nodes](../tent-node/SKILL.md).

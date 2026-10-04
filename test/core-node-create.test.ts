@@ -37,7 +37,7 @@ for (const failure of ["none", "body", "order"] as const) {
         throw new Error("injected order failure");
       await write(file, raw);
     };
-    const env = { fs: adapter, clock: { now: () => "fixture" }, tentName: "test" };
+    const env = { fs: adapter, clock: { now: () => "2026-10-04T00:00:00.000Z" }, tentName: "test" };
     const create = () =>
       createNode(env, {
         parentPath: "",
@@ -60,7 +60,7 @@ for (const failure of ["none", "body", "order"] as const) {
 
 test("invalid initial references never publish a partial Node", async (t) => {
   const adapter = await fixture(t);
-  const env = { fs: adapter, clock: { now: () => "fixture" }, tentName: "test" };
+  const env = { fs: adapter, clock: { now: () => "2026-10-04T00:00:00.000Z" }, tentName: "test" };
   await assert.rejects(
     createNode(env, {
       parentPath: "",

@@ -279,7 +279,7 @@ test("corrupt order registry is backed up and reset to default order", async () 
     await createNode(
       {
         fs: fsa,
-        clock: { now: () => "t" },
+        clock: { now: () => "2026-10-04T00:00:00.000Z" },
         tentName: "wqb",
       } as any,
       { parentPath: "", name: "AfterBadOrder", type: "goal" },

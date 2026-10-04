@@ -8,6 +8,7 @@ import {
   transitionCardDocument,
   listCardDocuments,
   moveCardDocument,
+  deprecateCardDocument,
   type CardDocumentState,
 } from "../core/card-document.js";
 import { cardRecordPath } from "../core/paths.js";
@@ -34,6 +35,7 @@ export async function runCardCommand(
         "create",
         "publish",
         "move",
+        "deprecate",
         "list",
         "get",
         "show",
@@ -49,7 +51,7 @@ export async function runCardCommand(
         ? ["prompt", "title", "target", "id"]
         : sub === "move"
           ? ["to", "base-etag"]
-          : sub === "publish"
+          : ["publish", "deprecate"].includes(sub)
             ? ["base-etag"]
             : sub === "list"
               ? ["role", "state", "start", "limit", "expected-revision"]
@@ -68,6 +70,7 @@ export async function runCardCommand(
           ? {
               "include-open": { type: "boolean" } as const,
               "include-drafts": { type: "boolean" } as const,
+              "include-deprecated": { type: "boolean" } as const,
             }
           : {}),
         ...(sub === "move" ? { public: { type: "boolean" } as const } : {}),
@@ -93,8 +96,8 @@ export async function runCardCommand(
       throw new Error("Invalid --state");
     if (["interrupt", "continue"].includes(sub) && !value("commit"))
       throw new Error("Supply the observed Card --commit");
-    if (sub === "publish" && !value("base-etag"))
-      throw new Error("Publish requires --base-etag from a raw read");
+    if (["publish", "deprecate"].includes(sub) && !value("base-etag"))
+      throw new Error(`${sub} requires --base-etag from a raw read`);
     if (
       sub === "move" &&
       (!value("base-etag") || (value("to") !== undefined) === (values.public === true))
@@ -130,6 +133,7 @@ export async function runCardCommand(
         sources,
       });
     } else if (sub === "publish") result = await publishCardDocument(fs, id, value("base-etag")!);
+    else if (sub === "deprecate") result = await deprecateCardDocument(fs, id, value("base-etag")!);
     else if (sub === "move")
       result = await moveCardDocument(fs, id, {
         target: values.public === true ? null : value("to")!,
@@ -142,6 +146,7 @@ export async function runCardCommand(
           state: value("state") as CardDocumentState | undefined,
           includeOpen: values["include-open"] === true,
           includeDrafts: values["include-drafts"] === true,
+          includeDeprecated: values["include-deprecated"] === true,
         }),
         "card.list",
         {
@@ -195,31 +200,48 @@ export async function runCardCommand(
 export function cardHelpText(_sub?: string) {
   return `tent card — recorded prompt input with optional Role context
   tent card create --prompt TEXT|- [--title TEXT] [--source PATH|JSON ...] [--target role-ID] [--id card-ID]
-  tent card list [--role role-ID --include-open] [--state pending|consumed|interrupted] [--include-drafts]
+  tent card list [--role role-ID --include-open] [--state pending|consumed|interrupted] [--include-drafts] [--include-deprecated]
                  [--start N --expected-revision HASH] [--limit N]
   tent card show card-ID [--view body|raw] [--start N --end N --expected-etag HASH]
   tent card publish card-ID --base-etag HASH
   tent card move card-ID (--to role-ID | --public) --base-etag HASH
+  tent card deprecate card-ID --base-etag HASH
   tent card take card-ID [--role role-ID]
   tent card interrupt card-ID [--role role-ID] --commit COMMIT
   tent card continue card-ID [--role role-ID] --commit COMMIT
 All commands accept --workspace PATH and --json. CLI output is paged; Core returns complete data.
 Sources keep their order. Selected Node/Role sources retain commit/path; external sources are addresses only.
 Show is a preview; take records reception and returns an input page. A replay is not a new execution.
-Use page.next for long input. Changed input requires a new Card.
+Use page.next for long input. Put requirements in Nodes; a Card briefly points to them. Update Nodes when requirements change.
 Automatic interruption is unavailable until a native host connection has been qualified.
 Targeted Cards require their Role; untargeted Cards can be received without one.
 Only published pending Cards can move. Drafts are excluded by default and from --state queries.
+Cancelled published tasks can be deprecated without changing their input or reception. Deprecated Cards are excluded from lists by default.
 `;
 }
 
 function formatCard(value: unknown, sub: string) {
-  if (["show", "get", "take", "interrupt", "continue"].includes(sub)) return formatTextPage(value);
+  if (["show", "get", "take", "interrupt", "continue"].includes(sub)) {
+    const result = value as {
+      notice?: string;
+      currentReferences?: Array<{ kind: string; id: string; path: string }>;
+      currentReferencesDiagnostic?: string;
+    };
+    return [
+      result.notice,
+      result.currentReferences?.map((ref) => `${ref.kind} ${ref.id}  ${ref.path}`).join("\n"),
+      result.currentReferencesDiagnostic,
+      formatTextPage(value),
+    ]
+      .filter((part) => part !== undefined && part !== "")
+      .join("\n\n");
+  }
   if (sub === "list") {
     const result = value as {
       items: Array<{
         cardId: string;
         state?: string;
+        status?: string;
         draft?: boolean;
         title?: string;
         publishedAt?: string;
@@ -229,7 +251,13 @@ function formatCard(value: unknown, sub: string) {
     return (
       result.items
         .map((item) =>
-          [item.cardId, item.draft ? "draft" : item.state, item.title, item.publishedAt]
+          [
+            item.cardId,
+            item.draft ? "draft" : item.state,
+            item.status === "deprecated" ? item.status : undefined,
+            item.title,
+            item.publishedAt,
+          ]
             .filter(Boolean)
             .join("  "),
         )

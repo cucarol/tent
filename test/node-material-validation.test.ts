@@ -17,7 +17,11 @@ async function fixture(t: TestContext) {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await scaffoldInWorkspace(new NodeFs(root), { name: "Materials" });
   const adapter = new NodeFs(path.join(root, ".tent"));
-  const env = { fs: adapter, clock: { now: () => "fixture" }, tentName: "Materials" };
+  const env = {
+    fs: adapter,
+    clock: { now: () => "2026-10-04T00:00:00.000Z" },
+    tentName: "Materials",
+  };
   await createNode(env, { parentPath: "", name: "A", type: "goal" });
   const id = await createNode(env, { parentPath: "A", name: "B", type: "prompt", body: "base" });
   return { root, adapter, env, id, note: "A/B/B.md" };

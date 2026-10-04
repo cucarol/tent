@@ -12,6 +12,7 @@ existing Workspace and the [bundled CLI](../../skill-resources/references/access
 
 1. Use `tent workspace brief` when you need the current situation: state
    counts, behind Nodes, ahead age, recent inputs/outputs and input Cards.
+   Reread current requirements when a received Card source has changed.
    Otherwise start from a Node linked from a Role or Card, a Node the user
    named, or a focused `tent node search`.
 2. Read those bodies. Follow links, parents or children only as far as the
@@ -28,9 +29,10 @@ Before you deliver, update the Nodes your work actually affected:
   Node that already owns that fact, or create one when none does.
 - A fact your work made wrong: correct it.
 - A new output: associate it with the confirmed goal it serves using
-  `node link-output`, marking recorded, inferred or confirmed provenance.
+  `node link-output`, which creates an output child with the material address.
+  An existing output belongs to its nearest goal ancestor.
 - Changed material with a still-valid judgment: read the Node and material,
-  then use `node confirm`. Keep intended but unfinished work `planned`.
+  then use `node confirm`. A goal stays ahead until it has relevant outputs.
 - Changed judgment: correct the Node and confirm the reviewed basis, using
   `node write --confirm` or `confirm: true` in a write-many update to save both
   together. A plain save does not clear `behind`.
@@ -42,12 +44,18 @@ a change confined to one heading. The [saving reference](../../skill-resources/r
 gives the commands and their separate read requirements.
 
 Saving observes new material versions automatically and preserves existing
-bases until confirmation; do not calculate or enter hashes. `node check`
+bases in Git until confirmation; do not calculate or enter hashes. `node check`
 inspects synchronization; it does not decide what
 is true. `workspace drift` finds unlinked outputs, changed output bases and
 goals without outputs. Stop questions are prompts for this judgment, not
 instructions to save every signal. Conversation-only decisions may remain
 unanchored; do not invent file references to remove that state.
+
+Content changes record native OKF authorship in `generated`; confirmation
+records `verified`. Supply `--by` only for a known actor, or keep the actual
+`tent/<version>` default. Agent confirmation is machine confirmation; only
+`human:<id>` verification claims a human review. Expired `stale_after`
+requires review regardless of an earlier matching version.
 
 Write for the next reader, following
 [Node saving](../../skill-resources/references/node-maintenance.md): open with

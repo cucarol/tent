@@ -26,6 +26,42 @@ function value(result: { exitCode: number; stdout: string; stderr: string }) {
   return JSON.parse(result.stdout);
 }
 
+test("Card CLI deprecates tasks with CAS, filters them and displays a reception notice", async (t) => {
+  const { root, globals } = await fixture(t);
+  const card = value(
+    await runCardCommand("create", ["--prompt", "Read the requirements Node."], globals),
+  );
+  const adapter = new NodeFs(path.join(root, ".tent"));
+  const before = await adapter.readFile(card.path);
+  assert.equal((await runCardCommand("deprecate", [card.cardId], globals)).exitCode, 1);
+  assert.equal(
+    (await runCardCommand("deprecate", [card.cardId, "--base-etag", "stale"], globals)).exitCode,
+    1,
+  );
+  assert.equal(await adapter.readFile(card.path), before);
+  const cancelled = value(
+    await runCardCommand("deprecate", [card.cardId, "--base-etag", card.etag], globals),
+  );
+  assert.equal(cancelled.status, "deprecated");
+  assert.equal(value(await runCardCommand("list", [], globals)).items.length, 0);
+  assert.equal(
+    value(await runCardCommand("list", ["--include-deprecated", "--state", "pending"], globals))
+      .items[0].cardId,
+    card.cardId,
+  );
+  const shown = value(await runCardCommand("show", [card.cardId], globals));
+  assert.equal(shown.text, "Read the requirements Node.");
+  assert.match(shown.notice, /deprecated/);
+  assert.deepEqual(shown.currentReferences, []);
+  const taken = value(await runCardCommand("take", [card.cardId], globals));
+  assert.equal(taken.status, "deprecated");
+  assert.equal(taken.state, "consumed");
+  assert.match(
+    (await runCardCommand("show", [card.cardId], { workspace: root })).stdout,
+    /deprecated/,
+  );
+});
+
 test("Card CLI supports an ordinary Session without creating a Role", async (t) => {
   const { root, globals } = await fixture(t);
   const card = value(await runCardCommand("create", ["--prompt", "do this"], globals));

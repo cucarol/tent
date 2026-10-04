@@ -46,13 +46,10 @@ async function fixture(t: TestContext) {
     body: "Confirmed intent",
   });
   await fs.writeFile(path.join(root, "existing.html"), "<h1>existing</h1>");
-  const read = await readNodeForEdit(adapter, id);
-  await linkNodeOutput(adapter, id, {
-    baseEtag: read.etag,
-    resource: "../../existing.html",
-    provenance: "confirmed",
+  const output = await linkNodeOutput(adapter, id, {
+    resource: "existing.html",
   });
-  return { root, adapter, id };
+  return { root, adapter, id, outputId: output.nodeId };
 }
 function transcript(turnId: string, items: unknown[], message?: string) {
   return (
@@ -224,15 +221,16 @@ test("Stop exposes uncertain Node inspection and excludes its goal from intent c
     path: "Uncertain",
     type: "goal",
     state: "unanchored" as const,
+    trustTier: "unverified" as const,
+    stale: false,
     materials: [],
-    outputs: [],
     reasons: [],
     uncertain: true,
   };
   const sync: WorkspaceSync = {
     nodes: [uncertainGoal],
     counts: { synced: 0, ahead: 0, behind: 0, unanchored: 1 },
-    unlinkedOutputs: [],
+    outputNodes: [],
     requirementsWithoutOutputs: [],
   };
   const event: SessionObservationEvent = {
@@ -269,7 +267,7 @@ test("Stop exposes uncertain Node inspection and excludes its goal from intent c
 });
 
 test("a changed linked output asks for review rather than disappearing from Stop advice", async (t) => {
-  const { root, adapter, id } = await fixture(t);
+  const { root, adapter, outputId } = await fixture(t);
   await fs.writeFile(path.join(root, "existing.html"), "<h1>changed output</h1>");
   const saved = await appendSessionObservations(
     adapter,
@@ -283,13 +281,13 @@ test("a changed linked output asks for review rather than disappearing from Stop
     (address) => observeSessionFile(root, address),
   );
   const sync = await inspectWorkspaceSync(adapter);
-  assert.equal(sync.nodes.find((node) => node.nodeId === id)?.state, "behind");
+  assert.equal(sync.nodes.find((node) => node.nodeId === outputId)?.state, "behind");
   const questions = questionsForObservedTurn(sync, root, saved.event, []);
   assert.deepEqual(
     questions.map((question) => question.kind),
     ["behind-node"],
   );
-  assert.match(questions[0].question, new RegExp(id));
+  assert.match(questions[0].question, new RegExp(outputId));
   assert.equal(
     questionsForObservedTurn(sync, root, { ...saved.event, turnId: "two" }, [saved.event]).length,
     0,

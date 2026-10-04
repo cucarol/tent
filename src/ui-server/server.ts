@@ -3,6 +3,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { userInfo } from "node:os";
 import * as path from "node:path";
 import {
   createCardDocument,
@@ -19,6 +20,8 @@ import { readDocumentDiff, readDocumentVersion } from "../core/document-diff.js"
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { documentVersionSchema } from "../core/git-history.js";
 import { NodeWriteError, writeNodeDocument } from "../core/node-document-write.js";
+import { nodeTrustTier } from "../core/node-provenance.js";
+import { confirmNodeSync } from "../core/node-sync.js";
 import { readNodeForEdit } from "../core/node-query.js";
 import { TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/paths.js";
 import { findTentSystemRoot } from "../core/status.js";
@@ -158,6 +161,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       throw new HttpError(415, "UNSUPPORTED_MEDIA_TYPE", "Send JSON");
     const route = `${method} ${url.pathname}`;
     const nodeId = /^\/api\/nodes\/([^/]+)$/.exec(url.pathname)?.[1];
+    const nodeConfirmId = /^\/api\/nodes\/([^/]+)\/confirm$/.exec(url.pathname)?.[1];
     const cardRoute = /^\/api\/cards\/([^/]+)(?:\/(move|publish))?$/.exec(url.pathname);
 
     if (route === "GET /api/revision")
@@ -169,16 +173,38 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       return json(res, 200, current, { ETag: etag });
     }
     if (nodeId && method === "GET") {
-      const read = () =>
-        readNodeForEdit(fs, decodeURIComponent(nodeId), {
+      const read = async () => {
+        const document = await readNodeForEdit(fs, decodeURIComponent(nodeId), {
           capture: url.searchParams.get("capture") === "true",
         });
+        return { ...document, trustTier: nodeTrustTier(document.frontmatter) };
+      };
       // A capture records history, so it waits its turn like a write.
       return json(
         res,
         200,
         await (url.searchParams.get("capture") === "true" ? serial(read) : read()),
       );
+    }
+    if (nodeConfirmId && method === "POST") {
+      const id = decodeURIComponent(nodeConfirmId);
+      const input = record(await readJson(req, BODY_LIMIT.document));
+      const saved = await serial(() =>
+        confirmNodeSync(fs, id, {
+          baseEtag: requiredString(input.baseEtag, "baseEtag"),
+          by: optionalString(input.by, "by") ?? `human:${userInfo().username}`,
+        }),
+      );
+      const parsed = parseFrontmatter(saved.raw);
+      return json(res, 200, {
+        nodeId: saved.nodeId,
+        path: saved.path,
+        etag: saved.etag,
+        changed: saved.changed,
+        version: saved.version,
+        body: parsed.body,
+        trustTier: nodeTrustTier(parsed.data),
+      });
     }
     if (nodeId && method === "PUT") {
       const id = decodeURIComponent(nodeId);
@@ -190,15 +216,18 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
             body: optionalString(input.body, "body"),
             raw: optionalString(input.raw, "raw"),
             frontmatter: input.frontmatter === undefined ? undefined : record(input.frontmatter),
+            by: optionalString(input.by, "by") ?? `human:${userInfo().username}`,
           }),
         );
+        const parsed = parseFrontmatter(saved.raw);
         return json(res, 200, {
           nodeId: saved.nodeId,
           path: saved.path,
           etag: saved.etag,
           changed: saved.changed,
           version: saved.version,
-          body: parseFrontmatter(saved.raw).body,
+          body: parsed.body,
+          trustTier: nodeTrustTier(parsed.data),
         });
       } catch (error) {
         if (error instanceof NodeWriteError && error.code === "ETAG_CONFLICT") {

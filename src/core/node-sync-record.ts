@@ -1,76 +1,151 @@
-import { isDeepStrictEqual } from "node:util";
 import * as z from "zod/v4";
 import type { FsAdapter } from "./adapter.js";
 import { canonicalSha256 } from "./canonical-digest.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
-import {
-  materialIdentity,
-  materialLocator,
-  materialOccurrences,
-  resourceSchema,
-} from "./material.js";
+import { materialIdentity, materialLocator, materialOccurrences } from "./material.js";
 import { nodeTypePrimary } from "./node-type.js";
+import { recordNodeVerification } from "./node-provenance.js";
+import { loadNodeCatalog, type CatalogNode } from "./node-catalog.js";
+import { nodeNotePath } from "./paths.js";
+import { rewriteMarkdownDestinations } from "../markdown/links.js";
+import { createHash } from "node:crypto";
 
+import type { NodeBasisRecord } from "./node-basis-record.js";
+export { nodeBasisRecordSchema, type NodeBasisRecord } from "./node-basis-record.js";
 const version = z.string().regex(/^[a-f0-9]{64}$/);
-export const syncMaterialSchema = z.looseObject({
-  resource: resourceSchema,
-  version: version.optional(),
-});
-export const syncBasisSchema = z.looseObject({
-  fingerprint: version,
-  materials: z.array(syncMaterialSchema),
-});
-export const nodeSyncRecordSchema = z.looseObject({
-  materials: z.array(syncMaterialSchema).optional(),
-  aheadSince: z.string().optional(),
-  implemented: syncBasisSchema.optional(),
-});
-export const nodeOutputSchema = z.looseObject({
-  resource: resourceSchema,
-  provenance: z.enum(["recorded", "inferred", "confirmed"]),
-  version: version.optional(),
-  linkedAt: z.string(),
-  basis: syncBasisSchema,
-});
-export type SyncMaterial = z.infer<typeof syncMaterialSchema>;
-export type SyncBasis = z.infer<typeof syncBasisSchema>;
-export type NodeSyncRecord = z.infer<typeof nodeSyncRecordSchema>;
-export type NodeOutput = z.infer<typeof nodeOutputSchema>;
-/** Hash embedding is impossible for a changing identity document. */
-export class UnanchoredMaterialError extends Error {}
+export const retiredNodeFields = [
+  "sync",
+  "planned",
+  "outputs",
+  "sha256",
+  "resource_sha256",
+  "supersedes",
+] as const;
 
-/** The requirement classification lives here, independently of OKF lifecycle. */
+export function assertNodeRecordFields(data: Record<string, unknown>): void {
+  for (const field of retiredNodeFields)
+    if (data[field] !== undefined)
+      throw new Error(`Node field ${field} is retired; migrate legacy Node records first`);
+  if (Array.isArray(data.sources))
+    for (const source of data.sources)
+      if (source.sha256 !== undefined || source.resource_sha256 !== undefined)
+        throw new Error("Material hashes belong to the Git record layer, not Node sources");
+}
+
 export function isRequirementNode(data: Record<string, unknown>): boolean {
   return typeof data.type === "string" && nodeTypePrimary(data.type) === "goal";
 }
-
-export function nodeSyncRecord(data: Record<string, unknown>): NodeSyncRecord {
-  return data.sync === undefined ? {} : nodeSyncRecordSchema.parse(data.sync);
+export function isOutputNode(data: { type?: unknown }): boolean {
+  return typeof data.type === "string" && nodeTypePrimary(data.type) === "output";
 }
-
-export function nodeOutputs(data: Record<string, unknown>): NodeOutput[] {
-  return data.outputs === undefined ? [] : z.array(nodeOutputSchema).parse(data.outputs);
+export function nearestGoal(
+  node: CatalogNode,
+  byId: Map<string, CatalogNode>,
+): CatalogNode | undefined {
+  let parent = node.parentNodeId ? byId.get(node.parentNodeId) : undefined;
+  while (parent) {
+    if (
+      !parent.archived &&
+      !parent.invalid &&
+      parseFrontmatter(parent.header).data.status !== "deprecated" &&
+      isRequirementNode({ type: parent.type })
+    )
+      return parent;
+    parent = parent.parentNodeId ? byId.get(parent.parentNodeId) : undefined;
+  }
 }
-
-export function syncMaterialIdentity(resource: string, documentPath: string) {
+export function syncMaterialIdentity(
+  resource: string,
+  documentPath: string,
+  nodes?: Map<string, CatalogNode>,
+) {
   try {
-    return materialIdentity(materialLocator(resource, documentPath)) ?? resource;
+    const locator = materialLocator(resource, documentPath);
+    if (locator.kind === "path" && nodes) {
+      const node = [...nodes.values()].find((n) => nodeNotePath(n.path) === locator.target);
+      if (node) return `node:${node.nodeId}${locator.suffix}`;
+    }
+    return materialIdentity(locator) ?? resource;
   } catch {
     return resource;
   }
 }
 
-/** Addresses are compared separately so structural relocation never changes the semantic digest. */
-export function nodeSemanticFingerprint(data: Record<string, unknown>, body: string): string {
+/** Canonical addresses make structural path rewrites invisible to semantic identity. */
+export function nodeSemanticFingerprint(
+  data: Record<string, unknown>,
+  body: string,
+  documentPath = "",
+  nodes?: Map<string, CatalogNode>,
+): string {
+  const canonicalAddress = (resource: string) => {
+    try {
+      const locator = materialLocator(resource, documentPath, false);
+      if (locator.kind === "path") {
+        const node =
+          nodes && [...nodes.values()].find((n) => nodeNotePath(n.path) === locator.target);
+        if (node) return `node:${node.nodeId}${locator.suffix}`;
+      }
+      return materialIdentity(locator) ?? resource;
+    } catch {
+      return resource;
+    }
+  };
   const semantic = { ...data };
-  for (const key of ["id", "title", "sync", "outputs", "planned", "resource"]) delete semantic[key];
+  for (const key of [
+    "id",
+    "title",
+    "generated",
+    "verified",
+    "stale_after",
+    "status",
+    ...retiredNodeFields,
+  ])
+    delete semantic[key];
+  if (typeof semantic.resource === "string")
+    semantic.resource = canonicalAddress(semantic.resource);
   if (Array.isArray(semantic.sources))
-    semantic.sources = semantic.sources.map((source: Record<string, unknown>) => {
-      const metadata = { ...source };
-      delete metadata.resource;
-      return metadata;
-    });
-  return canonicalSha256({ data: semantic, body });
+    semantic.sources = semantic.sources.map((source) => ({
+      ...source,
+      resource: canonicalAddress(source.resource),
+    }));
+  return canonicalSha256({
+    data: semantic,
+    body: rewriteMarkdownDestinations(body, canonicalAddress),
+  });
+}
+
+export async function retainedNodeRecords(fs: FsAdapter): Promise<Record<string, NodeBasisRecord>> {
+  return fs.history && (await fs.exists(".git")) ? fs.history.nodeRecords() : {};
+}
+
+/** A structure edit changes addresses, never acknowledges changed material content. */
+export function relocateNodeRecord(
+  record: NodeBasisRecord,
+  beforeRaw: string,
+  beforePath: string,
+  afterRaw: string,
+  afterPath: string,
+  beforeNodes: Map<string, CatalogNode>,
+  afterNodes: Map<string, CatalogNode>,
+): NodeBasisRecord {
+  const before = materialOccurrences(parseFrontmatter(beforeRaw).data),
+    after = materialOccurrences(parseFrontmatter(afterRaw).data);
+  const mapping = new Map(
+    before.map((entry, index) => [
+      syncMaterialIdentity(entry.resource, beforePath, beforeNodes),
+      after[index]
+        ? syncMaterialIdentity(after[index]!.resource, afterPath, afterNodes)
+        : undefined,
+    ]),
+  );
+  return {
+    ...record,
+    materials: record.materials.map((material) => ({
+      ...material,
+      identity: mapping.get(material.identity) ?? material.identity,
+    })),
+  };
 }
 
 export async function observeSyncMaterial(
@@ -78,25 +153,25 @@ export async function observeSyncMaterial(
   resource: string,
   documentPath: string,
   source = true,
-): Promise<{ version?: string; reason?: string; unanchored?: boolean }> {
+): Promise<{ version?: string; reason?: string }> {
   try {
     const locator = materialLocator(resource, documentPath, source);
     if (locator.kind === "unresolved") return { reason: "Source is not an explicit local address" };
     if (locator.kind === "uri" && !locator.uri.startsWith("file:"))
       return { reason: "Remote material version is unknown; no network request was made" };
-    if (locator.kind === "path" && locator.target === documentPath)
-      return { reason: "A Node cannot anchor its own embedded material version", unanchored: true };
     if (!fs.observeMaterial) return { reason: "Material observer is unavailable" };
     const explicitResource =
       locator.kind === "path" && !/^(?:\.{1,2}\/|\/)/.test(resource.trim())
         ? `./${resource.trim()}`
         : resource;
-    const observation = await fs.observeMaterial(explicitResource, documentPath);
-    return { version: version.parse(observation.observedVersion) };
+    return {
+      version: version.parse(
+        (await fs.observeMaterial(explicitResource, documentPath)).observedVersion,
+      ),
+    };
   } catch (error) {
     return {
       reason: error instanceof Error ? error.message : String(error),
-      ...(error instanceof UnanchoredMaterialError ? { unanchored: true } : {}),
     };
   }
 }
@@ -105,129 +180,87 @@ export async function observeNodeMaterials(
   fs: FsAdapter,
   data: Record<string, unknown>,
   documentPath: string,
+  finalDocuments?: Map<string, string>,
+  nodes?: Map<string, CatalogNode>,
 ) {
   return Promise.all(
-    materialOccurrences(data).map(async ({ resource, field }) => ({
-      resource,
-      ...(await observeSyncMaterial(fs, resource, documentPath, field === "sources")),
-    })),
+    materialOccurrences(data).map(async ({ resource, field }) => {
+      let finalRaw: string | undefined;
+      try {
+        const locator = materialLocator(resource, documentPath, field === "sources");
+        finalRaw = locator.kind === "path" ? finalDocuments?.get(locator.target) : undefined;
+      } catch {
+        // Existing invalid declarations remain editable; observation reports their diagnostic.
+      }
+      const observed =
+        finalRaw === undefined
+          ? await observeSyncMaterial(fs, resource, documentPath, field === "sources")
+          : { version: createHash("sha256").update(finalRaw).digest("hex") };
+      return {
+        resource,
+        identity: syncMaterialIdentity(resource, documentPath, nodes),
+        ...observed,
+      };
+    }),
   );
 }
 
-/** System metadata is embedded in the exact identity bytes, so batch rollback covers it too. */
+/** The returned record travels in the SAME capture as these final Node bytes. */
 export async function prepareNodeSyncSave(
   fs: FsAdapter,
   documentPath: string,
   raw: string,
-  planned?: boolean,
-  now = new Date().toISOString(),
-  confirm = false,
-): Promise<string> {
-  const parsed = parseFrontmatter(raw),
-    before = structuredClone(parsed.data);
-  const sync = nodeSyncRecord(parsed.data);
-  nodeOutputs(parsed.data);
-  if (planned !== undefined) parsed.data.planned = planned;
-  if (parsed.data.planned !== undefined && typeof parsed.data.planned !== "boolean")
-    throw new Error("planned must be a boolean");
-  if (parsed.data.planned === false) delete parsed.data.planned;
-  if (confirm) {
-    await refreshNodeSyncConfirmation(fs, parsed.data, parsed.body, documentPath, now);
-    return isDeepStrictEqual(before, parsed.data)
-      ? raw
-      : serializeFrontmatter(parsed.data, parsed.body, parsed.keyOrder);
+  options: {
+    confirm?: boolean;
+    by?: string;
+    now?: string;
+    nodes?: Map<string, CatalogNode>;
+    previous?: NodeBasisRecord;
+    finalDocuments?: Map<string, string>;
+  } = {},
+): Promise<{ raw: string; record: NodeBasisRecord }> {
+  const parsed = parseFrontmatter(raw);
+  assertNodeRecordFields(parsed.data);
+  if (options.confirm) {
+    recordNodeVerification(parsed.data, options.by, options.now);
+    raw = serializeFrontmatter(parsed.data, parsed.body, parsed.keyOrder);
   }
-  const observations = await observeNodeMaterials(fs, parsed.data, documentPath);
-  if (observations.length || parsed.data.sync !== undefined || isRequirementNode(parsed.data))
-    sync.materials = observations.map(({ resource, version }) => {
-      const old = sync.materials?.find(
-        (m) =>
-          syncMaterialIdentity(m.resource, documentPath) ===
-          syncMaterialIdentity(resource, documentPath),
-      );
-      // Saving unrelated content does not acknowledge a changed or missing material.
-      const knownVersion = old?.version ?? version;
-      const retained = { ...old, resource };
-      delete retained.version;
-      return { ...retained, ...(knownVersion ? { version: knownVersion } : {}) };
-    });
-  const ahead =
-    parsed.data.planned === true ||
-    (isRequirementNode(parsed.data) && !nodeOutputs(parsed.data).length && !sync.implemented);
-  // This is the time we first recorded the plan, never an inferred historical start.
-  if (ahead && !sync.aheadSince) sync.aheadSince = now;
-  if (!ahead) delete sync.aheadSince;
-  if (Object.keys(sync).length) parsed.data.sync = sync;
-  else delete parsed.data.sync;
-  return isDeepStrictEqual(before, parsed.data)
-    ? raw
-    : serializeFrontmatter(parsed.data, parsed.body, parsed.keyOrder);
-}
-
-export async function currentNodeSyncBasis(
-  fs: FsAdapter,
-  data: Record<string, unknown>,
-  body: string,
-  documentPath: string,
-): Promise<SyncBasis> {
-  const observations = await observeNodeMaterials(fs, data, documentPath);
-  const previous = nodeSyncRecord(data).materials;
-  return {
-    fingerprint: nodeSemanticFingerprint(data, body),
-    materials: observations.map(({ resource, version }) => {
-      const retained = {
-        ...previous?.find(
-          (m) =>
-            syncMaterialIdentity(m.resource, documentPath) ===
-            syncMaterialIdentity(resource, documentPath),
-        ),
-        resource,
-      };
-      return { ...retained, ...(version ? { version } : {}) };
-    }),
-  };
-}
-
-/** Both explicit confirmation and confirm-with-save use the final document's basis. */
-export async function refreshNodeSyncConfirmation(
-  fs: FsAdapter,
-  data: Record<string, unknown>,
-  body: string,
-  documentPath: string,
-  now = new Date().toISOString(),
-  basis?: SyncBasis,
-): Promise<void> {
-  const sync = nodeSyncRecord(data);
-  basis ??= await currentNodeSyncBasis(fs, data, body, documentPath);
-  sync.materials = basis.materials;
-  if (sync.implemented) sync.implemented = { ...sync.implemented, ...basis };
-  const outputs = nodeOutputs(data);
-  if (outputs.length)
-    data.outputs = await Promise.all(
-      outputs.map(async (output) => {
-        const observed = await observeSyncMaterial(fs, output.resource, documentPath, false);
-        return {
-          ...output,
-          basis: { ...output.basis, ...basis },
-          ...(observed.version ? { version: observed.version } : {}),
-        };
-      }),
-    );
-  if (data.planned === false) delete data.planned;
-  const ahead =
-    data.planned === true || (isRequirementNode(data) && !outputs.length && !sync.implemented);
-  if (ahead && !sync.aheadSince) sync.aheadSince = now;
-  if (!ahead) delete sync.aheadSince;
-  data.sync = sync;
-}
-
-export function assertSyncMetadataRetained(
-  previous: Record<string, unknown>,
-  next: Record<string, unknown>,
-) {
-  for (const field of ["sync", "outputs"])
-    if (!isDeepStrictEqual(previous[field], next[field]))
-      throw new Error(
-        `node.write cannot change system ${field} metadata; use sync confirmation or output association`,
-      );
+  const id = parsed.data.id as string;
+  const previous = options.previous ?? (await retainedNodeRecords(fs))[id];
+  const nodes = options.nodes ?? (await loadNodeCatalog(fs)).byId;
+  const observations = await observeNodeMaterials(
+    fs,
+    parsed.data,
+    documentPath,
+    new Map([...(options.finalDocuments ?? []), [documentPath, raw]]),
+    nodes,
+  );
+  const materials = observations.map(({ identity, version }) => {
+    const old = previous?.materials.find((m) => m.identity === identity);
+    const known = options.confirm ? (version ?? old?.version) : old ? old.version : version;
+    return { identity, ...(known ? { version: known } : {}) };
+  });
+  const node =
+    nodes.get(id) ?? [...nodes.values()].find((n) => nodeNotePath(n.path) === documentPath);
+  const goal = isOutputNode(parsed.data) && node ? nearestGoal(node, nodes) : undefined;
+  const record: NodeBasisRecord = { materials };
+  if (goal) {
+    const goalRaw =
+      options.finalDocuments?.get(nodeNotePath(goal.path)) ??
+      (await fs.readFile(nodeNotePath(goal.path)));
+    const goalParsed = parseFrontmatter(goalRaw);
+    record.goal =
+      !options.confirm && previous?.goal?.nodeId === goal.nodeId
+        ? previous.goal
+        : {
+            nodeId: goal.nodeId,
+            version: nodeSemanticFingerprint(
+              goalParsed.data,
+              goalParsed.body,
+              nodeNotePath(goal.path),
+              nodes,
+            ),
+          };
+  }
+  return { raw, record };
 }

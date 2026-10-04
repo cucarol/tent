@@ -1,8 +1,9 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FsAdapter } from "./adapter.js";
-import { listCardDocuments } from "./card-document.js";
+import { listCardDocuments, inspectReceivedCardSourceChanges } from "./card-document.js";
 import { inspectWorkspaceSync } from "./node-sync.js";
+import { nodeTypePrimary } from "./node-type.js";
 import { readSessionObservations, type SessionObservationEvent } from "./session-observations.js";
 import { localMaterialPath, materialLocator } from "./material.js";
 import { nodeNotePath } from "./paths.js";
@@ -17,11 +18,8 @@ export type ObservedFile = {
 };
 export type UnlinkedOutput = {
   address?: string;
-  nodeId?: string;
-  path?: string;
   observedAt?: string;
   sessionId?: string;
-  modifiedAt?: string;
 };
 
 const localKey = (filename: string) => {
@@ -84,26 +82,13 @@ export function findUnlinkedOutputs(
   // A racing Node may hold the very association we would otherwise call missing.
   if (sync.nodes.some((node) => node.uncertain)) return [];
   const linked = new Set<string>();
-  for (const node of sync.nodes)
-    for (const output of node.outputs) {
-      const key = materialAddressKey(workspaceRoot, nodeNotePath(node.path), output.resource);
-      if (key) linked.add(key);
-    }
+  for (const output of sync.outputNodes) {
+    if (!output.resource) continue;
+    const key = materialAddressKey(workspaceRoot, nodeNotePath(output.path), output.resource);
+    if (key) linked.add(key);
+  }
   const result: UnlinkedOutput[] = [];
   const seen = new Map<string, UnlinkedOutput>();
-  for (const output of sync.unlinkedOutputs) {
-    const key = output.resource
-      ? materialAddressKey(workspaceRoot, nodeNotePath(output.path), output.resource)
-      : undefined;
-    if (key && (linked.has(key) || seen.has(key))) continue;
-    const item: UnlinkedOutput = {
-      nodeId: output.nodeId,
-      path: output.path,
-      ...(output.resource ? { address: output.resource } : {}),
-    };
-    if (key) seen.set(key, item);
-    result.push(item);
-  }
   for (const file of observedFiles(events)) {
     if (file.kind !== "written") continue;
     const key = observationAddressKey(workspaceRoot, file.address);
@@ -128,25 +113,20 @@ export async function inspectCurrentContext(
   workspaceRoot: string,
   options: { roleId?: string } = {},
 ) {
-  const [sync, observations, cards] = await Promise.all([
+  const [sync, observations, cards, changedCardSources] = await Promise.all([
     inspectWorkspaceSync(fs),
     readSessionObservations(fs),
     listCardDocuments(fs, {
       ...(options.roleId ? { roleId: options.roleId, includeOpen: true } : {}),
     }),
+    inspectReceivedCardSourceChanges(fs, options),
   ]);
   const unlinkedOutputs = findUnlinkedOutputs(sync, observations.events, workspaceRoot);
-  const modified = await fs.history?.latestCommitTimes(
-    unlinkedOutputs.flatMap((output) => (output.path ? [nodeNotePath(output.path)] : [])),
-  );
-  for (const output of unlinkedOutputs) {
-    const time = output.path && modified?.get(nodeNotePath(output.path));
-    if (time) output.modifiedAt = time;
-  }
   return {
     sync,
     observations,
     cards,
+    changedCardSources,
     unlinkedOutputs,
   };
 }
@@ -168,17 +148,15 @@ export async function inspectWorkspaceDrift(fs: FsAdapter, workspaceRoot: string
 export function contextDriftItems(context: Pick<CurrentContext, "sync" | "unlinkedOutputs">) {
   return [
     ...context.unlinkedOutputs.map((output) => ({ kind: "unlinked-output" as const, ...output })),
-    ...context.sync.nodes.flatMap((node) =>
-      node.outputs
-        .filter((output) => output.possiblyDrifted)
-        .map((output) => ({
-          kind: "requirement-changed" as const,
-          nodeId: node.nodeId,
-          path: node.path,
-          address: output.resource,
-          reasons: output.reasons,
-        })),
-    ),
+    ...context.sync.nodes
+      .filter((node) => nodeTypePrimary(node.type) === "output" && node.state === "behind")
+      .map((node) => ({
+        kind: "output-behind" as const,
+        nodeId: node.nodeId,
+        path: node.path,
+        address: node.resource,
+        reasons: node.reasons,
+      })),
     ...context.sync.requirementsWithoutOutputs.map((nodeId) => ({
       kind: "requirement-without-output" as const,
       nodeId,
@@ -195,9 +173,11 @@ export type ContextBrief = {
   recentOutputs: BriefItem[];
   unlinkedOutputs: BriefItem[];
   cardInputs: BriefItem[];
+  changedCardSources: BriefItem[];
   omitted: Record<string, number>;
   observationUncertain?: true;
   synchronizationUncertain?: true;
+  cardSourcesUncertain?: true;
   roleId?: string;
 };
 const shorten = (value: string, length: number) =>
@@ -225,18 +205,19 @@ export function makeContextBrief(
   const recentUnlinked = context.unlinkedOutputs
     .filter(
       (output) =>
-        (output.modifiedAt && Date.parse(output.modifiedAt) >= cutoff) ||
-        (output.observedAt &&
-          Date.parse(output.observedAt) >= cutoff &&
-          output.sessionId &&
-          recentSessions.has(output.sessionId)),
+        output.observedAt &&
+        Date.parse(output.observedAt) >= cutoff &&
+        output.sessionId &&
+        recentSessions.has(output.sessionId),
     )
-    .sort(
-      (a, b) =>
-        Math.max(Date.parse(b.modifiedAt ?? "") || 0, Date.parse(b.observedAt ?? "") || 0) -
-        Math.max(Date.parse(a.modifiedAt ?? "") || 0, Date.parse(a.observedAt ?? "") || 0),
-    );
+    .sort((a, b) => Date.parse(b.observedAt ?? "") - Date.parse(a.observedAt ?? ""));
   const candidates = {
+    changedCardSources: context.changedCardSources.items.map((item) => ({
+      cardId: item.cardId,
+      nodeId: item.nodeId,
+      state: item.state,
+      reason: shorten(item.reason, 160),
+    })),
     behind: context.sync.nodes
       .filter((node) => node.state === "behind")
       .map((node) => ({
@@ -286,8 +267,10 @@ export function makeContextBrief(
     recentOutputs: [],
     unlinkedOutputs: [],
     cardInputs: [],
+    changedCardSources: [],
     omitted: {},
     ...(context.observations.uncertain ? { observationUncertain: true } : {}),
+    ...(context.changedCardSources.diagnostics.length ? { cardSourcesUncertain: true } : {}),
     ...(context.sync.nodes.some((node) => node.uncertain)
       ? { synchronizationUncertain: true }
       : {}),
@@ -328,10 +311,17 @@ export function formatContextBrief(brief: ContextBrief): string {
   const sections: [
     keyof Pick<
       ContextBrief,
-      "behind" | "ahead" | "recentInputs" | "recentOutputs" | "unlinkedOutputs" | "cardInputs"
+      | "behind"
+      | "ahead"
+      | "recentInputs"
+      | "recentOutputs"
+      | "unlinkedOutputs"
+      | "cardInputs"
+      | "changedCardSources"
     >,
     string,
   ][] = [
+    ["changedCardSources", "Received Card sources changed; reread current requirements"],
     ["behind", "Behind"],
     ["ahead", "Ahead"],
     ["recentInputs", "Recent inputs"],
@@ -343,7 +333,10 @@ export function formatContextBrief(brief: ContextBrief): string {
     if (!brief[key].length) continue;
     lines.push(title + ":");
     for (const item of brief[key]) {
-      const identity = String(item.nodeId ?? item.cardId ?? item.address);
+      const identity =
+        key === "changedCardSources"
+          ? `${item.cardId} → ${item.nodeId}`
+          : String(item.nodeId ?? item.cardId ?? item.address);
       const detail =
         key === "ahead"
           ? `${String(item.name ?? "")}; ${item.since ? `since ${item.since} (${formatAge(Number(item.ageSeconds))})` : "start time not recorded"}`
@@ -364,6 +357,8 @@ export function formatContextBrief(brief: ContextBrief): string {
     );
   if (brief.observationUncertain)
     lines.push("Session observations are incomplete; only evidenced addresses are shown.");
+  if (brief.cardSourcesUncertain)
+    lines.push("Some received Card sources could not be compared; inspect their published inputs.");
   if (brief.synchronizationUncertain)
     lines.push(
       "Some Nodes changed during inspection; synchronization and unlinked-output findings are incomplete. Retry workspace brief.",

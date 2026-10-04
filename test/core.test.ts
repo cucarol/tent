@@ -8,6 +8,7 @@ import { serializeFrontmatter } from "../src/core/frontmatter.js";
 import { loadTent, nodeNotePath } from "../src/core/tree.js";
 import { NodeFs, SystemClock } from "../src/fs/node-fs.js";
 import { makeTent } from "./helpers.js";
+import { workspaceDocumentPaths } from "../src/core/workspace-revision.js";
 
 test("Node creation rejects unindexable names before writing and allows nested system basenames", async () => {
   const root = await makeTent();
@@ -19,7 +20,13 @@ test("Node creation rejects unindexable names before writing and allows nested s
   const orderBefore = (await fs.exists("order.json")) ? await fs.readFile("order.json") : null;
   for (const parentPath of ["", "prompt"]) {
     const names = [".gitnotes", ".github", "roles", "cards", "temp", "attachments", ".tent"];
-    if (!parentPath) names.push("index.md", "settings.json");
+    if (!parentPath)
+      names.push(
+        "index.md",
+        "settings.json",
+        "mutation.lock.guard",
+        "mutation.lock.guard.pending-token",
+      );
     for (const name of names) {
       await assert.rejects(
         createNode(env, { parentPath, name, type: "prompt" }),
@@ -34,6 +41,31 @@ test("Node creation rejects unindexable names before writing and allows nested s
   );
   const id = await createNode(env, { parentPath: "prompt", name: "index.md", type: "prompt" });
   assert.equal((await loadTent(fs)).byId.get(id)?.path, "prompt/index.md");
+});
+
+test("Node and revision scans never enter transient mutation lock guard directories", async () => {
+  const root = await makeTent();
+  const fs = new NodeFs(root);
+  const listDir = fs.listDir.bind(fs);
+  const guardNames = [
+    "mutation.lock.guard",
+    "mutation.lock.guard.pending-token",
+    "mutation.lock.guard.released-token",
+    "mutation.lock.guard.stale-token",
+  ];
+  fs.listDir = async (dir) => {
+    assert.equal(
+      guardNames.includes(dir),
+      false,
+      `Transient guard disappeared before scanning: ${dir}`,
+    );
+    const entries = await listDir(dir);
+    return dir === ""
+      ? [...entries, ...guardNames.map((name) => ({ name, isDir: true }))]
+      : entries;
+  };
+  assert.equal((await loadTent(fs)).byId.has("node-p1"), true);
+  assert.ok((await workspaceDocumentPaths(fs)).includes("prompt/表达式任务书/表达式任务书.md"));
 });
 
 test("Core loads and extends the typed Node document forest", async () => {

@@ -21,6 +21,8 @@ export * from "./node-lightwrite.js";
 export * from "./node-write-batch.js";
 export * from "./graph-check.js";
 export * from "./node-sync.js";
+export * from "./node-record-migration.js";
+export * from "./node-provenance.js";
 export * from "./session-observations.js";
 export * from "./context-brief.js";
 export * from "./history-query.js";

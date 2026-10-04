@@ -16,6 +16,7 @@ import {
   TENT_SYSTEM_DIR,
   WORKSPACE_SETTINGS_PATH,
   isSystemNoteName,
+  isOperationalPath,
   systemRootFromWorkspace,
 } from "./paths.js";
 
@@ -151,7 +152,7 @@ export function validateNodeName(value: string, parentPath = ""): string {
     name === ".." ||
     name.startsWith(".git") ||
     OPERATIONAL_TOP_LEVEL.has(name) ||
-    (!parentPath && isSystemNoteName(name))
+    (!parentPath && (isSystemNoteName(name) || isOperationalPath(name)))
   ) {
     throw new Error(`Node name is reserved or excluded from the Node index: ${name}.`);
   }
