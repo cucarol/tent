@@ -46,8 +46,8 @@ gives the commands and their separate read requirements.
 Saving observes new material versions automatically and preserves existing
 bases in Git until confirmation; do not calculate or enter hashes. `node check`
 inspects synchronization; it does not decide what
-is true. `workspace drift` finds unlinked outputs, changed output bases and
-goals without outputs. Stop questions are prompts for this judgment, not
+is true. `workspace drift` lists ahead and behind Nodes; the brief also finds
+recent files not recorded as outputs. Stop questions are prompts for this judgment, not
 instructions to save every signal. Conversation-only decisions may remain
 unanchored; do not invent file references to remove that state.
 

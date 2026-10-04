@@ -199,8 +199,9 @@ tent workspace brief
 tent workspace drift --json
 ```
 
-Check reports `synced`, `ahead`, `behind` or `unanchored`, plus the material
-and output evidence. It is read-only and proves version agreement, not
+Check reports independent `ahead` and `behind` findings, plus neutral details,
+material and output evidence. A goal can be both ahead and behind. It is
+read-only and proves version agreement, not
 correctness. All `goal` Nodes are requirements regardless of suffix. A saved
 goal with no output anywhere in its subtree is ahead. Each output implicitly
 depends on its nearest goal ancestor. A changed goal makes its own outputs
@@ -251,6 +252,8 @@ Node IDs and absolute URIs are also supported. Local files must exist and be
 readable. The default Node name is the file name, numbered on collision;
 `--name` overrides it. The saved address is relative to the new child.
 The command returns the output Node ID; it does not edit the goal.
+Cards referencing this goal derive progress from outputs added or confirmed
+after their publication. Outputs need no Card source or additional parameter.
 Describe independently useful results in that output Node. Existing outputs
 can be moved under the appropriate goal. The nearest goal supplies the
 implicit source and recorded goal version without extra frontmatter.
@@ -258,9 +261,10 @@ implicit source and recorded goal version without extra frontmatter.
 When the goal changes, review the affected output and confirm it, updating
 its body if needed. Ordinary output edits retain the old goal basis.
 
-`workspace drift` reports session-written files not recorded by any output
-Node, behind outputs and goals with no output in their subtree. An independent
-output Node is already recorded even when it has no goal ancestor. Stop can
+`workspace drift` reports ahead and behind Nodes, including both findings when
+they apply to one Node. The brief also lists recent session-written files not
+recorded by any output Node. An independent output Node is already recorded
+even when it has no goal ancestor. Stop can
 suggest likely goals from this turn's observed files, but never creates or
 confirms on your behalf. Save only actual confirmed intent and real results.
 Session observations contain addresses and versions, not file or conversation

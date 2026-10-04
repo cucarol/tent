@@ -14,7 +14,7 @@ export const DELETE_PENDING_PATH = "delete.pending.json";
 export const INDEX_PATH = "index.md";
 /** Workspace identity and preserved custom settings. */
 export const WORKSPACE_SETTINGS_PATH = "settings.json";
-/** Card drafts, published input, destination and reception facts. */
+/** Published Card input, destination and reception facts. */
 export const CARDS_DIR = "cards";
 export const TEMP_DIR = "temp";
 export const ATTACHMENTS_DIR = "attachments";

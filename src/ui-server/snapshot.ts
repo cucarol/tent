@@ -7,6 +7,7 @@ import { parseFrontmatter } from "../core/frontmatter.js";
 import { CARDS_DIR, ROLES_DIR, nodeNotePath } from "../core/paths.js";
 import { loadTent } from "../core/tree.js";
 import type { Node } from "../core/types.js";
+import { readCardProgress } from "../core/card-progress.js";
 import type {
   Snapshot,
   SnapshotCard,
@@ -72,7 +73,8 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
   for (const d of roleDocs) byPath.set(d.file, { kind: "role", id: String(d.data.id) });
   for (const d of cardDocs) byPath.set(d.file, { kind: "card", id: String(d.data.id) });
 
-  const commits: SnapshotCommit[] = (await listHistoryChanges(fs)).reverse().map((commit) => ({
+  const retainedEvents = await listHistoryChanges(fs);
+  const commits: SnapshotCommit[] = [...retainedEvents].reverse().map((commit) => ({
     hash: commit.commit,
     parent: commit.parent ?? null,
     date: commit.time,
@@ -150,35 +152,47 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
     return role;
   });
 
-  const cards: SnapshotCard[] = cardDocs.map((d) => {
-    const id = String(d.data.id);
-    const history = touching(id, d.file);
-    const sources = from(id)
-      .filter((r) => r.via === "sources")
-      .map((r) => ({
-        ...material(r),
-        version: r.version ?? null,
-        changedSince: r.changedSince ?? false,
-      }));
-    const title =
-      typeof d.data.title === "string" && d.data.title
-        ? d.data.title
-        : plainLine(/^#\s+(.+)$/m.exec(d.body)?.[1] ?? d.body.trim().split(/\r?\n/)[0] ?? "");
-    return {
-      id,
-      title,
-      state: String(d.data.state) as SnapshotCard["state"],
-      target: typeof d.data.target === "string" ? d.data.target : null,
-      receivedBy: typeof d.data.receivedBy === "string" ? d.data.receivedBy : null,
-      status: typeof d.data.status === "string" ? d.data.status : "stable",
-      body: d.body,
-      sources,
-      path: d.file,
-      history,
-      publishedAt: commits.find((c) => c.hash === history.at(-1))?.date ?? null,
-      updatedAt: commits.find((c) => c.hash === history[0])?.date ?? null,
-    };
-  });
+  const progress = await readCardProgress(
+    fs,
+    cardDocs.map((d) => ({
+      cardId: String(d.data.id),
+      state: d.data.state as SnapshotCard["state"],
+      sources: Array.isArray(d.data.sources) ? d.data.sources : [],
+    })),
+    retainedEvents,
+  );
+  const cards: SnapshotCard[] = cardDocs
+    .filter((d) => touching(String(d.data.id), d.file).length > 0)
+    .map((d) => {
+      const id = String(d.data.id);
+      const history = touching(id, d.file);
+      const sources = from(id)
+        .filter((r) => r.via === "sources")
+        .map((r) => ({
+          ...material(r),
+          version: r.version ?? null,
+          changedSince: r.changedSince ?? false,
+        }));
+      const title =
+        typeof d.data.title === "string" && d.data.title
+          ? d.data.title
+          : plainLine(/^#\s+(.+)$/m.exec(d.body)?.[1] ?? d.body.trim().split(/\r?\n/)[0] ?? "");
+      return {
+        id,
+        title,
+        state: String(d.data.state) as SnapshotCard["state"],
+        ...progress.get(id)!,
+        target: typeof d.data.target === "string" ? d.data.target : null,
+        receivedBy: typeof d.data.receivedBy === "string" ? d.data.receivedBy : null,
+        status: typeof d.data.status === "string" ? d.data.status : "stable",
+        body: d.body,
+        sources,
+        path: d.file,
+        history,
+        publishedAt: commits.find((c) => c.hash === history.at(-1))?.date ?? null,
+        updatedAt: commits.find((c) => c.hash === history[0])?.date ?? null,
+      };
+    });
   for (const n of nodes) n.incoming = incoming.get(n.id) ?? [];
   for (const r of roles) r.incoming = incoming.get(r.id) ?? [];
 

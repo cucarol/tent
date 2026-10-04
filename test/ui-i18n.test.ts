@@ -13,6 +13,9 @@ test("switching language switches every message, dates included", () => {
   assert.equal(ago("2026-09-26T12:00:00Z", now), "3 days ago");
   assert.equal(t.card.contextOnly(1), "Context only · 1 source");
   assert.equal(t.map.children(2), "2 children");
+  assert.equal(t.cardProgress["received-no-output"], "Received, no output yet");
+  assert.equal(t.cardProgress["has-output"], "Has output");
+  assert.equal(t.work.saved, "Saved in this browser");
 
   setLang("zh", false);
   assert.equal(t.code, "zh-CN");

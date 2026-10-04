@@ -21,7 +21,7 @@ tent workspace changes [--from <commit>] [--to <commit>] [--limit <n>] [--cursor
 tent workspace check [--json]
 tent workspace brief [--role <roleId>] [--json]
 tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
-Accepts --workspace <root> and --json. check reports broken links, invalid material addresses and missing local material files without writing or capturing history. Exit 1 means issues or inspection errors; JSON remains on stdout. brief compares current local versions and returns at most 4 KiB, organized by synchronization state. --role filters Card inputs; Node counts remain Workspace-wide. drift reports unlinked outputs, changed requirements/materials and requirements without outputs. Use node confirm after reviewing a Node; Tent records hashes itself.`;
+Accepts --workspace <root> and --json. check reports broken links, invalid material addresses and missing local material files without writing or capturing history. Exit 1 means issues or inspection errors; JSON remains on stdout. brief compares current local versions and returns at most 4 KiB, with behind Nodes first, then ahead Nodes. --role filters Card inputs; Node counts remain Workspace-wide. drift reports ahead and behind Nodes. Use node confirm after reviewing a Node; Tent records hashes itself.`;
 
 export async function runWorkspaceCommand(
   sub: string,
@@ -106,7 +106,6 @@ export async function runWorkspaceCommand(
         {
           items: inspected.items,
           revision: canonicalSha256(inspected),
-          observationUncertain: inspected.observationUncertain,
           synchronizationUncertain: inspected.synchronizationUncertain,
         },
         "workspace.drift",
@@ -124,12 +123,9 @@ export async function runWorkspaceCommand(
                   `${item.kind}: ${"nodeId" in item ? (item.nodeId ?? "") : ""}${"address" in item ? ` ${item.address ?? ""}` : ""}`,
               ),
               ...(result.page.hasMore ? [`Continue with --cursor ${result.page.nextCursor}`] : []),
-              ...(inspected.observationUncertain
-                ? ["Session observations are incomplete; only recorded outputs were inspected."]
-                : []),
               ...(inspected.synchronizationUncertain
                 ? [
-                    "Some Nodes changed during inspection; synchronization and unlinked-output findings are incomplete. Retry workspace drift.",
+                    "Some Nodes changed during inspection; synchronization findings are incomplete. Retry workspace drift.",
                   ]
                 : []),
             ].join("\n") || "No observed drift.";

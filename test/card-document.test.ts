@@ -3,15 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
+import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import {
   createCardDocument,
-  publishCardDocument,
   readCardDocument,
-  transitionCardDocument,
+  takeCardDocument,
   listCardDocuments,
-  createCardDraft,
-  writeCardDraft,
-  deleteCardDraft,
   moveCardDocument,
   deprecateCardDocument,
   inspectReceivedCardSourceChanges,
@@ -22,6 +19,9 @@ import { renameNode } from "../src/core/rename-ops.js";
 import { contentEtag } from "../src/core/etag.js";
 import type { DocumentVersion } from "../src/core/git-history.js";
 import { git } from "./helpers.js";
+import { runCardCommand } from "../src/cli/card-commands.js";
+import { writeNodeDocument } from "../src/core/node-document-write.js";
+import { linkNodeOutput, confirmNodeSync } from "../src/core/node-sync.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
@@ -43,7 +43,127 @@ async function fixture(t: TestContext) {
 const code = (expected: string) => (error: unknown) =>
   (error as { code?: string }).code === expected;
 
-test("Card source inspection needs no Git for empty directories or unpublished drafts", async (t) => {
+test("Card progress derives from post-publication goal outputs and confirmations", async (t) => {
+  const scratch = path.resolve(".scratch");
+  await fs.mkdir(scratch, { recursive: true });
+  const root = await fs.mkdtemp(path.join(scratch, "card-progress-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  await initializeTentWorkspace(workspace);
+  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  await adapter.writeFile(
+    "Main/Main.md",
+    serializeFrontmatter({ id: "node-main", type: "goal" }, "First goal"),
+  );
+  await adapter.writeFile(
+    "Other/Other.md",
+    serializeFrontmatter({ id: "node-other", type: "goal" }, "Second goal"),
+  );
+  await fs.writeFile(path.join(workspace, "result.txt"), "result");
+  const oldOutput = await linkNodeOutput(adapter, "node-other", { resource: "result.txt" });
+  const card = await createCardDocument(adapter, {
+    cardId: "card-progress",
+    prompt: "Read both goals.",
+    sources: [
+      { resource: "/Main/Main.md" },
+      { resource: "/Other/Other.md" },
+      { resource: "/Main/Main.md" },
+    ],
+  });
+  assert.equal(card.progress, "pending");
+  assert.equal(card.totalGoalCount, 2);
+  assert.equal(card.goalCount, 0);
+  const taken = (await takeCardDocument(adapter, card.cardId)) as Record<string, unknown>;
+  assert.equal(taken.progress, "received-no-output");
+  const raw = await adapter.readFile(card.path);
+  // A later ordinary save of a preexisting output cannot stand in for confirmation.
+  const oldPath = `Other/${oldOutput.path.split("/").at(-1)}/${oldOutput.path.split("/").at(-1)}.md`;
+  const oldRaw = await adapter.readFile(oldPath);
+  await adapter.writeFile(oldPath, oldRaw + "\nordinary edit");
+  await adapter.history.captureUnlocked([{ path: oldPath, raw: oldRaw + "\nordinary edit" }], {
+    operation: "node.document-write",
+  });
+  assert.equal(
+    ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
+    0,
+  );
+  const output = await linkNodeOutput(adapter, "node-main", { resource: "result.txt" });
+  const outputRaw = await adapter.readFile(`${output.path}/${output.path.split("/").at(-1)}.md`);
+  assert.deepEqual(parseFrontmatter(outputRaw).data.sources ?? [], []);
+  const partial = (await readCardDocument(adapter, card.cardId)) as Record<string, unknown>;
+  assert.equal(partial.progress, "received-no-output");
+  assert.equal(partial.goalCount, 1);
+  assert.equal(partial.totalGoalCount, 2);
+  assert.deepEqual(partial.outputNodeIds, [output.nodeId]);
+  const cli = await runCardCommand("show", [card.cardId], { workspace, json: true });
+  assert.equal(cli.exitCode, 0, cli.stderr);
+  assert.equal(JSON.parse(cli.stdout).goalCount, 1);
+  assert.equal(JSON.parse(cli.stdout).totalGoalCount, 2);
+  const cliList = await runCardCommand("list", [], { workspace });
+  assert.equal(cliList.exitCode, 0, cliList.stderr);
+  assert.match(cliList.stdout, /1\/2/);
+  await renameNode(
+    { fs: adapter, clock: { now: () => "test" }, tentName: "test" },
+    "node-main",
+    "Moved",
+  );
+  assert.equal(
+    ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
+    1,
+  );
+  await confirmNodeSync(adapter, oldOutput.nodeId, {
+    baseEtag: contentEtag(await adapter.readFile(oldPath)),
+  });
+  const completed = (await readCardDocument(adapter, card.cardId)) as Record<string, unknown>;
+  assert.equal(completed.progress, "has-output");
+  assert.equal(completed.goalCount, 2);
+  const listed = (await listCardDocuments(adapter)).items.find(
+    (item) => item.cardId === card.cardId,
+  )!;
+  assert.equal(listed.progress, completed.progress);
+  assert.deepEqual(listed.outputNodeIds, completed.outputNodeIds);
+  assert.equal(await adapter.readFile(card.path), raw);
+  assert.equal(parseFrontmatter(raw).data.progress, undefined);
+  await adapter.remove("Moved");
+  assert.equal(
+    ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
+    1,
+  );
+  const confirmedCard = await createCardDocument(adapter, {
+    cardId: "card-confirmwrite",
+    prompt: "Verify the second goal.",
+    sources: [{ resource: "/Other/Other.md" }],
+  });
+  assert.equal(
+    ((await takeCardDocument(adapter, confirmedCard.cardId)) as Record<string, unknown>).goalCount,
+    0,
+  );
+  await writeNodeDocument(adapter, oldOutput.nodeId, {
+    baseEtag: contentEtag(await adapter.readFile(oldPath)),
+    confirm: true,
+    by: "human:cuca",
+  });
+  assert.equal(
+    ((await readCardDocument(adapter, confirmedCard.cardId)) as Record<string, unknown>).progress,
+    "has-output",
+  );
+  await adapter.writeFile(
+    "Notes/Notes.md",
+    serializeFrontmatter({ id: "node-notes", type: "prompt-spec" }, "Notes"),
+  );
+  const plain = await createCardDocument(adapter, {
+    cardId: "card-nogoal",
+    prompt: "Read the notes.",
+    sources: [{ resource: "/Notes/Notes.md" }],
+  });
+  assert.equal(plain.progress, null);
+  assert.equal(
+    ((await takeCardDocument(adapter, plain.cardId)) as Record<string, unknown>).progress,
+    null,
+  );
+});
+
+test("Card source inspection needs no Git when no published Card was received", async (t) => {
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "card-nohistory-"));
@@ -71,7 +191,7 @@ test("Card deprecation preserves input and reception, checks CAS, and replays wi
     sources: [{ resource: "node-main" }],
     target: "role-a",
   });
-  const taken = await transitionCardDocument(adapter, created.cardId, "role-a", "take");
+  const taken = await takeCardDocument(adapter, created.cardId, "role-a");
   const before = parseFrontmatter(await adapter.readFile(created.path));
   const head = await adapter.history.currentCommit();
   await assert.rejects(
@@ -102,18 +222,13 @@ test("Card deprecation preserves input and reception, checks CAS, and replays wi
     ).items.length,
     1,
   );
-  const replay = await transitionCardDocument(adapter, created.cardId, "role-a", "take");
+  const replay = await takeCardDocument(adapter, created.cardId, "role-a");
   assert.equal(replay.text, before.body);
   assert.equal((replay as Record<string, unknown>).replayed, true);
   assert.match(String((replay as Record<string, unknown>).notice), /deprecated/);
   await assert.rejects(
-    () => transitionCardDocument(adapter, created.cardId, "role-b", "take"),
+    () => takeCardDocument(adapter, created.cardId, "role-b"),
     code("RECEPTION_CONFLICT"),
-  );
-  const draft = await createCardDraft(adapter, { prompt: "not decided" });
-  await assert.rejects(
-    () => deprecateCardDocument(adapter, draft.cardId, draft.etag),
-    code("UNPUBLISHED"),
   );
 });
 
@@ -165,10 +280,6 @@ test("Deprecated Card reads and takes expose live Node, Role and published Card 
     prompt: "[task](./card-cancelled.md)",
   });
   await deprecateCardDocument(adapter, old.cardId, old.etag);
-  await createCardDraft(adapter, {
-    cardId: "card-draftref",
-    prompt: "[task](./card-cancelled.md)",
-  });
   await deprecateCardDocument(adapter, card.cardId, card.etag);
   const shown = (await readCardDocument(adapter, card.cardId)) as Record<string, unknown>;
   assert.equal(shown.text, "original input");
@@ -179,13 +290,10 @@ test("Deprecated Card reads and takes expose live Node, Role and published Card 
     { kind: "card", id: "card-reference", path: "cards/card-reference.md" },
   ]);
   await assert.rejects(
-    () => transitionCardDocument(adapter, card.cardId, undefined, "take"),
+    () => takeCardDocument(adapter, card.cardId, undefined),
     code("RECEPTION_CONFLICT"),
   );
-  const taken = (await transitionCardDocument(adapter, card.cardId, "role-a", "take")) as Record<
-    string,
-    unknown
-  >;
+  const taken = (await takeCardDocument(adapter, card.cardId, "role-a")) as Record<string, unknown>;
   assert.equal(taken.state, "consumed");
   assert.deepEqual(taken.currentReferences, shown.currentReferences);
 });
@@ -202,14 +310,7 @@ test("Received Card source inspection compares live content, follows Node identi
     ],
     target: "role-a",
   });
-  const receivedPage = await transitionCardDocument(adapter, received.cardId, "role-a", "take");
-  await transitionCardDocument(
-    adapter,
-    received.cardId,
-    "role-a",
-    "interrupt",
-    (receivedPage as Record<string, unknown>).version as DocumentVersion,
-  );
+  const receivedPage = await takeCardDocument(adapter, received.cardId, "role-a");
   const pending = await createCardDocument(adapter, {
     cardId: "card-pendingsource",
     prompt: "Read node",
@@ -222,15 +323,14 @@ test("Received Card source inspection compares live content, follows Node identi
     sources: [{ resource: "node-main" }],
     target: "role-b",
   });
-  await transitionCardDocument(adapter, otherRole.cardId, "role-b", "take");
+  await takeCardDocument(adapter, otherRole.cardId, "role-b");
   const cancelled = await createCardDocument(adapter, {
     cardId: "card-cancelledsource",
     prompt: "Read node",
     sources: [{ resource: "node-main" }],
   });
-  const taken = await transitionCardDocument(adapter, cancelled.cardId, undefined, "take");
+  const taken = await takeCardDocument(adapter, cancelled.cardId, undefined);
   await deprecateCardDocument(adapter, cancelled.cardId, taken.etag);
-  await createCardDraft(adapter, { prompt: "not published", sources: [{ resource: "node-main" }] });
   // These publications have changed HEAD, without changing the selected Node.
   assert.deepEqual(await inspectReceivedCardSourceChanges(adapter), { items: [], diagnostics: [] });
   const head = await adapter.history.currentCommit();
@@ -319,7 +419,7 @@ test("filtered Card lists skip history and keep malformed-header diagnostics", a
   );
 });
 
-test("Card list batches timestamps for matching headers and excludes drafts from reception", async (t) => {
+test("Card list batches matching timestamps and excludes untracked handwritten files", async (t) => {
   const { adapter } = await fixture(t);
   const card = await createCardDocument(adapter, {
     cardId: "card-match",
@@ -350,22 +450,6 @@ test("Card list batches timestamps for matching headers and excludes drafts from
     result.find((item) => item.cardId === "card-manual"),
     undefined,
   );
-  const all = (
-    await listCardDocuments(adapter, { roleId: "role-a", includeOpen: true, includeDrafts: true })
-  ).items;
-  assert.equal(all.find((item) => item.cardId === "card-manual")!.draft, true);
-  assert.equal(all.find((item) => item.cardId === "card-manual")!.publishedAt, null);
-  assert.equal(
-    (
-      await listCardDocuments(adapter, {
-        roleId: "role-a",
-        includeOpen: true,
-        includeDrafts: true,
-        state: "pending",
-      })
-    ).items.length,
-    1,
-  );
   t.mock.method(adapter.history, "available", async () => false);
   const withoutGit = await listCardDocuments(adapter, {
     roleId: "role-a",
@@ -375,10 +459,10 @@ test("Card list batches timestamps for matching headers and excludes drafts from
   assert.equal(withoutGit.items.length, 0);
 });
 
-test("untargeted Card can be received without a Role and preserves that choice across transitions", async (t) => {
+test("untargeted Card receives without a Role and preserves that choice on retry", async (t) => {
   const { adapter } = await fixture(t);
   const saved = await createCardDocument(adapter, { prompt: "ordinary session input" });
-  const taken = (await transitionCardDocument(adapter, saved.cardId, undefined, "take")) as Record<
+  const taken = (await takeCardDocument(adapter, saved.cardId, undefined)) as Record<
     string,
     unknown
   >;
@@ -386,49 +470,14 @@ test("untargeted Card can be received without a Role and preserves that choice a
   assert.equal(taken.receivedBy, undefined);
   assert.equal(parseFrontmatter(await adapter.readFile(saved.path)).data.receivedBy, undefined);
   assert.equal(
-    (
-      (await transitionCardDocument(adapter, saved.cardId, undefined, "take")) as Record<
-        string,
-        unknown
-      >
-    ).replayed,
+    ((await takeCardDocument(adapter, saved.cardId, undefined)) as Record<string, unknown>)
+      .replayed,
     true,
   );
   await assert.rejects(
-    () => transitionCardDocument(adapter, saved.cardId, "role-a", "take"),
+    () => takeCardDocument(adapter, saved.cardId, "role-a"),
     code("RECEPTION_CONFLICT"),
   );
-  await assert.rejects(
-    () => transitionCardDocument(adapter, saved.cardId, undefined, "interrupt"),
-    code("STATE_CHANGED"),
-  );
-  const interrupted = (await transitionCardDocument(
-    adapter,
-    saved.cardId,
-    undefined,
-    "interrupt",
-    taken.version as DocumentVersion,
-  )) as Record<string, unknown>;
-  await assert.rejects(
-    () =>
-      transitionCardDocument(
-        adapter,
-        saved.cardId,
-        undefined,
-        "continue",
-        taken.version as DocumentVersion,
-      ),
-    code("STATE_CHANGED"),
-  );
-  const continued = (await transitionCardDocument(
-    adapter,
-    saved.cardId,
-    undefined,
-    "continue",
-    interrupted.version as DocumentVersion,
-  )) as Record<string, unknown>;
-  assert.equal(continued.state, "consumed");
-  assert.equal(continued.receivedBy, undefined);
   assert.equal((await listCardDocuments(adapter, { state: "consumed" })).items.length, 1);
   assert.equal(
     (await listCardDocuments(adapter, { roleId: "role-a", state: "consumed", includeOpen: true }))
@@ -440,12 +489,12 @@ test("untargeted Card can be received without a Role and preserves that choice a
     target: "role-a",
   });
   await assert.rejects(
-    () => transitionCardDocument(adapter, targeted.cardId, undefined, "take"),
+    () => takeCardDocument(adapter, targeted.cardId, undefined),
     /supply --role role-a/,
   );
-  await transitionCardDocument(adapter, targeted.cardId, "role-a", "take");
+  await takeCardDocument(adapter, targeted.cardId, "role-a");
   await assert.rejects(
-    () => transitionCardDocument(adapter, targeted.cardId, undefined, "take"),
+    () => takeCardDocument(adapter, targeted.cardId, undefined),
     code("RECEPTION_CONFLICT"),
   );
 });
@@ -507,29 +556,28 @@ test("one Card has one receiving Role; retries replay reception and open input s
     target: "role-a",
   });
   await assert.rejects(
-    () => transitionCardDocument(adapter, saved.cardId, "role-b", "take"),
+    () => takeCardDocument(adapter, saved.cardId, "role-b"),
     code("RECEPTION_CONFLICT"),
   );
-  const first = (await transitionCardDocument(adapter, saved.cardId, "role-a", "take")) as Record<
+  const first = (await takeCardDocument(adapter, saved.cardId, "role-a")) as Record<
     string,
     unknown
   >;
   assert.equal(first.state, "consumed");
   assert.equal(first.replayed, false);
-  assert.equal(first.automaticInterrupt, "unavailable");
-  const replay = (await transitionCardDocument(adapter, saved.cardId, "role-a", "take")) as Record<
+  const replay = (await takeCardDocument(adapter, saved.cardId, "role-a")) as Record<
     string,
     unknown
   >;
   assert.equal(replay.replayed, true);
   assert.deepEqual(replay.version, first.version);
   const open = await createCardDocument(adapter, { cardId: "card-open", prompt: "open" });
-  await transitionCardDocument(adapter, open.cardId, "role-b", "take");
+  await takeCardDocument(adapter, open.cardId, "role-b");
   const fields = parseFrontmatter(await adapter.readFile(open.path)).data;
   assert.equal(fields.target, undefined);
   assert.equal(fields.receivedBy, "role-b");
   await assert.rejects(
-    () => transitionCardDocument(adapter, open.cardId, "role-a", "take"),
+    () => takeCardDocument(adapter, open.cardId, "role-a"),
     code("RECEPTION_CONFLICT"),
   );
   assert.equal(
@@ -541,23 +589,11 @@ test("one Card has one receiving Role; retries replay reception and open input s
 test("manual input or management edits stay raw-readable without being retained as reception proof", async (t) => {
   const { adapter } = await fixture(t);
   const path = "cards/card-handwritten.md";
-  const raw = serializeFrontmatter(
-    {
-      type: "card",
-      id: "card-handwritten",
-      schemaVersion: 3,
-      state: "pending",
-      custom: { keep: true },
-      sources: [{ resource: "/Main/Main.md" }],
-    },
-    "original",
-  );
-  await adapter.writeFile(path, raw);
-  assert.equal(
-    ((await readCardDocument(adapter, "card-handwritten")) as Record<string, any>).diagnostic.code,
-    "UNPUBLISHED",
-  );
-  const published = await publishCardDocument(adapter, "card-handwritten", contentEtag(raw));
+  const published = await createCardDocument(adapter, {
+    cardId: "card-handwritten",
+    prompt: "original",
+    sources: [{ resource: "/Main/Main.md", custom: { keep: true } }],
+  });
   const initial = await adapter.readFile(path);
   assert.equal(
     await adapter.history.read((await adapter.history.pathVersions(path)).first!),
@@ -568,6 +604,7 @@ test("manual input or management edits stay raw-readable without being retained 
     [initial.replace("original", "changed prompt"), "INPUT_CHANGED"],
     [initial.replace("keep: true", "keep: false"), "INPUT_CHANGED"],
     [initial.replace("state: pending", "state: consumed\nreceivedBy: role-a"), "STATE_CHANGED"],
+    [initial.replace("state: pending", "state: interrupted"), "INVALID_DOCUMENT"],
   ]) {
     await adapter.writeFile(path, changed!);
     const result = (await readCardDocument(adapter, published.cardId, { view: "raw" })) as Record<
@@ -581,7 +618,7 @@ test("manual input or management edits stay raw-readable without being retained 
       published.version.commit,
     );
     await assert.rejects(
-      () => transitionCardDocument(adapter, published.cardId, "role-a", "take"),
+      () => takeCardDocument(adapter, published.cardId, "role-a"),
       code(expected!),
     );
   }
@@ -596,46 +633,6 @@ test("manual input or management edits stay raw-readable without being retained 
     () => createCardDocument(adapter, { cardId: published.cardId, prompt: "reuse" }),
     /already exists/,
   );
-});
-
-test("explicit interrupted/continue transitions detect ABA and allow unrelated Git commits", async (t) => {
-  const { adapter } = await fixture(t);
-  const card = await createCardDocument(adapter, { cardId: "card-aba", prompt: "work" });
-  const taken = (await transitionCardDocument(adapter, card.cardId, "role-a", "take")) as Record<
-    string,
-    any
-  >;
-  const interrupted = (await transitionCardDocument(
-    adapter,
-    card.cardId,
-    "role-a",
-    "interrupt",
-    taken.version,
-  )) as Record<string, any>;
-  await assert.rejects(
-    () => transitionCardDocument(adapter, card.cardId, "role-a", "take"),
-    /explicit continue/,
-  );
-  await transitionCardDocument(adapter, card.cardId, "role-a", "continue", interrupted.version);
-  await assert.rejects(
-    () => transitionCardDocument(adapter, card.cardId, "role-a", "interrupt", taken.version),
-    code("STATE_CHANGED"),
-  );
-  const role = await adapter.readFile("roles/role-a.md");
-  await editRoleContext(adapter, "role-a", { baseEtag: contentEtag(role), body: "new direction" });
-  const observed = (await readCardDocument(adapter, card.cardId)) as Record<string, any>;
-  assert.equal(
-    observed.version.commit,
-    (await adapter.history.pathVersions(card.path)).latest!.commit,
-  );
-  const result = (await transitionCardDocument(
-    adapter,
-    card.cardId,
-    "role-a",
-    "interrupt",
-    observed.version,
-  )) as Record<string, any>;
-  assert.equal(result.state, "interrupted");
 });
 
 test("large Card inputs and source metadata are complete in Core", async (t) => {
@@ -653,7 +650,7 @@ test("large Card inputs and source metadata are complete in Core", async (t) => 
   assert.equal(page.text, prompt);
   assert.equal(page.sources.length, 100);
   assert.equal(page.page, undefined);
-  const taken = await transitionCardDocument(adapter, card.cardId, "role-a", "take");
+  const taken = await takeCardDocument(adapter, card.cardId, "role-a");
   assert.equal(taken.text, prompt);
 });
 
@@ -674,7 +671,7 @@ test("Card title remains fixed after publication and list includes first publica
     (await adapter.readFile(card.path)).replace("Review findings", "Changed title"),
   );
   await assert.rejects(
-    () => transitionCardDocument(adapter, card.cardId, undefined, "take"),
+    () => takeCardDocument(adapter, card.cardId, undefined),
     code("INPUT_CHANGED"),
   );
 });
@@ -724,7 +721,7 @@ test("pending Cards move with CAS and retain destinations, then freeze at recept
     code("ROLE_UNAVAILABLE"),
   );
   await assert.rejects(
-    () => transitionCardDocument(adapter, card.cardId, "role-a", "take"),
+    () => takeCardDocument(adapter, card.cardId, "role-a"),
     code("RECEPTION_CONFLICT"),
   );
   const open = await moveCardDocument(adapter, card.cardId, {
@@ -736,25 +733,11 @@ test("pending Cards move with CAS and retain destinations, then freeze at recept
   assert.deepEqual(after.data.sources, original.data.sources);
   assert.equal(after.body, original.body);
   assert.equal(after.data.title, original.data.title);
-  const taken = (await transitionCardDocument(adapter, card.cardId, "role-a", "take")) as Record<
-    string,
-    any
-  >;
+  const taken = (await takeCardDocument(adapter, card.cardId, "role-a")) as Record<string, any>;
   await assert.rejects(
     () => moveCardDocument(adapter, card.cardId, { target: "role-b", expectedEtag: open.etag }),
     (error: any) =>
       error.code === "RECEPTION_CONFLICT" && error.details.current.receivedBy === "role-a",
-  );
-  const paused = await transitionCardDocument(
-    adapter,
-    card.cardId,
-    "role-a",
-    "interrupt",
-    taken.version,
-  );
-  await assert.rejects(
-    () => moveCardDocument(adapter, card.cardId, { target: null, expectedEtag: paused.etag }),
-    code("RECEPTION_CONFLICT"),
   );
 });
 
@@ -775,10 +758,7 @@ test("manual target edits are management conflicts and moves never adopt changed
         }),
       code(expected!),
     );
-    await assert.rejects(
-      () => transitionCardDocument(adapter, card.cardId, "role-b", "take"),
-      code(expected!),
-    );
+    await assert.rejects(() => takeCardDocument(adapter, card.cardId, "role-b"), code(expected!));
     assert.equal(
       (await adapter.history.pathVersions(card.path)).latest!.commit,
       card.version.commit,
@@ -811,7 +791,7 @@ test("move and take share a lock, and take checks the destination that won", asy
   await inside;
   try {
     await assert.rejects(
-      () => transitionCardDocument(new NodeFs(root), card.cardId, "role-a", "take"),
+      () => takeCardDocument(new NodeFs(root), card.cardId, "role-a"),
       /already running another write operation/,
     );
   } finally {
@@ -819,172 +799,12 @@ test("move and take share a lock, and take checks the destination that won", asy
   }
   await moving;
   await assert.rejects(
-    () => transitionCardDocument(adapter, card.cardId, "role-a", "take"),
+    () => takeCardDocument(adapter, card.cardId, "role-a"),
     code("RECEPTION_CONFLICT"),
   );
   assert.equal(
-    (
-      (await transitionCardDocument(adapter, card.cardId, "role-b", "take")) as Record<
-        string,
-        unknown
-      >
-    ).receivedBy,
+    ((await takeCardDocument(adapter, card.cardId, "role-b")) as Record<string, unknown>)
+      .receivedBy,
     "role-b",
   );
-});
-
-test("drafts preserve editable input without capturing until explicit publication", async (t) => {
-  const { adapter } = await fixture(t);
-  const head = await adapter.history.currentCommit();
-  const draft = await createCardDraft(adapter, { cardId: "card-draft", prompt: "" });
-  assert.equal(await adapter.history.currentCommit(), head);
-  assert.deepEqual(await adapter.history.pathVersions(draft.path), {});
-  const preview = (await readCardDocument(adapter, draft.cardId, { capture: true })) as Record<
-    string,
-    any
-  >;
-  assert.equal(preview.draft, true);
-  assert.equal(preview.text, "");
-  assert.deepEqual(preview.sources, []);
-  await assert.rejects(
-    () => transitionCardDocument(adapter, draft.cardId, undefined, "take"),
-    code("UNPUBLISHED"),
-  );
-  await assert.rejects(
-    () => publishCardDocument(adapter, draft.cardId, draft.etag),
-    /needs prompt text or sources/,
-  );
-  const sources = [
-    { resource: "/Other/Other.md", custom: 1 },
-    { resource: "/Main/Main.md" },
-    { resource: "/Other/Other.md" },
-  ];
-  const saved = await writeCardDraft(adapter, draft.cardId, {
-    prompt: "draft",
-    sources,
-    target: "role-a",
-    expectedEtag: draft.etag,
-  });
-  assert.deepEqual(parseFrontmatter(await adapter.readFile(draft.path)).data.sources, sources);
-  assert.equal(await adapter.history.currentCommit(), head);
-  assert.deepEqual((await listCardDocuments(adapter)).items, []);
-  assert.equal((await listCardDocuments(adapter, { includeDrafts: true })).items[0]!.draft, true);
-  await assert.rejects(
-    () => writeCardDraft(adapter, draft.cardId, { prompt: "stale", expectedEtag: draft.etag }),
-    code("STATE_CHANGED"),
-  );
-  await assert.rejects(
-    () => deleteCardDraft(adapter, draft.cardId, draft.etag),
-    code("STATE_CHANGED"),
-  );
-  await assert.rejects(
-    () => publishCardDocument(adapter, draft.cardId, draft.etag),
-    code("STATE_CHANGED"),
-  );
-  const published = await publishCardDocument(adapter, draft.cardId, saved.etag);
-  const raw = await adapter.readFile(draft.path);
-  assert.equal(
-    await adapter.history.read((await adapter.history.pathVersions(draft.path)).first!),
-    raw,
-  );
-  assert.equal((parseFrontmatter(raw).data.sources as any[]).length, 3);
-  assert.ok((parseFrontmatter(raw).data.sources as any[]).every((s) => s.version?.commit));
-  assert.equal((await listCardDocuments(adapter, { state: "pending" })).items[0]!.draft, false);
-  await assert.rejects(
-    () =>
-      writeCardDraft(adapter, draft.cardId, { prompt: "rewrite", expectedEtag: published.etag }),
-    code("ALREADY_PUBLISHED"),
-  );
-  await assert.rejects(
-    () => deleteCardDraft(adapter, draft.cardId, published.etag),
-    code("ALREADY_PUBLISHED"),
-  );
-});
-
-test("deleted draft identities stay reserved across adapters without becoming publications", async (t) => {
-  const { adapter, root } = await fixture(t);
-  const draft = await createCardDraft(adapter, { cardId: "card-deleted", prompt: "discard" });
-  const raw = await adapter.readFile(draft.path);
-  await deleteCardDraft(adapter, draft.cardId, draft.etag);
-  assert.equal(await adapter.exists(draft.path), false);
-  assert.deepEqual(await adapter.history.pathVersions(draft.path), {});
-  const next = new NodeFs(root);
-  for (const create of [createCardDraft, createCardDocument])
-    await assert.rejects(
-      () => create(next, { cardId: draft.cardId, prompt: "reuse" }),
-      /already exists/,
-    );
-  await next.writeFile(draft.path, raw);
-  await assert.rejects(
-    () => publishCardDocument(next, draft.cardId, draft.etag),
-    /cannot be reused/,
-  );
-  await deleteCardDraft(next, draft.cardId, draft.etag);
-});
-
-test("draft edits preserve unknown metadata and refuse unavailable targets and external edits", async (t) => {
-  const { adapter } = await fixture(t);
-  const draft = await createCardDraft(adapter, {
-    prompt: "first",
-    title: "Title",
-    target: "role-a",
-  });
-  const manual = (await adapter.readFile(draft.path)).replace(
-    "schemaVersion: 3",
-    "schemaVersion: 3\ncustom: retained",
-  );
-  await adapter.writeFile(draft.path, manual);
-  const saved = await writeCardDraft(adapter, draft.cardId, {
-    prompt: "next",
-    expectedEtag: contentEtag(manual),
-  });
-  const fields = parseFrontmatter(await adapter.readFile(draft.path)).data;
-  assert.equal(fields.custom, "retained");
-  assert.equal(fields.title, "Title");
-  assert.equal(fields.target, undefined);
-  await assert.rejects(
-    () =>
-      writeCardDraft(adapter, draft.cardId, {
-        prompt: "bad",
-        target: "role-missing",
-        expectedEtag: saved.etag,
-      }),
-    code("ROLE_UNAVAILABLE"),
-  );
-  const read = adapter.readFrontmatter.bind(adapter);
-  t.mock.method(adapter, "readFrontmatter", async (file: string) => {
-    if (file === "roles/role-b.md") await adapter.writeFile(draft.path, manual);
-    return read(file);
-  });
-  await assert.rejects(
-    () =>
-      writeCardDraft(adapter, draft.cardId, {
-        prompt: "bad",
-        target: "role-b",
-        expectedEtag: saved.etag,
-      }),
-    code("STATE_CHANGED"),
-  );
-  assert.equal(await adapter.readFile(draft.path), manual);
-});
-
-test("draft saves canonicalize Node references without pinning their versions", async (t) => {
-  const { adapter } = await fixture(t);
-  const head = await adapter.history.currentCommit();
-  const draft = await createCardDraft(adapter, {
-    prompt: "[Read](node-main)",
-    sources: [{ resource: "node-main" }],
-  });
-  const first = parseFrontmatter(await adapter.readFile(draft.path));
-  assert.equal(first.body, "[Read](../Main/Main.md)");
-  assert.deepEqual(first.data.sources, [{ resource: "../Main/Main.md" }]);
-  const saved = await writeCardDraft(adapter, draft.cardId, {
-    prompt: "[Other](node-other)",
-    sources: [{ resource: "node-other" }],
-    expectedEtag: draft.etag,
-  });
-  const next = parseFrontmatter(await adapter.readFile(saved.path));
-  assert.equal(next.body, "[Other](../Other/Other.md)");
-  assert.deepEqual(next.data.sources, [{ resource: "../Other/Other.md" }]);
-  assert.equal(await adapter.history.currentCommit(), head);
 });

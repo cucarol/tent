@@ -4,13 +4,14 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import type { Graph } from "../data/store.js";
-import { api } from "../data/api.js";
+import { api, ApiError, describe, type NodeDocument } from "../data/api.js";
 import type {
   SnapshotFile,
   SnapshotIncoming,
   SnapshotMaterial,
   SnapshotNode,
   SnapshotRef,
+  SyncFlag,
 } from "../data/types.js";
 import { CardGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
@@ -297,6 +298,82 @@ export function MaterialName({ material: m }: { material: SnapshotMaterial }) {
 }
 
 /** Label and value rows under a title, like the properties of an issue. */
+type Verification = { by: string; at: string };
+/** OKF allows one mapping or a list; the latest `at` is the one that counts. */
+function latestVerification(value: unknown): Verification | null {
+  const list = (Array.isArray(value) ? value : value ? [value] : []) as Partial<Verification>[];
+  return (
+    list
+      .filter((v): v is Verification => typeof v?.by === "string" && typeof v?.at === "string")
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0] ?? null
+  );
+}
+
+/**
+ * Whether someone checked this Node against its materials, and the way to say so. A behind Node names
+ * what changed; confirming signs with the name set in settings, or the service's OS user.
+ */
+export function ReviewRow({
+  node,
+  doc,
+  disabled = false,
+  flag,
+  onRead,
+  onToast,
+}: {
+  node: SnapshotNode;
+  doc: NodeDocument | null;
+  disabled?: boolean;
+  flag?: SyncFlag;
+  onRead: (doc: NodeDocument) => void;
+  onToast: (text: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const last = latestVerification(doc?.frontmatter.verified);
+  const tier = doc?.trustTier ?? "unverified";
+  const confirm = async () => {
+    if (!doc || disabled || busy) return;
+    setBusy(true);
+    try {
+      await confirmDisplayedNode(doc);
+      onRead(await api.node(node.id));
+      onToast(t.review.confirmed);
+    } catch (error) {
+      onToast(
+        error instanceof ApiError && error.code === "ETAG_CONFLICT"
+          ? t.review.conflict
+          : describe(error),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <PropRow label={t.review.label}>
+      <div className="review">
+        {flag?.behind && <span className="review-why">{t.map.behindWhy(flag.behind.reasons)}</span>}
+        <span className={`review-tier is-${tier}`}>
+          {t.review.tier[tier]}
+          {last && <span className="review-by">{t.review.by(last.by, ago(last.at))}</span>}
+        </span>
+        <button
+          type="button"
+          className={`review-confirm${flag?.behind ? " is-behind" : ""}`}
+          onClick={confirm}
+          disabled={busy || disabled || !doc}
+          data-tip={t.review.confirmTip}
+        >
+          <Icon name="check" size={13} />
+          {busy ? t.review.confirming : t.review.confirm}
+        </button>
+      </div>
+    </PropRow>
+  );
+}
+
+/** Confirmation applies to the complete document the reader displayed, even if the file changed. */
+export const confirmDisplayedNode = (doc: NodeDocument) => api.confirmNode(doc.nodeId, doc.etag);
+
 export function PropRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="prop">

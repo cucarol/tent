@@ -3,7 +3,6 @@ import { fileURLToPath } from "node:url";
 import type { FsAdapter } from "./adapter.js";
 import { listCardDocuments, inspectReceivedCardSourceChanges } from "./card-document.js";
 import { inspectWorkspaceSync } from "./node-sync.js";
-import { nodeTypePrimary } from "./node-type.js";
 import { readSessionObservations, type SessionObservationEvent } from "./session-observations.js";
 import { localMaterialPath, materialLocator } from "./material.js";
 import { nodeNotePath } from "./paths.js";
@@ -113,7 +112,7 @@ export async function inspectCurrentContext(
   workspaceRoot: string,
   options: { roleId?: string } = {},
 ) {
-  const [sync, observations, cards, changedCardSources] = await Promise.all([
+  const [sync, observations, cards, sourceChanges] = await Promise.all([
     inspectWorkspaceSync(fs),
     readSessionObservations(fs),
     listCardDocuments(fs, {
@@ -122,6 +121,11 @@ export async function inspectCurrentContext(
     inspectReceivedCardSourceChanges(fs, options),
   ]);
   const unlinkedOutputs = findUnlinkedOutputs(sync, observations.events, workspaceRoot);
+  const aheadIds = new Set(sync.nodes.filter((node) => node.ahead).map((node) => node.nodeId));
+  const changedCardSources = {
+    ...sourceChanges,
+    items: sourceChanges.items.filter((item) => aheadIds.has(item.nodeId)),
+  };
   return {
     sync,
     observations,
@@ -133,44 +137,46 @@ export async function inspectCurrentContext(
 
 export type CurrentContext = Awaited<ReturnType<typeof inspectCurrentContext>>;
 export async function inspectWorkspaceDrift(fs: FsAdapter, workspaceRoot: string) {
-  const [sync, observations] = await Promise.all([
-    inspectWorkspaceSync(fs),
-    readSessionObservations(fs),
-  ]);
-  const unlinkedOutputs = findUnlinkedOutputs(sync, observations.events, workspaceRoot);
+  const sync = await inspectWorkspaceSync(fs);
   return {
-    items: contextDriftItems({ sync, unlinkedOutputs }),
-    observationUncertain: observations.uncertain,
+    items: contextDriftItems({ sync }),
     synchronizationUncertain: sync.nodes.some((node) => node.uncertain),
   };
 }
 
-export function contextDriftItems(context: Pick<CurrentContext, "sync" | "unlinkedOutputs">) {
-  return [
-    ...context.unlinkedOutputs.map((output) => ({ kind: "unlinked-output" as const, ...output })),
-    ...context.sync.nodes
-      .filter((node) => nodeTypePrimary(node.type) === "output" && node.state === "behind")
-      .map((node) => ({
-        kind: "output-behind" as const,
-        nodeId: node.nodeId,
-        path: node.path,
-        address: node.resource,
-        reasons: node.reasons,
-      })),
-    ...context.sync.requirementsWithoutOutputs.map((nodeId) => ({
-      kind: "requirement-without-output" as const,
-      nodeId,
-    })),
-  ];
+export function contextDriftItems(context: Pick<CurrentContext, "sync">) {
+  return context.sync.nodes.flatMap((node) => [
+    ...(node.behind
+      ? [
+          {
+            kind: "node-behind" as const,
+            nodeId: node.nodeId,
+            path: node.path,
+            address: node.resource,
+            reasons: node.behind.reasons,
+          },
+        ]
+      : []),
+    ...(node.ahead
+      ? [
+          {
+            kind: "node-ahead" as const,
+            nodeId: node.nodeId,
+            path: node.path,
+            address: node.resource,
+            reasons: node.ahead.reasons,
+            ...(node.ahead.since ? { aheadSince: node.ahead.since } : {}),
+          },
+        ]
+      : []),
+  ]);
 }
 
 type BriefItem = Record<string, string | number | boolean | undefined>;
 export type ContextBrief = {
-  counts: WorkspaceSync["counts"];
+  counts: Pick<WorkspaceSync["counts"], "ahead" | "behind">;
   behind: BriefItem[];
   ahead: BriefItem[];
-  recentInputs: BriefItem[];
-  recentOutputs: BriefItem[];
   unlinkedOutputs: BriefItem[];
   cardInputs: BriefItem[];
   changedCardSources: BriefItem[];
@@ -191,7 +197,6 @@ export function makeContextBrief(
   options: { roleId?: string; now?: string } = {},
 ): ContextBrief {
   const now = Date.parse(options.now ?? new Date().toISOString());
-  const files = observedFiles(context.observations.events);
   const recentSessions = new Set(
     [
       ...new Set(
@@ -212,59 +217,59 @@ export function makeContextBrief(
     )
     .sort((a, b) => Date.parse(b.observedAt ?? "") - Date.parse(a.observedAt ?? ""));
   const candidates = {
-    changedCardSources: context.changedCardSources.items.map((item) => ({
-      cardId: item.cardId,
-      nodeId: item.nodeId,
-      state: item.state,
-      reason: shorten(item.reason, 160),
-    })),
     behind: context.sync.nodes
-      .filter((node) => node.state === "behind")
+      .filter((node) => node.behind)
       .map((node) => ({
         nodeId: node.nodeId,
         name: shorten(path.posix.basename(node.path), 56),
-        reason: shorten(node.reasons.join("; "), 160),
+        reason: shorten(node.behind!.reasons.join("; "), 160),
       })),
     ahead: context.sync.nodes
-      .filter((node) => node.state === "ahead")
+      .filter((node) => node.ahead)
       .map((node) => ({
         nodeId: node.nodeId,
         name: shorten(path.posix.basename(node.path), 56),
-        ...(node.aheadSince
+        ...(node.ahead!.since
           ? {
-              since: node.aheadSince,
-              ageSeconds: Math.max(0, Math.floor((now - Date.parse(node.aheadSince)) / 1000)),
+              since: node.ahead!.since,
+              ageSeconds: Math.max(0, Math.floor((now - Date.parse(node.ahead!.since!)) / 1000)),
             }
           : { sinceUnknown: true }),
       })),
-    recentInputs: files
-      .filter((file) => file.kind !== "written")
-      .slice(0, 10)
-      .map((file) => ({ address: file.address, kind: file.kind, at: file.observedAt })),
-    recentOutputs: files
-      .filter((file) => file.kind === "written")
-      .slice(0, 10)
-      .map((file) => ({
-        address: file.address,
-        at: file.observedAt,
-        versionKnown: file.versionKnown,
-      })),
-    unlinkedOutputs: recentUnlinked.map(({ sessionId: _sessionId, ...output }) => ({ ...output })),
     cardInputs: context.cards.items
-      .filter((card) => !card.diagnostic && card.status !== "deprecated")
+      .filter(
+        (card) =>
+          !card.diagnostic &&
+          card.status !== "deprecated" &&
+          (card.state === "pending" ||
+            Number(card.goalCount ?? 0) < Number(card.totalGoalCount ?? 0)),
+      )
       .sort((a, b) => String(b.publishedAt ?? "").localeCompare(String(a.publishedAt ?? "")))
       .map((card) => ({
         cardId: String(card.cardId),
         title: shorten(String(card.title ?? card.cardId), 72),
         state: String(card.state),
+        progress: typeof card.progress === "string" ? card.progress : undefined,
+        outputCount: Array.isArray(card.outputNodeIds) ? card.outputNodeIds.length : 0,
+        goalCount: Number(card.goalCount ?? 0),
+        totalGoalCount: Number(card.totalGoalCount ?? 0),
+      })),
+    unlinkedOutputs: recentUnlinked.map(({ sessionId: _sessionId, ...output }) => ({ ...output })),
+    changedCardSources: context.changedCardSources.items
+      .filter((item) =>
+        context.sync.nodes.some((node) => node.nodeId === item.nodeId && node.ahead),
+      )
+      .map((item) => ({
+        cardId: item.cardId,
+        nodeId: item.nodeId,
+        state: item.state,
+        reason: shorten(item.reason, 160),
       })),
   } satisfies Record<string, BriefItem[]>;
   const brief: ContextBrief = {
-    counts: context.sync.counts,
+    counts: { ahead: context.sync.counts.ahead, behind: context.sync.counts.behind },
     behind: [],
     ahead: [],
-    recentInputs: [],
-    recentOutputs: [],
     unlinkedOutputs: [],
     cardInputs: [],
     changedCardSources: [],
@@ -305,29 +310,19 @@ export function makeContextBrief(
 }
 
 export function formatContextBrief(brief: ContextBrief): string {
-  const lines = [
-    `synced ${brief.counts.synced} · ahead ${brief.counts.ahead} · behind ${brief.counts.behind} · unanchored ${brief.counts.unanchored}`,
-  ];
+  const lines = [`behind ${brief.counts.behind} · ahead ${brief.counts.ahead}`];
   const sections: [
     keyof Pick<
       ContextBrief,
-      | "behind"
-      | "ahead"
-      | "recentInputs"
-      | "recentOutputs"
-      | "unlinkedOutputs"
-      | "cardInputs"
-      | "changedCardSources"
+      "behind" | "ahead" | "unlinkedOutputs" | "cardInputs" | "changedCardSources"
     >,
     string,
   ][] = [
-    ["changedCardSources", "Received Card sources changed; reread current requirements"],
     ["behind", "Behind"],
     ["ahead", "Ahead"],
-    ["recentInputs", "Recent inputs"],
-    ["recentOutputs", "Recent outputs"],
-    ["unlinkedOutputs", "Recent unlinked outputs"],
     ["cardInputs", "Input Cards (reception does not mean completion)"],
+    ["unlinkedOutputs", "Recent unrecorded files"],
+    ["changedCardSources", "Received Card sources changed; reread current requirements"],
   ];
   for (const [key, title] of sections) {
     if (!brief[key].length) continue;
@@ -342,7 +337,7 @@ export function formatContextBrief(brief: ContextBrief): string {
           ? `${String(item.name ?? "")}; ${item.since ? `since ${item.since} (${formatAge(Number(item.ageSeconds))})` : "start time not recorded"}`
           : String(item.reason ?? item.title ?? item.kind ?? item.at ?? item.address ?? "");
       lines.push(
-        `- ${identity}${detail && detail !== identity ? ` ${detail}` : ""}${item.state ? ` [${item.state}]` : ""}`,
+        `- ${identity}${detail && detail !== identity ? ` ${detail}` : ""}${item.progress || item.state ? ` [${item.progress || item.state}${Number(item.totalGoalCount) > 0 ? ` ${item.goalCount}/${item.totalGoalCount}` : ""}]` : ""}`,
       );
     }
   }
@@ -352,9 +347,7 @@ export function formatContextBrief(brief: ContextBrief): string {
       `${omitted} items omitted; use node check, workspace drift or the referenced address.`,
     );
   if (brief.omitted.unlinkedOutputs)
-    lines.push(
-      `${brief.omitted.unlinkedOutputs} older or omitted unlinked outputs; use workspace drift for the full list.`,
-    );
+    lines.push(`${brief.omitted.unlinkedOutputs} older or omitted unrecorded files.`);
   if (brief.observationUncertain)
     lines.push("Session observations are incomplete; only evidenced addresses are shown.");
   if (brief.cardSourcesUncertain)

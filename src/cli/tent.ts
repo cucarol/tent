@@ -144,7 +144,7 @@ Run from a Workspace containing .tent/, or select one with --workspace.
   tent new <workspace-path>           Create empty .tent and independent local Git.
   tent node list|get|create|write|…    Find, read and maintain Node documents.
   tent role list|show|write|create     Optional persistent Role context.
-  tent card create|publish|list|get|take|interrupt|continue
+  tent card create|list|show|take|move|deprecate
                                      Recorded inputs and optional Role reception.
   tent workspace export --output <dir>  Export the context graph and its Git history.
   tent workspace check --json        Inspect links and material addresses without edits.

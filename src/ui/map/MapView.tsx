@@ -23,7 +23,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { primaryOf, suffixOf, type Graph, type Hand, type Primary } from "../data/store.js";
-import type { SnapshotCommit, SnapshotRef } from "../data/types.js";
+import type { SnapshotCommit, SnapshotRef, SyncFlag, SyncFlags } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
@@ -79,6 +79,8 @@ type Actions = {
   onFold: (id: string) => void;
 };
 const MapActions = createContext<Actions>({ activeRole: null, onRole: () => {}, onFold: () => {} });
+/** Ahead and behind Nodes; every other card stays quiet. */
+const MapFlags = createContext<SyncFlags>({});
 
 const descendants = (graph: Graph, id: string): number =>
   graph.childrenOf(id).reduce((sum, c) => sum + 1 + descendants(graph, c.id), 0);
@@ -115,13 +117,14 @@ function Handles() {
  */
 const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
   const { onFold } = useContext(MapActions);
+  const flag = useContext(MapFlags)[data.id];
   const n = data.graph.nodes.get(data.id)!;
   const state = data.graph.states.get(data.id)!;
   const hands = data.graph.handedTo(data.id);
   const p = primaryOf(n.type);
   return (
     <div
-      className={`mcard t-${p}${data.top ? " is-top" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}`}
+      className={`mcard t-${p}${data.top ? " is-top" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? " is-behind" : ""}`}
       style={{ width: CARD.w, height: data.h }}
     >
       <Handles />
@@ -181,6 +184,9 @@ function Faces({ graph, hands }: { graph: Graph; hands: Hand[] }) {
           h.cards,
           h.waiting,
           h.old,
+          h.outputs,
+          h.goalCount,
+          h.totalGoalCount,
         );
         const cls = `mcard-face${h.old ? " is-old" : h.waiting ? " is-waiting" : ""}${activeRole !== null && activeRole === h.lane ? " is-active" : ""}`;
         const face =
@@ -191,9 +197,16 @@ function Faces({ graph, hands }: { graph: Graph; hands: Hand[] }) {
           ) : (
             <Pet id={h.lane} size={16} />
           );
-        const envelope = h.waiting > 0 && (
-          <i className="face-env">
-            <Icon name="mail" size={8} />
+        const envelope = (h.waiting > 0 || h.totalGoalCount > 0) && (
+          <i className={`face-env${h.totalGoalCount > 1 ? " face-progress" : ""}`}>
+            {h.totalGoalCount > 1 ? (
+              `${h.goalCount}/${h.totalGoalCount}`
+            ) : (
+              <Icon
+                name={h.waiting > 0 ? "mail" : h.goalCount === h.totalGoalCount ? "check" : "clock"}
+                size={8}
+              />
+            )}
           </i>
         );
         return role ? (
@@ -253,7 +266,7 @@ function LinkEdge({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps<Ed
   return <BaseEdge id={id} path={path} className={`link link-tree${state}`} />;
 }
 
-function PeekCard({ graph, peek }: { graph: Graph; peek: Peek }) {
+function PeekCard({ graph, peek, flag }: { graph: Graph; peek: Peek; flag?: SyncFlag }) {
   const n = graph.nodes.get(peek.id);
   if (!n) return null;
   const cites =
@@ -273,8 +286,71 @@ function PeekCard({ graph, peek }: { graph: Graph; peek: Peek }) {
       style={{ left: peek.left, top: peek.top }}
       role="tooltip"
     >
+      {flag?.behind && (
+        <div className="map-peek-flag is-behind">
+          <b>{t.map.behindWhy(flag.behind.reasons)}</b>
+          <span>{t.map.behindNext}</span>
+        </div>
+      )}
+      {flag?.ahead && (
+        <div className="map-peek-flag is-ahead">
+          <b>{t.map.aheadWhy(flag.ahead.since ? ago(flag.ahead.since) : null)}</b>
+          <span>{t.map.aheadNext}</span>
+        </div>
+      )}
       <p>{n.description || t.node.noSummary}</p>
       {facts.length > 0 && <div className="map-peek-meta">{facts.join(" · ")}</div>}
+    </div>
+  );
+}
+
+/**
+ * How many Nodes are behind or ahead, in the top corner of the map; a Node that is both counts in each.
+ * Each count steps through its Nodes in tree order; nothing shows while no Node needs attention.
+ */
+function FlagCounts({
+  graph,
+  flags,
+  onSelect,
+}: {
+  graph: Graph;
+  flags: SyncFlags;
+  onSelect: (ref: SnapshotRef) => void;
+}) {
+  const step = useRef<Record<keyof SyncFlag, number>>({ behind: 0, ahead: 0 });
+  const order = useMemo(() => {
+    const out: string[] = [];
+    const walk = (parentId: string | null) => {
+      for (const n of graph.childrenOf(parentId)) {
+        out.push(n.id);
+        walk(n.id);
+      }
+    };
+    walk(null);
+    return out;
+  }, [graph]);
+  const kinds = (["behind", "ahead"] as const)
+    .map((state) => [state, order.filter((id) => flags[id]?.[state])] as const)
+    .filter(([, ids]) => ids.length > 0);
+  if (!kinds.length) return null;
+  return (
+    <div className="panel map-flags" role="group" aria-label={t.map.flagsLabel}>
+      {kinds.map(([state, ids]) => (
+        <button
+          key={state}
+          type="button"
+          className={`map-flag is-${state}`}
+          data-tip={t.map.flagStep}
+          onClick={() => {
+            const i = step.current[state] % ids.length;
+            step.current[state] = i + 1;
+            onSelect({ kind: "node", id: ids[i] });
+          }}
+        >
+          <i className="map-flag-sw" />
+          {state === "behind" ? t.map.behindCount(ids.length) : t.map.aheadCount(ids.length)}
+        </button>
+      ))}
     </div>
   );
 }
@@ -292,6 +368,8 @@ type Filters = { types: Record<Primary, boolean>; allRefs: boolean };
 
 type MapProps = {
   graph: Graph;
+  /** Ahead and behind Nodes from the real workspace; empty when the service cannot say. */
+  flags: SyncFlags;
   selected: SnapshotRef | null;
   collapsed: ReadonlySet<string>;
   /** The draft being written: its sources in order (null for an address outside Tent). */
@@ -308,6 +386,7 @@ type MapProps = {
 
 export function MapView({
   graph,
+  flags,
   selected,
   collapsed,
   draft,
@@ -963,40 +1042,43 @@ export function MapView({
       className={`map zoom-${zoomLevel}${lensView ? " is-lens" : ""}${morphing ? " is-morphing" : ""}${timeOpen ? " is-time" : ""}`}
       ref={box}
     >
-      <MapActions.Provider value={actions}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          minZoom={ZOOM.min}
-          maxZoom={ZOOM.max}
-          proOptions={{ hideAttribution: true }}
-          nodesConnectable={false}
-          nodesDraggable={false}
-          elementsSelectable={false}
-          nodeClickDistance={5}
-          paneClickDistance={5}
-          disableKeyboardA11y
-          panActivationKeyCode={null}
-          onInit={() => setReady(true)}
-          onMove={(_, v) => {
-            trackZoom(v.zoom);
-          }}
-          onMoveStart={() => setPeek(null)}
-          onMoveEnd={countOutside}
-          onNodeClick={(_, node) => {
-            if (node.type === "node") onSelect({ kind: "node", id: node.id });
-          }}
-          onNodeMouseEnter={(_, node) => {
-            if (node.type === "node") hoverSoon(node.id, 150);
-          }}
-          onNodeMouseLeave={() => hoverSoon(null, 100)}
-          onPaneClick={() => onSelect(null)}
-        />
-      </MapActions.Provider>
+      <MapFlags.Provider value={flags}>
+        <MapActions.Provider value={actions}>
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            minZoom={ZOOM.min}
+            maxZoom={ZOOM.max}
+            proOptions={{ hideAttribution: true }}
+            nodesConnectable={false}
+            nodesDraggable={false}
+            elementsSelectable={false}
+            nodeClickDistance={5}
+            paneClickDistance={5}
+            disableKeyboardA11y
+            panActivationKeyCode={null}
+            onInit={() => setReady(true)}
+            onMove={(_, v) => {
+              trackZoom(v.zoom);
+            }}
+            onMoveStart={() => setPeek(null)}
+            onMoveEnd={countOutside}
+            onNodeClick={(_, node) => {
+              if (node.type === "node") onSelect({ kind: "node", id: node.id });
+            }}
+            onNodeMouseEnter={(_, node) => {
+              if (node.type === "node") hoverSoon(node.id, 150);
+            }}
+            onNodeMouseLeave={() => hoverSoon(null, 100)}
+            onPaneClick={() => onSelect(null)}
+          />
+        </MapActions.Provider>
+      </MapFlags.Provider>
 
-      {peek && <PeekCard graph={graph} peek={peek} />}
+      {peek && <PeekCard graph={graph} peek={peek} flag={flags[peek.id]} />}
+      <FlagCounts graph={graph} flags={flags} onSelect={onSelect} />
       {lensName ? (
         <div className="panel map-hint">
           <Icon name="lens" size={14} />

@@ -9,6 +9,7 @@ import type {
 } from "./types.js";
 import { t } from "../i18n.js";
 import { api, describe } from "./api.js";
+import { isDraft } from "./drafts.js";
 
 export type Primary = "goal" | "prompt" | "output";
 
@@ -40,8 +41,7 @@ export function buildGraph(snapshot: Snapshot, visits: Visits | null = null) {
   const roles = new Map(snapshot.roles.map((r) => [r.id, r]));
   const cards = new Map(snapshot.cards.map((c) => [c.id, c]));
   const commits = new Map(snapshot.commits.map((c) => [c.hash, c]));
-  // Drafts are Card files without history; they wait for nobody until they are published.
-  const waiting = (c: SnapshotCard) => c.state === "pending" && c.history.length > 0;
+  const waiting = (c: SnapshotCard) => c.state === "pending" && !isDraft(c);
 
   const states = new Map<string, NodeState>();
   for (const n of snapshot.nodes) {
@@ -93,7 +93,7 @@ export function buildGraph(snapshot: Snapshot, visits: Visits | null = null) {
   // Where each Node went in published Cards, lane by lane: Roles in their order, then the public area.
   const lanes = new Map<string, Map<string, Hand>>();
   for (const c of snapshot.cards) {
-    if (!c.history.length) continue;
+    if (isDraft(c)) continue;
     const lane = c.receivedBy ?? c.target ?? "";
     const waits = c.state === "pending";
     const counted = new Set<string>();
@@ -101,12 +101,25 @@ export function buildGraph(snapshot: Snapshot, visits: Visits | null = null) {
       if (!s.id || !nodes.has(s.id)) continue;
       const byLane = lanes.get(s.id) ?? new Map<string, Hand>();
       lanes.set(s.id, byLane);
-      const hand = byLane.get(lane) ?? { lane, cards: 0, waiting: 0, old: false };
+      const hand = byLane.get(lane) ?? {
+        lane,
+        cards: 0,
+        waiting: 0,
+        outputs: 0,
+        goalCount: 0,
+        totalGoalCount: 0,
+        old: false,
+      };
       byLane.set(lane, hand);
       // A Card can repeat a Node at different versions; count the Card, but inspect every version.
       if (!counted.has(s.id)) {
         if (waits) hand.waiting++;
         else hand.cards++;
+        if (c.progress === "has-output") hand.outputs++;
+        if (c.progress !== null) {
+          hand.goalCount += c.goalCount;
+          hand.totalGoalCount += c.totalGoalCount;
+        }
         counted.add(s.id);
       }
       if (waits && s.changedSince) hand.old = true;
@@ -206,7 +219,15 @@ export function buildGraph(snapshot: Snapshot, visits: Visits | null = null) {
  * Cards received there, `waiting` those still pending, and `old` is set when a waiting one pinned a version
  * the Node has since moved past.
  */
-export type Hand = { lane: string; cards: number; waiting: number; old: boolean };
+export type Hand = {
+  lane: string;
+  cards: number;
+  waiting: number;
+  outputs: number;
+  goalCount: number;
+  totalGoalCount: number;
+  old: boolean;
+};
 
 export const cardTitle = (c: SnapshotCard) => c.title || t.card.contextOnly(c.sources.length);
 

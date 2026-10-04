@@ -21,8 +21,9 @@ import { canonicalIdentityError } from "./tree.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { loadNodeCatalog, readCatalogDocument } from "./node-catalog.js";
 import { listWorkspaceRelations, type DocumentRef } from "./workspace-relations.js";
+import { readCardProgress } from "./card-progress.js";
 
-export type CardDocumentState = "pending" | "consumed" | "interrupted";
+export type CardDocumentState = "pending" | "consumed";
 type CardFields = Record<string, unknown> & {
   type: "card";
   id: string;
@@ -48,7 +49,6 @@ export class CardDocumentError extends Error {
       | "UNPUBLISHED"
       | "INPUT_CHANGED"
       | "STATE_CHANGED"
-      | "ALREADY_PUBLISHED"
       | "ROLE_UNAVAILABLE"
       | "RECEPTION_CONFLICT",
     message: string,
@@ -82,8 +82,7 @@ export function parseCardDocument(id: string, raw: string): CardDocument {
     invalid("Card title must be nonempty text");
   if (data.target !== undefined && (typeof data.target !== "string" || !isRoleId(data.target)))
     invalid("Card target must be an explicit Role id");
-  if (!["pending", "consumed", "interrupted"].includes(String(data.state)))
-    invalid("Invalid Card state");
+  if (!["pending", "consumed"].includes(String(data.state))) invalid("Invalid Card state");
   if (
     data.receivedBy !== undefined &&
     (data.state === "pending" || typeof data.receivedBy !== "string" || !isRoleId(data.receivedBy))
@@ -115,21 +114,14 @@ function stateOf(document: CardDocument) {
 function requireInput(card: CardDocument) {
   if (!card.body.trim() && !card.data.sources.length) invalid("Card needs prompt text or sources");
 }
-function deletedDraftPath(id: string) {
-  return `${CARDS_DIR}/.deleted/${cardPath(id).slice(CARDS_DIR.length + 1, -3)}`;
-}
 async function requireUnusedId(fs: FsAdapter, id: string) {
   const history = await historyOf(fs);
-  if (
-    (await fs.exists(cardPath(id))) ||
-    (await fs.exists(deletedDraftPath(id))) ||
-    (await history.pathVersions(cardPath(id))).first
-  )
+  if ((await fs.exists(cardPath(id))) || (await history.pathVersions(cardPath(id))).first)
     invalid("Card id already exists in files or history; create a new identity");
 }
 function cardConflict(
   card: CardDocument,
-  code: "STATE_CHANGED" | "RECEPTION_CONFLICT" | "ALREADY_PUBLISHED",
+  code: "STATE_CHANGED" | "RECEPTION_CONFLICT",
   message: string,
 ): never {
   throw new CardDocumentError(code, message, { current: { etag: card.etag, ...stateOf(card) } });
@@ -144,9 +136,6 @@ async function checkUnchanged(fs: FsAdapter, card: CardDocument) {
       "STATE_CHANGED",
       "Card changed during checks; reread before saving",
     );
-}
-function withCardLock<T>(fs: FsAdapter, action: () => Promise<T>) {
-  return fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, action) : action();
 }
 async function liveCard(fs: FsAdapter, id: string) {
   return parseCardDocument(
@@ -306,7 +295,10 @@ async function checkedCard(fs: FsAdapter, id: string) {
     history = await historyOf(fs);
   const versions = await history.pathVersions(current.path);
   if (!versions.first || !versions.latest)
-    throw new CardDocumentError("UNPUBLISHED", "Handwritten Card requires explicit publish");
+    throw new CardDocumentError(
+      "UNPUBLISHED",
+      "Card has no retained publication; create a Card through Tent",
+    );
   const published = parseCardDocument(id, await history.read(versions.first));
   const latest = parseCardDocument(id, await history.read(versions.latest));
   validateRetainedCard(current, published, latest);
@@ -364,11 +356,11 @@ export function createCardDocument(
         state: "pending",
       };
       const prompt = await canonicalDocumentReferences(fs, path, fields, input.prompt);
-      const draft = parseCardDocument(id, serializeFrontmatter(fields, prompt));
-      requireInput(draft);
-      if (draft.data.target) await roleAvailable(fs, draft.data.target);
-      draft.data.sources = await captureSources(fs, path, draft.data.sources);
-      const raw = serializeFrontmatter(draft.data, draft.body, draft.keyOrder);
+      const card = parseCardDocument(id, serializeFrontmatter(fields, prompt));
+      requireInput(card);
+      if (card.data.target) await roleAvailable(fs, card.data.target);
+      card.data.sources = await captureSources(fs, path, card.data.sources);
+      const raw = serializeFrontmatter(card.data, card.body, card.keyOrder);
       await fs.writeFile(path, raw);
       const captured = await history
         .captureUnlocked([{ path, raw }], { operation: "card.create" })
@@ -381,6 +373,9 @@ export function createCardDocument(
         cardId: id,
         path,
         state: "pending" as const,
+        ...(
+          await readCardProgress(fs, [{ cardId: id, state: "pending", sources: card.data.sources }])
+        ).get(id)!,
         etag: contentEtag(raw),
         version: captured.versions[0]!,
       };
@@ -389,95 +384,7 @@ export function createCardDocument(
   );
 }
 
-export type CardDraftInput = {
-  prompt: string;
-  sources?: MaterialSource[];
-  title?: string;
-  target?: string | null;
-};
-async function draftFields(
-  fs: FsAdapter,
-  id: string,
-  input: CardDraftInput,
-  previous?: CardDocument,
-) {
-  if (typeof input.prompt !== "string") invalid("Card prompt must be text");
-  const fields = {
-    ...previous?.data,
-    type: "card",
-    id,
-    schemaVersion: 3,
-    state: "pending",
-    sources: input.sources ?? [],
-  };
-  const data: Record<string, unknown> = fields;
-  if (input.title !== undefined) data.title = input.title;
-  if (input.target !== undefined && input.target !== null) data.target = input.target;
-  else delete data.target;
-  const draft = parseCardDocument(id, serializeFrontmatter(data, input.prompt, previous?.keyOrder));
-  const body = await canonicalDocumentReferences(fs, draft.path, draft.data, draft.body);
-  return parseCardDocument(id, serializeFrontmatter(draft.data, body, draft.keyOrder));
-}
-function draftResult(id: string, card: CardDocument) {
-  return {
-    cardId: id,
-    path: card.path,
-    etag: card.etag,
-    draft: true as const,
-    state: "pending" as const,
-  };
-}
-async function unpublishedCard(fs: FsAdapter, id: string, expectedEtag: string, deleting = false) {
-  const history = await historyOf(fs);
-  const card = await liveCard(fs, id);
-  if ((await history.pathVersions(card.path)).first)
-    cardConflict(card, "ALREADY_PUBLISHED", "Card already has publication history");
-  if (!deleting && (await fs.exists(deletedDraftPath(id))))
-    invalid("Deleted Card identity cannot be reused");
-  checkEtag(card, expectedEtag);
-  if (card.data.state !== "pending") invalid("An unpublished Card must be pending");
-  return card;
-}
-
-/** Draft writes hold the shared lock but deliberately do not capture Card or source history. */
-export function createCardDraft(fs: FsAdapter, input: CardDraftInput & { cardId?: string }) {
-  return withCardLock(fs, async () => {
-    const id = input.cardId ?? makeCardId();
-    await requireUnusedId(fs, id);
-    const card = await draftFields(fs, id, input);
-    if (card.data.target) await roleAvailable(fs, card.data.target);
-    await fs.writeFile(card.path, card.raw);
-    return draftResult(id, card);
-  });
-}
-
-export function writeCardDraft(
-  fs: FsAdapter,
-  id: string,
-  input: CardDraftInput & { expectedEtag: string },
-) {
-  return withCardLock(fs, async () => {
-    const before = await unpublishedCard(fs, id, input.expectedEtag);
-    const card = await draftFields(fs, id, input, before);
-    if (card.data.target) await roleAvailable(fs, card.data.target);
-    await checkUnchanged(fs, before);
-    if (card.raw !== before.raw) await fs.writeFile(card.path, card.raw);
-    return draftResult(id, card);
-  });
-}
-
-export function deleteCardDraft(fs: FsAdapter, id: string, expectedEtag: string) {
-  return withCardLock(fs, async () => {
-    const card = await unpublishedCard(fs, id, expectedEtag, true);
-    // Reserve the identity before deleting; a failed deletion can be retried with its ETag.
-    await fs.writeFile(deletedDraftPath(id), "");
-    await checkUnchanged(fs, card);
-    await fs.remove(card.path);
-    return { cardId: id, path: card.path, deleted: true as const };
-  });
-}
-
-/** Published Cards can change destination only before reception. Drafts use writeCardDraft. */
+/** Published Cards can change destination only before reception. */
 export function moveCardDocument(
   fs: FsAdapter,
   id: string,
@@ -523,37 +430,6 @@ export function moveCardDocument(
     },
     { operation: "card.move" },
   );
-}
-
-export function publishCardDocument(fs: FsAdapter, id: string, expectedEtag: string) {
-  // Unpublished editor bytes are not a publication preimage. The first retained
-  // Card version must contain the final resolved input, not its unversioned draft.
-  const publish = async () => {
-    const history = await historyOf(fs),
-      path = cardPath(id);
-    const card = await unpublishedCard(fs, id, expectedEtag),
-      raw = card.raw;
-    requireInput(card);
-    if (card.data.target) await roleAvailable(fs, card.data.target);
-    // Publishing is explicit: selected internal source addresses receive actual versions.
-    const body = await canonicalDocumentReferences(fs, path, card.data, card.body);
-    card.data.sources = await captureSources(fs, path, card.data.sources);
-    const after = serializeFrontmatter(card.data, body, card.keyOrder);
-    if ((await fs.readFile(path)) !== raw)
-      throw new CardDocumentError("STATE_CHANGED", "Card changed while resolving sources");
-    if (after !== raw) await fs.writeFile(path, after);
-    const captured = await history.captureUnlocked([{ path, raw: after }], {
-      operation: "card.publish",
-    });
-    return {
-      cardId: id,
-      path,
-      etag: contentEtag(after),
-      state: "pending" as const,
-      version: captured.versions[0]!,
-    };
-  };
-  return withCardLock(fs, publish);
 }
 
 /** Cancel a published task without altering its recorded input or reception. */
@@ -604,7 +480,7 @@ async function deprecatedCardNotice(fs: FsAdapter, card: CardDocument) {
     const relations = await listWorkspaceRelations(fs);
     const published = new Set(
       (await listCardDocuments(fs, { includeDeprecated: true })).items
-        .filter((item) => !item.draft && !item.diagnostic)
+        .filter((item) => !item.diagnostic)
         .map((item) => item.cardId),
     );
     for (const relation of relations) {
@@ -694,23 +570,23 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
       const metadata: Record<string, unknown> = {
         diagnostic: { code: error.code, message: error.message.slice(0, 512) },
       };
-      if (error.code === "UNPUBLISHED") {
-        const { sources, title, target, state } = parseCardDocument(id, raw).data;
-        Object.assign(metadata, { sources, title, target, state, draft: true });
-      }
       return cardPage(id, raw, options, metadata);
     }
     if (checked.current.raw !== raw)
       throw new ReaderError("SOURCE_CHANGED", "Card changed during lookup");
     const { current, history, publishedVersion } = checked;
     const metadata = {
-      draft: false,
       publishedVersion,
       sources: current.data.sources,
       title: current.data.title,
       target: current.data.target,
       state: current.data.state,
       receivedBy: current.data.receivedBy,
+      ...(
+        await readCardProgress(fs, [
+          { cardId: id, state: current.data.state, sources: current.data.sources },
+        ])
+      ).get(id)!,
       ...documentLifecycle(current.data),
       ...(await deprecatedCardNotice(fs, current)),
     };
@@ -724,12 +600,10 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
   return options.capture && fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, read) : read();
 }
 
-export function transitionCardDocument(
+export function takeCardDocument(
   fs: FsAdapter,
   id: string,
-  roleId: string | undefined,
-  action: "take" | "interrupt" | "continue",
-  expectedVersion?: DocumentVersion,
+  roleId: string | undefined = undefined,
 ) {
   return withTentMutation(
     fs,
@@ -751,32 +625,9 @@ export function transitionCardDocument(
           "RECEPTION_CONFLICT",
           "Card reception uses a different Role context",
         );
-      if (action !== "take") {
-        const expected = expectedVersion && documentVersionSchema.parse(expectedVersion);
-        if (
-          !expected ||
-          expected.path !== current.path ||
-          (await history.changedSince(expected)) ||
-          (await history.read(expected)) !== (await history.read(version))
-        )
-          throw new CardDocumentError(
-            "STATE_CHANGED",
-            "Card retained version changed; inspect before changing its state",
-          );
-      }
       const state = current.data.state;
-      if (action === "take" && state === "interrupted")
-        throw new CardDocumentError(
-          "RECEPTION_CONFLICT",
-          "Interrupted Card requires explicit continue",
-        );
-      if (action !== "take" && state === "pending")
-        throw new CardDocumentError(
-          "RECEPTION_CONFLICT",
-          "Receive the Card before continuing or interrupting it",
-        );
-      const nextState = action === "interrupt" ? "interrupted" : "consumed";
-      const replayed = action === "take" && state === "consumed";
+      const nextState = "consumed";
+      const replayed = state === "consumed";
       const raw =
         state === nextState
           ? current.raw
@@ -797,7 +648,11 @@ export function transitionCardDocument(
         state: nextState,
         receivedBy: roleId,
         replayed,
-        automaticInterrupt: "unavailable",
+        ...(
+          await readCardProgress(fs, [
+            { cardId: id, state: "consumed", sources: current.data.sources },
+          ])
+        ).get(id)!,
         ...documentLifecycle(current.data),
         ...(await deprecatedCardNotice(fs, current)),
       };
@@ -809,12 +664,17 @@ export function transitionCardDocument(
           "Card changed during reception checks; reread before continuing",
         );
       if (raw !== current.raw) await fs.writeFile(current.path, raw);
-      const saved = await history.captureUnlocked([{ path: current.path, raw }], {
-        operation: `card.${action}`,
-      });
-      return cardPage(id, raw, {}, { ...metadata, version: saved.versions[0] });
+      const savedVersion =
+        raw === current.raw
+          ? version
+          : (
+              await history.captureUnlocked([{ path: current.path, raw }], {
+                operation: "card.take",
+              })
+            ).versions[0];
+      return cardPage(id, raw, {}, { ...metadata, version: savedVersion });
     },
-    { operation: `card.${action}` },
+    { operation: "card.take" },
   );
 }
 
@@ -824,13 +684,13 @@ export async function listCardDocuments(
     roleId?: string;
     includeOpen?: boolean;
     state?: CardDocumentState;
-    includeDrafts?: boolean;
     includeDeprecated?: boolean;
   } = {},
 ) {
   if (options.roleId) await roleAvailable(fs, options.roleId);
   const items: Array<Record<string, unknown>> = [];
   const selected: Array<Record<string, unknown> & { path: string }> = [];
+  const sourceSets = new Map<string, MaterialSource[]>();
   for (const entry of (await fs.exists(CARDS_DIR))
     ? (await fs.listDir(CARDS_DIR)).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     : []) {
@@ -843,6 +703,7 @@ export async function listCardDocuments(
       if (data.id !== id || data.type !== "card" || data.schemaVersion !== 3)
         invalid("Card header identity mismatch");
       const state = data.state;
+      if (state !== "pending" && state !== "consumed") invalid("Invalid Card state");
       if (!options.includeDeprecated && documentLifecycle(data).status === "deprecated") continue;
       if (options.state && state !== options.state) continue;
       if (
@@ -863,6 +724,7 @@ export async function listCardDocuments(
       };
       items.push(item);
       selected.push(item);
+      sourceSets.set(id, Array.isArray(data.sources) ? (data.sources as MaterialSource[]) : []);
     } catch {
       items.push({ cardId: id, path, diagnostic: "Card header unavailable; inspect raw" });
     }
@@ -873,7 +735,6 @@ export async function listCardDocuments(
       for (const item of selected) {
         const time = times.get(item.path);
         item.publishedAt = time ?? null;
-        item.draft = !time;
       }
     } catch {
       for (let i = 0; i < items.length; i++) {
@@ -885,10 +746,23 @@ export async function listCardDocuments(
   const visible = items.filter((item) => {
     if (item.diagnostic) return true;
     // Without readable history, a header alone is never evidence of publication.
-    item.draft ??= true;
     item.publishedAt ??= null;
-    return !item.draft || (options.includeDrafts && !options.state);
+    return item.publishedAt !== null;
   });
+  if (visible.some((item) => !item.diagnostic)) {
+    const progress = await readCardProgress(
+      fs,
+      visible
+        .filter((item) => !item.diagnostic)
+        .map((item) => ({
+          cardId: String(item.cardId),
+          state: item.state as CardDocumentState,
+          sources: sourceSets.get(String(item.cardId)) ?? [],
+        })),
+    );
+    for (const item of visible)
+      if (!item.diagnostic) Object.assign(item, progress.get(String(item.cardId)));
+  }
   return { revision: canonicalSha256(visible), items: visible };
 }
 
@@ -926,12 +800,7 @@ export async function inspectReceivedCardSourceChanges(
       if (item.diagnostic)
         diagnostics.push({ cardId: String(item.cardId), message: String(item.diagnostic) });
     }
-    const candidates = listed.items.filter(
-      (item) =>
-        !item.diagnostic &&
-        !item.draft &&
-        (item.state === "consumed" || item.state === "interrupted"),
-    );
+    const candidates = listed.items.filter((item) => !item.diagnostic && item.state === "consumed");
     if (!candidates.length) return { items, diagnostics };
     const history = await historyOf(readonly);
     // One identity/history scan and two source batches serve the whole query.

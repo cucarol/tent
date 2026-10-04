@@ -44,6 +44,7 @@ export const INTEGRATION_TEST_FILES = Object.freeze([
   "test/role-context.test.ts",
   "test/root-build-canonical.test.ts",
   "test/ui-server.test.ts",
+  "test/ui-sync.test.ts",
   "test/workspace-init.test.ts",
 ] as const);
 

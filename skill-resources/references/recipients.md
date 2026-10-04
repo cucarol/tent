@@ -26,4 +26,4 @@ All commands accept `--workspace`.
   repaired on read.
 
 A Role's received Cards are found through the Cards themselves:
-`tent card list --role <role-id> --state consumed`, or `--state interrupted`.
+`tent card list --role <role-id> --state consumed`.

@@ -1,7 +1,8 @@
 // Client for the `tent ui` service (contract: Tent Node "Web界面服务接口").
 // The token arrives once in the URL fragment and is kept for this tab only.
 import { t } from "../i18n.js";
-import type { DocumentVersion, Snapshot } from "./types.js";
+import type { DocumentVersion, Snapshot, SyncFlags } from "./types.js";
+import { actorBy } from "./actor.js";
 
 const TOKEN_KEY = "tent-token";
 
@@ -110,7 +111,10 @@ export type NodeDocument = {
   etag: string;
   frontmatter: Record<string, unknown>;
   version?: DocumentVersion;
+  trustTier?: TrustTier;
 };
+/** Derived by Core from OKF `verified`: only a `human:` verifier makes a human review. */
+export type TrustTier = "unverified" | "machine-confirmed" | "human-reviewed";
 export type NodeEdit = {
   baseEtag: string;
   body?: string;
@@ -123,10 +127,11 @@ export type SavedNode = {
   changed: boolean;
   body: string;
   version?: DocumentVersion;
+  trustTier?: TrustTier;
 };
 export type CardSourceInput = { resource: string; title?: string; [key: string]: unknown };
-/** What a draft holds: its prompt, ordered sources and the lane it sits in (no target = the public area). */
-export type DraftInput = {
+/** Unsent browser input: its prompt, ordered sources and the lane it sits in (no target = the public area). */
+export type CardInput = {
   prompt: string;
   title?: string;
   target: string | null;
@@ -138,10 +143,9 @@ export type CardDocument = {
   path: string;
   etag: string;
   text: string;
-  draft: boolean;
   title?: string;
   target?: string;
-  state: "pending" | "consumed" | "interrupted";
+  state: "pending" | "consumed";
   receivedBy?: string;
   sources: CardSourceInput[];
 };
@@ -156,25 +160,27 @@ export const api = {
       revision ? { headers: { "If-None-Match": `"${revision}"` } } : {},
     ),
   revision: () => call<{ revision: string }>("/api/revision"),
+  /** Ahead and behind Nodes, computed fresh: material changes do not move the revision. */
+  sync: () => call<{ nodes: SyncFlags }>("/api/sync"),
   node: (id: string, capture = false) =>
     call<NodeDocument>(`/api/nodes/${encodeURIComponent(id)}${capture ? "?capture=true" : ""}`),
   saveNode: (id: string, edit: NodeEdit) =>
-    wrote(call<SavedNode>(`/api/nodes/${encodeURIComponent(id)}`, send("PUT", edit))),
+    wrote(
+      call<SavedNode>(
+        `/api/nodes/${encodeURIComponent(id)}`,
+        send("PUT", { ...edit, by: actorBy() }),
+      ),
+    ),
+  /** Records that the Node still holds against its materials; needs the ETag of a complete live read. */
+  confirmNode: (id: string, baseEtag: string) =>
+    wrote(
+      call<SavedNode>(
+        `/api/nodes/${encodeURIComponent(id)}/confirm`,
+        send("POST", { baseEtag, by: actorBy() }),
+      ),
+    ),
   card: (id: string) => call<CardDocument>(`/api/cards/${encodeURIComponent(id)}`),
-  /** Drafts live in the workspace without publication history; `card take` refuses them. */
-  createDraft: (draft: DraftInput) =>
-    wrote(call<SavedCard>("/api/cards/drafts", send("POST", draft))),
-  saveDraft: (id: string, baseEtag: string, draft: DraftInput) =>
-    wrote(
-      call<SavedCard>(`/api/cards/${encodeURIComponent(id)}`, send("PUT", { ...draft, baseEtag })),
-    ),
-  deleteDraft: (id: string, baseEtag: string) =>
-    wrote(call<SavedCard>(`/api/cards/${encodeURIComponent(id)}`, send("DELETE", { baseEtag }))),
-  /** Pins the sources, records the Card in history and fixes its prompt and sources. */
-  publishCard: (id: string, baseEtag: string) =>
-    wrote(
-      call<SavedCard>(`/api/cards/${encodeURIComponent(id)}/publish`, send("POST", { baseEtag })),
-    ),
+  createCard: (input: CardInput) => wrote(call<SavedCard>("/api/cards", send("POST", input))),
   /** A published Card changes lane until a Role receives it; null returns it to the public area. */
   moveCard: (id: string, baseEtag: string, target: string | null) =>
     wrote(

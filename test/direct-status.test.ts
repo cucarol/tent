@@ -46,8 +46,10 @@ test("Node, Role and Card discovery reads headers without bodies or Git capture"
   };
   const nodes = await loadNodeCatalog(adapter);
   const roles = await listRoleContexts(adapter);
-  const cards = await listCardDocuments(adapter, { includeDrafts: true });
+  const cards = await listCardDocuments(adapter, { includeDeprecated: true });
   assert.equal(nodes.byId.size, 1);
   assert.equal(roles.items[0]?.title, "Own");
-  assert.equal(cards.items.length, 26);
+  assert.equal(cards.items.length, 1);
+  assert.equal(cards.items[0]!.cardId, "card-legacy");
+  assert.match(String(cards.items[0]!.diagnostic), /header unavailable/);
 });

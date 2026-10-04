@@ -149,27 +149,9 @@ test(
     assert.equal(historical.node.text, "Original input\n");
     const taken = await json(["card", "take", card.cardId, "--role", role.roleId]);
     assert.equal(taken.state, "consumed");
+    assert.equal(taken.progress, null);
     assert.equal((await json(["card", "take", card.cardId, "--role", role.roleId])).replayed, true);
-    await json([
-      "card",
-      "interrupt",
-      card.cardId,
-      "--role",
-      role.roleId,
-      "--commit",
-      taken.version.commit,
-    ]);
-    const interrupted = await json(["card", "show", card.cardId]);
-    assert.equal(interrupted.state, "interrupted");
-    await json([
-      "card",
-      "continue",
-      card.cardId,
-      "--role",
-      role.roleId,
-      "--commit",
-      interrupted.version.commit,
-    ]);
+    await assert.rejects(cli(["card", "interrupt", card.cardId]), /Unknown card command/);
     await assert.rejects(
       cli(["node", "write", node.nodeId, "--body", "Lost", "--base-etag", before.etag]),
       /conflict|etag/i,

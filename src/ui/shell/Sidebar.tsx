@@ -2,13 +2,15 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, describe, type KnownWorkspace } from "../data/api.js";
 import type { Graph } from "../data/store.js";
 import type { SnapshotCard, SnapshotNode, SnapshotRef } from "../data/types.js";
-import { isDraft, editDraft, flushDrafts, useDraft } from "../data/drafts.js";
+import { isDraft, editDraft, useDraft } from "../data/drafts.js";
+import { cardProgressLabel } from "../data/card-progress.js";
 import { hasUnsavedNodeDrafts } from "../data/node-drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
 import { t, type Lang } from "../i18n.js";
 import { ago, pathTail, readStored, when, writeStored } from "../util.js";
 import { beginDrag, useDragState } from "./drag.js";
+import { actorName, setActorName } from "../data/actor.js";
 import { carried, PUBLIC, sourceIds, type Work } from "./work.js";
 
 export type ThemePref = "light" | "dark" | "system";
@@ -725,7 +727,7 @@ export function Letter({
       : card.sources.length;
   const meta = draft
     ? `${t.work.draft}${sources ? ` · ${sources}` : ""}`
-    : `${work.laneOf(card) === PUBLIC ? t.work.unclaimed : t.work.waiting} · ${ago(card.publishedAt)}`;
+    : `${cardProgressLabel(card)} · ${ago(card.publishedAt)}`;
   return (
     <div
       className={`letter ${draft ? "is-draft" : "is-pub"}${over ? " is-over" : ""}${lifted ? " is-lifted" : ""}${active ? " is-active" : ""}`}
@@ -872,7 +874,7 @@ function DraftBox({
         aria-label={t.work.what}
         onChange={(e) => {
           const prompt = e.target.value;
-          editDraft(card.id, (input) => ({ ...input, prompt }), true);
+          editDraft(card.id, (input) => ({ ...input, prompt }));
         }}
       />
       <div className="draft-foot">
@@ -895,8 +897,7 @@ function DraftBox({
 
 export function saveState(draft: ReturnType<typeof useDraft>) {
   if (!draft) return t.work.loading;
-  if (draft.failed) return t.work.notSaved;
-  if (draft.saving || draft.dirty) return t.work.saving;
+  if (draft.failed) return t.work.localOnly;
   return t.work.saved;
 }
 
@@ -997,7 +998,6 @@ function Workspaces({ name }: { name: string }) {
     setBusy(url);
     setProblem(null);
     try {
-      await flushDrafts();
       if (hasUnsavedNodeDrafts()) throw new Error(t.side.unsavedNodes);
       location.assign(url);
     } catch (error) {
@@ -1108,6 +1108,24 @@ function Workspaces({ name }: { name: string }) {
 }
 
 /** The gear at the foot: appearance and language. */
+/** The name saves and confirmations are signed with in this browser; empty means the service's OS user. */
+function SignName() {
+  const [name, setName] = useState(actorName);
+  return (
+    <input
+      id="sign-name"
+      className="settings-input"
+      value={name}
+      placeholder={t.side.signPlaceholder}
+      spellCheck={false}
+      onChange={(e) => {
+        setName(e.target.value);
+        setActorName(e.target.value);
+      }}
+    />
+  );
+}
+
 function Settings({
   themePref,
   lang,
@@ -1166,6 +1184,10 @@ function Settings({
               {choice("dark", themePref, t.side.dark, onTheme)}
             </div>
           </div>
+          <label className="settings-row">
+            <span data-tip={t.side.signTip}>{t.side.sign}</span>
+            <SignName />
+          </label>
           <div className="settings-row">
             <span>{t.side.language}</span>
             <div className="seg" role="radiogroup" aria-label={t.side.language}>

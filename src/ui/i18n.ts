@@ -9,6 +9,12 @@ const STORE_KEY = "tent-lang";
 
 /** Places a React node, such as a link to a Role, inside a sentence. */
 const phrase = (...parts: ReactNode[]) => createElement(Fragment, null, ...parts);
+/** File names of material addresses, the first two joined. */
+const names = (paths: string[], sep: string) =>
+  paths
+    .slice(0, 2)
+    .map((p) => p.split(/[\\/]/).pop())
+    .join(sep);
 /** "1 source", "2 sources". */
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -57,8 +63,17 @@ const zh = {
     noBody: "正文是空的。",
     noSummary: "还没有简介。",
   },
-  cardState: { pending: "待接收", consumed: "已接收", interrupted: "已中断" },
+  cardProgress: {
+    pending: "待接收",
+    "received-no-output": "已接收，尚无产出",
+    "has-output": "已有产出",
+    partial: "产出未齐",
+  },
+  cardReception: { pending: "待接收", consumed: "已接收" },
   side: {
+    sign: "确认署名",
+    signTip: "在网页上保存和确认时记下的名字；留空就用本机系统用户名",
+    signPlaceholder: "本机用户名",
     nav: "导航",
     expand: "展开侧栏",
     collapse: "收起侧栏",
@@ -104,11 +119,21 @@ const zh = {
     role: (title: string) => `Role ${title}`,
   },
   map: {
-    handed: (role: string | null, cards: number, waiting: number, old: boolean) =>
+    handed: (
+      role: string | null,
+      cards: number,
+      waiting: number,
+      old: boolean,
+      outputs: number,
+      goalCount: number,
+      totalGoalCount: number,
+    ) =>
       [
         cards > 0 && (role ? `交给过 ${role} ${cards} 次` : `在公共区被接收 ${cards} 次`),
         waiting > 0 && (role ? `${waiting} 张等 ${role} 接收` : `${waiting} 张在公共区待认领`),
         old && "其中有 Card 固定的是它的旧版本",
+        outputs > 0 && `${outputs} 张 Card 已有产出`,
+        totalGoalCount > 1 && `${goalCount}/${totalGoalCount} 个 goal 已有产出`,
       ]
         .filter(Boolean)
         .join("；"),
@@ -120,6 +145,17 @@ const zh = {
     children: (n: number) => `${n} 个下级`,
     cites: (n: number) => `引用 ${n}`,
     citedBy: (n: number) => `被引用 ${n}`,
+    flagsLabel: "需要处理的 Node",
+    flagStep: "依次选中",
+    behindCount: (n: number) => `落后 ${n}`,
+    aheadCount: (n: number) => `领先 ${n}`,
+    /** The changed materials by file name, at most two. */
+    behindWhy: (reasons: string[]) =>
+      `落后：${names(reasons, "、")}${reasons.length > 2 ? ` 等 ${reasons.length} 份材料改过` : " 改过"}`,
+    behindNext: "复核这些材料后确认，标记就会消失",
+    aheadWhy: (since: string | null) =>
+      since ? `领先：${since}记下，还没有产出` : "领先：还没有产出",
+    aheadNext: "做出东西后，在它下面挂一个产出",
     commitOnlyOther: "这次只改了 Role、Card 或其他文件",
     /** What a commit did to Nodes, e.g. "新建 1 · 修改 2：A、B 等 3 个". */
     commitSummary: (added: number, changed: number, names: string[]) =>
@@ -189,6 +225,16 @@ const zh = {
     fromLine: (line: number) => `第 ${line} 行起`,
     showAll: (n: number) => `显示全部 ${n} 个版本`,
     showFewer: "只看最近几次",
+  },
+  review: {
+    label: "复核",
+    tier: { unverified: "还没复核", "machine-confirmed": "机器确认", "human-reviewed": "人工复核" },
+    by: (by: string, ago: string) => `${by} · ${ago}`,
+    confirm: "确认仍然成立",
+    confirming: "正在确认…",
+    confirmTip: "对照它依据的材料，确认它说的仍然成立。会记下确认人和时间，落后标记也会消失",
+    confirmed: "已确认",
+    conflict: "它刚被改过，请再看一眼再确认",
   },
   props: {
     versions: "版本",
@@ -271,11 +317,12 @@ const zh = {
     publishTip: "发布后正文和来源就固定了，接收之前还能换栏",
     loading: "正在读取…",
     saving: "正在保存…",
-    saved: "已存进工作区",
-    notSaved: "没存上，稍后会再试",
+    saved: "已保存在浏览器",
+    localOnly: "只留在当前页面，刷新会丢失",
   },
   page: {
     props: "属性",
+    outputs: "产出",
     versions: "版本",
     versionsNote: "点一个版本看它改了什么",
     attachTip: "放进正在写的草稿；没有草稿就在公共区写一张",
@@ -330,9 +377,8 @@ const zh = {
     reorder: "拖动调整顺序",
     changedAgo: (ago: string) => `${ago}改过`,
     slot: "从左边目录拖 Node 进来，或在 Node 页点“放进 Card”",
-    draftNoteLead: "草稿存在工作区里，",
-    draftNote:
-      "Agent 和别的窗口都看得到，但还不能接收。发布后正文和来源就固定了，放在哪一栏还能换。",
+    draftNoteLead: "未发送内容只保存在这个浏览器里，",
+    draftNote: "按工作区分别保留，刷新后可以继续。发出后正文和来源就固定了，接收前还能转交。",
   },
   reader: {
     label: "阅读",
@@ -426,8 +472,18 @@ const en: Messages = {
     noBody: "No text yet.",
     noSummary: "No summary yet.",
   },
-  cardState: { pending: "Pending", consumed: "Received", interrupted: "Interrupted" },
+  cardProgress: {
+    pending: "Pending",
+    "received-no-output": "Received, no output yet",
+    "has-output": "Has output",
+    partial: "Some outputs still missing",
+  },
+  cardReception: { pending: "Pending", consumed: "Received" },
   side: {
+    sign: "Sign as",
+    signTip:
+      "The name recorded when you save or confirm here; empty uses this computer's user name",
+    signPlaceholder: "OS user name",
     nav: "Navigation",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
@@ -473,7 +529,7 @@ const en: Messages = {
     role: (title) => `Role ${title}`,
   },
   map: {
-    handed: (role, cards, waiting, old) =>
+    handed: (role, cards, waiting, old, outputs, goalCount, totalGoalCount) =>
       [
         cards > 0 &&
           (role
@@ -484,6 +540,8 @@ const en: Messages = {
             ? `${count(waiting, "Card")} waiting for ${role}`
             : `${count(waiting, "Card")} unclaimed in the public area`),
         old && "one pins an older version",
+        outputs > 0 && `${count(outputs, "Card")} with output`,
+        totalGoalCount > 1 && `${goalCount}/${totalGoalCount} goals with output`,
       ]
         .filter(Boolean)
         .join("; "),
@@ -495,6 +553,16 @@ const en: Messages = {
     children: (n) => count(n, "child", "children"),
     cites: (n) => `cites ${n}`,
     citedBy: (n) => `cited by ${n}`,
+    flagsLabel: "Nodes that need attention",
+    flagStep: "Select each in turn",
+    behindCount: (n) => `${n} behind`,
+    aheadCount: (n) => `${n} ahead`,
+    behindWhy: (reasons) =>
+      `Behind: ${names(reasons, ", ")}${reasons.length > 2 ? ` and ${reasons.length - 2} more` : ""} changed`,
+    behindNext: "Review those materials, then confirm to clear the mark",
+    aheadWhy: (since) =>
+      since ? `Ahead: recorded ${since}, no output yet` : "Ahead: no output yet",
+    aheadNext: "Once something is made, add an output under it",
     commitOnlyOther: "This commit only changed Roles, Cards or other files",
     commitSummary: (added, changed, names) =>
       `${[added > 0 && `${added} added`, changed > 0 && `${changed} changed`].filter(Boolean).join(" · ")}: ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` and ${names.length - 2} more` : ""}`,
@@ -563,6 +631,21 @@ const en: Messages = {
     fromLine: (line: number) => `From line ${line}`,
     showAll: (n) => `Show all ${count(n, "version")}`,
     showFewer: "Show only the latest",
+  },
+  review: {
+    label: "Review",
+    tier: {
+      unverified: "Not reviewed",
+      "machine-confirmed": "Machine-confirmed",
+      "human-reviewed": "Human-reviewed",
+    },
+    by: (by, ago) => `${by} · ${ago}`,
+    confirm: "Confirm it still holds",
+    confirming: "Confirming…",
+    confirmTip:
+      "Check it against its materials and confirm it still holds. Records who and when, and clears the behind mark",
+    confirmed: "Confirmed",
+    conflict: "It just changed; take another look before confirming",
   },
   props: {
     versions: "Versions",
@@ -650,11 +733,12 @@ const en: Messages = {
       "Publishing fixes the text and sources; until it is received it can still change lanes",
     loading: "Loading…",
     saving: "Saving…",
-    saved: "Saved in the workspace",
-    notSaved: "Not saved; will retry",
+    saved: "Saved in this browser",
+    localOnly: "Kept on this page only; refreshing will lose it",
   },
   page: {
     props: "Properties",
+    outputs: "Outputs",
     versions: "Versions",
     versionsNote: "Open a version to see what it changed",
     attachTip: "Put it in the draft being written, or start one in the public area",
@@ -710,9 +794,9 @@ const en: Messages = {
     reorder: "Drag to reorder",
     changedAgo: (ago) => `changed ${ago}`,
     slot: "Drag Nodes in from the contents, or use “Put in a Card” on a Node page",
-    draftNoteLead: "Drafts are kept in the workspace. ",
+    draftNoteLead: "Unsent contents stay in this browser. ",
     draftNote:
-      "Agents and other windows can see them, but they cannot be received yet. Publishing fixes the text and sources; the lane can still change.",
+      "They are kept separately for each workspace and survive refreshes. Sending fixes the text and sources; the lane can change until reception.",
   },
   reader: {
     label: "Reading",

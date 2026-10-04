@@ -355,6 +355,9 @@ body.is-dragging .row .acts { display: none !important; }
 .settings-pop { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 30; display: flex; flex-direction: column; gap: 10px; width: max-content; padding: 12px; border-radius: 11px; background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow-lg); }
 .sidebar.is-rail .settings-pop { left: calc(100% + 8px); bottom: 0; }
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; font-size: 12.5px; color: var(--text-2); }
+.settings-input { width: 150px; height: 28px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 12.5px; }
+.settings-input::placeholder { color: var(--text-3); }
+.settings-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 
 /* Dragging a Node or a Card: what is carried follows the pointer. */
 body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select: none; }
@@ -405,6 +408,14 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .mcard-tag { flex: none; font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
 .mcard.is-deprecated .mcard-name { text-decoration: line-through; color: var(--text-3); }
 .mcard.is-deprecated > .tile { filter: grayscale(1); opacity: .55; }
+/* Only Nodes that need attention are marked. Ahead: intent with no output yet, a dashed blue outline. Behind: its materials moved on, amber with a bar. */
+.mcard.is-ahead { border: 1.5px dashed var(--new); }
+.mcard.is-behind { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); background: var(--warn-soft); box-shadow: inset 3px 0 0 var(--warn), var(--shadow-xs); }
+.mcard.is-behind:hover { border-color: var(--warn); }
+.mcard.is-ahead.is-behind:not(.is-selected) { border-color: var(--new); }
+.mcard.is-behind.is-dim { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 40%, transparent); }
+.mcard.is-ahead.is-selected, .mcard.is-behind.is-selected { border-color: var(--accent); }
+.mcard.is-behind.is-selected { box-shadow: inset 3px 0 0 var(--warn), 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 /* The lanes it went to in Cards, overlapping a little. Waiting to be received: a blue ring and an envelope;
    amber when the waiting Card pinned an older version. */
 .mcard-faces { display: flex; flex: none; align-items: center; }
@@ -418,6 +429,7 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .mcard-face.is-old > :is(.pet, .pub-face) { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px var(--warn) !important; }
 .face-env { position: absolute; right: -5px; bottom: -4px; display: grid; place-items: center; width: 12px; height: 12px; border-radius: 50%; background: var(--new); color: #fff; box-shadow: 0 0 0 1.5px var(--bg); }
 .face-env .icon { stroke-width: 3; }
+.face-progress { width: auto; min-width: 22px; padding: 0 3px; border-radius: 5px; font-size: 8px; font-style: normal; }
 .mcard-face.is-old .face-env { background: var(--warn); }
 .mcard-more { flex: none; margin-left: 4px; font-size: 11px; color: var(--text-3); }
 /* Its number in the draft being written, pinned to the corner like the tree's. */
@@ -465,6 +477,17 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .map-peek.is-above { transform: translateY(-100%); }
 .map-peek p { margin: 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .map-peek-meta { margin-top: 6px; font-size: 11.5px; color: var(--text-3); }
+.map-peek-flag { display: grid; gap: 1px; margin: -2px -4px 8px; padding: 6px 8px; border-radius: 7px; font-size: 12px; line-height: 1.5; }
+.map-peek-flag b { font-weight: 600; }
+.map-peek-flag span { color: var(--text-2); }
+.map-peek-flag.is-behind { background: var(--warn-soft); } .map-peek-flag.is-behind b { color: var(--warn); }
+.map-peek-flag.is-ahead { background: var(--new-soft); } .map-peek-flag.is-ahead b { color: var(--new); }
+.map-flags { top: 12px; left: 12px; display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 4px; white-space: nowrap; }
+.map-flag { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: 7px; font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.map-flag:hover { background: var(--hover); color: var(--text); }
+.map-flag-sw { flex: none; width: 13px; height: 10px; border-radius: 3px; }
+.map-flag.is-behind .map-flag-sw { background: var(--warn-soft); border: 1px solid var(--warn); box-shadow: inset 3px 0 0 var(--warn); }
+.map-flag.is-ahead .map-flag-sw { background: var(--new-soft); border: 1.5px dashed var(--new); }
 @keyframes peek-in { from { opacity: 0; } }
 
 /* The toolbar, bottom centre: type filters | map modes | zoom | legend. */
@@ -550,6 +573,17 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .prop-none, .prop-text { padding: 0 8px; font-size: 12.5px; color: var(--text-3); }
 .prop-text { color: var(--text-2); }
 .prop .pill { margin-left: 8px; }
+/* Review: who checked this Node against its materials, and the way to say it still holds. */
+.review { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 5px 8px; font-size: 12.5px; line-height: 1.5; }
+.review-why { color: var(--warn); }
+.review-tier { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px; color: var(--text); }
+.review-tier.is-unverified { color: var(--text-3); }
+.review-by { color: var(--text-3); font-size: 12px; }
+.review-confirm { display: inline-flex; align-items: center; gap: 6px; height: 26px; margin: 2px 0 0 -8px; padding: 0 8px; border-radius: 7px; color: var(--text-2); font-size: 12.5px; }
+.review-confirm:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.review-confirm.is-behind { margin-left: 0; color: var(--warn); background: var(--warn-soft); }
+.review-confirm.is-behind:hover:not(:disabled) { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, var(--warn-soft)); }
+.review-confirm:disabled { opacity: .5; cursor: default; }
 .ref-link { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; height: 28px; padding: 0 8px; border-radius: 7px; font-size: 12.5px; text-align: left; color: var(--text); transition: background .12s; }
 .ref-link > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button.ref-link:hover, span.ref-link:hover { background: var(--hover); }
@@ -603,7 +637,6 @@ button.ref-link:hover, span.ref-link:hover { background: var(--hover); }
 .pill-recent, .pill-pending { background: var(--new-soft); color: var(--new); }
 .pill-drift { background: var(--warn-soft); color: var(--warn); }
 .pill-consumed { background: var(--output-soft); color: var(--output); }
-.pill-interrupted { background: var(--del-bg); color: var(--del-ink); }
 
 /* ---------- pages: an object read and written over the map ---------- */
 /* A thin bar with where it sits and what to do; a title block; the text in a readable measure with a rail

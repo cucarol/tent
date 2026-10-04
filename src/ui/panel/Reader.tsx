@@ -10,7 +10,7 @@ import {
   type RefObject,
   type UIEvent,
 } from "react";
-import { api, ApiError, describe } from "../data/api.js";
+import { api, ApiError, describe, type NodeDocument } from "../data/api.js";
 import { cardTitle, primaryOf, suffixOf, type Graph } from "../data/store.js";
 import type {
   SnapshotCard,
@@ -20,11 +20,22 @@ import type {
   SnapshotRole,
 } from "../data/types.js";
 import { editDraft, isDraft, useDraft } from "../data/drafts.js";
+import { cardProgressLabel } from "../data/card-progress.js";
 import { nodeDrafts as drafts } from "../data/node-drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { Pet, turnPet } from "../components/Pet.js";
 import { Markdown } from "../components/Markdown.js";
-import { FileDiff, History, MaterialName, NodeProps, Patch, PropRow, RefLink } from "./Details.js";
+import {
+  FileDiff,
+  History,
+  MaterialName,
+  NodeProps,
+  Patch,
+  PropRow,
+  RefLink,
+  ReviewRow,
+} from "./Details.js";
+import { useFlags } from "../data/flags.js";
 import { Letter, saveState } from "../shell/Sidebar.js";
 import { beginDrag, useDragState } from "../shell/drag.js";
 import { draftTitle, PUBLIC, sourceIds, type Work } from "../shell/work.js";
@@ -372,13 +383,7 @@ function CardLine({
               <span className="dot-sep">·</span>
             </>
           )}
-          {draft
-            ? t.work.draft
-            : waiting
-              ? `${lane === PUBLIC ? t.work.unclaimed : t.work.waiting} · ${ago(card.publishedAt)}`
-              : card.state === "interrupted"
-                ? t.cardState.interrupted
-                : ago(card.publishedAt)}
+          {draft ? t.work.draft : `${cardProgressLabel(card)} · ${ago(card.publishedAt)}`}
         </span>
       </span>
     </button>
@@ -469,6 +474,7 @@ type Base = { etag: string; body: string };
 
 function NodePage(props: PageProps & { node: SnapshotNode }) {
   const { graph, node, work, narrow, startEditing, onOpen, onExpand, onLocate, onToast } = props;
+  const flags = useFlags();
   const panel = props.mode === "panel";
   const kept = drafts.get(node.id);
   const [editing, setEditing] = useState(() => startEditing || !!kept?.editing);
@@ -479,6 +485,31 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
   const [conflict, setConflict] = useState<Base | null>(null);
   const [showDiff, setShowDiff] = useState(false);
   const [saving, setSaving] = useState(false);
+  const version = node.history[0];
+  const [read, setRead] = useState<{
+    doc: NodeDocument;
+    body: string;
+    version: string | undefined;
+  } | null>(null);
+  const doc =
+    read?.doc.nodeId === node.id && read.body === node.body && read.version === version
+      ? read.doc
+      : null;
+  const acceptRead = (doc: NodeDocument) => setRead({ doc, body: node.body, version });
+  useEffect(() => {
+    let live = true;
+    api.node(node.id).then(
+      (doc) => live && acceptRead(doc),
+      (error) => {
+        if (!live) return;
+        setRead(null);
+        onToast(describe(error));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [node.id, node.body, version]);
   // What was just saved shows until the refreshed map catches up.
   const [savedBody, setSavedBody] = useState<string | null>(null);
   const [editorKey, setEditorKey] = useState(0);
@@ -541,7 +572,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
   };
   const state = graph.states.get(node.id)!;
   const p = primaryOf(node.type);
-  const body = draft ?? savedBody ?? node.body;
+  const body = draft ?? savedBody ?? doc?.body ?? node.body;
   const stopEditing = () => {
     setDraft(null);
     setBase(null);
@@ -791,6 +822,14 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
           <>
             <RailSection title={t.page.props}>
               <NodeProps graph={graph} node={node} onOpen={onOpen}>
+                <ReviewRow
+                  node={node}
+                  doc={doc}
+                  disabled={editing || draft !== null || saving || savedBody !== null}
+                  flag={flags[node.id]}
+                  onRead={acceptRead}
+                  onToast={onToast}
+                />
                 <PropRow label="id">
                   <CopyId id={node.id} onToast={onToast} />
                 </PropRow>
@@ -975,13 +1014,7 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
       .reverse();
   };
   const open = since === null ? undefined : card.sources[since];
-  const status = pending
-    ? lane === PUBLIC
-      ? t.work.unclaimed
-      : t.work.waiting
-    : card.state === "interrupted"
-      ? t.cardState.interrupted
-      : t.page.receivedBy(laneName);
+  const status = cardProgressLabel(card);
   return (
     <>
       <PageTop
@@ -1021,9 +1054,7 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
                 <>
                   <b>Card</b>
                   <span className="dot-sep">·</span>
-                  <span
-                    className={`pill ${pending ? "pill-pending" : card.state === "interrupted" ? "pill-interrupted" : "pill-consumed"}`}
-                  >
+                  <span className={`pill ${pending ? "pill-pending" : "pill-consumed"}`}>
                     {status}
                   </span>
                 </>
@@ -1046,15 +1077,9 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
               />
               <Line todo={pending} />
               <Step
-                state={pending ? "todo" : card.state === "interrupted" ? "done" : "ok"}
+                state={pending ? "todo" : "ok"}
                 dot={<Icon name="check" size={15} />}
-                title={
-                  pending
-                    ? t.page.receive
-                    : card.state === "interrupted"
-                      ? t.cardState.interrupted
-                      : t.page.receivedBy(laneName)
-                }
+                title={pending ? t.page.receive : t.page.receivedBy(laneName)}
                 sub={pending ? t.page.thenFixed : when(card.updatedAt)}
               />
             </div>
@@ -1076,6 +1101,13 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
                 )}
               </div>
             </Section>
+            {card.outputNodeIds.length > 0 && (
+              <Section title={t.page.outputs}>
+                {card.outputNodeIds.map((id) => (
+                  <RefLink key={id} graph={graph} target={{ kind: "node", id }} onOpen={onOpen} />
+                ))}
+              </Section>
+            )}
             {open?.version && (
               <Section
                 title={t.page.sourceChanges(
@@ -1379,7 +1411,7 @@ function DraftPage(props: PageProps & { card: SnapshotCard }) {
                 aria-label={t.work.what}
                 onChange={(e) => {
                   const prompt = e.target.value;
-                  editDraft(card.id, (input) => ({ ...input, prompt }), true);
+                  editDraft(card.id, (input) => ({ ...input, prompt }));
                 }}
               />
             </Section>

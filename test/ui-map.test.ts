@@ -14,6 +14,7 @@ import { nearest, refPath } from "../src/ui/map/geometry.js";
 import { routeLinks, type Pt } from "../src/ui/map/route.js";
 import { ago, relativeHref, resolveHref, workspaceImagePath } from "../src/ui/util.js";
 import { setLang } from "../src/ui/i18n.js";
+import { cardProgressLabel } from "../src/ui/data/card-progress.js";
 import { petTraits } from "../src/ui/components/Pet.js";
 
 setLang("zh", false);
@@ -121,7 +122,7 @@ test("a Role belongs to the Nodes it links to and the Nodes that link to it", ()
   assert.deepEqual(graph.rolesOf("z"), []);
 });
 
-/** A Card carrying Nodes; published unless it has no history. [id, changed since] per source. */
+/** A sent Card carrying Nodes. [id, changed since] per source. */
 function card(
   id: string,
   lane: { target?: string; receivedBy?: string },
@@ -133,6 +134,10 @@ function card(
     id,
     title: id,
     state,
+    progress: null,
+    goalCount: 0,
+    totalGoalCount: 0,
+    outputNodeIds: [],
     target: lane.target ?? null,
     receivedBy: lane.receivedBy ?? null,
     status: "stable",
@@ -157,22 +162,115 @@ test("a Node's faces are the lanes its published Cards went to, Roles first, wit
     [role("role-x"), role("role-y")],
     [
       card("c1", { receivedBy: "role-y" }, "consumed", [["a", false]]),
-      card("c2", { target: "role-y", receivedBy: "role-y" }, "interrupted", [
+      card("c2", { target: "role-y", receivedBy: "role-y" }, "consumed", [
         ["a", false],
         ["b", false],
       ]),
       card("c3", { target: "role-x" }, "pending", [["a", true]]),
       card("c4", {}, "pending", [["a", false]]),
       // A draft has handed nothing to anyone yet.
-      card("d1", { target: "role-x" }, "pending", [["b", false]], []),
+      card("local-card-d1", { target: "role-x" }, "pending", [["b", false]], []),
     ],
   );
   assert.deepEqual(graph.handedTo("a"), [
-    { lane: "role-x", cards: 0, waiting: 1, old: true },
-    { lane: "role-y", cards: 2, waiting: 0, old: false },
-    { lane: "", cards: 0, waiting: 1, old: false },
+    {
+      lane: "role-x",
+      cards: 0,
+      waiting: 1,
+      outputs: 0,
+      goalCount: 0,
+      totalGoalCount: 0,
+      old: true,
+    },
+    {
+      lane: "role-y",
+      cards: 2,
+      waiting: 0,
+      outputs: 0,
+      goalCount: 0,
+      totalGoalCount: 0,
+      old: false,
+    },
+    { lane: "", cards: 0, waiting: 1, outputs: 0, goalCount: 0, totalGoalCount: 0, old: false },
   ]);
-  assert.deepEqual(graph.handedTo("b"), [{ lane: "role-y", cards: 1, waiting: 0, old: false }]);
+  assert.deepEqual(graph.handedTo("b"), [
+    {
+      lane: "role-y",
+      cards: 1,
+      waiting: 0,
+      outputs: 0,
+      goalCount: 0,
+      totalGoalCount: 0,
+      old: false,
+    },
+  ]);
+});
+
+test("Card output progress is reflected on each carried Node without counting repeated sources twice", () => {
+  const sent = card("sent", { receivedBy: "role-x" }, "consumed", [
+    ["a", false],
+    ["a", false],
+  ]);
+  sent.progress = "has-output";
+  sent.goalCount = 1;
+  sent.totalGoalCount = 1;
+  sent.outputNodeIds = ["result"];
+  const graph = graphOf([node("a", null), node("result", null)], [role("role-x")], [sent]);
+  assert.deepEqual(graph.handedTo("a"), [
+    {
+      lane: "role-x",
+      cards: 1,
+      waiting: 0,
+      outputs: 1,
+      goalCount: 1,
+      totalGoalCount: 1,
+      old: false,
+    },
+  ]);
+});
+
+test("goal-free Cards show only reception while partial multi-goal Cards show a completion ratio", () => {
+  setLang("en", false);
+  const sent = card("sent", {}, "consumed", []);
+  assert.equal(cardProgressLabel(sent), "Received");
+  assert.equal(cardProgressLabel({ ...sent, state: "pending" }), "Pending");
+  const partial = {
+    ...sent,
+    progress: "received-no-output" as const,
+    goalCount: 1,
+    totalGoalCount: 2,
+  };
+  assert.equal(cardProgressLabel(partial), "Some outputs still missing · 1/2");
+  assert.equal(cardProgressLabel({ ...partial, goalCount: 0 }), "Received, no output yet · 0/2");
+  assert.equal(
+    cardProgressLabel({ ...partial, goalCount: 2, progress: "has-output" }),
+    "Has output · 2/2",
+  );
+  setLang("zh", false);
+});
+
+test("map badges keep partial goal counts without treating a Card as completed", () => {
+  const partial = card("partial", { receivedBy: "role-x" }, "consumed", [
+    ["a", false],
+    ["a", false],
+  ]);
+  partial.progress = "received-no-output";
+  partial.goalCount = 1;
+  partial.totalGoalCount = 2;
+  partial.outputNodeIds = ["result"];
+  const referenceOnly = card("reference", { receivedBy: "role-x" }, "consumed", [["a", false]]);
+  const graph = graphOf([node("a", null)], [role("role-x")], [partial, referenceOnly]);
+  assert.deepEqual(graph.handedTo("a"), [
+    {
+      lane: "role-x",
+      cards: 2,
+      waiting: 0,
+      outputs: 0,
+      goalCount: 1,
+      totalGoalCount: 2,
+      old: false,
+    },
+  ]);
 });
 
 test("a repeated Node source counts its Card once and keeps drift from any of its versions", () => {
@@ -190,7 +288,17 @@ test("a repeated Node source counts its Card once and keeps drift from any of it
       ]),
     ],
   );
-  assert.deepEqual(graph.handedTo("a"), [{ lane: "role-x", cards: 1, waiting: 1, old: true }]);
+  assert.deepEqual(graph.handedTo("a"), [
+    {
+      lane: "role-x",
+      cards: 1,
+      waiting: 1,
+      outputs: 0,
+      goalCount: 0,
+      totalGoalCount: 0,
+      old: true,
+    },
+  ]);
 });
 
 test("a Card source names its Node or Role from the Tent root or from cards/", () => {

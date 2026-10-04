@@ -4,6 +4,7 @@ import type { SnapshotRef } from "../data/types.js";
 import { CardGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
 import { isDraft } from "../data/drafts.js";
+import { cardProgressLabel } from "../data/card-progress.js";
 import { t } from "../i18n.js";
 
 type Item = { ref: SnapshotRef; name: string; sub: string; hay: string; kindLabel: string };
@@ -27,7 +28,7 @@ function items(graph: Graph): Item[] {
     ...graph.snapshot.cards.map((c) => ({
       ref: { kind: "card" as const, id: c.id },
       name: cardTitle(c),
-      sub: `${isDraft(c) ? t.work.draft : t.cardState[c.state]} · ${c.id}`,
+      sub: `${isDraft(c) ? t.work.draft : cardProgressLabel(c)} · ${c.id}`,
       hay: `${c.title} ${c.id} ${c.body}`.toLowerCase(),
       kindLabel: "card",
     })),

@@ -1,3 +1,4 @@
+import { inspectWorkspaceSync } from "../core/node-sync.js";
 // The local service behind `tent ui`: serves the bundled Web UI and a small JSON API over Core.
 // Its contract is the Tent Node "Web界面服务接口"; it is not a public protocol.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -7,10 +8,6 @@ import { userInfo } from "node:os";
 import * as path from "node:path";
 import {
   createCardDocument,
-  createCardDraft,
-  writeCardDraft,
-  deleteCardDraft,
-  publishCardDocument,
   moveCardDocument,
   readCardDocument,
   CardDocumentError,
@@ -162,10 +159,23 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     const route = `${method} ${url.pathname}`;
     const nodeId = /^\/api\/nodes\/([^/]+)$/.exec(url.pathname)?.[1];
     const nodeConfirmId = /^\/api\/nodes\/([^/]+)\/confirm$/.exec(url.pathname)?.[1];
-    const cardRoute = /^\/api\/cards\/([^/]+)(?:\/(move|publish))?$/.exec(url.pathname);
+    const cardRoute = /^\/api\/cards\/([^/]+)(?:\/(move))?$/.exec(url.pathname);
 
     if (route === "GET /api/revision")
       return json(res, 200, { revision: await readWorkspaceRevision(fs) });
+    if (route === "GET /api/sync") {
+      const sync = await inspectWorkspaceSync(fs);
+      return json(res, 200, {
+        nodes: Object.fromEntries(
+          sync.nodes
+            .filter((n) => n.ahead || n.behind)
+            .map((n) => [
+              n.nodeId,
+              { ...(n.ahead ? { ahead: n.ahead } : {}), ...(n.behind ? { behind: n.behind } : {}) },
+            ]),
+        ),
+      });
+    }
     if (route === "GET /api/snapshot") {
       const current = await snapshot();
       const etag = `"${current.workspace.revision}"`;
@@ -239,33 +249,28 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         throw error;
       }
     }
-    if (cardRoute && !(method === "POST" && cardRoute[1] === "drafts")) {
+    if (cardRoute) {
       const id = decodeURIComponent(cardRoute[1]!);
       const action = cardRoute[2];
       if (method === "GET" && !action) return json(res, 200, await readCardDocument(fs, id));
-      if (((method === "PUT" || method === "DELETE") && !action) || (method === "POST" && action)) {
+      if (method === "POST" && action) {
         const input = record(await readJson(req, BODY_LIMIT.document));
-        const expectedEtag = requiredString(input.baseEtag, "baseEtag");
         return json(
           res,
           200,
           await serial(async () => {
-            if (method === "DELETE") return deleteCardDraft(fs, id, expectedEtag);
-            if (action === "publish") return publishCardDocument(fs, id, expectedEtag);
-            if (action === "move")
-              return moveCardDocument(fs, id, {
-                expectedEtag,
-                target: input.target === null ? null : requiredString(input.target, "target"),
-              });
-            return writeCardDraft(fs, id, { ...cardInput(input), expectedEtag });
+            const expectedEtag = requiredString(input.baseEtag, "baseEtag");
+            return moveCardDocument(fs, id, {
+              expectedEtag,
+              target: input.target === null ? null : requiredString(input.target, "target"),
+            });
           }),
         );
       }
     }
-    if (route === "POST /api/cards" || route === "POST /api/cards/drafts") {
+    if (route === "POST /api/cards") {
       const input = record(await readJson(req, BODY_LIMIT.document));
-      const create = route.endsWith("/drafts") ? createCardDraft : createCardDocument;
-      return json(res, 200, await serial(async () => create(fs, cardInput(input))));
+      return json(res, 200, await serial(async () => createCardDocument(fs, cardInput(input))));
     }
     if (route === "GET /api/history/document")
       return json(res, 200, await readDocumentVersion(fs, versionParam(url, "at")));

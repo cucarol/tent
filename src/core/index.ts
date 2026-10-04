@@ -14,6 +14,7 @@ export * from "./id.js";
 export * from "./ops.js";
 export * from "./etag.js";
 export * from "./card-document.js";
+export * from "./card-progress.js";
 export * from "./role-context.js";
 export * from "./node-query.js";
 export * from "./node-document-write.js";

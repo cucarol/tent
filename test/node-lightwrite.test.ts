@@ -305,8 +305,20 @@ test("real CLI processes queue concurrent append and section stdin edit reports 
   t.diagnostic(
     `Concurrent CLI initial exit codes: ${results.map((result) => result.code).join(", ")}`,
   );
+  assert.ok(results.some((result) => result.code === 0));
   for (let i = 0; i < results.length; i++) {
-    const result = results[i]!;
+    let result = results[i]!;
+    if (result.code !== 0) {
+      assert.equal(result.code, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /^Tent is already running another write operation; try again later\.\s*$/,
+      );
+      assert.ok(!(await readNodeForEdit(adapter, "node-note")).body.includes(payloads[i]!));
+      // The acquisition deadline can expire on a loaded host. Both contenders have
+      // settled, so one caller retry must append the previously rejected input once.
+      result = await cli(root, "node", "append", "node-note", "--body", payloads[i]!, "--json");
+    }
     assert.equal(result.code, 0, result.stderr);
     const saved = JSON.parse(result.stdout);
     assert.match(saved.etag, /^[a-f0-9]{24}$/);

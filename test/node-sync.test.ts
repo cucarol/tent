@@ -253,6 +253,53 @@ test("nearest goal ownership, subtree output presence and deprecated outputs are
   assert.ok(inspection.requirementsWithoutOutputs.includes(child));
 });
 
+test("a goal counts ahead and behind independently and each cause resolves separately", async (t) => {
+  const { fs, env, resource, workspace, edit } = await fixture(t);
+  const goal = await createNode(env, {
+    parentPath: "",
+    name: "Goal",
+    type: "goal",
+    sources: [{ resource }],
+  });
+  await writeFile(path.join(workspace, "input.txt"), "input v2");
+  let inspected = await inspectWorkspaceSync(fs);
+  let result = inspected.nodes.find((node) => node.nodeId === goal)!;
+  assert.ok(result.ahead && result.behind);
+  assert.deepEqual(inspected.counts, { synced: 0, ahead: 1, behind: 1, unanchored: 0 });
+  assert.match(result.behind.reasons.join("; "), /Material changed/);
+  assert.deepEqual(result.ahead.reasons, ["Goal subtree has no current output Node"]);
+  assert.equal(result.ahead.since, result.aheadSince);
+  await edit(goal, { body: "ordinary change" });
+  assert.ok((await inspectNodeSync(fs, goal)).behind, "ordinary save cannot clear behind");
+  const output = await linkNodeOutput(fs, goal, { resource: "output.txt" });
+  result = await inspectNodeSync(fs, goal);
+  assert.ok(result.behind);
+  assert.equal(result.ahead, undefined, "a current output resolves only ahead");
+  await edit(goal, { body: "new requirement" });
+  result = await inspectNodeSync(fs, goal);
+  assert.ok(result.behind && result.ahead);
+  assert.deepEqual(result.ahead.reasons, ["Owned output is behind the current goal version"]);
+  const read = await readNodeForEdit(fs, goal);
+  await confirmNodeSync(fs, goal, { baseEtag: read.etag });
+  result = await inspectNodeSync(fs, goal);
+  assert.equal(result.behind, undefined);
+  assert.ok(result.ahead, "confirming goal material does not confirm its output");
+  await edit(output.nodeId, { confirm: true });
+  result = await inspectNodeSync(fs, goal);
+  assert.equal(result.behind, undefined);
+  assert.equal(result.ahead, undefined);
+});
+
+test("an expired goal without Git or outputs has both flags and unknown ahead time", async (t) => {
+  const { fs, create, edit } = await fixture(t, false);
+  const goal = await create("Expired", "goal");
+  await edit(goal, { frontmatter: { stale_after: "2020-01-01T00:00:00Z" } });
+  const result = await inspectNodeSync(fs, goal);
+  assert.ok(result.ahead && result.behind);
+  assert.equal(result.ahead.since, undefined);
+  assert.match(result.behind.reasons[0]!, /stale/);
+});
+
 test("ordinary saves retain changed and unreadable material versions; only new declarations get a baseline", async (t) => {
   const { fs, workspace, env, resource, edit } = await fixture(t);
   const id = await createNode(env, {

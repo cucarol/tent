@@ -3,15 +3,13 @@ import { NodeFs } from "../fs/node-fs.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
 import {
   createCardDocument,
-  publishCardDocument,
   readCardDocument,
-  transitionCardDocument,
+  takeCardDocument,
   listCardDocuments,
   moveCardDocument,
   deprecateCardDocument,
   type CardDocumentState,
 } from "../core/card-document.js";
-import { cardRecordPath } from "../core/paths.js";
 import { pageItems, pageText, formatTextPage } from "./reader-page.js";
 
 export type CardCommandOptions = {
@@ -30,20 +28,7 @@ export async function runCardCommand(
   if (!sub || ["help", "--help", "-h"].includes(sub) || args.includes("--help"))
     return { exitCode: 0, stdout: cardHelpText(sub), stderr: "" };
   try {
-    if (
-      ![
-        "create",
-        "publish",
-        "move",
-        "deprecate",
-        "list",
-        "get",
-        "show",
-        "take",
-        "interrupt",
-        "continue",
-      ].includes(sub)
-    )
+    if (!["create", "move", "deprecate", "list", "get", "show", "take"].includes(sub))
       throw new Error(`Unknown card command: ${sub}`);
     const fields = [
       "workspace",
@@ -51,13 +36,13 @@ export async function runCardCommand(
         ? ["prompt", "title", "target", "id"]
         : sub === "move"
           ? ["to", "base-etag"]
-          : ["publish", "deprecate"].includes(sub)
+          : sub === "deprecate"
             ? ["base-etag"]
             : sub === "list"
               ? ["role", "state", "start", "limit", "expected-revision"]
               : ["show", "get"].includes(sub)
                 ? ["view", "start", "end", "expected-etag"]
-                : ["role", ...(sub === "take" ? [] : ["commit"])]),
+                : ["role"]),
     ];
     const { values, positionals } = parseArgs({
       args,
@@ -69,7 +54,6 @@ export async function runCardCommand(
         ...(sub === "list"
           ? {
               "include-open": { type: "boolean" } as const,
-              "include-drafts": { type: "boolean" } as const,
               "include-deprecated": { type: "boolean" } as const,
             }
           : {}),
@@ -89,14 +73,9 @@ export async function runCardCommand(
       throw new Error("Supply both --start and --end");
     if (["get", "show"].includes(sub) && number("start")! > 0 && !value("expected-etag"))
       throw new Error("--start after zero requires --expected-etag from the previous page");
-    if (
-      value("state") !== undefined &&
-      !["pending", "consumed", "interrupted"].includes(value("state")!)
-    )
+    if (value("state") !== undefined && !["pending", "consumed"].includes(value("state")!))
       throw new Error("Invalid --state");
-    if (["interrupt", "continue"].includes(sub) && !value("commit"))
-      throw new Error("Supply the observed Card --commit");
-    if (["publish", "deprecate"].includes(sub) && !value("base-etag"))
+    if (sub === "deprecate" && !value("base-etag"))
       throw new Error(`${sub} requires --base-etag from a raw read`);
     if (
       sub === "move" &&
@@ -132,8 +111,8 @@ export async function runCardCommand(
         target: value("target"),
         sources,
       });
-    } else if (sub === "publish") result = await publishCardDocument(fs, id, value("base-etag")!);
-    else if (sub === "deprecate") result = await deprecateCardDocument(fs, id, value("base-etag")!);
+    } else if (sub === "deprecate")
+      result = await deprecateCardDocument(fs, id, value("base-etag")!);
     else if (sub === "move")
       result = await moveCardDocument(fs, id, {
         target: values.public === true ? null : value("to")!,
@@ -145,7 +124,6 @@ export async function runCardCommand(
           roleId: value("role"),
           state: value("state") as CardDocumentState | undefined,
           includeOpen: values["include-open"] === true,
-          includeDrafts: values["include-drafts"] === true,
           includeDeprecated: values["include-deprecated"] === true,
         }),
         "card.list",
@@ -171,17 +149,7 @@ export async function runCardCommand(
         `card.${sub}:${id}`,
         { start: number("start"), end: number("end") },
       );
-    } else
-      result = pageText(
-        await transitionCardDocument(
-          fs,
-          id,
-          value("role"),
-          sub as "take" | "interrupt" | "continue",
-          value("commit") ? { commit: value("commit")!, path: cardRecordPath(id) } : undefined,
-        ),
-        `card.get:${id}`,
-      );
+    } else result = pageText(await takeCardDocument(fs, id, value("role")), `card.get:${id}`);
     const json = values.json === true || globals.json === true;
     return {
       exitCode: 0,
@@ -200,34 +168,43 @@ export async function runCardCommand(
 export function cardHelpText(_sub?: string) {
   return `tent card — recorded prompt input with optional Role context
   tent card create --prompt TEXT|- [--title TEXT] [--source PATH|JSON ...] [--target role-ID] [--id card-ID]
-  tent card list [--role role-ID --include-open] [--state pending|consumed|interrupted] [--include-drafts] [--include-deprecated]
+  tent card list [--role role-ID --include-open] [--state pending|consumed] [--include-deprecated]
                  [--start N --expected-revision HASH] [--limit N]
   tent card show card-ID [--view body|raw] [--start N --end N --expected-etag HASH]
-  tent card publish card-ID --base-etag HASH
   tent card move card-ID (--to role-ID | --public) --base-etag HASH
   tent card deprecate card-ID --base-etag HASH
   tent card take card-ID [--role role-ID]
-  tent card interrupt card-ID [--role role-ID] --commit COMMIT
-  tent card continue card-ID [--role role-ID] --commit COMMIT
 All commands accept --workspace PATH and --json. CLI output is paged; Core returns complete data.
 Sources keep their order. Selected Node/Role sources retain commit/path; external sources are addresses only.
 Show is a preview; take records reception and returns an input page. A replay is not a new execution.
 Use page.next for long input. Put requirements in Nodes; a Card briefly points to them. Update Nodes when requirements change.
-Automatic interruption is unavailable until a native host connection has been qualified.
 Targeted Cards require their Role; untargeted Cards can be received without one.
-Only published pending Cards can move. Drafts are excluded by default and from --state queries.
+Only published pending Cards can move. Requirements awaiting a decision belong in Nodes marked status: draft.
 Cancelled published tasks can be deprecated without changing their input or reception. Deprecated Cards are excluded from lists by default.
 `;
 }
 
 function formatCard(value: unknown, sub: string) {
-  if (["show", "get", "take", "interrupt", "continue"].includes(sub)) {
+  if (["show", "get", "take"].includes(sub)) {
     const result = value as {
+      state?: string;
+      progress?: string | null;
+      goalCount?: number;
+      totalGoalCount?: number;
       notice?: string;
       currentReferences?: Array<{ kind: string; id: string; path: string }>;
       currentReferencesDiagnostic?: string;
     };
     return [
+      [
+        result.state,
+        result.progress,
+        (result.totalGoalCount ?? 0) > 1
+          ? `${result.goalCount}/${result.totalGoalCount}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("  "),
       result.notice,
       result.currentReferences?.map((ref) => `${ref.kind} ${ref.id}  ${ref.path}`).join("\n"),
       result.currentReferencesDiagnostic,
@@ -242,7 +219,9 @@ function formatCard(value: unknown, sub: string) {
         cardId: string;
         state?: string;
         status?: string;
-        draft?: boolean;
+        progress?: string | null;
+        goalCount?: number;
+        totalGoalCount?: number;
         title?: string;
         publishedAt?: string;
       }>;
@@ -253,7 +232,9 @@ function formatCard(value: unknown, sub: string) {
         .map((item) =>
           [
             item.cardId,
-            item.draft ? "draft" : item.state,
+            item.state,
+            item.progress,
+            (item.totalGoalCount ?? 0) > 1 ? `${item.goalCount}/${item.totalGoalCount}` : undefined,
             item.status === "deprecated" ? item.status : undefined,
             item.title,
             item.publishedAt,

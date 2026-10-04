@@ -6,7 +6,6 @@ import {
   createDraft,
   discardDraft,
   editDraft,
-  ensureDraft,
   isDraft,
   moveCard,
   publishDraft,
@@ -47,46 +46,26 @@ export function draftTitle(card: SnapshotCard | undefined, draft: Draft | null) 
   return line ?? t.work.untitled;
 }
 
-/** Stands in for the history of a Card published here until the workspace lists it. */
-const PUBLISHING = "publishing";
-
-function placeholder(id: string, draft: Draft): SnapshotCard {
-  return {
-    id,
-    title: "",
-    state: "pending",
-    target: draft.input.target,
-    receivedBy: null,
-    status: "stable",
-    body: draft.input.prompt,
-    sources: draft.input.sources.map((s) => ({
-      kind: "text",
-      resource: s.resource,
-      version: null,
-      changedSince: false,
-    })),
-    path: "",
-    history: [],
-    publishedAt: null,
-    updatedAt: null,
-  };
-}
-
 export function useWork(graph: Graph | null, toast: (text: string) => void) {
-  const [openDraft, setOpenDraftState] = useState<string | null>(() =>
-    readStored<string | null>("tent-open-draft", null),
-  );
-  // Moves and publications shown before the workspace catches up with them.
+  const [openDraft, setOpenDraftState] = useState<string | null>(null);
+  const workspaceId = graph?.snapshot.workspace.id;
+  const openKey = `tent-open-draft:${workspaceId}`;
+  useEffect(() => {
+    if (workspaceId) setOpenDraftState(readStored<string | null>(openKey, null));
+  }, [workspaceId]);
+  // Moves shown before the workspace catches up with them.
   const [moved, setMoved] = useState<ReadonlyMap<string, string>>(new Map());
-  const [published, setPublished] = useState<ReadonlyMap<string, string>>(new Map());
   // The lane a Card was last put in, so the sidebar can open it.
   const [publishing, setPublishing] = useState<string | null>(null);
   const [landed, setLanded] = useState<{ lane: string; at: number } | null>(null);
   const draft = useDraft(openDraft);
-  const setOpenDraft = useCallback((id: string | null) => {
-    setOpenDraftState(id);
-    writeStored("tent-open-draft", id);
-  }, []);
+  const setOpenDraft = useCallback(
+    (id: string | null) => {
+      setOpenDraftState(id);
+      writeStored(openKey, id);
+    },
+    [openKey],
+  );
 
   useEffect(() => {
     if (!graph) return;
@@ -95,41 +74,18 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
         ? new Map([...m].filter(([id, at]) => (graph.cards.get(id)?.target ?? PUBLIC) !== at))
         : m,
     );
-    setPublished((p) =>
-      p.size ? new Map([...p].filter(([id]) => !graph.cards.get(id)?.history.length)) : p,
-    );
-    // A draft published or deleted elsewhere stops being the one written here.
-    const open = openDraft ? graph.cards.get(openDraft) : undefined;
-    if (open && !isDraft(open)) setOpenDraft(null);
+    if (openDraft && !graph.cards.has(openDraft)) setOpenDraft(null);
   }, [graph]);
 
   const laneOf = useCallback(
     (card: SnapshotCard) => card.receivedBy ?? moved.get(card.id) ?? card.target ?? PUBLIC,
     [moved],
   );
-  /** A Card published here counts as published before the workspace lists it so. */
-  const shown = useCallback(
-    (c: SnapshotCard): SnapshotCard =>
-      published.has(c.id) && isDraft(c)
-        ? { ...c, history: [PUBLISHING], publishedAt: published.get(c.id)! }
-        : c,
-    [published],
-  );
-  const cardOf = useCallback(
-    (id: string) => {
-      const c = graph?.cards.get(id);
-      return c && shown(c);
-    },
-    [graph, shown],
-  );
   /** Cards still moving between lanes: drafts first, then the newest published ones. */
   const laneCards = useCallback(
     (lane: string) => {
       if (!graph) return [];
-      const cards = graph.snapshot.cards.map(shown);
-      // A draft just started here shows before the workspace lists it.
-      if (openDraft && draft && !graph.cards.has(openDraft))
-        cards.unshift(placeholder(openDraft, draft));
+      const cards = graph.snapshot.cards;
       const here = cards.filter(
         (c) => c.state === "pending" && !c.receivedBy && laneOf(c) === lane,
       );
@@ -142,7 +98,7 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
           .sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "")),
       ];
     },
-    [graph, laneOf, shown, openDraft, draft],
+    [graph, laneOf, openDraft],
   );
   const laneName = (lane: string) =>
     lane === PUBLIC ? t.work.public : (graph?.roles.get(lane)?.title ?? lane);
@@ -226,7 +182,6 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     setPublishing(id);
     try {
       await publishDraft(id);
-      setPublished((p) => new Map([...p, [id, new Date().toISOString()]]));
       if (openDraft === id) setOpenDraft(null);
       toast(t.work.published(laneName(card ? laneOf(card) : PUBLIC)));
     } catch (error) {
@@ -276,18 +231,12 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
       else if (kind === "lane") void move(item.id, id);
       else if (kind === "card") {
         if (id !== openDraft) setOpenDraft(id);
-        void addWhenLoaded(id, item.id);
+        toggleSource(id, item.id, true);
       }
     },
   });
-  // A draft dropped onto before it was opened here is read from its file first.
-  const addWhenLoaded = async (draftId: string, nodeId: string) => {
-    await ensureDraft(draftId);
-    toggleSource(draftId, nodeId, true);
-  };
-
   return {
-    card: cardOf,
+    card: (id: string) => graph?.cards.get(id),
     landed,
     publishing,
     openDraft,

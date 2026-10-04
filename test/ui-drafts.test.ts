@@ -1,234 +1,193 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { api, ApiError, type CardDocument, type DraftInput } from "../src/ui/data/api.js";
+import { api, ApiError, type CardInput } from "../src/ui/data/api.js";
 import {
+  createDraft,
   discardDraft,
   editDraft,
-  ensureDraft,
-  flushDraft,
-  flushDrafts,
+  isDraft,
+  loadLocalDrafts,
+  localDraftCards,
+  moveCard,
   publishDraft,
 } from "../src/ui/data/drafts.js";
 
-async function draft(t: TestContext, id: string, extra: Partial<CardDocument> = {}) {
-  const doc: CardDocument = {
-    cardId: id,
-    path: `cards/${id}.md`,
-    etag: "seen-version",
-    text: "Saved prompt",
-    draft: true,
-    state: "pending",
-    sources: [],
-    ...extra,
-  };
-  const read = t.mock.method(api, "card", async () => doc);
-  t.mock.method(api, "deleteDraft", async () => doc);
-  t.after(async () => {
-    t.mock.method(api, "saveDraft", async () => doc);
-    await discardDraft(id);
-  });
-  await ensureDraft(id);
-  return { doc, read };
-}
-
-test("a failed draft save prevents publishing stale contents and retains edits for retry", async (t) => {
-  const id = "card-failed-save";
-  const { doc } = await draft(t, id);
-  const saved: DraftInput[] = [];
-  const save = t.mock.method(
-    api,
-    "saveDraft",
-    async (...[_id, etag, input]: Parameters<typeof api.saveDraft>) => {
-      assert.equal(etag, doc.etag);
-      saved.push(input);
-      throw new ApiError(500, "WRITE_FAILED", "Could not save");
-    },
-  );
-  const publish = t.mock.method(api, "publishCard", async () => doc);
-  editDraft(id, (input) => ({ ...input, prompt: "Latest prompt" }), true);
-
-  await assert.rejects(publishDraft(id), /Could not save/);
-  assert.equal(publish.mock.callCount(), 0);
-  assert.equal(saved[0]?.prompt, "Latest prompt");
-
-  save.mock.mockImplementation(async (...[_id, etag, input]: Parameters<typeof api.saveDraft>) => {
-    assert.equal(etag, doc.etag);
-    assert.equal(input.prompt, "Latest prompt");
-    return { ...doc, etag: "saved-version" };
-  });
-  await publishDraft(id);
-  assert.deepEqual(publish.mock.calls[0]?.arguments, [id, "saved-version"]);
-});
-
-for (const code of ["STATE_CHANGED", "ETAG_CONFLICT"]) {
-  test(`draft ${code} keeps the observed version and never overwrites another writer`, async (t) => {
-    const id = `card-conflict-${code}`;
-    const { doc, read } = await draft(t, id);
-    read.mock.mockImplementation(async () => ({ ...doc, etag: "someone-elses-version" }));
-    const save = t.mock.method(
-      api,
-      "saveDraft",
-      async (...[_id, etag]: Parameters<typeof api.saveDraft>) => {
-        if (etag === "seen-version") throw new ApiError(409, code, "Changed elsewhere");
-        return { ...doc, etag: "overwritten-version" };
+function browser(t: TestContext) {
+  const data = new Map<string, string>();
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        data.set(key, value);
       },
-    );
-    const publish = t.mock.method(api, "publishCard", async () => doc);
-    editDraft(id, (input) => ({ ...input, prompt: "My local edit" }), true);
-
-    await assert.rejects(publishDraft(id), /Changed elsewhere/);
-    assert.equal(read.mock.callCount(), 1);
-    assert.equal(save.mock.callCount(), 1);
-    assert.equal(publish.mock.callCount(), 0);
-    await assert.rejects(flushDraft(id), /Changed elsewhere/);
-    assert.equal(save.mock.calls[1]?.arguments[1], "seen-version");
-    assert.equal(save.mock.calls[1]?.arguments[2]?.prompt, "My local edit");
+    },
   });
+  t.after(() => {
+    if (original) Object.defineProperty(globalThis, "localStorage", original);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  });
+  loadLocalDrafts(`workspace-${t.name}`);
+  const reads = t.mock.method(api, "card", async () => {
+    throw new Error("Unexpected backend read");
+  });
+  const writes = t.mock.method(api, "createCard", async () => ({
+    cardId: "card-published",
+    path: "cards/card-published.md",
+    etag: "etag",
+  }));
+  const moves = t.mock.method(api, "moveCard", async () => {
+    throw new Error("Unexpected backend move");
+  });
+  return { data, reads, writes, moves };
 }
 
-test("editing a draft preserves source metadata and explicit versions", async (t) => {
-  const id = "card-source-metadata";
+test("unsent editing, source order, local retargeting and discard never call the backend", async (t) => {
+  const { reads, writes, moves, data } = browser(t);
   const sources = [
-    {
-      resource: "node-example",
-      title: "",
-      version: { commit: "pinned-commit", path: "Example/Example.md" },
-      provenance: { author: "original", labels: ["reference"] },
-    },
+    { resource: "/A/A.md", title: "A", custom: { kept: true } },
+    { resource: "/B/B.md" },
   ];
-  const { doc } = await draft(t, id, { sources });
-  const save = t.mock.method(api, "saveDraft", async () => doc);
-  editDraft(id, (input) => ({ ...input, prompt: "Edited prompt" }), true);
-  await flushDraft(id);
-  assert.deepEqual(save.mock.calls[0]?.arguments[2]?.sources, sources);
-});
-
-test("publication drains edits made during an in-flight save and uses its final ETag", async (t) => {
-  const id = "card-inflight-save";
-  const { doc } = await draft(t, id);
-  let release!: () => void;
-  let started!: () => void;
-  const saving = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const pending = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const inputs: DraftInput[] = [];
-  t.mock.method(
-    api,
-    "saveDraft",
-    async (...[_id, etag, input]: Parameters<typeof api.saveDraft>) => {
-      inputs.push(input);
-      if (inputs.length === 1) {
-        assert.equal(etag, "seen-version");
-        started();
-        await pending;
-        return { ...doc, etag: "first-save" };
-      }
-      assert.equal(etag, "first-save");
-      return { ...doc, etag: "second-save" };
-    },
-  );
-  const publish = t.mock.method(api, "publishCard", async () => doc);
-  editDraft(id, (input) => ({ ...input, prompt: "First edit" }), true);
-  const published = publishDraft(id);
-  await saving;
-  editDraft(id, (input) => ({ ...input, prompt: "Latest edit" }), true);
-  release();
-  await published;
+  const id = createDraft(null, sources);
+  assert.equal(localDraftCards()[0]!.progress, null);
+  assert.equal(localDraftCards()[0]!.totalGoalCount, 0);
+  editDraft(id, (input) => ({
+    ...input,
+    prompt: "Local only",
+    sources: [...input.sources].reverse(),
+  }));
+  await moveCard(localDraftCards()[0]!, "role-ui");
+  assert.equal(localDraftCards()[0]!.body, "Local only");
+  assert.equal(localDraftCards()[0]!.target, "role-ui");
   assert.deepEqual(
-    inputs.map((input) => input.prompt),
-    ["First edit", "Latest edit"],
+    JSON.parse([...data.values()][0]!).map((d: { input: CardInput }) => d.input.sources),
+    [[sources[1], sources[0]]],
   );
-  assert.deepEqual(publish.mock.calls[0]?.arguments, [id, "second-save"]);
+  discardDraft(id);
+  assert.equal(localDraftCards().length, 0);
+  for (const mock of [reads, writes, moves]) assert.equal(mock.mock.callCount(), 0);
 });
 
-test("a publishing draft stops accepting edits until a failed publication finishes", async (t) => {
-  const id = "card-publishing";
-  const { doc } = await draft(t, id);
-  const save = t.mock.method(api, "saveDraft", async () => doc);
-  let started!: () => void;
-  let fail!: (error: Error) => void;
-  const publishing = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const pending = new Promise<never>((_resolve, reject) => {
-    fail = reject;
-  });
-  t.mock.method(api, "publishCard", () => {
-    started();
-    return pending;
-  });
-  const result = publishDraft(id);
-  const failed = assert.rejects(result, /Publish failed/);
-  await publishing;
-  const change = t.mock.fn((input: DraftInput) => ({ ...input, prompt: "Too late" }));
-  editDraft(id, change, true);
-  fail(new Error("Publish failed"));
-  await failed;
-  assert.equal(change.mock.callCount(), 0);
-  editDraft(id, (input) => ({ ...input, prompt: "After failure" }), true);
-  await flushDraft(id);
-  assert.equal(save.mock.calls[0]?.arguments[2]?.prompt, "After failure");
+test("browser refresh restores contents and keeps Workspace edits isolated", (t) => {
+  browser(t);
+  loadLocalDrafts("workspace-A");
+  const a = createDraft("role-a", [{ resource: "/A/A.md" }]);
+  editDraft(a, (input) => ({ ...input, prompt: "Workspace A" }));
+  loadLocalDrafts("workspace-B");
+  assert.equal(localDraftCards().length, 0);
+  const b = createDraft(null);
+  editDraft(b, (input) => ({ ...input, prompt: "Workspace B" }));
+  loadLocalDrafts("workspace-A");
+  assert.deepEqual(
+    localDraftCards().map((c) => [c.id, c.body, c.target]),
+    [[a, "Workspace A", "role-a"]],
+  );
+  loadLocalDrafts("workspace-B");
+  assert.deepEqual(
+    localDraftCards().map((c) => [c.id, c.body]),
+    [[b, "Workspace B"]],
+  );
 });
 
-test("leaving a workspace drains edits made to an earlier draft while a later one saves", async (t) => {
-  const first = "card-leave-first";
-  const second = "card-leave-second";
-  const { doc } = await draft(t, first);
-  await draft(t, second);
-  let started!: () => void;
+test("sending directly creates a published Card from the latest local input and drops only that edit", async (t) => {
+  const { writes, reads } = browser(t);
+  const a = createDraft(null, [{ resource: "/A/A.md", title: "context" }]);
+  const b = createDraft(null);
+  editDraft(a, (input) => ({ ...input, prompt: "Final requirement", target: "role-ui" }));
+  const saved = await publishDraft(a);
+  assert.equal(saved!.cardId, "card-published");
+  assert.deepEqual(writes.mock.calls[0]!.arguments, [
+    {
+      prompt: "Final requirement",
+      target: "role-ui",
+      sources: [{ resource: "/A/A.md", title: "context" }],
+    },
+  ]);
+  assert.deepEqual(
+    localDraftCards().map((c) => c.id),
+    [b],
+  );
+  assert.equal(reads.mock.callCount(), 0);
+  assert.equal(isDraft({ id: "card-published" }), false);
+});
+
+test("failed sending keeps the latest local input for retry", async (t) => {
+  const { writes, data } = browser(t);
+  const id = createDraft(null);
+  editDraft(id, (input) => ({ ...input, prompt: "Retry this" }));
+  writes.mock.mockImplementation(async () => {
+    throw new ApiError(500, "WRITE_FAILED", "Sending failed");
+  });
+  await assert.rejects(publishDraft(id), /Sending failed/);
+  assert.equal(localDraftCards()[0]!.body, "Retry this");
+  assert.equal(JSON.parse([...data.values()][0]!)[0].input.prompt, "Retry this");
+  writes.mock.mockImplementation(async () => ({
+    cardId: "card-retried",
+    path: "cards/card-retried.md",
+    etag: "ok",
+  }));
+  await publishDraft(id);
+  assert.equal(localDraftCards().length, 0);
+});
+
+test("in-flight sending prevents duplicate POSTs, editing and discarding", async (t) => {
+  const { writes } = browser(t);
+  const id = createDraft(null);
+  editDraft(id, (input) => ({ ...input, prompt: "Send once" }));
   let release!: () => void;
-  const saving = new Promise<void>((resolve) => {
-    started = resolve;
+  const pending = new Promise<void>((r) => {
+    release = r;
   });
+  writes.mock.mockImplementation(async () => {
+    await pending;
+    return { cardId: "card-once", path: "cards/card-once.md", etag: "ok" };
+  });
+  const sent = publishDraft(id);
+  await publishDraft(id);
+  editDraft(id, (input) => ({ ...input, prompt: "Too late" }));
+  discardDraft(id);
+  assert.equal(localDraftCards()[0]!.body, "Send once");
+  assert.equal(writes.mock.callCount(), 1);
+  release();
+  await sent;
+  assert.equal(localDraftCards().length, 0);
+});
+
+test("sending from Workspace A clears only A after switching to Workspace B", async (t) => {
+  const { writes, data } = browser(t);
+  loadLocalDrafts("sending-A");
+  const a = createDraft(null);
+  editDraft(a, (input) => ({ ...input, prompt: "Send from A" }));
+  const retained = createDraft(null);
+  let release!: () => void;
   const pending = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const saved: string[] = [];
-  t.mock.method(
-    api,
-    "saveDraft",
-    async (...[id, _etag, input]: Parameters<typeof api.saveDraft>) => {
-      saved.push(`${id}: ${input.prompt}`);
-      if (id === second) {
-        started();
-        await pending;
-      }
-      return { ...doc, etag: `saved-${saved.length}` };
-    },
-  );
-  editDraft(first, (input) => ({ ...input, prompt: "First edit" }), true);
-  editDraft(second, (input) => ({ ...input, prompt: "Other draft" }), true);
-  let finished = false;
-  const flushed = flushDrafts().then(() => {
-    finished = true;
+  writes.mock.mockImplementation(async () => {
+    await pending;
+    return { cardId: "card-from-A", path: "cards/card-from-A.md", etag: "ok" };
   });
-  await saving;
-  assert.equal(finished, false);
-  editDraft(first, (input) => ({ ...input, prompt: "Latest edit" }), true);
+  const sent = publishDraft(a);
+  loadLocalDrafts("sending-B");
+  const b = createDraft("role-b");
+  editDraft(b, (input) => ({ ...input, prompt: "Keep B unchanged" }));
+  const bBefore = data.get("tent-unsent-cards:sending-B");
+  const bMemory = localDraftCards();
   release();
-  await flushed;
-  assert.deepEqual(saved, [
-    `${first}: First edit`,
-    `${second}: Other draft`,
-    `${first}: Latest edit`,
-  ]);
+  await sent;
+  assert.equal(data.get("tent-unsent-cards:sending-B"), bBefore);
+  assert.equal(localDraftCards(), bMemory);
+  loadLocalDrafts("sending-A");
+  assert.deepEqual(
+    localDraftCards().map((c) => c.id),
+    [retained],
+  );
 });
 
-test("leaving a workspace fails on an unsaved draft and keeps its contents for retry", async (t) => {
-  const id = "card-leave-failed";
-  const { doc } = await draft(t, id);
-  const save = t.mock.method(api, "saveDraft", async () => {
-    throw new ApiError(409, "STATE_CHANGED", "Changed elsewhere");
-  });
-  editDraft(id, (input) => ({ ...input, prompt: "Keep this edit" }), true);
-  await assert.rejects(flushDrafts(), /Changed elsewhere/);
-  save.mock.mockImplementation(async (...[_id, etag, input]: Parameters<typeof api.saveDraft>) => {
-    assert.equal(etag, "seen-version");
-    assert.equal(input.prompt, "Keep this edit");
-    return doc;
-  });
-  await flushDrafts();
+test("empty local contents cannot create a Card", async (t) => {
+  const { writes } = browser(t);
+  const id = createDraft(null);
+  await assert.rejects(publishDraft(id));
+  assert.equal(writes.mock.callCount(), 0);
 });

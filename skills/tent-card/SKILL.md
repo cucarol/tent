@@ -1,6 +1,6 @@
 ---
 name: tent-card
-description: "Record a prompt and its context references as a Tent Card for a Role or a later conversation, or preview, receive, interrupt and continue a Card, or check whether a Card has been received."
+description: "Record a prompt and its context references as a Tent Card, receive or transfer it, cancel a task, or check its reception and outputs."
 ---
 
 # Tent Card
@@ -24,7 +24,7 @@ When the user asks to hand work to a Role or save a request for later:
 3. Address it with `--target <role-id>` when the work belongs to a Role.
 
 Creating a Card does not start another Agent; the receiver takes it later.
-Keep undecided requests as unpublished drafts, and publish only when ready
+Keep undecided requests in Nodes with `status: draft`; create a Card when ready
 for reception. When requirements change, edit their Nodes. Cancel a published
 task with `tent card deprecate <card-id> --base-etag <observed-etag>`; its
 input and reception record remain intact.
@@ -51,8 +51,9 @@ targeted Card.
    source-change reminders, then read the current Node when a source has
    changed. A missing source or diagnostic needs inspection before relying
    on the old requirements.
-4. To pause, `interrupt` it; to resume, `continue` it. Both take the Card
-   version you last observed and the same Role choice as the take.
+4. Save implementation results as output Nodes under the goals referenced by
+   the Card, using `node link-output`. Questions, research and pending decisions
+   belong in prompt Nodes; they do not count as implementation outputs.
 
 `replayed: true` from take means the Card was already received: continue the
 existing work instead of starting it again. A finished Card stays `consumed`.
@@ -61,3 +62,10 @@ them; `show` and `take` retain their original input and warn that the task was
 cancelled, with current documents that still refer to it. Review that notice
 before acting.
 Reply normally, and keep lasting facts in [Nodes](../tent-node/SKILL.md).
+
+Progress follows the referenced goals: pending, received without all outputs,
+or has outputs for every goal. Only outputs added or confirmed after publication
+count; multiple goals show a completed/total count. Cards with no goal sources
+show reception only. Check each output's current goal basis and actual result.
+A pending Card can be transferred
+with `card move`; its destination is fixed after reception.

@@ -1,210 +1,138 @@
-// Card drafts written in this page, saved to their workspace files as they change, and the moves that put
-// Cards in the public area or a Role's lane. Every write sends the ETag it last saw (Tent Node "Web界面服务接口").
-import { useEffect, useSyncExternalStore } from "react";
-import { api, ApiError, describe, type CardSourceInput, type DraftInput } from "./api.js";
+// Unsent Card composition stays in this browser, isolated by Workspace identity.
+import { useSyncExternalStore } from "react";
+import { api, type CardSourceInput, type CardInput } from "./api.js";
 import type { SnapshotCard } from "./types.js";
 import { t } from "../i18n.js";
 
-export type Draft = {
-  id: string;
-  etag: string | null;
-  input: DraftInput;
-  /** Edits not yet written, and whether a write is on its way. */
-  dirty: boolean;
-  saving: boolean;
-  failed: string | null;
-};
-
+export type Draft = { id: string; input: CardInput; failed: string | null };
 const drafts = new Map<string, Draft>();
-const loading = new Map<string, Promise<void>>();
 const publishing = new Set<string>();
-const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const listeners = new Set<() => void>();
-let notify: (text: string) => void = () => {};
+let workspace = "";
+let cards: SnapshotCard[] = [];
+const storageKey = () => `tent-unsent-cards:${workspace}`;
+export const isDraft = (card: Pick<SnapshotCard, "id">) => card.id.startsWith("local-card-");
 
-/** Where drafts report what happened (the page's toast). */
-export function onDraftNotice(fn: (text: string) => void) {
-  notify = fn;
-}
-
-function put(draft: Draft) {
-  drafts.set(draft.id, draft);
-  listeners.forEach((l) => l());
-}
-function drop(id: string) {
-  drafts.delete(id);
-  clearTimeout(timers.get(id));
-  timers.delete(id);
-  listeners.forEach((l) => l());
-}
-
-/** A Card that has never been published is a draft: it has no history yet. */
-export const isDraft = (card: SnapshotCard) => card.history.length === 0;
-
-const inputOf = (doc: Awaited<ReturnType<typeof api.card>>): DraftInput => ({
-  prompt: doc.text,
-  ...(doc.title !== undefined ? { title: doc.title } : {}),
-  target: doc.target ?? null,
-  sources: doc.sources ?? [],
-});
-
-async function load(id: string) {
-  let pending = loading.get(id);
-  if (!pending) {
-    pending = api
-      .card(id)
-      .then((doc) => {
-        const current = drafts.get(id);
-        if (!doc.draft) return drop(id);
-        if (current?.dirty || current?.saving) return;
-        put({ id, etag: doc.etag, input: inputOf(doc), dirty: false, saving: false, failed: null });
-      })
-      .catch((error) => {
-        if (error instanceof ApiError && error.status === 404) drop(id);
-        else notify(describe(error));
-      })
-      .finally(() => loading.delete(id));
-    loading.set(id, pending);
-  }
-  return pending;
-}
-
-/** Read a draft from its file unless this page already has it. */
-export async function ensureDraft(id: string) {
-  if (!drafts.has(id)) await load(id);
-}
-
-/** A draft as this page knows it, loaded from its file on first use. */
-export function useDraft(id: string | null): Draft | null {
-  useEffect(() => {
-    if (id && !drafts.has(id)) void load(id);
-  }, [id]);
-  return useSyncExternalStore(
-    (cb) => {
-      listeners.add(cb);
-      return () => listeners.delete(cb);
-    },
-    () => (id ? (drafts.get(id) ?? null) : null),
-  );
-}
-
-const trimEnd = (s: string) => s.replace(/\s+$/, "");
-/**
- * After the workspace changes, reread drafts that someone else changed; ones with edits waiting keep them.
- * Drafts that are gone or published are forgotten.
- */
-export function syncDrafts(cards: SnapshotCard[]) {
-  const byId = new Map(cards.map((c) => [c.id, c]));
-  for (const draft of [...drafts.values()]) {
-    if (draft.dirty || draft.saving) continue;
-    const card = byId.get(draft.id);
-    if (!card || !isDraft(card)) {
-      drop(draft.id);
-      continue;
+function changed(save = true) {
+  if (save) {
+    try {
+      localStorage.setItem(
+        storageKey(),
+        JSON.stringify([...drafts.values()].map(({ id, input }) => ({ id, input }))),
+      );
+      for (const [id, draft] of drafts)
+        if (draft.failed) drafts.set(id, { ...draft, failed: null });
+    } catch {
+      for (const [id, draft] of drafts) drafts.set(id, { ...draft, failed: t.work.localOnly });
     }
-    const same =
-      trimEnd(card.body) === trimEnd(draft.input.prompt) &&
-      (card.target ?? null) === draft.input.target &&
-      card.sources.map((s) => s.resource).join("\n") ===
-        draft.input.sources.map((s) => s.resource).join("\n");
-    if (!same) void load(draft.id);
   }
+  cards = [...drafts.values()].map(({ id, input }) => ({
+    id,
+    title:
+      input.title ??
+      input.prompt
+        .split("\n")
+        .map((line) => line.replace(/^#+\s*/, "").trim())
+        .find(Boolean) ??
+      "",
+    state: "pending",
+    progress: null,
+    goalCount: 0,
+    totalGoalCount: 0,
+    outputNodeIds: [],
+    target: input.target,
+    receivedBy: null,
+    status: "stable",
+    body: input.prompt,
+    sources: input.sources.map((s) => ({ ...s, kind: "text", version: null, changedSince: false })),
+    path: "",
+    history: [],
+    publishedAt: null,
+    updatedAt: null,
+  }));
+  listeners.forEach((listener) => listener());
 }
 
-async function save(id: string): Promise<void> {
-  const draft = drafts.get(id);
-  if (!draft || draft.saving || !draft.dirty) return;
-  if (!draft.etag) {
-    await load(id);
-    return save(id);
-  }
-  const input = draft.input;
-  put({ ...draft, saving: true, dirty: false });
+/** Refreshes restore only this Workspace's unsent edits. */
+export function loadLocalDrafts(workspaceId: string) {
+  if (workspace === workspaceId) return;
+  workspace = workspaceId;
+  drafts.clear();
   try {
-    const saved = await api.saveDraft(id, draft.etag, input);
-    const now = drafts.get(id);
-    if (now) put({ ...now, etag: saved.etag, saving: false, failed: null });
-  } catch (error) {
-    const now = drafts.get(id);
-    if (!now) return;
-    put({ ...now, saving: false, dirty: true, failed: describe(error) });
-    notify(describe(error));
-    return;
+    const saved = JSON.parse(localStorage.getItem(storageKey()) ?? "[]") as Draft[];
+    for (const draft of saved)
+      if (
+        isDraft(draft) &&
+        typeof draft.input?.prompt === "string" &&
+        Array.isArray(draft.input.sources)
+      )
+        drafts.set(draft.id, { ...draft, failed: null });
+  } catch {
+    /* Unreadable browser data cannot be a published Card. */
   }
-  if (drafts.get(id)?.dirty) return save(id);
+  changed(false);
 }
 
-/** Change a draft; text waits for a pause in typing, everything else is written at once. */
-export function editDraft(id: string, change: (input: DraftInput) => DraftInput, typing = false) {
+const subscribe = (listener: () => void) => {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+};
+export const localDraftCards = () => cards;
+export const useDraftCards = () => useSyncExternalStore(subscribe, localDraftCards);
+export function useDraft(id: string | null): Draft | null {
+  return useSyncExternalStore(subscribe, () => (id ? (drafts.get(id) ?? null) : null));
+}
+
+export function createDraft(target: string | null, sources: CardSourceInput[] = []) {
+  const id = `local-card-${crypto.randomUUID()}`;
+  drafts.set(id, { id, input: { prompt: "", target, sources }, failed: null });
+  changed();
+  return id;
+}
+
+export function editDraft(id: string, change: (input: CardInput) => CardInput) {
   if (publishing.has(id)) return;
   const draft = drafts.get(id);
   if (!draft) return;
-  put({ ...draft, input: change(draft.input), dirty: true, failed: null });
-  clearTimeout(timers.get(id));
-  if (typing)
-    timers.set(
-      id,
-      setTimeout(() => void save(id), 600),
-    );
-  else void save(id);
-}
-
-/** Write any waiting edits now. */
-export async function flushDraft(id: string) {
-  clearTimeout(timers.get(id));
-  timers.delete(id);
-  await save(id);
-  while (drafts.get(id)?.saving || loading.has(id)) await new Promise((r) => setTimeout(r, 60));
-  const draft = drafts.get(id);
-  if (draft?.failed || draft?.dirty) throw new Error(draft.failed ?? t.work.notSaved);
-}
-
-/** Finish this page's pending Card edits before leaving its workspace. */
-export async function flushDrafts() {
-  do {
-    for (const id of drafts.keys()) await flushDraft(id);
-  } while ([...drafts.values()].some((draft) => draft.dirty || draft.saving));
-}
-
-/** A new draft in a lane; it is a Card file in the workspace from the start. */
-export async function createDraft(target: string | null, sources: CardSourceInput[] = []) {
-  const input: DraftInput = { prompt: "", target, sources };
-  const saved = await api.createDraft(input);
-  put({ id: saved.cardId, etag: saved.etag, input, dirty: false, saving: false, failed: null });
-  return saved.cardId;
+  drafts.set(id, { ...draft, input: change(draft.input) });
+  changed();
 }
 
 export async function publishDraft(id: string) {
-  await flushDraft(id);
   const draft = drafts.get(id);
-  if (!draft?.etag) throw new Error(t.work.notLoaded);
+  if (!draft) throw new Error(t.work.notLoaded);
+  if (publishing.has(id)) return;
   if (!draft.input.prompt.trim() && !draft.input.sources.length) throw new Error(t.work.empty);
+  const originWorkspace = workspace;
+  const originKey = storageKey();
   publishing.add(id);
   try {
-    await api.publishCard(id, draft.etag);
-    drop(id);
+    const saved = await api.createCard(draft.input);
+    if (workspace === originWorkspace) {
+      drafts.delete(id);
+      changed();
+    } else {
+      const originDrafts = JSON.parse(localStorage.getItem(originKey) ?? "[]") as Draft[];
+      localStorage.setItem(originKey, JSON.stringify(originDrafts.filter((d) => d.id !== id)));
+    }
+    return saved;
   } finally {
     publishing.delete(id);
   }
 }
 
-export async function discardDraft(id: string) {
-  clearTimeout(timers.get(id));
-  await flushDraft(id).catch(() => {});
-  const etag = drafts.get(id)?.etag ?? (await api.card(id)).etag;
-  await api.deleteDraft(id, etag);
-  drop(id);
+export function discardDraft(id: string) {
+  if (publishing.has(id)) return;
+  drafts.delete(id);
+  changed();
 }
 
-/** Put a Card in a lane: a draft saves its new target, a published Card moves until a Role receives it. */
+/** Local targets can change while composing; sent Cards use their observed version. */
 export async function moveCard(card: SnapshotCard, target: string | null) {
-  // Read the file first: the page may not have seen a publication yet.
-  const doc = await api.card(card.id);
-  if (doc.draft) {
-    if (!drafts.has(card.id)) await load(card.id);
+  if (isDraft(card)) {
     editDraft(card.id, (input) => ({ ...input, target }));
-    await flushDraft(card.id);
     return;
   }
+  const doc = await api.card(card.id);
   await api.moveCard(card.id, doc.etag, target);
 }

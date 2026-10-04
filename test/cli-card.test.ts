@@ -7,7 +7,6 @@ import { runRoleCommand } from "../src/cli/role-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { git } from "./helpers.js";
-import { createCardDraft } from "../src/core/card-document.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
@@ -68,19 +67,6 @@ test("Card CLI supports an ordinary Session without creating a Role", async (t) 
   const taken = value(await runCardCommand("take", [card.cardId], globals));
   assert.equal(taken.state, "consumed");
   assert.equal(taken.receivedBy, undefined);
-  const interrupted = value(
-    await runCardCommand("interrupt", [card.cardId, "--commit", taken.version.commit], globals),
-  );
-  assert.equal(
-    value(
-      await runCardCommand(
-        "continue",
-        [card.cardId, "--commit", interrupted.version.commit],
-        globals,
-      ),
-    ).state,
-    "consumed",
-  );
   assert.equal(value(await runRoleCommand("list", [], globals)).items.length, 0);
 });
 
@@ -91,6 +77,10 @@ test("Card CLI help and invalid flags are handled before workspace or input acce
     ["create", ["--prompt"]],
     ["list", ["--prompt=text"]],
     ["history", ["card-a"]],
+    ["publish", ["card-a", "--base-etag", "hash"]],
+    ["interrupt", ["card-a", "--commit", "hash"]],
+    ["list", ["--include-drafts"]],
+    ["list", ["--state", "interrupted"]],
     ["continue", ["card-a", "--role", "role-a"]],
     ["consume", ["card-a"]],
     ["return", ["card-a"]],
@@ -104,7 +94,7 @@ test("Card CLI help and invalid flags are handled before workspace or input acce
   }
 });
 
-test("Card CLI moves pending input and keeps drafts outside the pending queue", async (t) => {
+test("Card CLI moves pending input and locks the target at reception", async (t) => {
   const { root, globals } = await fixture(t);
   const role = value(await runRoleCommand("create", ["--title", "Reviewer"], globals));
   const card = value(await runCardCommand("create", ["--prompt", "Review"], globals));
@@ -120,14 +110,7 @@ test("Card CLI moves pending input and keeps drafts outside the pending queue", 
     await runCardCommand("move", [card.cardId, "--public", "--base-etag", moved.etag], globals),
   );
   assert.equal(opened.target, null);
-  await createCardDraft(new NodeFs(path.join(root, ".tent")), { prompt: "" });
   assert.equal(value(await runCardCommand("list", [], globals)).items.length, 1);
-  assert.equal(value(await runCardCommand("list", ["--include-drafts"], globals)).items.length, 2);
-  assert.equal(
-    value(await runCardCommand("list", ["--state", "pending", "--include-drafts"], globals)).items
-      .length,
-    1,
-  );
   value(await runCardCommand("take", [card.cardId], globals));
   assert.equal(
     (
@@ -176,20 +159,4 @@ test("Card CLI creates ordered sources, previews and receives with an explicit R
     true,
   );
   assert.equal((await fs.readdir(path.join(root, ".tent"))).includes("card-consumptions"), false);
-  const interrupted = value(
-    await runCardCommand(
-      "interrupt",
-      [card.cardId, "--role", role.roleId, "--commit", taken.version.commit],
-      globals,
-    ),
-  );
-  assert.equal(interrupted.state, "interrupted");
-  const continued = value(
-    await runCardCommand(
-      "continue",
-      [card.cardId, "--role", role.roleId, "--commit", interrupted.version.commit],
-      globals,
-    ),
-  );
-  assert.equal(continued.state, "consumed");
 });

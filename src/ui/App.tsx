@@ -18,7 +18,8 @@ import { Sidebar, type ThemePref } from "./shell/Sidebar.js";
 import { StageBar } from "./shell/StageBar.js";
 import { Reader } from "./panel/Reader.js";
 import { Palette } from "./panel/Overlays.js";
-import { isDraft, onDraftNotice, syncDrafts } from "./data/drafts.js";
+import { isDraft, loadLocalDrafts, useDraftCards } from "./data/drafts.js";
+import { FlagsContext, useSyncFlags } from "./data/flags.js";
 import { useDragState } from "./shell/drag.js";
 import { carried, sourceIds, useWork, type Work } from "./shell/work.js";
 import type { Graph } from "./data/store.js";
@@ -90,7 +91,14 @@ export function App() {
   const [lang, setLangState] = useState<Lang>(currentLang);
   const systemDark = useSystemDark();
   const theme = themePref === "system" ? (systemDark ? "dark" : "light") : themePref;
-  const graph = useMemo(() => (snapshot ? buildGraph(snapshot, visits) : null), [snapshot, visits]);
+  const localCards = useDraftCards();
+  const graph = useMemo(
+    () =>
+      snapshot
+        ? buildGraph({ ...snapshot, cards: [...snapshot.cards, ...localCards] }, visits)
+        : null,
+    [snapshot, visits, localCards],
+  );
   const showToast = useCallback((text: string) => setToast(text), []);
   const work = useWork(graph, showToast);
   // The lane the pointer rests on in 分工; the tree and the map mark what its Cards carried.
@@ -105,15 +113,10 @@ export function App() {
       graph && work.openDraft ? sourceIds(graph, graph.cards.get(work.openDraft), work.draft) : [],
     [graph, work.openDraft, work.draft],
   );
-  useEffect(() => onDraftNotice(showToast), [showToast]);
-  // Drafts changed elsewhere are reread; ones being typed keep their text.
-  useEffect(() => {
-    if (snapshot) syncDrafts(snapshot.cards);
-  }, [snapshot]);
-
   useEffect(() => {
     loadSnapshot()
       .then((s) => {
+        loadLocalDrafts(s.workspace.id);
         setSnapshot(s);
         setVisits(loadVisits(s));
       })
@@ -122,6 +125,7 @@ export function App() {
 
   // Follow changes made elsewhere: compare revisions on focus and every few seconds while visible.
   const revision = snapshot?.workspace.revision;
+  const flags = useSyncFlags(revision);
   const [lost, setLost] = useState<string | null>(null);
   useEffect(() => {
     if (!revision) return;
@@ -445,129 +449,132 @@ export function App() {
 
   return (
     // Views read the messages while rendering; remounting them on a language change redraws every string.
-    <div
-      key={lang}
-      className={`app${sideOpen ? "" : " side-collapsed"}${reading ? " is-reading" : ""}`}
-      style={{ "--side-w": `${sideWidth}px` } as CSSProperties}
-    >
-      <Sidebar
-        graph={graph}
-        selected={selected}
-        open={sideOpen}
-        collapsed={collapsed}
-        work={work}
-        draftOnPage={selected?.kind === "card" && selected.id === work.openDraft}
-        themePref={themePref}
-        lang={lang}
-        onTheme={setThemePref}
-        onLang={switchLang}
-        onFold={fold}
-        onOpen={open}
-        onPage={openPage}
-        onLocate={locate}
-        onSearch={() => setOverlay({ kind: "palette" })}
-        onToggle={() => setSideOpen((o) => !o)}
-        onResize={resizeSide}
-        onResetWidth={() => setSideWidth(SIDE.initial)}
-        onMarkAllSeen={() => markSeen(graph.snapshot.nodes.map((n) => n.id))}
-        hotLane={hotLane}
-        onHotLane={setHotLane}
-      />
-
+    <FlagsContext.Provider value={flags}>
       <div
-        className={`surface${selected && !reading ? " has-detail" : ""}`}
-        style={{ "--detail-w": `${detailWidth}px` } as CSSProperties}
+        key={lang}
+        className={`app${sideOpen ? "" : " side-collapsed"}${reading ? " is-reading" : ""}`}
+        style={{ "--side-w": `${sideWidth}px` } as CSSProperties}
       >
-        <main className="stage" aria-hidden={reading || undefined}>
-          <StageBar graph={graph} selected={selected} onOpen={open} />
-          <div className="stage-body">
-            <Boundary label={t.app.map}>
-              <ReactFlowProvider>
-                <MapView
-                  graph={graph}
-                  selected={selected}
-                  collapsed={collapsed}
-                  draft={draftIds}
-                  hotLane={hotLane}
-                  carriedBy={carriedBy}
-                  keys={!reading && !overlay}
-                  onSelect={open}
-                  onFold={fold}
-                  onExpand={() => {
-                    setEditOnExpand(false);
-                    setExpanded(true);
-                  }}
-                />
-              </ReactFlowProvider>
-            </Boundary>
-          </div>
-        </main>
+        <Sidebar
+          graph={graph}
+          selected={selected}
+          open={sideOpen}
+          collapsed={collapsed}
+          work={work}
+          draftOnPage={selected?.kind === "card" && selected.id === work.openDraft}
+          themePref={themePref}
+          lang={lang}
+          onTheme={setThemePref}
+          onLang={switchLang}
+          onFold={fold}
+          onOpen={open}
+          onPage={openPage}
+          onLocate={locate}
+          onSearch={() => setOverlay({ kind: "palette" })}
+          onToggle={() => setSideOpen((o) => !o)}
+          onResize={resizeSide}
+          onResetWidth={() => setSideWidth(SIDE.initial)}
+          onMarkAllSeen={() => markSeen(graph.snapshot.nodes.map((n) => n.id))}
+          hotLane={hotLane}
+          onHotLane={setHotLane}
+        />
 
-        {selected && !reading && (
-          <aside className="detail">
-            <div
-              className="detail-resize"
-              onPointerDown={resizeDetail}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label={t.app.resizeDetail}
-            />
+        <div
+          className={`surface${selected && !reading ? " has-detail" : ""}`}
+          style={{ "--detail-w": `${detailWidth}px` } as CSSProperties}
+        >
+          <main className="stage" aria-hidden={reading || undefined}>
+            <StageBar graph={graph} selected={selected} onOpen={open} />
+            <div className="stage-body">
+              <Boundary label={t.app.map}>
+                <ReactFlowProvider>
+                  <MapView
+                    graph={graph}
+                    flags={flags}
+                    selected={selected}
+                    collapsed={collapsed}
+                    draft={draftIds}
+                    hotLane={hotLane}
+                    carriedBy={carriedBy}
+                    keys={!reading && !overlay}
+                    onSelect={open}
+                    onFold={fold}
+                    onExpand={() => {
+                      setEditOnExpand(false);
+                      setExpanded(true);
+                    }}
+                  />
+                </ReactFlowProvider>
+              </Boundary>
+            </div>
+          </main>
+
+          {selected && !reading && (
+            <aside className="detail">
+              <div
+                className="detail-resize"
+                onPointerDown={resizeDetail}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={t.app.resizeDetail}
+              />
+              <Reader
+                mode="panel"
+                graph={graph}
+                target={selected}
+                startEditing={false}
+                onOpen={open}
+                onClose={() => open(null)}
+                onExpand={(edit) => {
+                  setEditOnExpand(!!edit);
+                  setExpanded(true);
+                }}
+                work={work}
+                onLocate={locate}
+                onToast={showToast}
+              />
+            </aside>
+          )}
+
+          {reading && (
             <Reader
-              mode="panel"
               graph={graph}
-              target={selected}
-              startEditing={false}
+              target={selected!}
+              startEditing={editOnExpand}
               onOpen={open}
               onClose={() => open(null)}
-              onExpand={(edit) => {
-                setEditOnExpand(!!edit);
-                setExpanded(true);
-              }}
+              onCollapse={() => setExpanded(false)}
               work={work}
               onLocate={locate}
               onToast={showToast}
             />
-          </aside>
-        )}
+          )}
+        </div>
 
-        {reading && (
-          <Reader
+        {overlay?.kind === "palette" && (
+          <Palette
             graph={graph}
-            target={selected!}
-            startEditing={editOnExpand}
-            onOpen={open}
-            onClose={() => open(null)}
-            onCollapse={() => setExpanded(false)}
-            work={work}
-            onLocate={locate}
-            onToast={showToast}
+            onOpen={(ref) => (ref.kind === "node" ? open(ref) : openPage(ref))}
+            onClose={() => setOverlay(null)}
           />
         )}
+        <DragGhost graph={graph} work={work} />
+        {edge && (
+          <div
+            className={`edge-line${edge.label ? " is-armed" : ""}${edge.x > window.innerWidth - 240 ? " flip" : ""}`}
+            style={{ left: edge.x }}
+            aria-hidden="true"
+          >
+            {edge.label && <span>{edge.label}</span>}
+          </div>
+        )}
+        {toast && (
+          <div className="toast" role="status">
+            {toast}
+          </div>
+        )}
       </div>
-
-      {overlay?.kind === "palette" && (
-        <Palette
-          graph={graph}
-          onOpen={(ref) => (ref.kind === "node" ? open(ref) : openPage(ref))}
-          onClose={() => setOverlay(null)}
-        />
-      )}
-      <DragGhost graph={graph} work={work} />
-      {edge && (
-        <div
-          className={`edge-line${edge.label ? " is-armed" : ""}${edge.x > window.innerWidth - 240 ? " flip" : ""}`}
-          style={{ left: edge.x }}
-          aria-hidden="true"
-        >
-          {edge.label && <span>{edge.label}</span>}
-        </div>
-      )}
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
-        </div>
-      )}
-    </div>
+    </FlagsContext.Provider>
   );
 }
 

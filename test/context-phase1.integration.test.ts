@@ -10,10 +10,12 @@ import { runCardCommand } from "../src/cli/card-commands.js";
 import { git } from "./helpers.js";
 import { appendSessionObservations } from "../src/core/session-observations.js";
 import { observeSessionFile } from "../src/fs/session-observations.js";
+import { parseFrontmatter } from "../src/core/frontmatter.js";
 import {
   makeContextBrief,
   formatContextBrief,
   findUnlinkedOutputs,
+  contextDriftItems,
   type CurrentContext,
 } from "../src/core/context-brief.js";
 
@@ -103,7 +105,7 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   assert.ok(
     drift.items.some(
       (item: { kind: string; nodeId?: string }) =>
-        item.kind === "output-behind" && item.nodeId === linked.nodeId,
+        item.kind === "node-behind" && item.nodeId === linked.nodeId,
     ),
   );
   read = await f.node("get", [linked.nodeId, "--full"]);
@@ -157,7 +159,8 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   ]);
   assert.equal((await f.node("check", [decision.node.nodeId])).state, "unanchored");
   brief = await f.workspace("brief");
-  assert.equal(brief.value.counts.unanchored, 1);
+  assert.equal("unanchored" in brief.value.counts, false);
+  assert.equal("synced" in brief.value.counts, false);
   assert.equal(
     Object.values(brief.value)
       .flat()
@@ -202,14 +205,21 @@ test("CLI rejects retired flags and confirmation still requires a full live read
   assert.match(rejected.stderr, /complete|incomplete|full/i);
 });
 
-test("brief warns about changed received Card sources and removes cancelled Cards", async (t) => {
+test("brief shows multi-goal Card completion and only warns for changed source goals still ahead", async (t) => {
   const f = await fixture(t);
   const source = await f.node("create", [
     "Spec",
     "--type",
-    "prompt-spec",
+    "goal",
     "--body",
     "Original requirement",
+  ]);
+  const second = await f.node("create", [
+    "Second",
+    "--type",
+    "goal",
+    "--body",
+    "Second requirement",
   ]);
   const card = async (sub: string, args: string[]) => {
     const result = await runCardCommand(sub, args, f.options);
@@ -221,9 +231,31 @@ test("brief warns about changed received Card sources and removes cancelled Card
     "Implement the source.",
     "--source",
     source.node.nodeId,
+    "--source",
+    second.node.nodeId,
   ]);
   await card("take", [published.cardId]);
-  assert.deepEqual((await f.workspace("brief")).value.changedCardSources, []);
+  const received = (await f.workspace("brief")).value;
+  assert.deepEqual(received.changedCardSources, []);
+  assert.equal(received.cardInputs[0].progress, "received-no-output");
+  await fs.writeFile(path.join(f.root, "result.html"), "<h1>result</h1>");
+  const output = await f.node("link-output", [source.node.nodeId, "--resource", "result.html"]);
+  const outputRaw = await fs.readFile(
+    path.join(f.root, ".tent", output.path, path.basename(output.path) + ".md"),
+    "utf8",
+  );
+  assert.equal(
+    JSON.stringify(parseFrontmatter(outputRaw).data.sources ?? []).includes(published.cardId),
+    false,
+  );
+  const withOutput = (await f.workspace("brief")).value;
+  assert.equal(withOutput.cardInputs[0].progress, "received-no-output");
+  assert.equal(withOutput.cardInputs[0].outputCount, 1);
+  assert.equal(withOutput.cardInputs[0].goalCount, 1);
+  assert.equal(withOutput.cardInputs[0].totalGoalCount, 2);
+  const textBrief = await runWorkspaceCommand("brief", [], { workspace: f.root });
+  assert.equal(textBrief.exitCode, 0, textBrief.stderr);
+  assert.match(textBrief.stdout, /\[received-no-output 1\/2\]/);
   const file = path.join(f.root, ".tent", "Spec", "Spec.md");
   const original = await fs.readFile(file, "utf8");
   await fs.writeFile(file, original.replace("Original requirement", "Changed requirement"));
@@ -233,6 +265,19 @@ test("brief warns about changed received Card sources and removes cancelled Card
   assert.equal(brief.value.changedCardSources[0].nodeId, source.node.nodeId);
   assert.equal(brief.value.changedCardSources[0].state, "changed");
   assert.equal(await git(path.join(f.root, ".tent"), "rev-parse", "HEAD"), head);
+  const currentOutput = await f.node("get", [output.nodeId, "--full"]);
+  await f.node("confirm", [output.nodeId, "--base-etag", currentOutput.node.etag]);
+  assert.deepEqual(
+    (await f.workspace("brief")).value.changedCardSources,
+    [],
+    "completed source goal removes old changed Card warning",
+  );
+  await f.node("link-output", [second.node.nodeId, "--resource", "result.html"]);
+  assert.deepEqual(
+    (await f.workspace("brief")).value.cardInputs,
+    [],
+    "fully completed Cards leave pending work",
+  );
   const shown = await card("show", [published.cardId]);
   await card("deprecate", [published.cardId, "--base-etag", shown.etag]);
   const after = (await f.workspace("brief")).value;
@@ -249,6 +294,9 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
     trustTier: "unverified" as const,
     stale: false,
     aheadSince: "2026-01-01T00:00:00.000Z",
+    ...(i % 2
+      ? { ahead: { since: "2026-01-01T00:00:00.000Z", reasons: ["No output"] } }
+      : { behind: { reasons: ["材料变化".repeat(100)] } }),
     materials: [],
     reasons: ["材料变化".repeat(100)],
   }));
@@ -291,13 +339,10 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
     ],
   };
   const brief = makeContextBrief(context, { now: "2026-02-01T00:00:00.000Z" });
-  assert.deepEqual(brief.counts, context.sync.counts);
+  assert.deepEqual(brief.counts, { ahead: 50, behind: 50 });
   assert.ok(Buffer.byteLength(JSON.stringify(brief) + "\n") <= 4096);
   assert.ok(Buffer.byteLength(formatContextBrief(brief) + "\n") <= 4096);
-  assert.match(
-    formatContextBrief(brief).split("\n")[0],
-    /^synced 0 · ahead 50 · behind 50 · unanchored 9$/,
-  );
+  assert.match(formatContextBrief(brief).split("\n")[0], /^behind 50 · ahead 50$/);
   assert.ok(brief.omitted.behind > 0 && brief.omitted.ahead > 0);
   assert.ok(brief.omitted.changedCardSources > 0);
   assert.match(formatContextBrief(brief), /Received Card sources changed/);
@@ -345,8 +390,70 @@ test("brief counts historical unrecorded files but only lists three recent sessi
     new Set(["file-0.md", "file-1.md", "file-2.md"]),
   );
   assert.equal(brief.omitted.unlinkedOutputs, 2);
-  assert.match(formatContextBrief(brief), /2 older or omitted unlinked outputs/);
-  assert.equal(context.unlinkedOutputs.length, 5, "the full drift source remains intact");
+  assert.match(formatContextBrief(brief), /2 older or omitted unrecorded files/);
+  assert.equal(context.unlinkedOutputs.length, 5, "the full observation source remains intact");
+});
+
+test("brief and drift both show a dual-status goal and leave neutral recorded output quiet", () => {
+  const context: CurrentContext = {
+    sync: {
+      nodes: [
+        {
+          nodeId: "node-goal",
+          path: "Goal",
+          type: "goal",
+          state: "behind",
+          trustTier: "unverified",
+          stale: false,
+          materials: [],
+          reasons: ["Material changed", "No output"],
+          behind: { reasons: ["Material changed"] },
+          ahead: { reasons: ["No output"] },
+        },
+        {
+          nodeId: "node-quiet",
+          path: "Evidence",
+          type: "output",
+          resource: "../../evidence.svg",
+          state: "synced",
+          trustTier: "unverified",
+          stale: false,
+          materials: [],
+          reasons: [],
+        },
+      ],
+      counts: { synced: 1, unanchored: 0, ahead: 1, behind: 1 },
+      outputNodes: [{ nodeId: "node-quiet", path: "Evidence", resource: "../../evidence.svg" }],
+      requirementsWithoutOutputs: ["node-goal"],
+    },
+    observations: { events: [], uncertain: false },
+    cards: { revision: "r", items: [] },
+    changedCardSources: { items: [], diagnostics: [] },
+    unlinkedOutputs: [],
+  };
+  const brief = makeContextBrief(context);
+  assert.deepEqual(brief.counts, { ahead: 1, behind: 1 });
+  assert.deepEqual(
+    brief.behind.map((item) => item.nodeId),
+    ["node-goal"],
+  );
+  assert.deepEqual(
+    brief.ahead.map((item) => item.nodeId),
+    ["node-goal"],
+  );
+  assert.equal(brief.behind[0]!.reason, "Material changed");
+  const text = formatContextBrief(brief);
+  assert.match(text, /^behind 1 · ahead 1\nBehind:/);
+  assert.ok(text.indexOf("Behind:") < text.indexOf("Ahead:"));
+  assert.match(text, /start time not recorded/);
+  assert.doesNotMatch(text, /node-quiet|Recent inputs|Recent outputs|synced/);
+  assert.deepEqual(
+    contextDriftItems(context).map((item) => [item.kind, item.nodeId]),
+    [
+      ["node-behind", "node-goal"],
+      ["node-ahead", "node-goal"],
+    ],
+  );
 });
 
 test("uncertain Node associations never become a definite unlinked file claim", () => {

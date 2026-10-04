@@ -26,6 +26,17 @@ export type SnapshotIncoming = {
   changedSince?: boolean;
 };
 
+/**
+ * A Node that needs attention, computed from the real workspace on each request: a goal whose intent
+ * has no current output (ahead), or a Node whose materials moved on (behind). The two are independent,
+ * so a goal with no output whose materials changed carries both. Every other Node is absent.
+ */
+export type SyncFlag = {
+  ahead?: { since?: string; reasons: string[] };
+  behind?: { reasons: string[] };
+};
+export type SyncFlags = Record<string, SyncFlag>;
+
 export type SnapshotNode = {
   id: string;
   name: string;
@@ -65,7 +76,11 @@ export type CardSource = SnapshotMaterial & {
 export type SnapshotCard = {
   id: string;
   title: string;
-  state: "pending" | "consumed" | "interrupted";
+  state: "pending" | "consumed";
+  progress: "pending" | "received-no-output" | "has-output" | null;
+  goalCount: number;
+  totalGoalCount: number;
+  outputNodeIds: string[];
   target: string | null;
   receivedBy: string | null;
   status: string;

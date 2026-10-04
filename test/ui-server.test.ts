@@ -10,7 +10,8 @@ import { writeNodeDocument } from "../src/core/node-document-write.js";
 import { renameNode } from "../src/core/ops.js";
 import { readWorkspaceSettings } from "../src/core/workspace-settings.js";
 import { createRoleContext } from "../src/core/role-context.js";
-import { transitionCardDocument } from "../src/core/card-document.js";
+import { linkNodeOutput } from "../src/core/node-sync.js";
+import { takeCardDocument } from "../src/core/card-document.js";
 import { startUiServer, workspacePort } from "../src/ui-server/server.js";
 import {
   defaultWorkspacesFile,
@@ -369,68 +370,59 @@ test("only images inside the workspace are served", async (t) => {
   assert.equal((await call("GET", "/api/files?path=docs/missing.png")).status, 404);
 });
 
-test("workspace drafts support reload, CAS, publication, movement and reception conflicts", async (t) => {
+test("direct Card publication supports immutable reads, pending moves and reception conflicts", async (t) => {
   const { call, tent } = await fixture(t);
   await createRoleContext(tent, { roleId: "role-review", title: "Review", body: "Review" });
-  const initial = json<Snapshot>(await call("GET", "/api/snapshot")).workspace.revision;
-  const created = await call("POST", "/api/cards/drafts", { json: { prompt: "", sources: [] } });
-  assert.equal(created.status, 200, created.body);
-  const { cardId, etag } = json<{ cardId: string; etag: string }>(created);
-  const endpoint = `/api/cards/${cardId}`;
-  const snapshot = json<Snapshot>(await call("GET", "/api/snapshot"));
-  assert.notEqual(snapshot.workspace.revision, initial);
-  assert.equal(snapshot.cards.find((c) => c.id === cardId)!.publishedAt, null);
-  const opened = json<{ etag: string; text: string; draft: boolean }>(await call("GET", endpoint));
-  assert.equal(opened.etag, etag);
-  assert.equal(opened.text, "");
-  assert.equal(opened.draft, true);
-  const saved = await call("PUT", endpoint, {
+  const created = await call("POST", "/api/cards", {
     json: {
-      baseEtag: etag,
       prompt: "Review this",
       sources: [{ resource: "/Other/Other.md" }],
       target: "role-review",
     },
   });
-  assert.equal(saved.status, 200, saved.body);
-  const next = json<{ etag: string }>(saved).etag;
-  assert.equal(
-    (await call("PUT", endpoint, { json: { baseEtag: etag, prompt: "stale" } })).status,
-    409,
+  assert.equal(created.status, 200, created.body);
+  const { cardId, etag } = json<{ cardId: string; etag: string }>(created);
+  const endpoint = `/api/cards/${cardId}`;
+  const opened = json<{ text: string; progress: string; outputNodeIds: string[] }>(
+    await call("GET", endpoint),
   );
-  assert.equal((await call("DELETE", endpoint, { json: { baseEtag: etag } })).status, 409);
-  assert.equal(
-    (await call("POST", `${endpoint}/publish`, { json: { baseEtag: etag } })).status,
-    409,
-  );
-  const published = await call("POST", `${endpoint}/publish`, { json: { baseEtag: next } });
-  assert.equal(published.status, 200, published.body);
-  let baseEtag = json<{ etag: string }>(published).etag;
+  assert.equal(opened.text, "Review this");
+  assert.equal(opened.progress, "pending");
+  assert.deepEqual(opened.outputNodeIds, []);
   const live = json<Snapshot>(await call("GET", "/api/snapshot")).cards.find(
     (c) => c.id === cardId,
   )!;
   assert.ok(live.publishedAt);
   assert.ok(live.sources[0]!.version);
+  assert.equal(live.progress, "pending");
+  for (const [method, target] of [
+    ["PUT", endpoint],
+    ["DELETE", endpoint],
+    ["POST", `${endpoint}/publish`],
+    ["POST", "/api/cards/drafts"],
+  ])
+    assert.equal(
+      (await call(method!, target!, { json: { baseEtag: etag, prompt: "unavailable" } })).status,
+      404,
+    );
   assert.equal(
-    (await call("PUT", endpoint, { json: { baseEtag, prompt: "rewrite" } })).status,
+    (await call("POST", `${endpoint}/move`, { json: { baseEtag: "stale", target: null } })).status,
     409,
   );
-  assert.equal((await call("DELETE", endpoint, { json: { baseEtag } })).status, 409);
   assert.equal(
-    (await call("POST", `${endpoint}/move`, { json: { baseEtag, target: "role-missing" } })).status,
+    (await call("POST", `${endpoint}/move`, { json: { baseEtag: etag, target: "role-missing" } }))
+      .status,
     422,
   );
-  assert.equal((await call("POST", `${endpoint}/move`, { json: { baseEtag } })).status, 422);
-  const moved = await call("POST", `${endpoint}/move`, { json: { baseEtag, target: null } });
+  const moved = await call("POST", `${endpoint}/move`, { json: { baseEtag: etag, target: null } });
   assert.equal(moved.status, 200, moved.body);
+  await takeCardDocument(tent, cardId, "role-review");
   assert.equal(
-    json<Snapshot>(await call("GET", "/api/snapshot")).cards.find((c) => c.id === cardId)!.target,
-    null,
+    json<Snapshot>(await call("GET", "/api/snapshot")).cards.find((c) => c.id === cardId)!.progress,
+    "received-no-output",
   );
-  baseEtag = json<{ etag: string }>(moved).etag;
-  await transitionCardDocument(tent, cardId, "role-review", "take");
   const conflict = await call("POST", `${endpoint}/move`, {
-    json: { baseEtag, target: "role-review" },
+    json: { baseEtag: json<{ etag: string }>(moved).etag, target: "role-review" },
   });
   assert.equal(conflict.status, 409);
   assert.equal(
@@ -438,27 +430,31 @@ test("workspace drafts support reload, CAS, publication, movement and reception 
       .current.receivedBy,
     "role-review",
   );
+  const cardBytes = await tent.readFile(`cards/${cardId}.md`);
+  const output = await linkNodeOutput(tent, "node-other", { resource: "docs/notes.txt" });
+  const after = json<Snapshot>(await call("GET", "/api/snapshot")).cards.find(
+    (c) => c.id === cardId,
+  )!;
+  assert.equal(after.progress, "has-output");
+  assert.deepEqual(after.outputNodeIds, [output.nodeId]);
+  assert.equal(after.goalCount, 1);
+  assert.equal(after.totalGoalCount, 1);
+  assert.equal(await tent.readFile(`cards/${cardId}.md`), cardBytes);
 });
 
-test("deleting a draft updates the snapshot and invalid draft requests do not write", async (t) => {
+test("removed Card endpoints and invalid create requests never write Card files", async (t) => {
   const { call } = await fixture(t);
   for (const input of [
     { prompt: 4 },
-    { prompt: "", target: "role-missing" },
-    { prompt: "", sources: ["invalid"] },
+    { prompt: "" },
+    { prompt: "request", target: "role-missing" },
+    { prompt: "request", sources: ["invalid"] },
   ])
-    assert.equal((await call("POST", "/api/cards/drafts", { json: input })).status, 422);
-  assert.equal(json<Snapshot>(await call("GET", "/api/snapshot")).cards.length, 0);
-  const draft = json<{ cardId: string; etag: string }>(
-    await call("POST", "/api/cards/drafts", { json: { prompt: "" } }),
-  );
-  const endpoint = `/api/cards/${draft.cardId}`;
+    assert.equal((await call("POST", "/api/cards", { json: input })).status, 422);
   assert.equal(
-    (await call("POST", `${endpoint}/publish`, { json: { baseEtag: draft.etag } })).status,
-    422,
+    (await call("POST", "/api/cards/drafts", { json: { prompt: "request" } })).status,
+    404,
   );
-  assert.equal((await call("DELETE", endpoint, { json: { baseEtag: draft.etag } })).status, 200);
-  assert.equal((await call("GET", endpoint)).status, 404);
   assert.equal(json<Snapshot>(await call("GET", "/api/snapshot")).cards.length, 0);
 });
 

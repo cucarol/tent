@@ -14,6 +14,52 @@ async function tempRoot(): Promise<string> {
   return fs.mkdtemp(path.join(testScratchRoot(), "tent-mutation-lock-"));
 }
 
+test("an acquisition waiter runs exactly once after the observed holder releases", async (t) => {
+  const dir = await tempRoot();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const lockPath = path.join(dir, "mutation.lock");
+  let acquired!: () => void, release!: () => void, observed!: () => void;
+  const ready = new Promise<void>((resolve) => (acquired = resolve));
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const busySeen = new Promise<void>((resolve) => (observed = resolve));
+  const options = { busyMessage: "busy", acquireFailedMessage: "failed" };
+  const holder = withFileMutationLock(
+    lockPath,
+    async () => {
+      acquired();
+      await held;
+    },
+    options,
+  );
+  await ready;
+  let calls = 0;
+  const waiter = withFileMutationLock(
+    lockPath,
+    async () => {
+      calls++;
+    },
+    {
+      ...options,
+      waitMs: 2000,
+      now: () => Date.now() + 10000,
+      staleMs: 1,
+      isProcessAlive: () => {
+        observed();
+        return true;
+      },
+    },
+  );
+  try {
+    await Promise.race([busySeen, waiter.then(() => assert.fail("Waiter bypassed the holder"))]);
+    assert.equal(calls, 0);
+  } finally {
+    release();
+    await holder;
+  }
+  await waiter;
+  assert.equal(calls, 1);
+});
+
 test("bounded acquisition waiting never executes a timed-out action or retries action failures", async (t) => {
   const dir = await tempRoot();
   t.after(() => fs.rm(dir, { recursive: true, force: true }));

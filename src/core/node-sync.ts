@@ -33,7 +33,10 @@ export type NodeSyncInspection = {
   type?: string;
   resource?: string;
   goalId?: string;
+  /** Detail summary; the independent attention flags below drive counts and lists. */
   state: NodeSyncState;
+  ahead?: { since?: string; reasons: string[] };
+  behind?: { reasons: string[] };
   trustTier: NodeTrustTier;
   stale: boolean;
   uncertain?: boolean;
@@ -139,6 +142,7 @@ async function inspectCatalogNodes(
           ...(typeof data.resource === "string" ? { resource: data.resource } : {}),
           ...(goal ? { goalId: goal.nodeId } : {}),
           state: reasons.length ? "behind" : anchored ? "synced" : "unanchored",
+          ...(reasons.length ? { behind: { reasons: [...reasons] } } : {}),
           trustTier: nodeTrustTier(data),
           stale,
           materials,
@@ -199,23 +203,29 @@ async function inspectCatalogNodes(
     const owned = nodes.filter((n) => n.goalId === goal.nodeId);
     const uncertainSubtree = nodes.some((n) => n.uncertain && n.path.startsWith(goal.path + "/"));
     if (!subtreeOutputs.length && !uncertainSubtree) requirementsWithoutOutputs.push(goal.nodeId);
-    if (goal.state === "behind") continue;
     if (
       (!subtreeOutputs.length && !uncertainSubtree) ||
       owned.some((n) => goalMismatch.has(n.nodeId))
     ) {
-      goal.state = "ahead";
-      goal.reasons.push(
+      if (!goal.behind) goal.state = "ahead";
+      const reasons = [
         subtreeOutputs.length
           ? "Owned output is behind the current goal version"
           : "Goal subtree has no current output Node",
-      );
+      ];
+      goal.reasons.push(...reasons);
       if (fs.history && (await fs.exists(".git")))
         goal.aheadSince = await fs.history.firstNodeTime(goal.nodeId);
-    } else if (owned.length && owned.every((n) => n.state === "synced")) goal.state = "synced";
+      goal.ahead = { ...(goal.aheadSince ? { since: goal.aheadSince } : {}), reasons };
+    } else if (!goal.behind && owned.length && owned.every((n) => n.state === "synced"))
+      goal.state = "synced";
   }
   const counts: Record<NodeSyncState, number> = { synced: 0, ahead: 0, behind: 0, unanchored: 0 };
-  for (const node of nodes) counts[node.state]++;
+  for (const node of nodes) {
+    if (node.ahead) counts.ahead++;
+    if (node.behind) counts.behind++;
+    if (node.state === "synced" || node.state === "unanchored") counts[node.state]++;
+  }
   return { nodes, counts, requirementsWithoutOutputs, outputNodes };
 }
 

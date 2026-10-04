@@ -42,7 +42,7 @@ confirm the Node after reviewing its evidence; `node write --confirm` combines
 the corrected save and confirmation. Use `node link-output` for an output's
 requirement. A version match alone does not prove semantic correctness.
 Keeping facts current stays the Agent's job through
-[tent-node](../../tent-node/SKILL.md). Automatic Card interruption is not
-available yet; use explicit `card interrupt` and `card continue`.
+[tent-node](../../tent-node/SKILL.md). Card reception stays consumed; output
+Nodes record the results and their originating Card sources.
 
 Official event and output contract: [Codex Hooks](https://learn.chatgpt.com/docs/hooks).
