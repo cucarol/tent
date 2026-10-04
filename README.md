@@ -1,7 +1,5 @@
 # Tent / 帷幄
 
-> *vibe 于帷幄之中*
-
 [中文](README.zh-CN.md)
 
 Tent keeps a project's working context inside the project: the goals you confirmed, the decisions later work must follow, the evidence that something was done, and the inputs passed from one agent session to the next. It is a small graph of Markdown files in `.tent/`, versioned by its own Git history. Agents read and maintain it through Skills and a CLI. You browse and edit it in a local web page.
