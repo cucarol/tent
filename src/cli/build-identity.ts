@@ -59,7 +59,7 @@ export async function sourceBuildMismatch(
   if (!identity.commit) return;
   try {
     const pkg = JSON.parse(await fs.readFile(path.join(workspaceRoot, "package.json"), "utf8"));
-    if (pkg.name !== "vibe-tent") return;
+    if (pkg.name !== "@cucarol/tent") return;
     await Promise.all([
       fs.access(path.join(workspaceRoot, "src/cli/tent.ts")),
       fs.access(path.join(workspaceRoot, "esbuild.config.mjs")),

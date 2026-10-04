@@ -70,16 +70,16 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   assert.equal(pkg.author, "cucarol");
   assert.equal(pkg.author, manifest.author);
   assert.equal(pkg.version, "0.1.0");
-  assert.equal(manifest.name, "Vibe Tent");
+  assert.equal(manifest.name, "Tent");
   assert.equal(
     manifest.minAppVersion,
     undefined,
     "release manifest has no Obsidian compatibility axis",
   );
   assert.equal(manifest.isDesktopOnly, undefined, "release manifest has no Obsidian plugin flag");
-  assert.equal(pkg.repository.url, "git+https://github.com/cucarol/vibe-tent.git");
-  assert.equal(pkg.bugs.url, "https://github.com/cucarol/vibe-tent/issues");
-  assert.equal(pkg.homepage, "https://github.com/cucarol/vibe-tent#readme");
+  assert.equal(pkg.repository.url, "git+https://github.com/cucarol/tent.git");
+  assert.equal(pkg.bugs.url, "https://github.com/cucarol/tent/issues");
+  assert.equal(pkg.homepage, "https://github.com/cucarol/tent#readme");
   assert.equal(pkg.version, manifest.version, "npm package version matches release manifest");
   assert.match(pkg.description, /^[\x20-\x7E]+\.$/, "npm description 使用完整英文句子");
   for (const keyword of ["cli", "okf", "coding-agents"]) {

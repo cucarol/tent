@@ -1,4 +1,4 @@
-# Vibe Tent / 帷幄
+# Tent / 帷幄
 
 > *vibe 于帷幄之中*
 
@@ -30,7 +30,7 @@ You need Node.js 22.19+ and Git.
 
 ### Codex
 
-Download `tent-plugin-0.1.0.zip` from [Releases](https://github.com/cucarol/vibe-tent/releases/tag/0.1.0) and extract it to a folder you will keep. Add that folder as a local marketplace:
+Download `tent-plugin-0.1.0.zip` from [Releases](https://github.com/cucarol/tent/releases/tag/0.1.0) and extract it to a folder you will keep. Add that folder as a local marketplace:
 
 ```sh
 codex plugin marketplace add "<absolute path to the extracted folder>"
@@ -42,8 +42,8 @@ The extracted folder must contain both `.agents/` and `plugins/`. It includes th
 To build from source instead:
 
 ```sh
-git clone https://github.com/cucarol/vibe-tent.git
-cd vibe-tent
+git clone https://github.com/cucarol/tent.git
+cd tent
 npm ci --ignore-scripts
 npm run plugin:build
 codex plugin marketplace add "$PWD/release"
@@ -55,7 +55,7 @@ codex plugin add tent@tent-local
 Or give your agent this:
 
 ```text
-Install the Tent plugin for Codex from github.com/cucarol/vibe-tent:
+Install the Tent plugin for Codex from github.com/cucarol/tent:
 clone it, run `npm ci --ignore-scripts && npm run plugin:build`,
 then `codex plugin marketplace add "<clone>/release"` and `codex plugin add tent@tent-local`.
 Check that the four Skills appear, and let me review the new Hooks.
@@ -69,7 +69,7 @@ Codex is the only host with a package so far. Any agent that can run shell comma
 node "<plugin folder>/cli.mjs" --help
 ```
 
-The plugin folder is `plugins/tent` inside the extracted download, or `release/plugins/tent` after a source build. For the separate npm CLI package, download `vibe-tent-0.1.0.tgz` from the same Release and run `npm install -g "<path to vibe-tent-0.1.0.tgz>"`. This installs its dependencies and exposes `tent`; it does not register a Codex plugin.
+The plugin folder is `plugins/tent` inside the extracted download, or `release/plugins/tent` after a source build. For the separate npm CLI package, download `cucarol-tent-0.1.0.tgz` from the same Release and run `npm install -g "<path to cucarol-tent-0.1.0.tgz>"`. This installs its dependencies and exposes `tent`; it does not register a Codex plugin.
 
 ## Use
 

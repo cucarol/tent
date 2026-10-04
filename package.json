@@ -1,5 +1,5 @@
 {
-  "name": "vibe-tent",
+  "name": "@cucarol/tent",
   "version": "0.1.0",
   "description": "A local Workspace context graph for durable Nodes, immutable Cards, optional Roles, and Agent plugin workflows.",
   "type": "module",
@@ -55,12 +55,12 @@
   "author": "cucarol",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cucarol/vibe-tent.git"
+    "url": "git+https://github.com/cucarol/tent.git"
   },
   "bugs": {
-    "url": "https://github.com/cucarol/vibe-tent/issues"
+    "url": "https://github.com/cucarol/tent/issues"
   },
-  "homepage": "https://github.com/cucarol/vibe-tent#readme",
+  "homepage": "https://github.com/cucarol/tent#readme",
   "engines": {
     "node": ">=22.19.0"
   },

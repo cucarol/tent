@@ -19,14 +19,14 @@ codex plugin add tent@tent-local
 
 Review the SessionStart and Stop Hooks in Codex before enabling them. Tent's CLI works without Hooks.
 
-For the standalone npm CLI, download `vibe-tent-0.1.0.tgz` and run:
+For the standalone npm CLI, download `cucarol-tent-0.1.0.tgz` and run:
 
 ```sh
-npm install -g "<path to vibe-tent-0.1.0.tgz>"
+npm install -g "<path to cucarol-tent-0.1.0.tgz>"
 tent --help
 ```
 
-This installs the CLI and its dependencies, but does not register a Codex plugin. See the [English README](https://github.com/cucarol/vibe-tent/blob/main/README.md) or [中文说明](https://github.com/cucarol/vibe-tent/blob/main/README.zh-CN.md) for usage and source builds.
+This installs the CLI and its dependencies, but does not register a Codex plugin. See the [English README](https://github.com/cucarol/tent/blob/main/README.md) or [中文说明](https://github.com/cucarol/tent/blob/main/README.zh-CN.md) for usage and source builds.
 
 ## Current limits
 

@@ -1,4 +1,4 @@
-# Vibe Tent V0.1 Specification
+# Tent V0.1 Specification
 
 This document defines Tent's current public contract. Retired commands and wire fields are removed rather than kept as aliases. Core owns document semantics and local persistence; the CLI and plugin are thin entrypoints.
 

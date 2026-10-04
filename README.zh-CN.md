@@ -1,4 +1,4 @@
-# Vibe Tent / 帷幄
+# Tent / 帷幄
 
 > *vibe 于帷幄之中*
 
@@ -30,7 +30,7 @@ Tent 面向一份交接文档已经装不下的项目：同时有几个方向，
 
 ### Codex
 
-从 [Releases](https://github.com/cucarol/vibe-tent/releases/tag/0.1.0) 下载 `tent-plugin-0.1.0.zip`，解压到准备保留的目录，再把该目录添加为本地 marketplace：
+从 [Releases](https://github.com/cucarol/tent/releases/tag/0.1.0) 下载 `tent-plugin-0.1.0.zip`，解压到准备保留的目录，再把该目录添加为本地 marketplace：
 
 ```sh
 codex plugin marketplace add "<解压目录的绝对路径>"
@@ -42,8 +42,8 @@ codex plugin add tent@tent-local
 也可以从源码构建：
 
 ```sh
-git clone https://github.com/cucarol/vibe-tent.git
-cd vibe-tent
+git clone https://github.com/cucarol/tent.git
+cd tent
 npm ci --ignore-scripts
 npm run plugin:build
 codex plugin marketplace add "$PWD/release"
@@ -55,7 +55,7 @@ codex plugin add tent@tent-local
 也可以把下面这段发给你的 Agent：
 
 ```text
-Install the Tent plugin for Codex from github.com/cucarol/vibe-tent:
+Install the Tent plugin for Codex from github.com/cucarol/tent:
 clone it, run `npm ci --ignore-scripts && npm run plugin:build`,
 then `codex plugin marketplace add "<clone>/release"` and `codex plugin add tent@tent-local`.
 Check that the four Skills appear, and let me review the new Hooks.
@@ -69,7 +69,7 @@ Check that the four Skills appear, and let me review the new Hooks.
 node "<插件目录>/cli.mjs" --help
 ```
 
-插件目录是下载包解压后的 `plugins/tent`，或源码构建后的 `release/plugins/tent`。若使用单独的 npm CLI 包，从同一 Release 下载 `vibe-tent-0.1.0.tgz`，运行 `npm install -g "<vibe-tent-0.1.0.tgz 的路径>"`。这会安装运行依赖并提供 `tent` 命令，不会注册 Codex 插件。
+插件目录是下载包解压后的 `plugins/tent`，或源码构建后的 `release/plugins/tent`。若使用单独的 npm CLI 包，从同一 Release 下载 `cucarol-tent-0.1.0.tgz`，运行 `npm install -g "<cucarol-tent-0.1.0.tgz 的路径>"`。这会安装运行依赖并提供 `tent` 命令，不会注册 Codex 插件。
 
 ## 使用
 
