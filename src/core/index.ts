@@ -17,6 +17,7 @@ export * from "./card-document.js";
 export * from "./role-context.js";
 export * from "./node-query.js";
 export * from "./node-document-write.js";
+export * from "./node-lightwrite.js";
 export * from "./node-write-batch.js";
 export * from "./graph-check.js";
 export * from "./node-sync.js";

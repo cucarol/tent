@@ -147,10 +147,11 @@ function destinationSpan(body: string, node: Link | Definition) {
   return { start: destinationStart, end: cursor, angled };
 }
 
-/** One parser for relationship discovery, canonical writes and move/rename rewriting. */
+/** Parse full-document references; an edit range limits which destination bytes may change. */
 export function rewriteMarkdownDestinations(
   body: string,
   map: (url: string) => string | undefined,
+  range?: { start: number; end: number },
 ): string {
   const tree = fromMarkdown(body),
     defs = definitions(tree);
@@ -173,6 +174,7 @@ export function rewriteMarkdownDestinations(
     if (mapped === undefined || mapped === node.url) continue;
     const span = destinationSpan(body, node);
     if (!span) throw new Error("Cannot locate Markdown link destination");
+    if (range && (span.start < range.start || span.end > range.end)) continue;
     const escaped = mapped.replace(/\\/g, "\\\\").replace(/[<>]/g, (char) => "\\" + char);
     const value = span.angled
       ? "<" + escaped + ">"

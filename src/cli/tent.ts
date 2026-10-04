@@ -29,7 +29,14 @@ async function main() {
     return;
   }
   if (cmd === "version" || cmd === "--version" || cmd === "-v") {
-    const { values } = parseArgs({ args, options: { json: { type: "boolean" } } });
+    const { values } = parseArgs({
+      args,
+      options: { json: { type: "boolean" }, help: { type: "boolean", short: "h" } },
+    });
+    if (values.help) {
+      console.log("Usage: tent version [--json]\nShow the local build identity and runtime path.");
+      return;
+    }
     const identity = await readBuildIdentity(packageRoot());
     console.log(
       values.json
@@ -58,7 +65,17 @@ async function main() {
     return;
   }
   if (cmd === "new") {
-    const { positionals } = parseArgs({ args, allowPositionals: true });
+    const { positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: { help: { type: "boolean", short: "h" } },
+    });
+    if (values.help) {
+      console.log(
+        "Usage: tent new <workspace-path>\nCreate an empty .tent and independent local Git.",
+      );
+      return;
+    }
     if (positionals.length !== 1) return fail("Usage: tent new <workspace-path>");
     await newTent(positionals[0]);
     return;

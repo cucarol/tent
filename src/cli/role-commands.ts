@@ -43,8 +43,10 @@ export async function runRoleCommand(
       options: {
         ...Object.fromEntries(flags.map((key) => [key, { type: "string" as const }])),
         json: { type: "boolean" },
+        help: { type: "boolean", short: "h" },
       },
     });
+    if (values.help) return { exitCode: 0, stdout: roleHelpText(), stderr: "" };
     const value = (key: string) => (values as Record<string, unknown>)[key] as string | undefined;
     const number = (key: string) => (value(key) === undefined ? undefined : Number(value(key)));
     const text = async (key: string) => {

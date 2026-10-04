@@ -36,8 +36,9 @@ export function canonicalDocumentLinks(
   body: string,
   paths: ReadonlyMap<string, string>,
   fromPath: string,
+  range?: { start: number; end: number },
 ): string {
-  return rewriteMarkdownDestinations(body, (url) => resolveId(url, paths, fromPath));
+  return rewriteMarkdownDestinations(body, (url) => resolveId(url, paths, fromPath), range);
 }
 
 /** Normalize declared Node id inputs without touching labels, unknown metadata or prose. */
@@ -46,6 +47,7 @@ export async function canonicalDocumentReferences(
   fromPath: string,
   data: Record<string, unknown>,
   body: string,
+  range?: { start: number; end: number },
 ): Promise<string> {
   const occurrences = materialOccurrences(data);
   if (
@@ -54,7 +56,7 @@ export async function canonicalDocumentReferences(
   )
     return body;
   const paths = await workspaceDocumentPaths(fs);
-  return canonicalDocumentReferencesWithPaths(fromPath, data, body, paths);
+  return canonicalDocumentReferencesWithPaths(fromPath, data, body, paths, range);
 }
 
 /** Resolve against a prepared catalog, including Nodes not yet written by a batch. */
@@ -63,6 +65,7 @@ export function canonicalDocumentReferencesWithPaths(
   data: Record<string, unknown>,
   body: string,
   paths: ReadonlyMap<string, string>,
+  range?: { start: number; end: number },
 ): string {
   const occurrences = materialOccurrences(data);
   for (const occurrence of occurrences) {
@@ -75,5 +78,5 @@ export function canonicalDocumentReferencesWithPaths(
       data.sources = sources;
     }
   }
-  return canonicalDocumentLinks(body, paths, fromPath);
+  return canonicalDocumentLinks(body, paths, fromPath, range);
 }

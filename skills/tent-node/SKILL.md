@@ -36,6 +36,11 @@ Before you deliver, update the Nodes your work actually affected:
   together. A plain save does not clear `behind`.
 - Nothing changed: leave the Nodes as they are.
 
+Use `node append` to add a paragraph or section; do not read and rewrite the
+whole Node for an append. Use `node get-section` and `node write-section` for
+a change confined to one heading. The [saving reference](../../skill-resources/references/node-maintenance.md)
+gives the commands and their separate read requirements.
+
 Saving observes new material versions automatically and preserves existing
 bases until confirmation; do not calculate or enter hashes. `node check`
 inspects synchronization; it does not decide what
@@ -67,7 +72,7 @@ ids, test counts and merge or delivery status in Git and Card history;
 preserve useful verification as dated `output` evidence. Card reception alone
 does not prove completion.
 
-Before replacing a Node body or raw document, read it with
+Before replacing a whole Node body or raw document, read it with
 `tent node get <node-id> --full --json` (add `--view raw` for raw editing).
 Use that complete live text and its ETag. A partial page or a Card's pinned
 source is not a basis for replacing the current Node.

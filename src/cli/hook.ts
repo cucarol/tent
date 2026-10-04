@@ -24,7 +24,11 @@ export async function runHookCommand(
   if (["help", "--help", "-h"].includes(sub)) return { ...silent, stdout: hookHelp };
   try {
     if (!["start", "stop"].includes(sub)) throw new Error(hookHelp);
-    const { values } = parseArgs({ args, options: { host: { type: "string" } } });
+    const { values } = parseArgs({
+      args,
+      options: { host: { type: "string" }, help: { type: "boolean", short: "h" } },
+    });
+    if (values.help) return { ...silent, stdout: hookHelp };
     if (values.host !== "codex") throw new Error("Hook host must be codex");
     let text = options.stdin;
     if (text === undefined) {

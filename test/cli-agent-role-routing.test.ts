@@ -3,8 +3,9 @@ import { spawn } from "node:child_process";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { roleHelpText } from "../src/cli/role-commands.js";
+import { roleHelpText, runRoleCommand } from "../src/cli/role-commands.js";
 import { cardHelpText } from "../src/cli/card-commands.js";
+import { runHookCommand } from "../src/cli/hook.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -64,4 +65,29 @@ test("retired Role initialization and checkpoint commands stay absent", async ()
   const roleCpHelp = await runCli("role-checkpoint", "--help");
   assert.notEqual(roleCpHelp.code, 0);
   assert.match(roleCpHelp.stderr, /Unknown command: role-checkpoint/);
+});
+
+test("subcommand help works without required fields, stdin or a Workspace", async () => {
+  for (const sub of ["list", "show", "write", "create"]) {
+    for (const flag of ["--help", "-h"]) {
+      const result = await runRoleCommand(sub, [flag], { cwd: "C:/does-not-exist/tent-help" });
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(result.stdout, roleHelpText());
+    }
+  }
+  for (const sub of ["start", "stop"]) {
+    const result = await runHookCommand(sub, ["--help"], {
+      packageRoot: repoRoot,
+      stdin: "this must not be read as a Hook event",
+    });
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /tent hook start\|stop/);
+    assert.doesNotMatch(result.stdout, /unavailable/);
+  }
+  for (const args of [["role", "create"], ["hook", "start"], ["new"], ["version"]]) {
+    const result = await runCli(...args, "--help");
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /tent /);
+    assert.doesNotMatch(result.stdout, /unavailable|already a Tent/);
+  }
 });

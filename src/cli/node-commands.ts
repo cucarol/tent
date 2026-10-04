@@ -34,6 +34,12 @@ import {
   deleteNode,
 } from "../core/ops.js";
 import { writeNodeDocument, NodeWriteError } from "../core/node-document-write.js";
+import {
+  appendNodeBody,
+  readNodeSection,
+  writeNodeSection,
+  NodeSectionError,
+} from "../core/node-lightwrite.js";
 import { NodeLifecycleError } from "../core/node-lifecycle.js";
 import { ContextReader } from "../core/context-reader.js";
 import { documentLifecycle } from "../core/document-status.js";
@@ -94,6 +100,8 @@ export async function runNodeCommand(
       return { exitCode: 0, stdout: nodeHelpText(sub), stderr: "" };
     }
     if (!Object.prototype.hasOwnProperty.call(NODE_COMMAND_HELP, sub)) return usage(nodeHelpText());
+    if (flags.heading !== undefined && !["append", "get-section", "write-section"].includes(sub))
+      return usage("--heading is only valid for node append, get-section or write-section");
     if (flags.start !== undefined && sub !== "read-many")
       return usage("--start is only valid for node read-many");
     if (flags["archive-commit"] !== undefined && sub !== "restore")
@@ -478,6 +486,49 @@ export async function runNodeCommand(
         };
         return print(output, json, (value) => `Created ${formatNode(value)}`);
       }
+      case "append":
+      case "get-section":
+      case "write-section": {
+        const target = oneTarget(positionals, nodeHelpText(sub));
+        if (typeof target !== "string") return target;
+        const allowed = [
+          "json",
+          "workspace",
+          "heading",
+          ...(sub === "get-section" ? [] : ["body"]),
+          ...(sub === "write-section" ? ["base-etag"] : []),
+        ];
+        if (
+          Object.keys(flags).some((key) => !allowed.includes(key)) ||
+          (sub !== "append" && flags.heading === undefined) ||
+          (sub !== "get-section" && flags.body === undefined) ||
+          (sub === "write-section" && !flags["base-etag"])
+        )
+          return usage(nodeHelpText(sub));
+        const nodeId = nodeRef(target);
+        if (sub === "get-section") {
+          const result = await readNodeSection(fs, nodeId, flags.heading);
+          return print(result, json, () => `${nodeId}  ${result.sectionEtag}\n${result.text}`);
+        }
+        const body = flags.body === "-" ? (globals.stdin ?? (await readStdin())) : flags.body;
+        const saved =
+          sub === "append"
+            ? await appendNodeBody(fs, nodeId, { body, heading: flags.heading })
+            : await writeNodeSection(fs, nodeId, {
+                heading: flags.heading,
+                baseEtag: flags["base-etag"],
+                body,
+              });
+        const result = {
+          workspaceId,
+          nodeId,
+          path: saved.path,
+          etag: saved.etag,
+          changed: saved.changed,
+          ...(saved.version ? { version: saved.version } : {}),
+        };
+        return print(result, json, () => `Updated ${nodeId}  ${saved.etag}`);
+      }
       case "write": {
         const target = oneTarget(
           positionals,
@@ -666,6 +717,7 @@ export async function runNodeCommand(
     const message = error instanceof Error ? error.message : String(error);
     const details =
       error instanceof NodeWriteError ||
+      error instanceof NodeSectionError ||
       error instanceof NodeLifecycleError ||
       error instanceof NodeBatchWriteError
         ? incompleteNodeRead(error.details)
@@ -711,6 +763,11 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
     "tent node write <nodeId> [--body <text>|-] [--planned] [--confirm] --base-etag <etag> [--read-back] [--json]",
     "tent node write <nodeId> --input-json <JSON>|- [--json]",
   ],
+  append: ["tent node append <nodeId> --body <text|-> [--heading <title>] [--json]"],
+  "get-section": ["tent node get-section <nodeId> --heading <title> [--json]"],
+  "write-section": [
+    "tent node write-section <nodeId> --heading <title> --base-etag <section-etag> --body <complete-section|-> [--json]",
+  ],
   "write-many": ["tent node write-many --input-json <JSON|-> [--json]"],
   rename: ["tent node rename <nodeId> <new-name> [--json]"],
   move: ["tent node move <nodeId> --parent <nodeId|root> [--json]"],
@@ -738,6 +795,12 @@ export function nodeHelpText(sub?: string): string {
     create: `Body, resource, ordered sources and tags are saved together. Local material versions are observed automatically. --planned marks unfinished intent independently of lifecycle status. Suggested types: ${NODE_TYPE_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; explicit relative paths resolve from the new Node document, / from .tent. Inspect an uncertain result before retrying.`,
     write:
       'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"../../src/file.ts","sources":[{"resource":"../Other/Other.md"}]},"planned":true,"confirm":true,"readBack":true}. Omitted fields are preserved. planned is an intent flag, independent of lifecycle status; set false to clear it. Ordinary saves retain recorded material baselines and observe new declarations. --confirm or confirm:true confirms the final saved content and refreshes material and output bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. sync and outputs are generated metadata. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
+    append:
+      "Append under the Workspace lock without a prior read or ETag. --heading adds a level-two Markdown heading. Existing and new content are separated by one blank line; the saved body ends with one newline. Ordinary saves retain material baselines.",
+    "get-section":
+      "Match the unique Markdown document heading text outside lists and blockquotes. The complete section includes its heading and ends at the next same-level or higher-level heading. Code blocks do not define sections. sectionEtag authorizes replacing only this section.",
+    "write-section":
+      "Replace the selected section with complete Markdown from --body, including any replacement heading. The title may change or be removed. Other body bytes are preserved. Use sectionEtag from get-section; changes to other sections do not conflict. Ordinary saves retain material baselines.",
     "write-many":
       'Batch JSON: {"items":[{"op":"create","ref":"rules","name":"Rules","type":"prompt","body":"..."},{"op":"update","nodeId":"node-existing","baseEtag":"<complete-read etag>","body":"...","confirm":true}]}. Create parent is null/omitted, an existing Node ID or @ref. @ref also works in Markdown links and material addresses, including forward references. Ordinary updates retain recorded material baselines; confirm:true refreshes the final saved content and output bases. All items validate before saving under one lock and one Tent commit; failures roll back the batch. Ordered results contain nodeId, path and etag. Existing Node updates require a complete read ETag; read: bases are rejected.',
   };
@@ -821,6 +884,7 @@ function parseFlags(args: string[]): { positionals: string[]; flags: Record<stri
           "direction",
           "type",
           "body",
+          "heading",
           "sources-json",
           "tags",
           "base-etag",

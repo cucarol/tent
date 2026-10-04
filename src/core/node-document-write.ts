@@ -73,7 +73,7 @@ export async function writeNodeDocumentUnlocked(
     }
     throw error;
   });
-  let raw = prepareNodeDocumentWrite({ id: nodeId, path: node.path }, document.raw, input);
+  const raw = prepareNodeDocumentWrite({ id: nodeId, path: node.path }, document.raw, input);
   const parsed = parseFrontmatter(raw);
   const canonicalBody = await canonicalDocumentReferences(
     fs,
@@ -81,19 +81,38 @@ export async function writeNodeDocumentUnlocked(
     parsed.data,
     parsed.body,
   );
-  raw = await prepareNodeSyncSave(
+  return savePreparedNodeDocumentUnlocked(
+    fs,
+    { id: nodeId, name: node.name, path: node.path },
+    document.raw,
+    serializeFrontmatter(parsed.data, canonicalBody, parsed.keyOrder),
+    input,
+    "node.write",
+  );
+}
+
+/** Persist validated, reference-resolved bytes under the caller's mutation lock. */
+export async function savePreparedNodeDocumentUnlocked(
+  fs: FsAdapter,
+  node: Pick<Node, "id" | "name" | "path">,
+  diskRaw: string,
+  preparedRaw: string,
+  input: NodeDocumentEdit,
+  operation: string,
+) {
+  const nodeId = node.id;
+  const raw = await prepareNodeSyncSave(
     fs,
     nodeNotePath(node.path),
-    serializeFrontmatter(parsed.data, canonicalBody, parsed.keyOrder),
+    preparedRaw,
     input.planned,
     undefined,
     input.confirm,
   );
-  const changed = raw !== document.raw;
+  const changed = raw !== diskRaw;
   const path = nodeNotePath(node.path);
-  // Link resolution awaits a catalog scan; keep the caller's original CAS basis.
   const currentRaw = await fs.readFile(path);
-  if (currentRaw !== document.raw)
+  if (currentRaw !== diskRaw)
     throw new NodeWriteError(
       "ETAG_CONFLICT",
       "etag conflict: Node changed while resolving references",
@@ -106,13 +125,11 @@ export async function writeNodeDocumentUnlocked(
       },
     );
   if (changed) await fs.writeFile(path, raw);
-  const version = await captureDocumentUnlocked(fs, path, raw, { operation: "node.write" }).catch(
-    (error) => {
-      throw new Error(
-        `Node may already be saved, but Git capture failed; reread before retrying: ${String(error)}`,
-      );
-    },
-  );
+  const version = await captureDocumentUnlocked(fs, path, raw, { operation }).catch((error) => {
+    throw new Error(
+      `Node may already be saved, but Git capture failed; reread before retrying: ${String(error)}`,
+    );
+  });
   return {
     nodeId,
     name: node.name,

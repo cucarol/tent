@@ -56,7 +56,46 @@ The name becomes the folder and file name. Body, type, resource, sources and
 tags are saved together, and only one argument can read stdin. If a create
 fails unclearly, check whether the Node exists before retrying.
 
-## Edit
+## Append or replace one section
+
+Append with one command. No preceding full read or ETag is required:
+
+```text
+tent node append <node-id> --body - [--heading "Decision"] --json
+```
+
+The optional heading is plain text and adds a level-two Markdown heading.
+Tent appends under the Workspace lock, normalizes trailing newlines and leaves
+one blank line between the previous body and the new content. A busy lock
+is an explicit error; retry the append after the other write finishes, without
+rereading the body. Successful appends retain earlier additions. The result includes the saved document's
+canonical ETag and Git version; keep the receipt instead of reading back the
+entire Node. Ordinary address and synchronization rules still apply: an
+append does not confirm changed material or clear `behind`.
+
+For a change within one section, read only that section:
+
+```text
+tent node get-section <node-id> --heading "Decision" --json
+tent node write-section <node-id> --heading "Decision" --base-etag <sectionEtag> --body - --json
+```
+
+A section starts at its heading and ends before the next heading of the same
+or higher level. Nested headings belong to it; headings in code blocks do
+not count. Titles must identify exactly one heading. A missing or repeated
+title is an error.
+
+The read returns complete section `text`, including the heading, and its
+`sectionEtag`, without capturing a whole-document Git version. Saving captures
+the final document. Supply the complete replacement section as `--body`, including
+the heading if it should remain. It may change or remove that heading. The
+section ETag checks this section's bytes; edits to other sections do not
+conflict. Changes to the selected section require rereading and reconciling
+it. Other sections stay unchanged; Tent adds a missing separator before the
+next heading within the replacement range. A section ETag is not a
+full-document editing basis.
+
+## Replace a whole document
 
 Before replacing a body, read the complete live body with `--full`; use
 `--view raw --full` before replacing the raw document. Never write a partial
@@ -65,7 +104,7 @@ An incomplete CLI read marks its ETag as `read:<etag>`. Core rejects that
 basis for body/raw replacement with `INCOMPLETE_READ`; reread with `--full`
 and preserve the returned complete text. Do not strip the marker. The marked
 basis remains usable for continuation and metadata-only edits.
-Every edit needs the ETag from the live read that informed it:
+Whole-body and raw replacements need the ETag from the live read that informed them:
 
 Read responses put body or raw content in `text`, including `--full`; the
 write input below uses `body` for the replacement.

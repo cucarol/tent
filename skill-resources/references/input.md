@@ -46,12 +46,15 @@ name. There is no `body` alias in read responses.
 - Pages are bounded. When `page.nextCursor` is present, continue with
   `--cursor`, the same view and `--expected-etag`. A partial page is not the
   whole document.
-- Before editing, read the complete live document and its ETag with
-  `tent node get <node-id> --full --json`.
+- Before replacing a whole body or raw document, read its complete live text
+  and ETag with `tent node get <node-id> --full --json`. An append uses
+  `node append` without a full read. To replace one section, use
+  `node get-section <node-id> --heading "Title" --json` and its section ETag;
+  see [saving](node-maintenance.md).
 
 ## Versions
 
-Body and raw reads return `version: {commit, path}`: the exact bytes you read,
+Whole-document body and raw reads return `version: {commit, path}`: the exact bytes you read,
 as kept in `.tent/.git`. Use it to:
 
 - read those bytes again after later edits, renames or deletion:
