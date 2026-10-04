@@ -44,17 +44,20 @@ export function appendNodeBody(fs: FsAdapter, nodeId: string, input: NodeAppendI
     async () => {
       const current = await readNodeForEdit(fs, nodeId);
       const eol = /\r?\n/.exec(current.raw)?.[0] ?? "\n";
+      const section = heading === undefined ? undefined : findSection(current.body, heading);
       const addition = normalizeTail(
-        (heading === undefined ? "" : `## ${escapeHeading(heading)}${eol}${eol}`) +
+        (heading === undefined || section ? "" : `## ${escapeHeading(heading)}${eol}${eol}`) +
           input.body.replace(/\r?\n/g, eol).replace(/^(?:[ \t]*\r?\n)+/, ""),
       );
-      const existing = normalizeTail(current.body);
+      const end = section?.end ?? current.body.length;
+      const existing = normalizeTail(current.body.slice(0, end));
       const prefix = existing ? existing + eol + eol : "";
+      const remainder = current.body.slice(end);
       const body = await resolveChangedBody(
         fs,
         current.path,
         current.raw,
-        prefix + addition + eol,
+        prefix + addition + eol + (remainder ? eol + remainder : ""),
         {
           start: prefix.length,
           end: prefix.length + addition.length,
@@ -159,12 +162,18 @@ async function saveBody(
 }
 
 function selectSection(body: string, heading: string): Section {
-  const headings = fromMarkdown(body).children.filter((node) => node.type === "heading");
-  const matches = headings.filter((node) => inlineText(node).trim() === heading);
-  if (!matches.length)
+  const section = findSection(body, heading);
+  if (!section)
     throw new NodeSectionError("SECTION_NOT_FOUND", `Markdown section not found: ${heading}`, {
       heading,
     });
+  return section;
+}
+
+function findSection(body: string, heading: string): Section | undefined {
+  const headings = fromMarkdown(body).children.filter((node) => node.type === "heading");
+  const matches = headings.filter((node) => inlineText(node).trim() === heading);
+  if (!matches.length) return undefined;
   if (matches.length !== 1)
     throw new NodeSectionError(
       "SECTION_AMBIGUOUS",

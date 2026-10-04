@@ -19,16 +19,6 @@ primary type with `tent node type <node-id> <type> --base-etag <etag>`; the
 Node keeps its id. For example, your own conclusions are `output` until the
 user agrees to them.
 
-## Preset suffixes
-
-Prefer these labels so the same kind of content reads the same way across a
-Workspace. When none fits, use a clearer label of your own.
-
-- `goal-direction`, `goal-requirement`, `goal-todo`, `goal-question`
-- `prompt-spec`, `prompt-rule`, `prompt-decision`, `prompt-reference`,
-  `prompt-procedure`
-- `output-asset`, `output-evidence`, `output-analysis`, `output-issue`
-
 ## Mixed content
 
 A Node takes the type of its main content. When one part will be read or

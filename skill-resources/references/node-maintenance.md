@@ -64,11 +64,12 @@ Append with one command. No preceding full read or ETag is required:
 tent node append <node-id> --body - [--heading "Decision"] --json
 ```
 
-The optional heading is plain text and adds a level-two Markdown heading.
-Tent appends under the Workspace lock, normalizes trailing newlines and leaves
-one blank line between the previous body and the new content. A busy lock
-is an explicit error; retry the append after the other write finishes, without
-rereading the body. Successful appends retain earlier additions. The result includes the saved document's
+The optional heading is plain text. If it already exists, Tent appends at the
+end of that section; otherwise it adds a level-two Markdown heading. Repeated
+matching headings are an error. Tent appends under the Workspace lock,
+normalizes trailing newlines and separates the addition with a blank line.
+CLI writes wait briefly for a busy lock; a timeout reports that it remains
+busy. Successful appends retain earlier additions. The result includes the saved document's
 canonical ETag and Git version; keep the receipt instead of reading back the
 entire Node. Ordinary address and synchronization rules still apply: an
 append does not confirm changed material or clear `behind`.

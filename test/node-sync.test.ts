@@ -131,7 +131,14 @@ test("link-output rejects missing, unreadable and directory materials before lea
     pathToFileURL(path.join(workspace, "directory")).href,
     "unreadable.txt",
   ])
-    await assert.rejects(linkNodeOutput(fs, goal, { resource }));
+    await assert.rejects(linkNodeOutput(fs, goal, { resource }), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      if (resource.includes("missing.html")) {
+        assert.match(error.message, /Output file not found: .*Create the file first/);
+        assert.doesNotMatch(error.message, /ENOENT|lstat/);
+      }
+      return true;
+    });
   assert.deepEqual([...(await loadNodeCatalog(fs)).byId.keys()], [goal]);
   assert.equal(await fs.readFile("order.json"), order);
   assert.equal(await fs.history.currentCommit(), head);

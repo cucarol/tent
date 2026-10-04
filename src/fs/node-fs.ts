@@ -26,7 +26,10 @@ export class NodeFs implements FsAdapter {
   private historyWrites = new AsyncLocalStorage<Map<string, string | null>>();
   private historyPreimages = new AsyncLocalStorage<Map<string, string | null>>();
 
-  constructor(root: string, entry: CaptureMetadata["entry"] = "core") {
+  constructor(
+    root: string,
+    private readonly entry: CaptureMetadata["entry"] = "core",
+  ) {
     this.root = nodePath.resolve(root);
     this.history = new GitDocumentHistory(this.root, entry);
   }
@@ -355,6 +358,7 @@ export class NodeFs implements FsAdapter {
 
   async withLock<T>(path: string, action: () => Promise<T>): Promise<T> {
     return withFileMutationLock(this.abs(path), action, {
+      waitMs: this.entry === "cli" ? 8_000 : 0,
       busyMessage: "Tent is already running another write operation; try again later.",
       acquireFailedMessage: "Cannot acquire the Tent mutation lock.",
     });

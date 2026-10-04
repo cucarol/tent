@@ -14,6 +14,57 @@ async function tempRoot(): Promise<string> {
   return fs.mkdtemp(path.join(testScratchRoot(), "tent-mutation-lock-"));
 }
 
+test("bounded acquisition waiting never executes a timed-out action or retries action failures", async (t) => {
+  const dir = await tempRoot();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const lockPath = path.join(dir, "mutation.lock");
+  const options = { busyMessage: "busy", acquireFailedMessage: "failed", waitMs: 100 };
+  let acquired!: () => void,
+    release!: () => void,
+    calls = 0;
+  const ready = new Promise<void>((resolve) => (acquired = resolve));
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const holder = withFileMutationLock(
+    lockPath,
+    async () => {
+      acquired();
+      await held;
+    },
+    options,
+  );
+  await ready;
+  const start = performance.now();
+  try {
+    await assert.rejects(
+      withFileMutationLock(
+        lockPath,
+        async () => {
+          calls++;
+        },
+        options,
+      ),
+      /busy/,
+    );
+    assert.ok(performance.now() - start >= 100);
+    assert.equal(calls, 0);
+  } finally {
+    release();
+    await holder;
+  }
+  await assert.rejects(
+    withFileMutationLock(
+      lockPath,
+      async () => {
+        calls++;
+        throw new Error("busy after side effect");
+      },
+      options,
+    ),
+    /busy after side effect/,
+  );
+  assert.equal(calls, 1);
+});
+
 test("mutation lock rejects a concurrent holder and releases for the next", async () => {
   const dir = await tempRoot();
   const lockPath = path.join(dir, "mutation.lock");

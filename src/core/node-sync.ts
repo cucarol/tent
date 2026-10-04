@@ -311,7 +311,16 @@ export function linkNodeOutput(
             "INVALID_INPUT",
             "Local output creation requires a material observer",
           );
-        await fs.observeMaterial(descriptor.resource, addressOwner);
+        try {
+          await fs.observeMaterial(descriptor.resource, addressOwner);
+        } catch (error) {
+          if (error && typeof error === "object" && "code" in error && error.code === "ENOENT")
+            throw new NodeWriteError(
+              "INVALID_INPUT",
+              `Output file not found: ${input.resource}. Create the file first, then run link-output again.`,
+            );
+          throw error;
+        }
       }
       const basename =
         locator.kind === "path"

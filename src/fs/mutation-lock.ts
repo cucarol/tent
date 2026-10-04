@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import { setTimeout } from "node:timers/promises";
 import { withFileLockGuard } from "./file-lock-guard.js";
 
 /** Lock older than this may be reclaimed when its PID is absent/unusable. */
@@ -18,6 +19,8 @@ export interface MutationLockRecord {
 }
 
 export interface WithFileMutationLockOptions {
+  /** Wait only for acquisition; the action is never retried. Defaults to fail-fast. */
+  waitMs?: number;
   /** Busy error when a non-stale lock is held. */
   busyMessage: string;
   /** Thrown when acquire fails after reclaim attempts. */
@@ -61,37 +64,46 @@ export async function withFileMutationLock<T>(
   await fs.mkdir(dirnameOf(lockPath), { recursive: true });
 
   let handle: FileHandle | undefined;
-  await withFileLockGuard(lockPath, async () => {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        handle = await fs.open(lockPath, "wx");
-        break;
-      } catch (error) {
-        if (!isAlreadyExists(error)) throw error;
-        const reclaimable = await mayReclaimLock(lockPath, now, staleMs, isProcessAlive);
-        if (!reclaimable || attempt >= 2) {
-          throw new Error(options.busyMessage);
-        }
-        // The guard prevents another owner from publishing between check and move.
-        const quarantine = `${lockPath}.stale-${randomUUID()}`;
-        try {
-          await fs.rename(lockPath, quarantine);
-          await fs.rm(quarantine, { force: true }).catch(() => undefined);
-        } catch (renameError) {
-          if (isNotFound(renameError)) continue;
-          throw renameError;
-        }
-      }
-    }
-    if (!handle) throw new Error(options.acquireFailedMessage);
+  const deadline = performance.now() + (options.waitMs ?? 0);
+  for (;;) {
     try {
-      await handle.writeFile(JSON.stringify(record), "utf8");
+      await withFileLockGuard(lockPath, async () => {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            handle = await fs.open(lockPath, "wx");
+            break;
+          } catch (error) {
+            if (!isAlreadyExists(error)) throw error;
+            const reclaimable = await mayReclaimLock(lockPath, now, staleMs, isProcessAlive);
+            if (!reclaimable || attempt >= 2) {
+              throw new MutationLockBusyError(options.busyMessage);
+            }
+            // The guard prevents another owner from publishing between check and move.
+            const quarantine = `${lockPath}.stale-${randomUUID()}`;
+            try {
+              await fs.rename(lockPath, quarantine);
+              await fs.rm(quarantine, { force: true }).catch(() => undefined);
+            } catch (renameError) {
+              if (isNotFound(renameError)) continue;
+              throw renameError;
+            }
+          }
+        }
+        if (!handle) throw new Error(options.acquireFailedMessage);
+        try {
+          await handle.writeFile(JSON.stringify(record), "utf8");
+        } catch (error) {
+          await handle.close().catch(() => undefined);
+          await fs.rm(lockPath, { force: true });
+          throw error;
+        }
+      });
+      break;
     } catch (error) {
-      await handle.close().catch(() => undefined);
-      await fs.rm(lockPath, { force: true });
-      throw error;
+      if (!(error instanceof MutationLockBusyError) || performance.now() >= deadline) throw error;
+      await setTimeout(Math.min(50, Math.max(1, deadline - performance.now())));
     }
-  });
+  }
 
   try {
     return await action();
@@ -100,6 +112,8 @@ export async function withFileMutationLock<T>(
     await releaseMutationLockIfOwned(lockPath, ownerToken);
   }
 }
+
+class MutationLockBusyError extends Error {}
 
 /**
  * Remove lock only when the file still belongs to this holder.

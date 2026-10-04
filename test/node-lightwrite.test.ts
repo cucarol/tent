@@ -296,7 +296,7 @@ test("lightweight ordinary saves retain material behind and standard material va
   );
 });
 
-test("real CLI processes append concurrently with retry and section stdin edit reports captured version", async (t) => {
+test("real CLI processes queue concurrent append and section stdin edit reports captured version", async (t) => {
   const { root, adapter } = await fixture(t, "start");
   const payloads = ["process one", "process two"];
   const results = await Promise.all(
@@ -307,12 +307,8 @@ test("real CLI processes append concurrently with retry and section stdin edit r
   );
   for (let i = 0; i < results.length; i++) {
     const result = results[i]!;
-    if (result.code !== 0) {
-      assert.match(result.stderr, /another write operation/);
-      results[i] = await cli(root, "node", "append", "node-note", "--body", payloads[i]!, "--json");
-    }
-    assert.equal(results[i]!.code, 0, results[i]!.stderr);
-    const saved = JSON.parse(results[i]!.stdout);
+    assert.equal(result.code, 0, result.stderr);
+    const saved = JSON.parse(result.stdout);
     assert.match(saved.etag, /^[a-f0-9]{24}$/);
     assert.ok(saved.version);
   }
@@ -372,6 +368,51 @@ test("real CLI processes append concurrently with retry and section stdin edit r
     assert.equal(scoped.exitCode, 1);
     assert.match(scoped.stderr, /--heading is only valid/);
   }
+});
+
+test("append reuses a unique section after its nested content and preserves following sections", async (t) => {
+  const before = "# Title\n\n```md\n## Notes\n```\n\n## Notes\nold\n\n### Child\nnested\n\n";
+  const after = "## Next\nuntouched  \n\n# Higher\nlast\n";
+  const { adapter } = await fixture(t, before + after);
+  const saved = await appendNodeBody(adapter, "node-note", {
+    heading: "Notes",
+    body: "[Peer](node-peer)",
+  });
+  assert.equal(parseFrontmatter(saved.raw).body, before + "[Peer](../Peer/Peer.md)\n\n" + after);
+  await appendNodeBody(adapter, "node-note", { heading: "Notes", body: "again" });
+  const section = await readNodeSection(adapter, "node-note", "Notes");
+  assert.match(section.text, /nested\n\n\[Peer\].*\n\nagain\n\n$/);
+  await appendNodeBody(adapter, "node-note", { body: "## Notes\nduplicate" });
+  const raw = await adapter.readFile("Note/Note.md");
+  await assert.rejects(
+    appendNodeBody(adapter, "node-note", { heading: "Notes", body: "x" }),
+    (error: unknown) => error instanceof NodeSectionError && error.code === "SECTION_AMBIGUOUS",
+  );
+  assert.equal(await adapter.readFile("Note/Note.md"), raw);
+});
+
+test("CLI adapter waits before execution but preserves CAS conflicts without retrying the action", async (t) => {
+  const { adapter, tentRoot } = await fixture(t, "base");
+  const current = await readNodeForEdit(adapter, "node-note");
+  const cliAdapter = new NodeFs(tentRoot, "cli");
+  let acquired!: () => void, release!: () => void;
+  const ready = new Promise<void>((resolve) => (acquired = resolve));
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const holder = adapter.withLock("mutation.lock", async () => {
+    acquired();
+    await held;
+  });
+  await ready;
+  const stale = writeNodeDocument(cliAdapter, "node-note", {
+    baseEtag: current.etag,
+    body: "stale",
+  });
+  const rejected = assert.rejects(stale, /etag conflict/i);
+  await adapter.writeFile("Note/Note.md", current.raw.replace("base", "external change"));
+  release();
+  await holder;
+  await rejected;
+  assert.match(await adapter.readFile("Note/Note.md"), /external change/);
 });
 
 test("cross-section reference definitions are canonicalized only inside the appended or replaced range", async (t) => {
