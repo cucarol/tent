@@ -69,7 +69,7 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   assert.equal(pkg.license, "MIT");
   assert.equal(pkg.author, "cucarol");
   assert.equal(pkg.author, manifest.author);
-  assert.equal(pkg.version, "0.1.0");
+  assert.equal(pkg.version, "0.1.1");
   assert.equal(manifest.name, "Tent");
   assert.equal(
     manifest.minAppVersion,

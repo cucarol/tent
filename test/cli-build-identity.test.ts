@@ -75,7 +75,7 @@ test("source identity has no build time; mismatch is limited to Tent source chec
   await fs.writeFile(path.join(root, "esbuild.config.mjs"), "build");
   await fs.writeFile(
     path.join(root, "package.json"),
-    JSON.stringify({ name: "@cucarol/tent", version: "2.0.0" }),
+    JSON.stringify({ name: "vibe-tent", version: "2.0.0" }),
   );
   // A nested source copy must not inherit the containing repository's identity.
   assert.deepEqual(await readBuildIdentity(root), {

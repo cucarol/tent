@@ -1,6 +1,6 @@
 {
   "name": "tent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Maintain a local context graph and exchange prompt-and-context Cards from your existing Agent workflow.",
   "author": {
     "name": "cucarol"

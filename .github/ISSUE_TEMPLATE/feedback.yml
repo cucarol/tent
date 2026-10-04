@@ -14,7 +14,7 @@ body:
     attributes:
       label: Version and environment
       description: Tent version, operating system, and agent or host (if any).
-      placeholder: "Tent 0.1.0, Windows 11, Codex"
+      placeholder: "Tent 0.1.1, Windows 11, Codex"
     validations:
       required: true
   - type: textarea

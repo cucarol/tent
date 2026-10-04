@@ -6,7 +6,7 @@
 
 Tent 把项目的工作上下文留在项目里：确认过的目标、后续工作要遵守的决定、某件事确实做过的证据，以及从一个 Agent 会话交给下一个会话的输入。它是 `.tent/` 里的一小组 Markdown 文件，组成一张图，由独立的 Git 历史保存版本。Agent 通过 Skill 和 CLI 读写它，你在本地网页里浏览和编辑。
 
-当前版本 0.1.0，还在早期，会继续变化，见[现状](#现状)。
+当前版本 0.1.1，还在早期，会继续变化，见[现状](#现状)。
 
 ## 什么时候有用
 
@@ -30,7 +30,7 @@ Tent 面向一份交接文档已经装不下的项目：同时有几个方向，
 
 ### Codex
 
-从 [Releases](https://github.com/cucarol/tent/releases/tag/0.1.0) 下载 `tent-plugin-0.1.0.zip`，解压到准备保留的目录，再把该目录添加为本地 marketplace：
+从 [Releases](https://github.com/cucarol/tent/releases/tag/0.1.1) 下载 `tent-plugin-0.1.1.zip`，解压到准备保留的目录，再把该目录添加为本地 marketplace：
 
 ```sh
 codex plugin marketplace add "<解压目录的绝对路径>"
@@ -69,7 +69,7 @@ Check that the four Skills appear, and let me review the new Hooks.
 node "<插件目录>/cli.mjs" --help
 ```
 
-插件目录是下载包解压后的 `plugins/tent`，或源码构建后的 `release/plugins/tent`。若使用单独的 npm CLI 包，从同一 Release 下载 `cucarol-tent-0.1.0.tgz`，运行 `npm install -g "<cucarol-tent-0.1.0.tgz 的路径>"`。这会安装运行依赖并提供 `tent` 命令，不会注册 Codex 插件。
+插件目录是下载包解压后的 `plugins/tent`，或源码构建后的 `release/plugins/tent`。只想装 CLI 的话，运行 `npm install -g vibe-tent`（Release 里也附了同一个包 `vibe-tent-0.1.1.tgz`）。这会提供 `tent` 命令，不会注册 Codex 插件。
 
 ## 使用
 
@@ -91,7 +91,7 @@ tent ui --workspace <项目文件夹>
 
 ## 现状
 
-- **一个维护者，版本 0.1.0。** 文件格式和命令还可能变，以 [SPEC](docs/SPEC.md) 为准。
+- **一个维护者，版本 0.1.1。** 文件格式和命令还可能变，以 [SPEC](docs/SPEC.md) 为准。
 - **还没有证据表明它比普通笔记好。** 2026 年 10 月最新一轮针对需求会变化的项目进行对照，Markdown 组完成了集成；Tent 组的初始拆解超时，最终集成被共享 token 预算截断。Tent 中一处过期摘要在下一阶段自行修正，拆解阶段较高的观测成本再次出现；这些局部发现尚不能证明质量或效率收益。
 - **Hook 需要宿主批准。** 第一轮测试中的 Hook 未获信任，没有投递不能说明宿主模式不支持它们。需要启用时，在宿主里审查并信任 Hook；所有命令不依赖 Hook。
 

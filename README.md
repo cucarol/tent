@@ -6,7 +6,7 @@
 
 Tent keeps a project's working context inside the project: the goals you confirmed, the decisions later work must follow, the evidence that something was done, and the inputs passed from one agent session to the next. It is a small graph of Markdown files in `.tent/`, versioned by its own Git history. Agents read and maintain it through Skills and a CLI. You browse and edit it in a local web page.
 
-Version 0.1.0. Early, and changing; see [Status](#status).
+Version 0.1.1. Early, and changing; see [Status](#status).
 
 ## When it helps
 
@@ -30,7 +30,7 @@ You need Node.js 22.19+ and Git.
 
 ### Codex
 
-Download `tent-plugin-0.1.0.zip` from [Releases](https://github.com/cucarol/tent/releases/tag/0.1.0) and extract it to a folder you will keep. Add that folder as a local marketplace:
+Download `tent-plugin-0.1.1.zip` from [Releases](https://github.com/cucarol/tent/releases/tag/0.1.1) and extract it to a folder you will keep. Add that folder as a local marketplace:
 
 ```sh
 codex plugin marketplace add "<absolute path to the extracted folder>"
@@ -69,7 +69,7 @@ Codex is the only host with a package so far. Any agent that can run shell comma
 node "<plugin folder>/cli.mjs" --help
 ```
 
-The plugin folder is `plugins/tent` inside the extracted download, or `release/plugins/tent` after a source build. For the separate npm CLI package, download `cucarol-tent-0.1.0.tgz` from the same Release and run `npm install -g "<path to cucarol-tent-0.1.0.tgz>"`. This installs its dependencies and exposes `tent`; it does not register a Codex plugin.
+The plugin folder is `plugins/tent` inside the extracted download, or `release/plugins/tent` after a source build. To install only the CLI, run `npm install -g vibe-tent` (the same package is attached to the Release as `vibe-tent-0.1.1.tgz`). This exposes `tent`; it does not register a Codex plugin.
 
 ## Use
 
@@ -91,7 +91,7 @@ A local page with the map of Nodes, Roles and Cards and how they connect. You ca
 
 ## Status
 
-- **One maintainer, version 0.1.0.** The file format and commands may still change; [SPEC](docs/SPEC.md) is the contract.
+- **One maintainer, version 0.1.1.** The file format and commands may still change; [SPEC](docs/SPEC.md) is the contract.
 - **No evidence yet that it beats plain notes.** In the latest October 2026 comparison on a project with changing requirements, Markdown completed integration; Tent's initial decomposition timed out and its final integration was cut short by the shared token budget. A stale Tent summary was corrected in the next stage, while higher observed decomposition cost recurred; these local findings do not establish a quality or efficiency benefit.
 - **Hooks need host approval.** The first test's Hooks were untrusted, so their absence does not show that the host mode cannot deliver them. Review and trust Hooks in the host if you want to enable them; every command works without them.
 
