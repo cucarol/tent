@@ -5,13 +5,19 @@ through the host; it does not add separate global Hook scripts. Hosts without
 these Hooks use the bundled CLI directly.
 
 - **SessionStart** tells the conversation that a Tent Workspace exists,
-  where its CLI is and which build it uses. It reports a commit mismatch in
-  a Tent source checkout. It reads no Node or Role bodies and selects nothing.
-- **Stop** runs after a turn and reads the end of that turn's transcript. When
-  the turn changed files that Nodes declare as material, it lists up to five
-  of those Nodes, in at most 2 KiB, so the Agent can check them. Read-only and
-  cancelled turns stay quiet; when it cannot tell which files changed, it says
-  so. It never blocks the turn or starts another one.
+  where its CLI is, which build it uses and how to request `workspace brief`.
+  It reports a commit mismatch in a Tent source checkout. It reads no Node
+  or Role bodies and does not inject the brief itself.
+- **Stop** reads the end of the current turn's transcript and records explicit
+  provided/read/written file addresses, times and locally observed versions.
+  It stores no material or conversation bodies. It asks at most three concrete
+  questions with candidate answers about unlinked outputs, changed evidence
+  or explicit new decisions; ordinary requests do not trigger an intent question,
+  nor do turns that already changed a Node or Card. Questions use English and
+  the complete JSON fits within 2 KiB. Duplicate Stop
+  delivery is silent. Cancelled turns retain observed facts without questions.
+  Incomplete observations stay marked uncertain. It never blocks the turn or
+  starts another one.
 
 ## Set up and verify
 
@@ -29,9 +35,12 @@ these Hooks use the bundled CLI directly.
 
 ## Reading Stop notices
 
-A Stop notice is a pointer to Nodes worth checking, not a verdict. It may
-appear in the interface or in a later turn. A current `node check` record for
-the changed files suppresses a Node, and that says only that versions match.
+A Stop question needs judgment and may appear in the interface or a later
+turn. Repeated observations of the same file version in a session do not
+repeat the question. Use `node check` to inspect, then confirm or update and
+confirm the Node after reviewing its evidence; `node write --confirm` combines
+the corrected save and confirmation. Use `node link-output` for an output's
+requirement. A version match alone does not prove semantic correctness.
 Keeping facts current stays the Agent's job through
 [tent-node](../../tent-node/SKILL.md). Automatic Card interruption is not
 available yet; use explicit `card interrupt` and `card continue`.

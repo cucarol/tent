@@ -134,7 +134,7 @@ test("legacy addresses survive body/raw/metadata edits, source reorder and remov
   await edit({ frontmatter: { resource: "../../../spec/x.md", sources: [] } });
 });
 
-test("CLI writes retain legacy addresses and report the same repair as node check", async (t) => {
+test("CLI writes retain legacy addresses and read-only node check reports their repair", async (t) => {
   const { root, adapter, id, note } = await fixture(t);
   await adapter.writeFile(
     note,
@@ -154,23 +154,13 @@ test("CLI writes retain legacy addresses and report the same repair as node chec
   const rejected = await cli("write", [id, "--input-json", JSON.stringify(input)]);
   assert.equal(rejected.exitCode, 1);
   assert.match(rejected.stderr, /Invalid sources\[0\]\.resource.*\.\.\/\.\.\/\.\.\/new.md/);
-  const checked = await cli("check", [
-    id,
-    "--input-json",
-    JSON.stringify({
-      expectedPath: live.path,
-      expectedEtag: live.etag,
-      materials: [
-        {
-          resource: "/../spec/x.md",
-          canonicalPath: path.join(root, "spec/x.md"),
-          observedVersion: "0".repeat(64),
-        },
-      ],
-    }),
-  ]);
-  assert.equal(checked.exitCode, 1);
-  assert.match(checked.stderr, /escapes \.tent; use "\.\.\/\.\.\/\.\.\/spec\/x.md"/);
+  const checked = await cli("check", [id]);
+  assert.equal(checked.exitCode, 0, checked.stderr);
+  assert.equal(JSON.parse(checked.stdout).state, "unanchored");
+  assert.match(
+    JSON.parse(checked.stdout).materials[0].reason,
+    /escapes \.tent; use "\.\.\/\.\.\/\.\.\/spec\/x.md"/,
+  );
   assert.equal(await adapter.readFile(note), live.raw);
   for (const fields of [
     { resource: "/../spec/x.md" },

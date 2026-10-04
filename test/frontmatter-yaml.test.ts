@@ -177,7 +177,13 @@ test("Core and Docs edits retain unknown YAML and refuse invalid writes without 
   const expected = parseFrontmatter(raw).data;
   let snapshot = await readNodeForEdit(systemFs, created.nodeId);
   await writeNodeDocument(systemFs, created.nodeId, { baseEtag: snapshot.etag, body: "body\r\n" });
-  assert.equal(await systemFs.readFile(notePath), raw.replace("original\r\n", "body\r\n"));
+  const saved = parseFrontmatter(await systemFs.readFile(notePath));
+  assert.equal(saved.body, "body\r\n");
+  const { sync, ...savedMetadata } = saved.data;
+  assert.deepEqual(savedMetadata, expected);
+  assert.deepEqual(sync, { materials: [{ resource: "https://example.com/a#section" }] });
+  expected.sync = sync;
+  assert.match(await systemFs.readFile(notePath), /# preserved document comment/);
   snapshot = await readNodeForEdit(systemFs, created.nodeId);
   await writeNodeDocument(systemFs, created.nodeId, {
     baseEtag: snapshot.etag,

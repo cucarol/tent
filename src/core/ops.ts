@@ -17,6 +17,7 @@ import { ORDER_PATH } from "./paths.js";
 import { executeDeleteUnlocked, type DeleteWrite } from "./delete-recovery.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import type { CaptureMetadata } from "./git-history.js";
+import { prepareNodeSyncSave } from "./node-sync-record.js";
 
 export type { OpsEnv } from "./ops-context.js";
 export { renameNode, type RenameNodeResult } from "./rename-ops.js";
@@ -32,6 +33,7 @@ export interface NewNodeInput extends MaterialFields {
   type: NodeType;
   body?: string;
   tags?: string[];
+  planned?: boolean;
 }
 
 export async function createNode(env: OpsEnv, input: NewNodeInput): Promise<string> {
@@ -63,7 +65,13 @@ async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Promise<str
   const notePath = nodeNotePath(path);
   validateMaterialAddresses(fm, notePath);
   const body = await canonicalDocumentReferences(env.fs, notePath, fm, input.body ?? "");
-  const content = serializeFrontmatter(fm, body, NODE_FRONTMATTER_KEY_ORDER);
+  const content = await prepareNodeSyncSave(
+    env.fs,
+    notePath,
+    serializeFrontmatter(fm, body, NODE_FRONTMATTER_KEY_ORDER),
+    input.planned,
+    env.clock.now(),
+  );
   if (await env.fs.exists(path)) {
     throw new Error(`Node path already exists: ${path}.`);
   }

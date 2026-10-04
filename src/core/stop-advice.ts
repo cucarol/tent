@@ -1,84 +1,199 @@
-import path from "node:path";
 import type { FsAdapter } from "./adapter.js";
-import { loadNodeCatalog } from "./node-catalog.js";
-import { parseFrontmatter } from "./frontmatter.js";
-import { documentLifecycle } from "./document-status.js";
-import { localMaterialPath, resolvedMaterialOccurrences } from "./material.js";
+import { inspectWorkspaceSync } from "./node-sync.js";
+import { readSessionObservations, type SessionObservationEvent } from "./session-observations.js";
+import {
+  findUnlinkedOutputs,
+  materialAddressKey,
+  observationAddressKey,
+  type WorkspaceSync,
+} from "./context-brief.js";
 import { nodeNotePath } from "./paths.js";
-import { materialCheck, type ObserveMaterial } from "./material-check.js";
+import { nodeTypePrimary } from "./node-type.js";
 
-export type StopActivity = { paths: string[]; uncertain: boolean; cancelled?: true };
-const key = (file: string) =>
-  process.platform === "win32" ? path.resolve(file).toLowerCase() : path.resolve(file);
+export type StopQuestion = {
+  kind: "unlinked-output" | "behind-node" | "possible-intent";
+  question: string;
+  answers: string[];
+};
 const fits = (message: string) =>
   Buffer.byteLength(JSON.stringify({ systemMessage: message }) + "\n", "utf8") <= 2048;
+const literal = (text: string) => JSON.stringify(text);
+const nodeUncertain = (node: WorkspaceSync["nodes"][number]) =>
+  "uncertain" in node && node.uncertain === true;
 
-/** Advisory only: no baseline, completion receipt, document save, or model continuation. */
+/** Use the saved observation, never a copied transcript or material body. */
+export function questionsForObservedTurn(
+  sync: WorkspaceSync,
+  workspaceRoot: string,
+  event: SessionObservationEvent,
+  earlierEvents: SessionObservationEvent[],
+): StopQuestion[] {
+  if (event.cancelled) return [];
+  const previousVersions = new Map<string, string | undefined>();
+  for (const previous of [...earlierEvents].sort((a, b) =>
+    b.observedAt.localeCompare(a.observedAt),
+  )) {
+    if (previous.sessionId === event.sessionId && previous.turnId === event.turnId) continue;
+    for (const file of previous.files) {
+      const key = observationAddressKey(workspaceRoot, file.address);
+      if (key && !previousVersions.has(key))
+        previousVersions.set(
+          key,
+          file.version.state === "observed" ? file.version.sha256 : undefined,
+        );
+    }
+  }
+  const newlyObserved = event.files.filter((file) => {
+    const key = observationAddressKey(workspaceRoot, file.address);
+    return (
+      key &&
+      (!previousVersions.has(key) ||
+        file.version.state !== "observed" ||
+        previousVersions.get(key) !== file.version.sha256)
+    );
+  });
+  const readKeys = new Set(
+    event.files
+      .filter((file) => file.kind === "read" || file.kind === "provided")
+      .map((file) => observationAddressKey(workspaceRoot, file.address))
+      .filter((key): key is string => !!key),
+  );
+  const requirements = sync.nodes.filter(
+    (node) => nodeTypePrimary(node.type) === "goal" && !nodeUncertain(node),
+  );
+  const sameMaterial = requirements
+    .filter((node) =>
+      node.materials.some((material) => {
+        const key = materialAddressKey(workspaceRoot, nodeNotePath(node.path), material.resource);
+        return key && readKeys.has(key);
+      }),
+    )
+    .slice(0, 2);
+  const candidates = sameMaterial.length ? sameMaterial : requirements.slice(0, 2);
+  const unlinked = findUnlinkedOutputs(sync, [event], workspaceRoot);
+  const questions: StopQuestion[] = [];
+  const newOutput = newlyObserved.find(
+    (file) =>
+      file.kind === "written" &&
+      unlinked.some(
+        (output) =>
+          output.address &&
+          observationAddressKey(workspaceRoot, file.address) ===
+            (output.nodeId && output.path
+              ? materialAddressKey(workspaceRoot, nodeNotePath(output.path), output.address)
+              : observationAddressKey(workspaceRoot, output.address)),
+      ),
+  );
+  if (newOutput)
+    questions.push({
+      kind: "unlinked-output",
+      question: `This turn produced ${literal(newOutput.address)} without a requirement link. Which requirement does it serve?`,
+      answers: [
+        ...candidates.map((node) => `Link to ${node.nodeId} (inferred)`),
+        ...(candidates.length ? [] : ["Find or create a confirmed goal first"]),
+        "Leave unlinked for now",
+      ],
+    });
+  const currentKeys = new Set(
+    newlyObserved
+      .map((file) => observationAddressKey(workspaceRoot, file.address))
+      .filter((key): key is string => !!key),
+  );
+  const behind = sync.nodes.find((node) => {
+    if (node.state !== "behind") return false;
+    const matches = (resource: string) => {
+      const key = materialAddressKey(workspaceRoot, nodeNotePath(node.path), resource);
+      return !!key && currentKeys.has(key);
+    };
+    return (
+      matches(`/${nodeNotePath(node.path)}`) ||
+      node.materials.some(
+        (material) =>
+          material.state !== "current" &&
+          material.state !== "unanchored" &&
+          matches(material.resource),
+      ) ||
+      node.outputs.some((output) => output.possiblyDrifted && matches(output.resource))
+    );
+  });
+  if (behind)
+    questions.push({
+      kind: "behind-node",
+      question: `A file version observed this turn puts ${behind.nodeId} behind. Does the Node's judgment still hold?`,
+      answers: [
+        "Still holds: read it fully, then node confirm",
+        "Changed: update the Node and confirm",
+        "Intent retained but not implemented: review material, confirm and mark planned",
+      ],
+    });
+  if (event.signals.length && !event.nodeOrCardChanged)
+    questions.push({
+      kind: "possible-intent",
+      question: `Turn ${literal(event.turnId)} may contain ${event.signals.includes("possible-decision") ? "a new decision or requirement" : "a new requirement"}. Which judgment should be saved?`,
+      answers: [
+        ...(candidates[0] ? [`Update existing ${candidates[0].nodeId}`] : []),
+        "Create a confirmed goal or prompt",
+        "Discussion only; do not save",
+      ],
+    });
+  return questions.slice(0, 3);
+}
+
+export function formatStopQuestions(
+  questions: StopQuestion[],
+  uncertain = false,
+): string | undefined {
+  const lines = [
+    "Tent turn review (addresses and options are advisory; nothing is saved automatically):",
+  ];
+  let count = 0;
+  for (const question of questions.slice(0, 3)) {
+    const candidate = `${count + 1}. ${question.question}\nOptions: ${question.answers.join("; ")}.`;
+    if (
+      !fits(
+        [
+          ...lines,
+          candidate,
+          ...(uncertain
+            ? ["Some observations are incomplete; use workspace brief to check the current state."]
+            : []),
+        ].join("\n"),
+      )
+    )
+      continue;
+    lines.push(candidate);
+    count++;
+  }
+  if (uncertain)
+    lines.push("Some observations are incomplete; use workspace brief to check the current state.");
+  if (!count && !uncertain) return undefined;
+  return lines.join("\n");
+}
+
+/** Keep Node inspection uncertainty visible even when no turn observation raised it. */
+export function formatObservedTurnAdvice(
+  sync: WorkspaceSync,
+  workspaceRoot: string,
+  event: SessionObservationEvent,
+  previous: { events: SessionObservationEvent[]; uncertain: boolean },
+): string | undefined {
+  if (event.cancelled) return undefined;
+  return formatStopQuestions(
+    questionsForObservedTurn(sync, workspaceRoot, event, previous.events),
+    event.uncertain || previous.uncertain || sync.nodes.some(nodeUncertain),
+  );
+}
+
+/** Advisory only: at most three questions, no document save or model continuation. */
 export async function stopAdvice(
   fs: FsAdapter,
   workspaceRoot: string,
-  activity: StopActivity,
-  observe: ObserveMaterial,
+  event: SessionObservationEvent,
 ): Promise<string | undefined> {
-  if (activity.cancelled || (!activity.uncertain && !activity.paths.length)) return undefined;
-  if (activity.uncertain && !activity.paths.length)
-    return "Tent：本轮修改路径归属未证实；未进行同步扫描。按实际工作检查需要维护的 Node。";
-  const changed = activity.paths.map((file) => key(path.resolve(workspaceRoot, file)));
-  const catalog = await loadNodeCatalog(fs);
-  const candidates: string[] = [];
-  let more = false,
-    inspected = 0;
-  for (const node of catalog.byId.values()) {
-    const data = parseFrontmatter(node.header).data;
-    if (!["draft", "stable"].includes(documentLifecycle(data).status ?? "")) continue;
-    const addressed = resolvedMaterialOccurrences(data, nodeNotePath(node.path)).flatMap(
-      ({ locator }) => {
-        if (!locator) return [];
-        const file = localMaterialPath(locator, workspaceRoot);
-        return file === undefined ? [] : [key(file)];
-      },
-    );
-    const affected = changed.filter((file) =>
-      addressed.some((target) => file === target || file.startsWith(target + path.sep)),
-    );
-    if (!affected.length) continue;
-    if (inspected++ === 5) {
-      more = true;
-      break;
-    }
-    if (await fs.exists(`temp/material-checks/${node.nodeId}.json`)) {
-      try {
-        const checked = await materialCheck(
-          fs,
-          { action: "inspect", nodeId: node.nodeId },
-          observe,
-        );
-        if (
-          checked.state === "current" &&
-          affected.every((file) =>
-            checked.record.materials.some((material) => key(material.canonicalPath) === file),
-          )
-        )
-          continue;
-      } catch {
-        /* An unavailable check cannot suppress this candidate. */
-      }
-    }
-    const title = Array.from(node.name)
-      .slice(0, 48)
-      .join("")
-      .replace(/[\r\n]/g, " ");
-    const item = `${node.nodeId} (${title})`;
-    const trial = `Tent：已观察修改涉及以下 Node，可按需核对：\n${[...candidates, item].join("\n")}\n更多候选请用 node search --resource 查询实际修改路径。${activity.uncertain ? "本轮路径归属不完整；" : ""}提示不是同步完成证明。`;
-    if (!fits(trial)) {
-      more = true;
-      break;
-    }
-    candidates.push(item);
-  }
-  if (!candidates.length && !more)
-    return activity.uncertain
-      ? "Tent：本轮路径归属不完整；已知修改路径未匹配到 Node。按实际工作检查需要维护的 Node。"
-      : undefined;
-  return `Tent：已观察修改涉及以下 Node，可按需核对：\n${candidates.join("\n")}${more ? "\n更多候选请用 node search --resource 查询实际修改路径。" : ""}\n${activity.uncertain ? "本轮路径归属不完整；" : ""}提示不是同步完成证明。`;
+  if (event.cancelled) return undefined;
+  const [sync, previous] = await Promise.all([
+    inspectWorkspaceSync(fs),
+    readSessionObservations(fs, { sessionId: event.sessionId }),
+  ]);
+  return formatObservedTurnAdvice(sync, workspaceRoot, event, previous);
 }

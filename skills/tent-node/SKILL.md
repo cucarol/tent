@@ -10,8 +10,10 @@ existing Workspace and the [bundled CLI](../../skill-resources/references/access
 
 ## Before working: read what the task needs
 
-1. Start from what you already have: a Node linked from a Role or Card, a Node
-   the user named, or a focused `tent node search`.
+1. Use `tent workspace brief` when you need the current situation: state
+   counts, behind Nodes, ahead age, recent inputs/outputs and input Cards.
+   Otherwise start from a Node linked from a Role or Card, a Node the user
+   named, or a focused `tent node search`.
 2. Read those bodies. Follow links, parents or children only as far as the
    task needs; see [context discovery](../../skill-resources/references/input.md).
 3. Treat each Node by its [type](../../skill-resources/references/node-types.md):
@@ -25,7 +27,22 @@ Before you deliver, update the Nodes your work actually affected:
 - New confirmed intent, a rule, a decision, a result or a problem: update the
   Node that already owns that fact, or create one when none does.
 - A fact your work made wrong: correct it.
+- A new output: associate it with the confirmed goal it serves using
+  `node link-output`, marking recorded, inferred or confirmed provenance.
+- Changed material with a still-valid judgment: read the Node and material,
+  then use `node confirm`. Keep intended but unfinished work `planned`.
+- Changed judgment: correct the Node and confirm the reviewed basis, using
+  `node write --confirm` or `confirm: true` in a write-many update to save both
+  together. A plain save does not clear `behind`.
 - Nothing changed: leave the Nodes as they are.
+
+Saving observes new material versions automatically and preserves existing
+bases until confirmation; do not calculate or enter hashes. `node check`
+inspects synchronization; it does not decide what
+is true. `workspace drift` finds unlinked outputs, changed output bases and
+goals without outputs. Stop questions are prompts for this judgment, not
+instructions to save every signal. Conversation-only decisions may remain
+unanchored; do not invent file references to remove that state.
 
 Write for the next reader, following
 [Node saving](../../skill-resources/references/node-maintenance.md): open with

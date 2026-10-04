@@ -4,7 +4,11 @@ import { NodeFs } from "../fs/node-fs.js";
 import { findTentSystemRoot } from "../core/status.js";
 import { workspaceRootFromSystemRoot } from "../core/paths.js";
 import { stopAdvice } from "../core/stop-advice.js";
-import { observeMaterialResource } from "../fs/source-observation.js";
+import {
+  appendSessionObservations,
+  saveSessionHistoryBaseline,
+} from "../core/session-observations.js";
+import { observeSessionFile } from "../fs/session-observations.js";
 import { readCodexTurnActivity } from "./codex-turn-activity.js";
 import { readBuildIdentity, formatBuildIdentity, sourceBuildMismatch } from "./build-identity.js";
 
@@ -41,6 +45,8 @@ export async function runHookCommand(
     const workspaceRoot = workspaceRootFromSystemRoot(systemRoot);
     if (!workspaceRoot) throw new Error("Tent requires an in-workspace .tent layout");
     if (sub === "start") {
+      if (typeof event.session_id === "string")
+        await saveSessionHistoryBaseline(new NodeFs(systemRoot), event.session_id);
       const command = `node ${JSON.stringify(path.join(options.packageRoot, "cli.mjs"))}`;
       const identity = await readBuildIdentity(options.packageRoot);
       const mismatch = await sourceBuildMismatch(workspaceRoot, identity);
@@ -50,7 +56,7 @@ export async function runHookCommand(
           JSON.stringify({
             hookSpecificOutput: {
               hookEventName: "SessionStart",
-              additionalContext: `Tent is available in this Workspace.\nWorkspace: ${workspaceRoot}\nCLI: ${command}\nBuild: ${formatBuildIdentity(identity)}\n${mismatch ? `${mismatch}\n` : ""}`,
+              additionalContext: `Tent is available in this Workspace.\nWorkspace: ${workspaceRoot}\nCLI: ${command}\nCurrent context: ${command} workspace brief --workspace ${JSON.stringify(workspaceRoot)} --json (at most 4 KiB).\nBuild: ${formatBuildIdentity(identity)}\n${mismatch ? `${mismatch}\n` : ""}`,
             },
           }) + "\n",
       };
@@ -60,12 +66,18 @@ export async function runHookCommand(
       workspaceRoot,
       event.turn_id,
     );
-    const message = await stopAdvice(
-      new NodeFs(systemRoot),
-      workspaceRoot,
+    if (typeof event.session_id !== "string" || typeof event.turn_id !== "string")
+      throw new Error("Stop session and turn identities are required for observations");
+    const fs = new NodeFs(systemRoot);
+    const saved = await appendSessionObservations(
+      fs,
+      event.session_id,
+      event.turn_id,
       activity,
-      (resource, documentPath) => observeMaterialResource(workspaceRoot, documentPath, resource),
+      (address) => observeSessionFile(workspaceRoot, address),
     );
+    if (!saved.appended || saved.event.cancelled) return silent;
+    const message = await stopAdvice(fs, workspaceRoot, saved.event);
     return message
       ? { ...silent, stdout: JSON.stringify({ systemMessage: message }) + "\n" }
       : silent;

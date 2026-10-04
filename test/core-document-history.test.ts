@@ -7,9 +7,7 @@ import {
   readRoleContext,
   listRoleContexts,
 } from "../src/core/role-context.js";
-import { materialCheck } from "../src/core/material-check.js";
-import { observeMaterialResource } from "../src/fs/source-observation.js";
-import { observeSourceFile } from "../src/fs/source-observation.js";
+import { inspectNodeSync, confirmNodeSync } from "../src/core/node-sync.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
@@ -122,7 +120,13 @@ test("independent Core writers share CAS, selected reads and exact Git history",
     writeNodeDocument(adapter, "node-alpha", { baseEtag, body: "Core fact" }),
     writeNodeDocument(new NodeFs(mount.systemRoot), "node-alpha", { baseEtag, body: "other fact" }),
   ]);
-  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(
+    results.filter((result) => result.status === "fulfilled").length,
+    1,
+    results
+      .map((result) => (result.status === "rejected" ? String(result.reason) : "saved"))
+      .join("; "),
+  );
   const rejected = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
   assert.match(String(rejected.reason), /etag conflict|already running another write operation/);
   assert.equal(unrelatedReads, 0);
@@ -362,87 +366,63 @@ test("batch writes share a commit, Role reads capture explicitly, and Git failur
   assert.equal(await adapter.history!.read(retry.version), retry.raw);
 });
 
-test("checked materials are explicit, body-preserving, local and invalidated by exact versions or paths", async (t) => {
+test("material versions are automatic, body-preserving, local and captured with the Node", async (t) => {
   const h = await fixture(t),
-    { adapter, workspaceId } = h;
-  const resource = "/attachments/checked.txt",
-    target = "attachments/checked.txt";
+    { adapter } = h;
+  const target = "attachments/checked.txt";
   await adapter.writeFile(target, "material one");
-  const node = await readNodeForEdit(adapter, "node-alpha");
-  const observation = await observeSourceFile(
-    h.mount.systemRoot,
-    path.join(h.mount.systemRoot, target),
-  );
-  const input = {
-    expectedPath: node.path,
-    expectedEtag: node.etag,
-    materials: [{ resource, ...observation }],
-  };
+  let node = await readNodeForEdit(adapter, "node-alpha");
+  const originalBody = parseFrontmatter(node.raw).body;
+  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "unanchored");
   const readFile = adapter.readFile.bind(adapter);
   const bodyReads: string[] = [];
   adapter.readFile = async (file) => {
     if (file.endsWith(".md")) bodyReads.push(file);
     return readFile(file);
   };
-  const send = (input: unknown) =>
-    materialCheck(adapter, input, (resource, notePath) =>
-      observeMaterialResource(h.workspace, notePath, resource),
-    );
-  assert.equal((await send({ action: "inspect", nodeId: node.nodeId })).state, "missing");
-  assert.equal((await send({ action: "confirm", nodeId: node.nodeId, ...input })).state, "current");
+  await writeNodeDocument(adapter, node.nodeId, {
+    baseEtag: node.etag,
+    frontmatter: { resource: "/attachments/checked.txt" },
+  });
+  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
   assert.equal(
     bodyReads.includes("B/B.md"),
     false,
     "checking one Node must not read unrelated bodies",
   );
-  assert.ok(bodyReads.includes("A/A.md"));
-  await adapter.writeFile("attachments/same-bytes.txt", "material one");
-  await assert.rejects(
-    send({
-      action: "confirm",
-      nodeId: node.nodeId,
-      ...input,
-      materials: [{ ...observation, resource: "/attachments/same-bytes.txt" }],
-    }),
-    /Material changed/,
+  node = await readNodeForEdit(adapter, node.nodeId);
+  const firstHash = String(
+    (parseFrontmatter(node.raw).data.sync as { materials: { version: string }[] }).materials[0]
+      .version,
   );
-  await assert.rejects(
-    send({
-      action: "confirm",
-      nodeId: node.nodeId,
-      ...input,
-      materials: [
-        input.materials[0],
-        { ...input.materials[0], resource: "../attachments/checked.txt" },
-      ],
-    }),
-    /Duplicate/,
-  );
-  assert.equal(await adapter.readFile("A/A.md"), node.raw);
+  assert.match(firstHash, /^[a-f0-9]{64}$/);
+  await confirmNodeSync(adapter, node.nodeId, { baseEtag: node.etag });
   assert.equal(
-    (await send({ action: "inspect", nodeId: node.nodeId })).record!.materials.length,
-    1,
+    await adapter.readFile("A/A.md"),
+    node.raw,
+    "no-op confirmation keeps its recorded versions",
   );
-  await adapter.writeFile("attachments/unexamined.txt", "irrelevant change");
-  const cli = await runNodeCommand("check", [node.nodeId], { workspace: h.workspace, json: true });
-  assert.equal(cli.exitCode, 0, cli.stderr);
-  assert.equal(JSON.parse(cli.stdout).state, "current");
   await adapter.writeFile(target, "material two");
-  assert.equal((await send({ action: "inspect", nodeId: node.nodeId })).state, "changed");
+  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "behind");
+  const confirmed = await confirmNodeSync(adapter, node.nodeId, { baseEtag: node.etag });
+  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
+  assert.equal(parseFrontmatter(confirmed.raw).body, originalBody);
   await assert.rejects(
-    send({ action: "confirm", nodeId: node.nodeId, ...input }),
-    /Material changed/,
+    confirmNodeSync(adapter, node.nodeId, { baseEtag: node.etag }),
+    /etag conflict/i,
   );
   await adapter.remove(target);
-  assert.equal((await send({ action: "inspect", nodeId: node.nodeId })).state, "unavailable");
-  await adapter.writeFile(target, "material one");
+  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "behind");
+  await adapter.writeFile(target, "material two");
   await renameNode(h.mount.env, node.nodeId, "Moved");
-  assert.equal((await send({ action: "inspect", nodeId: node.nodeId })).state, "changed");
-  assert.ok(
-    !(await h
-      .git("ls-tree", "-r", "--name-only", "HEAD")
-      .then((s) => s.includes("material-checks"))),
-  );
+  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
+  const retained = (
+    await promisify(execFile)("git", ["-C", h.mount.systemRoot, "show", "HEAD:Moved/Moved.md"], {
+      windowsHide: true,
+    })
+  ).stdout;
+  assert.match(retained, /sync:/);
+  assert.equal(parseFrontmatter(retained).body, originalBody);
   adapter.readFile = readFile;
 });
 
@@ -617,17 +597,14 @@ for (const stage of [
       return entries;
     };
     const before = await snapshot();
-    const inspect = () =>
-      materialCheck(adapter, { action: "inspect", nodeId: "node-alpha" }, (resource, notePath) =>
-        observeMaterialResource(h.workspace, notePath, resource),
-      );
+    const inspect = () => inspectNodeSync(adapter, "node-alpha");
     if (stage === "corrupt-order") {
       await assert.rejects(inspect, /requires explicit repair/);
       assert.deepEqual(await snapshot(), before);
       return;
     }
     const result = await inspect();
-    assert.equal(result.state, "missing");
+    assert.equal(result.state, "unanchored");
     assert.deepEqual(await snapshot(), before);
     if (stage === "delete-conflict")
       await assert.rejects(

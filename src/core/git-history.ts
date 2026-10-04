@@ -660,6 +660,18 @@ export class GitDocumentHistory {
 
   /** First retained timestamps for selected paths, from one reachable history walk. */
   async firstCommitTimes(files: readonly string[]): Promise<Map<string, string>> {
+    return this.pathCommitTimes(files, true);
+  }
+
+  /** Latest retained change per path; does not capture live files or consult filename dates. */
+  async latestCommitTimes(files: readonly string[]): Promise<Map<string, string>> {
+    return this.pathCommitTimes(files, false);
+  }
+
+  private async pathCommitTimes(
+    files: readonly string[],
+    first: boolean,
+  ): Promise<Map<string, string>> {
     const selected = new Set(files.map(documentPath));
     const times = new Map<string, string>();
     if (!selected.size) return times;
@@ -670,10 +682,9 @@ export class GitDocumentHistory {
       "--literal-pathspecs",
       "log",
       "--full-history",
-      "--reverse",
+      ...(first ? ["--reverse", "--diff-filter=A"] : ["--diff-merges=separate"]),
       // A single-path query sees the destination as an addition, not a rename.
       "--no-renames",
-      "--diff-filter=A",
       "--format=%cI",
       "-z",
       "--name-only",

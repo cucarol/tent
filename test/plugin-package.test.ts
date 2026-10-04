@@ -195,8 +195,61 @@ test(
     const start = JSON.parse(await hook("SessionStart")).hookSpecificOutput.additionalContext;
     assert.ok(start.includes(workspace));
     assert.ok(start.includes(JSON.stringify(path.join(bundle, "cli.mjs"))));
+    assert.match(start, /workspace brief/);
     assert.doesNotMatch(start, /SKILL\.md|\$tent-|reconcile|baseline|sessionToken/);
-    assert.match(JSON.parse(await hook("Stop")).systemMessage, /未证实|unverified/);
+    assert.match(
+      JSON.parse(await hook("Stop")).systemMessage,
+      /Stop session and turn identities are required/,
+    );
+    const transcript = path.join(workspace, "turn.jsonl");
+    await fs.writeFile(path.join(workspace, "new.svg"), "<svg>private payload</svg>");
+    await fs.writeFile(
+      transcript,
+      [
+        { type: "event_msg", payload: { type: "task_started", turn_id: "turn-1" } },
+        {
+          type: "event_msg",
+          payload: {
+            type: "item_completed",
+            turn_id: "turn-1",
+            item: {
+              type: "FileChange",
+              status: "completed",
+              changes: { "new.svg": { type: "add" } },
+            },
+          },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n") + "\n",
+    );
+    const stopInput = { turn_id: "turn-1", transcript_path: transcript };
+    const stop = await hook("Stop", stopInput);
+    assert.ok(Buffer.byteLength(stop) <= 2048);
+    assert.match(JSON.parse(stop).systemMessage, /new\.svg/);
+    const observationDir = path.join(workspace, ".tent", "temp", "observations");
+    const entries = await fs.readdir(observationDir);
+    const logs = entries.filter((name) => name.endsWith(".jsonl"));
+    const baselines = entries.filter((name) => name.endsWith(".baseline.json"));
+    assert.equal(logs.length, 1);
+    assert.equal(baselines.length, 1);
+    const baseline = JSON.parse(
+      await fs.readFile(path.join(observationDir, baselines[0]!), "utf8"),
+    );
+    assert.deepEqual(Object.keys(baseline), ["historyCommit"]);
+    assert.match(baseline.historyCommit, /^[a-f0-9]{40,64}$/);
+    const logPath = path.join(observationDir, logs[0]!);
+    const recorded = await fs.readFile(logPath, "utf8");
+    const observed = JSON.parse(recorded);
+    assert.equal(observed.sessionId, "fixture-session");
+    assert.equal(observed.turnId, "turn-1");
+    assert.equal(observed.files[0].address, "new.svg");
+    assert.equal(observed.files[0].kind, "written");
+    assert.equal(observed.files[0].version.state, "observed");
+    assert.equal(observed.historyCommit, baseline.historyCommit);
+    assert.doesNotMatch(recorded, /private payload/);
+    assert.deepEqual(JSON.parse(await hook("Stop", stopInput)), {});
+    assert.equal(await fs.readFile(logPath, "utf8"), recorded);
     await assert.rejects(fs.access(dataDir), { code: "ENOENT" });
     await assert.rejects(fs.access(trap), { code: "ENOENT" });
     // A broken CLI is not repaired with a cwd/global runtime.

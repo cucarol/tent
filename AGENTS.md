@@ -9,7 +9,6 @@
 
 - 提交使用 Conventional Commits：`feat|fix|chore|ci|test|refactor(scope): description`。
 - 功能分支压成一个提交合入 main，完成集成后及时推送。
-- `archive/full-history` 保存重写前的本地历史，不推送、不删除。
 - 主 checkout 用于集成；并行写入需隔离，worktree 按需创建。
 - 项目相关目录必须位于本项目根目录内：临时 worktree 放 `.worktrees/`，测试副本和临时数据放 `.scratch/`；不得在父目录或其他全局目录创建项目副本。完成后核验成果并清理临时目录。
 - 发布 tag 与 `manifest.json.version` 完全一致，不加 `v` 前缀。

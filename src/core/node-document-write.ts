@@ -14,6 +14,7 @@ import { assertStatusEdit } from "./document-status.js";
 import { ReaderError } from "./context-reader.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "./node-read-basis.js";
+import { assertSyncMetadataRetained, prepareNodeSyncSave } from "./node-sync-record.js";
 
 export class NodeWriteError extends Error {
   constructor(
@@ -37,6 +38,8 @@ export type NodeDocumentEdit = {
   raw?: string;
   body?: string;
   frontmatter?: Record<string, unknown>;
+  planned?: boolean;
+  confirm?: boolean;
 };
 
 /** Shared Core entry for direct CLI and other hosts. */
@@ -78,7 +81,14 @@ export async function writeNodeDocumentUnlocked(
     parsed.data,
     parsed.body,
   );
-  raw = serializeFrontmatter(parsed.data, canonicalBody, parsed.keyOrder);
+  raw = await prepareNodeSyncSave(
+    fs,
+    nodeNotePath(node.path),
+    serializeFrontmatter(parsed.data, canonicalBody, parsed.keyOrder),
+    input.planned,
+    undefined,
+    input.confirm,
+  );
   const changed = raw !== document.raw;
   const path = nodeNotePath(node.path);
   // Link resolution awaits a catalog scan; keep the caller's original CAS basis.
@@ -131,10 +141,13 @@ export function prepareNodeDocumentWrite(
       nodeId: node.id,
     });
   }
-  if (isIncompleteNodeReadEtag(baseEtag) && (rawInput !== undefined || body !== undefined)) {
+  if (
+    isIncompleteNodeReadEtag(baseEtag) &&
+    (rawInput !== undefined || body !== undefined || input.confirm === true)
+  ) {
     throw new NodeWriteError(
       "INCOMPLETE_READ",
-      "Incomplete Node read cannot replace body or raw content; use tent node get <nodeId> --full before writing",
+      "Incomplete Node read cannot replace or confirm content; use tent node get <nodeId> --full before writing",
       { code: "incomplete_read", nodeId: node.id, path: node.path },
     );
   }
@@ -154,6 +167,7 @@ export function prepareNodeDocumentWrite(
     const nextParsed = parseFrontmatter(rawInput);
     // The Node id is the document identity and cannot be changed here.
     assertRawDocsWriteReserved(diskParsed.data, nextParsed.data);
+    validateSyncMetadata(diskParsed.data, nextParsed.data);
     assertStatusEdit(diskParsed.data, nextParsed.data);
     normalizeOptionalNodeType(nextParsed.data.type);
     if (nextParsed.data.tags !== undefined) normalizeTagList(nextParsed.data.tags);
@@ -169,7 +183,12 @@ export function prepareNodeDocumentWrite(
       assertReservedDocsWriteFields(frontmatter);
     }
 
-    if (body === undefined && (!frontmatter || Object.keys(frontmatter).length === 0)) {
+    if (
+      body === undefined &&
+      input.planned === undefined &&
+      input.confirm !== true &&
+      (!frontmatter || Object.keys(frontmatter).length === 0)
+    ) {
       throw new NodeWriteError(
         "INVALID_INPUT",
         "node.write requires raw, body, and/or frontmatter",
@@ -177,6 +196,7 @@ export function prepareNodeDocumentWrite(
     }
     const current = parseFrontmatter(diskRaw);
     const merged = { ...current.data, ...frontmatter };
+    validateSyncMetadata(current.data, merged);
     assertStatusEdit(current.data, merged);
     if (frontmatter && "type" in frontmatter)
       merged.type = normalizeOptionalNodeType(frontmatter.type);
@@ -195,6 +215,14 @@ export function prepareNodeDocumentWrite(
   }
 
   return nextRaw;
+}
+
+function validateSyncMetadata(previous: Record<string, unknown>, next: Record<string, unknown>) {
+  try {
+    assertSyncMetadataRetained(previous, next);
+  } catch (error) {
+    throw new NodeWriteError("INVALID_EDIT", String(error));
+  }
 }
 
 function validateNodeMaterials(

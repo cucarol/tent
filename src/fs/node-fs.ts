@@ -10,6 +10,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { GitDocumentHistory, type CaptureMetadata } from "../core/git-history.js";
 import { isHistoryDocument } from "../core/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
+import { observeMaterialResource } from "./source-observation.js";
+import { workspaceRootFromSystemRoot } from "../core/paths.js";
+import { UnanchoredMaterialError } from "../core/node-sync-record.js";
 
 export class NodeFs implements FsAdapter {
   private root: string;
@@ -19,6 +22,21 @@ export class NodeFs implements FsAdapter {
   constructor(root: string, entry: CaptureMetadata["entry"] = "core") {
     this.root = nodePath.resolve(root);
     this.history = new GitDocumentHistory(this.root, entry);
+  }
+
+  async observeMaterial(resource: string, documentPath: string) {
+    const workspaceRoot = workspaceRootFromSystemRoot(this.root);
+    if (!workspaceRoot) throw new Error("Material observation requires a Workspace .tent root");
+    const observed = await observeMaterialResource(workspaceRoot, documentPath, resource);
+    const relative = nodePath.relative(this.root, observed.canonicalPath);
+    const inside =
+      relative !== ".." &&
+      !relative.startsWith(`..${nodePath.sep}`) &&
+      !nodePath.isAbsolute(relative);
+    const systemPath = inside ? relative.split(nodePath.sep).join("/") : undefined;
+    if (systemPath === documentPath)
+      throw new UnanchoredMaterialError("A Node cannot anchor its own embedded material version");
+    return { ...observed, ...(systemPath ? { systemPath } : {}) };
   }
 
   private abs(p: string): string {

@@ -49,7 +49,7 @@ Write for an Agent or person who arrives without this conversation:
 ## Create
 
 ```text
-tent node create <name> --type <type> [--parent <node-id>] [--body -] [--resource <path>] [--sources-json <JSON>] [--tags a,b] --json
+tent node create <name> --type <type> [--parent <node-id>] [--body -] [--resource <path>] [--sources-json <JSON>] [--tags a,b] [--planned] --json
 ```
 
 The name becomes the folder and file name. Body, type, resource, sources and
@@ -80,6 +80,9 @@ tent node write <node-id> --input-json - --json
 ```
 
 - Omitted body and fields stay unchanged, and unknown metadata is kept.
+- Use top-level `planned: true` for intended but unfinished work, or
+  `planned: false` to remove that explicit intent marker. It is independent
+  of OKF lifecycle status and supported by batch inputs too.
 - `sources` replaces the whole list: send every entry in order, and
   `sources: []` to clear it.
 - For a body-only edit, use
@@ -144,21 +147,67 @@ After maintaining Nodes, run `tent workspace check --json` once instead of
 writing a checking script. It reports unresolved links, invalid material
 addresses and missing local material files across Nodes, Roles and Cards.
 It changes no files and does not decide whether a fact is still current.
-The following per-Node check separately records material versions.
 
-After reading the real files a Node describes, record the check:
+Creating and saving automatically observe new local material versions. A plain
+save retains existing versions when material changed or became unavailable;
+it cannot clear `behind`, even when part of the body changed. Do not
+enter hashes or edit generated `sync` and `outputs` metadata. An old Node
+without a recorded version remains unanchored until saved or confirmed.
+Remote sources and conversation-only decisions can remain unanchored.
 
 ```text
-tent node check <node-id> --input-json - --json
+tent node check <node-id> --json
+tent workspace brief
+tent workspace drift --json
 ```
 
-```json
-{"expectedPath":"<Node path from the read>","expectedEtag":"<etag>","materials":[{"resource":"../../src/app.ts","canonicalPath":"<absolute file path>","observedVersion":"<SHA-256 of the whole file>"}]}
+Check reports `synced`, `ahead`, `behind` or `unanchored`, plus the material
+and output evidence. It is read-only and proves version agreement, not
+correctness. All `goal` Nodes are requirements regardless of suffix. A saved
+goal without an output or explicit implementation confirmation is ahead;
+an explicit plan records the first known start time. Material changes or
+changed output bases require review.
+
+After reading the complete live Node and the changed material, choose:
+
+- Judgment still holds: `tent node confirm <node-id> --base-etag <etag> --json`.
+- Judgment changed: review the changed material and drifted outputs, then save
+  the corrected Node with `node write --confirm` (or `confirm: true` in write
+  JSON or a write-many update item), or follow the save with `node confirm`.
+- Intent remains unfinished: write `planned: true`. Changed material still
+  requires review and confirmation; a plan alone does not clear `behind`.
+- Implementation is verified by declared local material but has no separate
+  output: add `--implemented` to confirmation. This clears an explicit plan.
+
+Confirmation records the current basis without rewriting the body. It does
+not clear an explicit plan unless `--implemented` is supplied. Both commands
+require an ETag from a complete live read; a summary or old Card is not an
+edit basis. Material that still cannot be read retains its known old version
+and remains behind even after confirmation.
+
+## Associate an output with its requirement
+
+Read the goal and use one command to record the association:
+
+```text
+tent node link-output <goal-id> --resource <path-or-node-id> --provenance inferred --base-etag <etag> --json
 ```
 
-Include only files you actually checked. Later, `tent node check <node-id> --json`
-reports whether the Node and those files are unchanged since. It confirms
-versions, not meaning, and changes no Markdown.
+Use `recorded` for a linkage supported by observed records, `inferred` for
+your reasoned attribution, and `confirmed` for an explicitly confirmed
+association. Paths resolve from the requirement Node's Markdown; Node ids
+are converted to relative paths. The command stores the output address and
+current requirement/material basis in the goal and records the save in Git.
+Requirement or material changes can make an associated output
+`possiblyDrifted`; linking it again does not acknowledge that requirement
+change. Review and confirm explicitly.
+
+`workspace drift` reports unlinked outputs, changed output bases and goals
+without output associations. Stop can suggest likely goals from this turn's
+observed files, but never associates or confirms on your behalf. Treat a
+possible intent signal as a question; save only a real confirmed requirement
+or decision. Session observations contain addresses and versions, not file
+or conversation contents.
 
 ## Structure and lifecycle
 

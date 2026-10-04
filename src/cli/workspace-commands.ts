@@ -6,13 +6,22 @@ import { resolveWorkspacePaths } from "./workspace-path.js";
 import { readWorkspaceSettings } from "../core/workspace-settings.js";
 import { listHistoryChanges } from "../core/history-query.js";
 import { checkGraph } from "../core/graph-check.js";
+import {
+  inspectCurrentContext,
+  makeContextBrief,
+  formatContextBrief,
+  inspectWorkspaceDrift,
+} from "../core/context-brief.js";
+import { canonicalSha256 } from "../core/canonical-digest.js";
 import { pageItems } from "./reader-page.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
 
 export const workspaceHelpText = `tent workspace export --output <new-output-or-scratch-directory>
 tent workspace changes [--from <commit>] [--to <commit>] [--limit <n>] [--cursor <cursor>]
 tent workspace check [--json]
-Accepts --workspace <root> and --json. check reports broken links, invalid material addresses and missing local material files without writing or capturing history. Exit 1 means issues or inspection errors; JSON remains on stdout. Use node check separately to record material versions.`;
+tent workspace brief [--role <roleId>] [--json]
+tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
+Accepts --workspace <root> and --json. check reports broken links, invalid material addresses and missing local material files without writing or capturing history. Exit 1 means issues or inspection errors; JSON remains on stdout. brief compares current local versions and returns at most 4 KiB, organized by synchronization state. --role filters Card inputs; Node counts remain Workspace-wide. drift reports unlinked outputs, changed requirements/materials and requirements without outputs. Use node confirm after reviewing a Node; Tent records hashes itself.`;
 
 export async function runWorkspaceCommand(
   sub: string,
@@ -22,7 +31,8 @@ export async function runWorkspaceCommand(
   try {
     if (["help", "--help", "-h"].includes(sub))
       return { exitCode: 0, stdout: workspaceHelpText + "\n", stderr: "" };
-    if (!["export", "changes", "check"].includes(sub)) throw new Error(workspaceHelpText);
+    if (!["export", "changes", "check", "brief", "drift"].includes(sub))
+      throw new Error(workspaceHelpText);
     const { values, positionals } = parseArgs({
       args,
       allowPositionals: true,
@@ -32,6 +42,7 @@ export async function runWorkspaceCommand(
         to: { type: "string" },
         limit: { type: "string" },
         cursor: { type: "string" },
+        role: { type: "string" },
         help: { type: "boolean", short: "h" },
         workspace: { type: "string" },
         json: { type: "boolean" },
@@ -40,12 +51,26 @@ export async function runWorkspaceCommand(
     if (values.help || positionals[0] === "help")
       return { exitCode: 0, stdout: workspaceHelpText + "\n", stderr: "" };
     if (positionals.length) throw new Error(workspaceHelpText);
+    if (values.role !== undefined && sub !== "brief")
+      throw new Error("--role is only valid for workspace brief");
     if (
       sub === "export" &&
       (!values.output || values.from || values.to || values.limit || values.cursor)
     )
       throw new Error(workspaceHelpText);
     if (sub === "changes" && values.output) throw new Error(workspaceHelpText);
+    if (
+      sub === "brief" &&
+      [values.output, values.from, values.to, values.limit, values.cursor].some(
+        (value) => value !== undefined,
+      )
+    )
+      throw new Error(workspaceHelpText);
+    if (
+      sub === "drift" &&
+      [values.output, values.from, values.to].some((value) => value !== undefined)
+    )
+      throw new Error(workspaceHelpText);
     if (
       sub === "check" &&
       [values.output, values.from, values.to, values.limit, values.cursor].some(
@@ -63,6 +88,53 @@ export async function runWorkspaceCommand(
       throw new Error(
         "Tent workspace identity is missing; explicitly initialize or convert this workspace",
       );
+    if (sub === "brief") {
+      const brief = makeContextBrief(
+        await inspectCurrentContext(fs, roots.workspaceRoot, { roleId: values.role }),
+        { roleId: values.role },
+      );
+      return {
+        exitCode: 0,
+        stdout:
+          (values.json || globals.json ? JSON.stringify(brief) : formatContextBrief(brief)) + "\n",
+        stderr: "",
+      };
+    }
+    if (sub === "drift") {
+      const inspected = await inspectWorkspaceDrift(fs, roots.workspaceRoot);
+      const result = pageItems(
+        {
+          items: inspected.items,
+          revision: canonicalSha256(inspected),
+          observationUncertain: inspected.observationUncertain,
+          synchronizationUncertain: inspected.synchronizationUncertain,
+        },
+        "workspace.drift",
+        {
+          limit: values.limit === undefined ? undefined : Number(values.limit),
+          cursor: values.cursor,
+        },
+      );
+      const output =
+        values.json || globals.json
+          ? JSON.stringify(result)
+          : [
+              ...result.items.map(
+                (item) =>
+                  `${item.kind}: ${"nodeId" in item ? (item.nodeId ?? "") : ""}${"address" in item ? ` ${item.address ?? ""}` : ""}`,
+              ),
+              ...(result.page.hasMore ? [`Continue with --cursor ${result.page.nextCursor}`] : []),
+              ...(inspected.observationUncertain
+                ? ["Session observations are incomplete; only recorded outputs were inspected."]
+                : []),
+              ...(inspected.synchronizationUncertain
+                ? [
+                    "Some Nodes changed during inspection; synchronization and unlinked-output findings are incomplete. Retry workspace drift.",
+                  ]
+                : []),
+            ].join("\n") || "No observed drift.";
+      return { exitCode: 0, stdout: output + "\n", stderr: "" };
+    }
     if (sub === "check") {
       const result = await checkGraph(fs, roots.workspaceRoot, async (filename) => {
         try {

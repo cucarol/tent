@@ -70,6 +70,11 @@ test("batched first timestamps retain publication across edits, removal and re-a
     const first = (await history.pathVersions(name)).first!;
     assert.equal(result.get(name), await history.commitTime(first.commit));
   }
+  const latest = await history.latestCommitTimes([a, b, unicode, "missing.md", "nodes/*.md"]);
+  assert.equal(latest.size, 3);
+  assert.equal(latest.get(a), "2025-12-31T02:00:00.000Z");
+  assert.equal(latest.get(b), "2026-01-02T02:00:00.000Z");
+  assert.equal(latest.get(unicode), "2026-01-01T02:00:00.000Z");
   assert.equal(git("rev-parse", "HEAD"), before);
   assert.equal(git("status", "--porcelain"), "");
   await assert.rejects(history.firstCommitTimes(["../outside.md"]), /Invalid Git document path/);
@@ -90,9 +95,12 @@ test("batched first timestamps retain publication across edits, removal and re-a
     branchHead,
   );
   const merged = await history.firstCommitTimes([a, b, unicode, branchPath]);
+  const latestMerged = await history.latestCommitTimes([a, b, unicode, branchPath]);
   for (const name of [a, b, unicode, branchPath]) {
     const first = (await history.pathVersions(name)).first!;
     assert.equal(merged.get(name), await history.commitTime(first.commit));
+    const last = (await history.pathVersions(name)).latest!;
+    assert.equal(latestMerged.get(name), await history.commitTime(last.commit));
   }
 
   const renamed = "cards/card-renamed.md";

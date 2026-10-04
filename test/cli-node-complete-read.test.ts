@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
 import test, { type TestContext } from "node:test";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
@@ -10,7 +9,6 @@ import { parseFrontmatter } from "../src/core/frontmatter.js";
 import { prepareNodeDocumentWrite, NodeWriteError } from "../src/core/node-document-write.js";
 import { contentEtag } from "../src/core/etag.js";
 import { incompleteNodeReadEtag } from "../src/core/node-read-basis.js";
-import { materialCheck } from "../src/core/material-check.js";
 
 async function fixture(t: TestContext, metadata = "") {
   const scratch = path.resolve(".scratch");
@@ -203,27 +201,9 @@ test("batch, create, read-back and excerpt outputs expose no unrestricted replac
 test("incomplete bases support metadata-only edits and retain revision conflict detection", async (t) => {
   const { adapter, raw, body, globals, cli } = await fixture(t);
   const page = (await cli("get", ["node-alpha"])).node;
-  const material = {
-    resource: "../B/B.md",
-    canonicalPath: await fs.realpath(path.join(globals.workspace, ".tent/B/B.md")),
-    observedVersion: createHash("sha256")
-      .update(await adapter.readFile("B/B.md"))
-      .digest("hex"),
-  };
-  await materialCheck(
-    adapter,
-    {
-      action: "confirm",
-      nodeId: "node-alpha",
-      expectedPath: "A",
-      expectedEtag: page.etag,
-      materials: [material],
-    },
-    async () => material,
-  );
   const checked = await cli("check", ["node-alpha"]);
-  assert.equal(checked.state, "current");
-  assertIncomplete(checked, raw);
+  assert.equal(checked.state, "unanchored");
+  assert.equal("etag" in checked, false, "sync inspection is not a complete document read");
   const saved = await cli("write", [
     "node-alpha",
     "--input-json",

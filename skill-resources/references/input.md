@@ -9,6 +9,7 @@ Start from what you have and widen only as needed:
 
 | You have | Run |
 | --- | --- |
+| Need the current situation | `tent workspace brief` (optional `--role <id>` filters input Cards) |
 | A Node id | `tent node get <node-id> --view body --json` |
 | A topic or term | `tent node search "<term>" --json` |
 | A file, and want the Nodes about it | `tent node search --resource <path-from-.tent-or-URI> --json` |
@@ -19,6 +20,9 @@ These are alternatives, not a checklist; stop once you have what the task
 needs. Keep the `node-` ids you find, because names and paths can change.
 
 - `list` shows direct children only, of the root by default.
+- `brief` is a bounded discovery page. Counts cover the whole Workspace;
+  omitted details can be followed with `node check` or `workspace drift`.
+  Ahead age starts when Tent first recorded the intent, not an inferred date.
 - `search` matches words in the body, name, path, type, tags and material
   addresses. A hit can be a passing mention, so read the Node before relying
   on it. Archived Nodes appear only with `--include-archived`.
