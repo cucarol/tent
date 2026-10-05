@@ -33,6 +33,9 @@ Update only the Nodes your work affected
 - A behind Node whose judgment still holds after you read the changed
   material: `tent node confirm`. If the judgment changed, save the correction
   with `node write --confirm`. A plain save does not clear behind.
+- A decision only the user can make: save the proposal, reasons and
+  alternatives as a `prompt` Node with `status: draft` and tell the user.
+  They settle it on the Now page of `tent ui`, which makes it `stable`.
 - Nothing changed: leave the Nodes alone.
 
 Add text with `node append` and change one heading with `node write-section`.

@@ -5,43 +5,68 @@ import { CardGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
 import { t } from "../i18n.js";
 
-/** The bar over the map: where the selection sits, and the Roles at work in the workspace. */
+export type StageView = "now" | "map";
+
+/** The bar over the stage: the Now and map tabs, where the selection sits on the map, and the Roles at work. */
 export function StageBar({
   graph,
   selected,
+  view,
+  onView,
   onOpen,
 }: {
   graph: Graph;
   selected: SnapshotRef | null;
+  view: StageView;
+  onView: (view: StageView) => void;
   onOpen: (ref: SnapshotRef | null) => void;
 }) {
   const crumbs: { ref: SnapshotRef; name: string; glyph: React.ReactNode }[] = [];
-  if (selected?.kind === "node" && graph.nodes.has(selected.id)) {
-    for (const n of [...graph.ancestors(selected.id), graph.nodes.get(selected.id)!])
+  // Crumbs place the selection on the map; the Now page has none.
+  const at = view === "map" ? selected : null;
+  if (at?.kind === "node" && graph.nodes.has(at.id)) {
+    for (const n of [...graph.ancestors(at.id), graph.nodes.get(at.id)!])
       crumbs.push({
         ref: { kind: "node", id: n.id },
         name: n.name,
         glyph: <TypeGlyph type={n.type} size={15} />,
       });
-  } else if (selected?.kind === "role" && graph.roles.has(selected.id)) {
+  } else if (at?.kind === "role" && graph.roles.has(at.id)) {
     crumbs.push({
-      ref: selected,
-      name: t.bar.role(graph.roles.get(selected.id)!.title),
-      glyph: <Pet id={selected.id} size={14} />,
+      ref: at,
+      name: t.bar.role(graph.roles.get(at.id)!.title),
+      glyph: <Pet id={at.id} size={14} />,
     });
-  } else if (selected?.kind === "card" && graph.cards.has(selected.id)) {
+  } else if (at?.kind === "card" && graph.cards.has(at.id)) {
     crumbs.push({
-      ref: selected,
-      name: cardTitle(graph.cards.get(selected.id)!),
+      ref: at,
+      name: cardTitle(graph.cards.get(at.id)!),
       glyph: <CardGlyph size={15} />,
     });
   }
   return (
     <header className="stage-bar">
       <nav className="crumbs" aria-label={t.bar.where}>
-        <button type="button" className="crumb" onClick={() => onOpen(null)}>
-          {t.app.map}
-        </button>
+        <span className="stage-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            className="stage-tab"
+            aria-selected={view === "now"}
+            onClick={() => onView("now")}
+          >
+            {t.now.tab}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className="stage-tab"
+            aria-selected={view === "map"}
+            onClick={() => (view === "map" ? onOpen(null) : onView("map"))}
+          >
+            {t.app.map}
+          </button>
+        </span>
         {crumbs.map((c, i) => (
           <Fragment key={c.ref.id}>
             <Icon name="chevron" size={13} />
@@ -58,7 +83,7 @@ export function StageBar({
         ))}
       </nav>
       <div className="stage-meta">
-        {!selected && <span>{t.bar.nodes(graph.snapshot.nodes.length)}</span>}
+        {view === "map" && !selected && <span>{t.bar.nodes(graph.snapshot.nodes.length)}</span>}
         <span className="avatars">
           {graph.snapshot.roles.map((r) => (
             <button

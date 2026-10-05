@@ -425,48 +425,48 @@ export class GitDocumentHistory {
       this.snapshotRecordsPromise.catch(() => {});
       this.snapshotPromise = (async () => {
         const file = path.join(this.root, ".git", "tent-history-index.json");
+        let base: HistorySnapshot | undefined;
+        let records: RawHistoryCommit[] | undefined;
         try {
           const saved = historySnapshotSchema.parse(JSON.parse(await fs.readFile(file, "utf8")));
-          if (saved.head === head && saved.digest === this.snapshotDigest(saved)) {
-            resolveRecords(saved.records);
-            return saved;
+          if (saved.digest === this.snapshotDigest(saved) && this.completeSnapshot(saved)) {
+            if (saved.head === head) {
+              resolveRecords(saved.records);
+              return saved;
+            }
+            // A reset cannot extend this cache. For other heads, require every new
+            // commit to continue one single-parent chain from the cached head.
+            if (!saved.records.some((record) => record.commit === head)) {
+              const added = await this.historyRecords(`${saved.head}..${head}`);
+              let parent = saved.head;
+              const linear = added.every((record) => {
+                if (record.parents.length !== 1 || record.parent !== parent) return false;
+                parent = record.commit;
+                return true;
+              });
+              if (linear && parent === head) {
+                base = saved;
+                records = [...saved.records, ...added];
+              }
+            }
           }
         } catch {
           /* Derived history can always be reconstructed from Git. */
         }
-        const records = parseHistoryLog(
-          await runGit(this.root, [
-            "log",
-            "--full-history",
-            "--reverse",
-            "--raw",
-            "-z",
-            "--root",
-            "--no-renames",
-            "--no-abbrev",
-            "--no-color",
-            "--no-show-signature",
-            "--diff-merges=separate",
-            "--always",
-            "--format=%x00%H%x00%P%x00%cI%x00%B%x00",
-            head,
-          ]),
-        );
+        records ??= await this.historyRecords(head);
         const objects = new Set<string>();
         resolveRecords(records);
+        const blobs: Record<string, string> = { ...base?.blobs };
+        const frontmatters: Record<string, Record<string, unknown>> = { ...base?.frontmatters };
         for (const record of records)
           for (const entry of record.files) {
             if (!isHistoryDocument(entry.path) || entry.status === "T") continue;
-            if (entry.beforeBlob) objects.add(entry.beforeBlob);
-            if (entry.afterBlob) objects.add(entry.afterBlob);
+            if (entry.beforeBlob && !(entry.beforeBlob in blobs)) objects.add(entry.beforeBlob);
+            if (entry.afterBlob && !(entry.afterBlob in blobs)) objects.add(entry.afterBlob);
           }
-        const blobs: Record<string, string> = {};
         for (const [object, raw] of await readBlobs(this.root, objects, (raw) => raw)) {
           if (raw instanceof Error) throw raw;
           blobs[object] = raw;
-        }
-        const frontmatters: Record<string, Record<string, unknown>> = {};
-        for (const [object, raw] of Object.entries(blobs)) {
           try {
             frontmatters[object] = parseFrontmatter(raw).data;
           } catch {
@@ -491,6 +491,50 @@ export class GitDocumentHistory {
       });
     }
     return this.snapshotPromise;
+  }
+
+  private async historyRecords(revision: string) {
+    return parseHistoryLog(
+      await runGit(this.root, [
+        "log",
+        "--full-history",
+        "--reverse",
+        "--raw",
+        "-z",
+        "--root",
+        "--no-renames",
+        "--no-abbrev",
+        "--no-color",
+        "--no-show-signature",
+        "--diff-merges=separate",
+        "--always",
+        "--format=%x00%H%x00%P%x00%cI%x00%B%x00",
+        revision,
+      ]),
+    );
+  }
+
+  private completeSnapshot(snapshot: HistorySnapshot): boolean {
+    const graph = new Map(snapshot.records.map((record) => [record.commit, record]));
+    const reached = new Set<string>(),
+      pending = [snapshot.head];
+    while (pending.length) {
+      const commit = pending.pop()!;
+      if (reached.has(commit)) continue;
+      const record = graph.get(commit);
+      if (!record || record.parent !== record.parents[0]) return false;
+      reached.add(commit);
+      pending.push(...record.parents);
+    }
+    if (reached.size !== graph.size) return false;
+    for (const record of snapshot.records)
+      for (const entry of record.files) {
+        documentPath(entry.path);
+        if (!isHistoryDocument(entry.path) || entry.status === "T") continue;
+        if (entry.beforeBlob && !(entry.beforeBlob in snapshot.blobs)) return false;
+        if (entry.afterBlob && !(entry.afterBlob in snapshot.blobs)) return false;
+      }
+    return true;
   }
 
   private async snapshotRecords(head: string) {

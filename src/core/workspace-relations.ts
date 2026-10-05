@@ -53,24 +53,29 @@ export async function listWorkspaceRelations(fs: FsAdapter): Promise<WorkspaceRe
     [CARDS_DIR, "card"],
   ] as const) {
     if (!(await readonlyFs.exists(directory))) continue;
-    for (const entry of (await readonlyFs.listDir(directory)).sort((a, b) =>
-      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
-    )) {
-      const id = entry.name.slice(0, -3);
-      if (
-        entry.isDir ||
-        !entry.name.endsWith(".md") ||
-        !(kind === "role" ? isRoleId(id) : isCardId(id))
+    const entries = (await readonlyFs.listDir(directory))
+      .filter(
+        (entry) =>
+          !entry.isDir &&
+          entry.name.endsWith(".md") &&
+          (kind === "role" ? isRoleId(entry.name.slice(0, -3)) : isCardId(entry.name.slice(0, -3))),
       )
-        continue;
-      const file = `${directory}/${entry.name}`;
-      const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-        await readonlyFs.readBinary(file),
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (let start = 0; start < entries.length; start += 8) {
+      const batch = await Promise.all(
+        entries.slice(start, start + 8).map(async (entry) => {
+          const id = entry.name.slice(0, -3);
+          const file = `${directory}/${entry.name}`;
+          const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+            await readonlyFs.readBinary(file),
+          );
+          if (kind === "role") parseRoleDocument(id, raw);
+          else parseCardDocument(id, raw);
+          const parsed = parseFrontmatter(raw);
+          return { ref: { kind, id }, path: file, data: parsed.data, body: parsed.body };
+        }),
       );
-      if (kind === "role") parseRoleDocument(id, raw);
-      else parseCardDocument(id, raw);
-      const parsed = parseFrontmatter(raw);
-      documents.push({ ref: { kind, id }, path: file, data: parsed.data, body: parsed.body });
+      documents.push(...batch);
     }
   }
   const byPath = new Map(documents.map((d) => [d.path, d.ref]));

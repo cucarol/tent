@@ -840,7 +840,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
         }
         tail={
           <Section title={t.page.versions} count={node.history.length} note={t.page.versionsNote}>
-            <History graph={graph} path={node.notePath} hashes={node.history} />
+            <History graph={graph} id={node.id} path={node.notePath} hashes={node.history} />
           </Section>
         }
       />
@@ -987,7 +987,7 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
         }
         tail={
           <Section title={t.page.versions} count={role.history.length}>
-            <History graph={graph} path={role.path} hashes={role.history} />
+            <History graph={graph} id={role.id} path={role.path} hashes={role.history} />
           </Section>
         }
       />

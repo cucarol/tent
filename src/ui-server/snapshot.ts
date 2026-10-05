@@ -7,7 +7,7 @@ import { parseFrontmatter } from "../core/frontmatter.js";
 import { CARDS_DIR, ROLES_DIR, nodeNotePath } from "../core/paths.js";
 import { loadTent } from "../core/tree.js";
 import type { Node } from "../core/types.js";
-import { readCardProgress } from "../core/card-progress.js";
+import { readCardProgress, readOutputActivity } from "../core/card-progress.js";
 import type {
   Snapshot,
   SnapshotCard,
@@ -28,7 +28,14 @@ export type SnapshotSource = {
 
 export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
   const fs = readOnlyFs(source.fs);
-  const tent = await loadTent(fs);
+  // Current document scans are independent of the retained Git history read.
+  const [tent, roleDocs, cardDocs, retainedEvents, relations] = await Promise.all([
+    loadTent(fs),
+    readDocs(ROLES_DIR),
+    readDocs(CARDS_DIR),
+    listHistoryChanges(fs),
+    listWorkspaceRelations(fs),
+  ]);
   const byPath = new Map<string, SnapshotRef>();
 
   const nodes: SnapshotNode[] = [];
@@ -57,23 +64,28 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
   };
   for (const root of tent.roots) visit(root, 0);
 
-  const readDocs = async (dir: string) => {
+  async function readDocs(dir: string) {
     if (!(await fs.exists(dir))) return [];
     const docs = [];
-    for (const entry of (await fs.listDir(dir)).sort((a, b) => (a.name < b.name ? -1 : 1))) {
-      if (entry.isDir || !entry.name.endsWith(".md")) continue;
-      const file = `${dir}/${entry.name}`;
-      const { data, body } = parseFrontmatter(await fs.readFile(file));
-      docs.push({ file, data, body });
+    const entries = (await fs.listDir(dir))
+      .filter((entry) => !entry.isDir && entry.name.endsWith(".md"))
+      .sort((a, b) => (a.name < b.name ? -1 : 1));
+    for (let start = 0; start < entries.length; start += 8) {
+      docs.push(
+        ...(await Promise.all(
+          entries.slice(start, start + 8).map(async (entry) => {
+            const file = `${dir}/${entry.name}`;
+            const { data, body } = parseFrontmatter(await fs.readFile(file));
+            return { file, data, body };
+          }),
+        )),
+      );
     }
     return docs;
-  };
-  const roleDocs = await readDocs(ROLES_DIR);
-  const cardDocs = await readDocs(CARDS_DIR);
+  }
   for (const d of roleDocs) byPath.set(d.file, { kind: "role", id: String(d.data.id) });
   for (const d of cardDocs) byPath.set(d.file, { kind: "card", id: String(d.data.id) });
 
-  const retainedEvents = await listHistoryChanges(fs);
   const commits: SnapshotCommit[] = [...retainedEvents].reverse().map((commit) => ({
     hash: commit.commit,
     parent: commit.parent ?? null,
@@ -93,7 +105,6 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
     commits
       .filter((c) => c.files.some((f) => (f.ref ? f.ref.id === id : f.path === file)))
       .map((c) => c.hash);
-  const relations = await listWorkspaceRelations(fs);
   const from = (id: string) => relations.filter((r) => r.from.id === id);
   const linksOf = (id: string): SnapshotLink[] =>
     from(id)
@@ -161,6 +172,11 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
     })),
     retainedEvents,
   );
+  const outputActivity = await readOutputActivity(fs, retainedEvents);
+  for (const node of nodes) {
+    const outputAt = outputActivity.get(node.id);
+    if (outputAt) node.outputAt = outputAt;
+  }
   const cards: SnapshotCard[] = cardDocs
     .filter((d) => touching(String(d.data.id), d.file).length > 0)
     .map((d) => {

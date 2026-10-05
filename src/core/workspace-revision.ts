@@ -39,9 +39,14 @@ export async function readWorkspaceRevision(fs: FsAdapter): Promise<string> {
   for (const file of [ORDER_PATH, WORKSPACE_SETTINGS_PATH])
     if (await fs.exists(file)) files.add(file);
   const digest = createHash("sha256");
-  for (const file of [...files].sort()) {
-    const bytes = await fs.readBinary(file);
-    digest.update(JSON.stringify([file, bytes.length]) + "\n").update(bytes);
+  const sorted = [...files].sort();
+  for (let start = 0; start < sorted.length; start += 8) {
+    const batch = sorted.slice(start, start + 8);
+    const contents = await Promise.all(batch.map((file) => fs.readBinary(file)));
+    for (const [index, file] of batch.entries()) {
+      const bytes = contents[index]!;
+      digest.update(JSON.stringify([file, bytes.length]) + "\n").update(bytes);
+    }
   }
   const head = fs.history && (await fs.exists(".git")) ? await fs.history.currentCommit() : null;
   digest.update(JSON.stringify({ head }));

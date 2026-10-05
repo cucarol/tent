@@ -53,6 +53,7 @@ type ProgressHistory = {
   sourceGoals: Record<string, string>;
   pinErrors: Record<string, string>;
   attachments: Record<string, Record<string, number>>;
+  outputActivity: Record<string, string>;
 };
 const versionKey = (version: DocumentVersion) => `${version.commit}:${version.path}`;
 const nodePath = (version: DocumentVersion) => version.path.slice(0, version.path.lastIndexOf("/"));
@@ -111,6 +112,7 @@ async function buildProgressHistory(
   const byPath = new Map<string, string>();
   const outputs = new Set<string>();
   const attachments: Record<string, Record<string, number>> = {};
+  const outputActivity: Record<string, string> = {};
   const ancestors = (outputId: string) => {
     const goals = new Set<string>();
     let path = historical.get(outputId)!.path;
@@ -125,6 +127,7 @@ async function buildProgressHistory(
   const verificationKeys = (data: Record<string, unknown>) =>
     new Set(nodeVerifications(data).map((entry) => `${entry.by}:${entry.at}`));
   for (const [index, event] of events.entries()) {
+    const previousOutputs = new Set(outputs);
     const previousAncestors = new Map([...outputs].map((id) => [id, ancestors(id)]));
     const confirmed = new Set<string>();
     for (const change of event.changes) {
@@ -138,6 +141,7 @@ async function buildProgressHistory(
         historical.delete(id);
         outputs.delete(id);
         delete attachments[id];
+        delete outputActivity[id];
       } else {
         const data = dataByVersion.get(versionKey(change.after))!;
         historical.set(id, { path: nodePath(change.after), data });
@@ -149,24 +153,47 @@ async function buildProgressHistory(
         } else {
           outputs.delete(id);
           delete attachments[id];
+          delete outputActivity[id];
         }
       }
     }
     for (const id of outputs) {
       const goals = ancestors(id),
         evidence = attachments[id] ?? {};
+      const confirmation =
+        confirmed.has(id) ||
+        (event.operation === "node.sync-confirm" && event.objectIds.includes(id));
+      let newAttachment = false;
       for (const goalId of Object.keys(evidence)) if (!goals.has(goalId)) delete evidence[goalId];
-      for (const goalId of goals)
-        if (
-          !previousAncestors.get(id)?.has(goalId) ||
-          confirmed.has(id) ||
-          (event.operation === "node.sync-confirm" && event.objectIds.includes(id))
-        )
-          evidence[goalId] = index;
+      for (const goalId of goals) {
+        const attached = !previousAncestors.get(id)?.has(goalId);
+        if (attached || confirmation) evidence[goalId] = index;
+        newAttachment ||= attached;
+      }
       attachments[id] = evidence;
+      if (!previousOutputs.has(id) || newAttachment || confirmation)
+        outputActivity[id] = new Date(event.time).toISOString();
     }
   }
-  return { publications, sourceGoals, pinErrors, attachments };
+  return { publications, sourceGoals, pinErrors, attachments, outputActivity };
+}
+
+function readProgressHistory(fs: FsAdapter, retainedEvents?: readonly HistoryCommit[]) {
+  return fs.history!.derived("card-subtree-progress", 3, (head) =>
+    buildProgressHistory(fs.history!, retainedEvents, head),
+  );
+}
+
+/**
+ * Latest retained creation, goal attachment, or confirmation event for each output.
+ * Uncaptured live edits provide no new completion evidence; callers filter current validity/lifecycle.
+ */
+export async function readOutputActivity(
+  fs: FsAdapter,
+  retainedEvents?: readonly HistoryCommit[],
+): Promise<Map<string, string>> {
+  if (!fs.history || !(await fs.exists(".git"))) return new Map();
+  return new Map(Object.entries((await readProgressHistory(fs, retainedEvents)).outputActivity));
 }
 
 /** Each referenced goal observes every active output in its subtree, including nested goals. */
@@ -183,9 +210,7 @@ export async function readCardProgress(
     !(await fs.exists(".git"))
   )
     return result;
-  const history = await fs.history.derived("card-subtree-progress", 2, (head) =>
-    buildProgressHistory(fs.history!, retainedEvents, head),
-  );
+  const history = await readProgressHistory(fs, retainedEvents);
   const catalog = await loadNodeCatalog(readOnlyFs(fs));
   const active = (node: { archived: boolean; header: string }) => {
     const status = documentLifecycle(parseFrontmatter(node.header).data).status;

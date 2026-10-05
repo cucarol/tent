@@ -31,6 +31,7 @@ export const INTEGRATION_TEST_FILES = Object.freeze([
   "test/docs-move.test.ts",
   "test/file-lock-concurrency.test.ts",
   "test/git-history.test.ts",
+  "test/history-cache-incremental.test.ts",
   "test/history-operations.test.ts",
   "test/node-batch.test.ts",
   "test/node-discovery.test.ts",

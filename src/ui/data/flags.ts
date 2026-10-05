@@ -3,6 +3,8 @@ import { ApiError, api, changes } from "./api.js";
 import type { SyncFlags } from "./types.js";
 
 const NONE: SyncFlags = {};
+/** Before the first read: no flags yet, but not known to be in sync either. */
+export const UNREAD: SyncFlags = {};
 
 /** The page's current flags, for panels below the App. */
 export const FlagsContext = createContext<SyncFlags>(NONE);
@@ -14,7 +16,7 @@ export const useFlags = () => useContext(FlagsContext);
  * leaves the map unmarked.
  */
 export function useSyncFlags(revision: string | undefined): SyncFlags {
-  const [flags, setFlags] = useState<SyncFlags>(NONE);
+  const [flags, setFlags] = useState<SyncFlags>(UNREAD);
   useEffect(() => {
     if (!revision) return;
     let stopped = false,

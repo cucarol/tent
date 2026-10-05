@@ -55,6 +55,8 @@ export type SnapshotNode = {
   materials: SnapshotMaterial[];
   incoming: SnapshotIncoming[];
   history: string[];
+  /** Latest output attachment or confirmation in retained history; ordinary edits do not advance it. */
+  outputAt?: string;
 };
 
 export type SnapshotRole = {

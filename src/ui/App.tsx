@@ -15,7 +15,8 @@ import { Icon, TypeGlyph } from "./components/Glyph.js";
 import { MapView } from "./map/MapView.js";
 import { Boundary } from "./components/Boundary.js";
 import { Sidebar, type ThemePref } from "./shell/Sidebar.js";
-import { StageBar } from "./shell/StageBar.js";
+import { StageBar, type StageView } from "./shell/StageBar.js";
+import { NowView } from "./now/NowView.js";
 import { Reader } from "./panel/Reader.js";
 import { Palette } from "./panel/Overlays.js";
 import { isDraft, loadLocalDrafts, useDraftCards } from "./data/drafts.js";
@@ -83,6 +84,9 @@ export function App() {
     readStored("tent-theme-pref", "system"),
   );
   const [selected, setSelected] = useState<SnapshotRef | null>(null);
+  const [view, setView] = useState<StageView>(() =>
+    readStored<StageView>("tent-view", "now") === "map" ? "map" : "now",
+  );
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => new Set(readStored<string[]>("tent-collapsed-v1", [])),
   );
@@ -419,8 +423,13 @@ export function App() {
     setLang(next);
     setLangState(next);
   };
+  const showView = (next: StageView) => {
+    setView(next);
+    writeStored("tent-view", next);
+  };
   const locate = (ref: SnapshotRef) => {
     setExpanded(false);
+    showView("map");
     open(ref);
   };
   /** Roles and Cards open as pages; they are not places on the map. */
@@ -484,28 +493,46 @@ export function App() {
           style={{ "--detail-w": `${detailWidth}px` } as CSSProperties}
         >
           <main className="stage" aria-hidden={reading || undefined}>
-            <StageBar graph={graph} selected={selected} onOpen={open} />
+            <StageBar
+              graph={graph}
+              selected={selected}
+              view={view}
+              onView={showView}
+              onOpen={open}
+            />
             <div className="stage-body">
-              <Boundary label={t.app.map}>
-                <ReactFlowProvider>
-                  <MapView
+              {view === "now" ? (
+                <Boundary label={t.now.tab}>
+                  <NowView
                     graph={graph}
                     flags={flags}
-                    selected={selected}
-                    collapsed={collapsed}
-                    draft={draftIds}
-                    hotLane={hotLane}
-                    carriedBy={carriedBy}
-                    keys={!reading && !overlay}
-                    onSelect={open}
-                    onFold={fold}
-                    onExpand={() => {
-                      setEditOnExpand(false);
-                      setExpanded(true);
-                    }}
+                    onOpen={open}
+                    onPage={openPage}
+                    onToast={showToast}
                   />
-                </ReactFlowProvider>
-              </Boundary>
+                </Boundary>
+              ) : (
+                <Boundary label={t.app.map}>
+                  <ReactFlowProvider>
+                    <MapView
+                      graph={graph}
+                      flags={flags}
+                      selected={selected}
+                      collapsed={collapsed}
+                      draft={draftIds}
+                      hotLane={hotLane}
+                      carriedBy={carriedBy}
+                      keys={!reading && !overlay}
+                      onSelect={open}
+                      onFold={fold}
+                      onExpand={() => {
+                        setEditOnExpand(false);
+                        setExpanded(true);
+                      }}
+                    />
+                  </ReactFlowProvider>
+                </Boundary>
+              )}
             </div>
           </main>
 

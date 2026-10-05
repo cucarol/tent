@@ -60,6 +60,32 @@ test("workspace revision observes exact external bytes, identity paths, registri
   assert.notEqual(await readWorkspaceRevision(adapter), revisions.at(-1));
 });
 
+test("workspace revision keeps deterministic bytes while bounded reads complete out of order", async (t) => {
+  const { adapter } = await fixture(t);
+  for (let index = 0; index < 17; index++)
+    await adapter.writeFile(`roles/role-${String(index).padStart(2, "0")}.md`, `role ${index}\n`);
+  const expected = await readWorkspaceRevision(adapter);
+  const original = adapter.readBinary.bind(adapter);
+  let active = 0,
+    maximum = 0;
+  const finished: string[] = [];
+  adapter.readBinary = async (file) => {
+    active++;
+    maximum = Math.max(maximum, active);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, file.endsWith("00.md") ? 40 : 1));
+      const bytes = await original(file);
+      finished.push(file);
+      return bytes;
+    } finally {
+      active--;
+    }
+  };
+  assert.equal(await readWorkspaceRevision(adapter), expected);
+  assert.ok(maximum > 1 && maximum <= 8);
+  assert.ok(finished.indexOf("roles/role-01.md") < finished.indexOf("roles/role-00.md"));
+});
+
 test("workspace relations use Markdown occurrences across identities and retained Card targets after moves", async (t) => {
   const { adapter, env, root } = await fixture(t);
   const id = await createNode(env, {

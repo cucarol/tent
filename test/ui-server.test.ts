@@ -93,6 +93,34 @@ async function fixture(t: TestContext) {
 
 const json = <T>(reply: Reply) => JSON.parse(reply.body) as T;
 
+test("Web proposal approval saves stable and human verification together with full-document CAS", async (t) => {
+  const { tent, call } = await fixture(t);
+  const target = "/api/nodes/node-main";
+  const draft = "---\nid: node-main\ntype: prompt\nstatus: draft\n---\nA proposal.\n";
+  await tent.writeFile("Main/Main.md", draft);
+  const shown = json<{ etag: string }>(await call("GET", target));
+  const input = { baseEtag: shown.etag, frontmatter: { status: "stable" }, confirm: true };
+  const malformed = await call("PUT", target, { json: { ...input, confirm: "true" } });
+  assert.equal(malformed.status, 422);
+  assert.equal(await tent.readFile("Main/Main.md"), draft);
+  const incomplete = await call("PUT", target, {
+    json: { ...input, baseEtag: incompleteNodeReadEtag(shown.etag) },
+  });
+  assert.equal(incomplete.status, 422);
+  assert.equal(await tent.readFile("Main/Main.md"), draft);
+  const approved = await call("PUT", target, { json: input });
+  assert.equal(approved.status, 200, approved.body);
+  assert.equal(json<{ trustTier: string }>(approved).trustTier, "human-reviewed");
+  const saved = await tent.readFile("Main/Main.md");
+  const parsed = parseFrontmatter(saved);
+  assert.equal(parsed.data.status, "stable");
+  assert.equal(parsed.body, "A proposal.\n");
+  assert.equal((parsed.data.verified as { by: string }[])[0]?.by, `human:${userInfo().username}`);
+  const stale = await call("PUT", target, { json: input });
+  assert.equal(stale.status, 409);
+  assert.equal(await tent.readFile("Main/Main.md"), saved);
+});
+
 test("Web confirmation records the local human or explicit actor with full-document CAS", async (t) => {
   const { tent, call } = await fixture(t);
   const target = "/api/nodes/node-main";
@@ -432,13 +460,25 @@ test("direct Card publication supports immutable reads, pending moves and recept
   );
   const cardBytes = await tent.readFile(`cards/${cardId}.md`);
   const output = await linkNodeOutput(tent, "node-other", { resource: "docs/notes.txt" });
-  const after = json<Snapshot>(await call("GET", "/api/snapshot")).cards.find(
-    (c) => c.id === cardId,
-  )!;
+  const completed = json<Snapshot>(await call("GET", "/api/snapshot"));
+  const after = completed.cards.find((c) => c.id === cardId)!;
   assert.equal(after.progress, "has-output");
   assert.deepEqual(after.outputNodeIds, [output.nodeId]);
   assert.equal(after.goalCount, 1);
   assert.equal(after.totalGoalCount, 1);
+  const activity = completed.nodes.find((n) => n.id === output.nodeId)!.outputAt;
+  assert.ok(activity && Number.isFinite(Date.parse(activity)));
+  const document = json<{ etag: string }>(await call("GET", `/api/nodes/${output.nodeId}`));
+  assert.equal(
+    (
+      await call("PUT", `/api/nodes/${output.nodeId}`, {
+        json: { baseEtag: document.etag, body: "Ordinary wording update." },
+      })
+    ).status,
+    200,
+  );
+  const edited = json<Snapshot>(await call("GET", "/api/snapshot"));
+  assert.equal(edited.nodes.find((n) => n.id === output.nodeId)!.outputAt, activity);
   assert.equal(await tent.readFile(`cards/${cardId}.md`), cardBytes);
 });
 

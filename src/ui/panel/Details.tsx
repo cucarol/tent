@@ -210,7 +210,17 @@ export function Patch({ patch }: { patch: string }) {
 const RECENT = 6;
 
 /** A document's versions as a timeline, newest first; each opens to show what it changed. */
-export function History({ graph, path, hashes }: { graph: Graph; path: string; hashes: string[] }) {
+export function History({
+  graph,
+  id,
+  path,
+  hashes,
+}: {
+  graph: Graph;
+  id: string;
+  path: string;
+  hashes: string[];
+}) {
   const [open, setOpen] = useState<string | null>(null);
   const [all, setAll] = useState(false);
   const [, redraw] = useState(0);
@@ -219,13 +229,17 @@ export function History({ graph, path, hashes }: { graph: Graph; path: string; h
     setAll(false);
   }, [path]);
   if (!hashes.length) return <p className="empty">{t.history.none}</p>;
-  const shown = all ? hashes : hashes.slice(0, RECENT);
+  // A renamed or moved document keeps its id; its older versions sit at the old path.
+  const shown = (all ? hashes : hashes.slice(0, RECENT)).flatMap((h) => {
+    const c = graph.commits.get(h);
+    const f =
+      c?.files.find((x) => x.ref?.id === id) ?? c?.files.find((x) => x.path === path && !x.ref);
+    return c && f ? [{ h, c, f }] : [];
+  });
   return (
     <>
       <ol className="versions">
-        {shown.map((h) => {
-          const c = graph.commits.get(h)!;
-          const f = c.files.find((x) => x.path === path)!;
+        {shown.map(({ h, c, f }) => {
           const patch = loaded.get(patchKey(f));
           return (
             <li key={h} className={open === h ? "is-open" : ""}>
