@@ -6,6 +6,7 @@ import {
   readCardDocument,
   takeCardDocument,
   listCardDocuments,
+  watchCardDocuments,
   moveCardDocument,
   deprecateCardDocument,
   type CardDocumentState,
@@ -28,7 +29,7 @@ export async function runCardCommand(
   if (!sub || ["help", "--help", "-h"].includes(sub) || args.includes("--help"))
     return { exitCode: 0, stdout: cardHelpText(sub), stderr: "" };
   try {
-    if (!["create", "move", "deprecate", "list", "get", "show", "take"].includes(sub))
+    if (!["create", "move", "deprecate", "list", "get", "show", "take", "watch"].includes(sub))
       throw new Error(`Unknown card command: ${sub}`);
     const fields = [
       "workspace",
@@ -40,9 +41,11 @@ export async function runCardCommand(
             ? ["base-etag"]
             : sub === "list"
               ? ["role", "state", "start", "limit", "expected-revision"]
-              : ["show", "get"].includes(sub)
-                ? ["view", "start", "end", "expected-etag"]
-                : ["role"]),
+              : sub === "watch"
+                ? ["role", "timeout"]
+                : ["show", "get"].includes(sub)
+                  ? ["view", "start", "end", "expected-etag"]
+                  : ["role"]),
     ];
     const { values, positionals } = parseArgs({
       args,
@@ -62,8 +65,15 @@ export async function runCardCommand(
     });
     const value = (key: string) => (values as Record<string, unknown>)[key] as string | undefined;
     const number = (key: string) => (value(key) === undefined ? undefined : Number(value(key)));
-    if (positionals.length !== (["create", "list"].includes(sub) ? 0 : 1))
-      throw new Error("Expected one Card id except for create/list");
+    if (positionals.length !== (["create", "list", "watch"].includes(sub) ? 0 : 1))
+      throw new Error("Expected one Card id except for create/list/watch");
+    if (sub === "watch" && !value("role")) throw new Error("Watch requires --role role-ID");
+    if (
+      sub === "watch" &&
+      value("timeout") !== undefined &&
+      !/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(value("timeout")!)
+    )
+      throw new Error("--timeout must be a nonnegative number of seconds");
     if (value("view") !== undefined && !["body", "raw"].includes(value("view")!))
       throw new Error("--view must be body or raw");
     if (
@@ -89,6 +99,29 @@ export async function runCardCommand(
     const fs = new NodeFs(systemRoot, "cli"),
       id = positionals[0]!;
     let result: unknown;
+    if (sub === "watch") {
+      const items = (await watchCardDocuments(fs, value("role")!, number("timeout"))).map(
+        (item) => ({
+          ...item,
+          take: `tent card take ${item.cardId} --role ${value("role")!}`,
+        }),
+      );
+      return {
+        exitCode: items.length ? 0 : 2,
+        stdout: !items.length
+          ? ""
+          : (values.json === true || globals.json === true
+              ? JSON.stringify(items)
+              : items
+                  .map((item) =>
+                    [item.cardId, item.title?.replace(/\s+/g, " "), item.take]
+                      .filter(Boolean)
+                      .join("  "),
+                  )
+                  .join("\n")) + "\n",
+        stderr: "",
+      };
+    }
     if (sub === "create") {
       let prompt = value("prompt") ?? "";
       if (prompt === "-") {
@@ -174,11 +207,15 @@ export function cardHelpText(_sub?: string) {
   tent card move card-ID (--to role-ID | --public) --base-etag HASH
   tent card deprecate card-ID --base-etag HASH
   tent card take card-ID [--role role-ID]
+  tent card watch --role role-ID [--timeout SECONDS]
 All commands accept --workspace PATH and --json. CLI output is paged; Core returns complete data.
 Sources keep their order. Selected Node/Role sources retain commit/path; external sources are addresses only.
 Show is a preview; take records reception and returns an input page. A replay is not a new execution.
 Use page.next for long input. Put requirements in Nodes; a Card briefly points to them. Update Nodes when requirements change.
 Targeted Cards require their Role; untargeted Cards can be received without one.
+Watch reads committed pending Cards for exactly that Role, writes no files, and exits when input exists.
+It checks HEAD every 3 seconds; omit --timeout to wait indefinitely, or use 0 for one immediate check.
+Watch exit codes: 0 = Cards (one line per Card, or a JSON array); 2 = timeout (no output); 1 = error.
 Progress counts outputs attached or confirmed after publication anywhere in each referenced goal's subtree, including outputs without a resource.
 Only published pending Cards can move. Requirements awaiting a decision belong in Nodes marked status: draft.
 Cancelled published tasks can be deprecated without changing their input or reception. Deprecated Cards are excluded from lists by default.

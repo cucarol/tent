@@ -5,28 +5,21 @@ description: "Create an empty Tent in a workspace and set up host access to its 
 
 # Tent Init
 
-Use this when the user asks to set up Tent for a project. See
-[runtime access](../../skill-resources/references/access.md) for the launcher.
+Use this when the user asks to set up Tent for a project. The CLI is described
+in [runtime access](../../skill-resources/references/access.md).
 
-1. Choose the root: the folder the user named, or the current project root.
-   If it already contains `.tent/`, reuse it.
-2. Create it with `tent new <root>`. This makes `.tent/` with its own local Git
-   history at `.tent/.git`, and no Nodes. Let the CLI write `.tent/`; do not
-   create it by hand.
-3. Confirm access with `tent node list --workspace <root> --json`. An empty
-   list means Tent is working.
-4. For automatic Hooks, follow [host integration](references/host-hooks.md).
-   Report what works now separately from what waits on a host reload or trust
-   review.
+1. Choose the root: the folder the user named, or the project root. Reuse an
+   existing `.tent/`.
+2. Run `tent new <root>`. It creates `.tent/` with its own Git history and no
+   Nodes; never create it by hand.
+3. Confirm with `tent node list --workspace <root> --json`; an empty list
+   means Tent works.
+4. For Hooks, follow [host integration](references/host-hooks.md). Report
+   what works now separately from what waits on a host reload or trust review.
 
-Start with an empty graph. Nodes form as decisions, references and results
-come up in real work, through [tent-node](../tent-node/SKILL.md); setup itself
-does not analyze the project or add placeholder Nodes.
-
-The folder containing `.tent/` is the Workspace that all material paths use,
-including for nested or non-Git projects. When your shell runs elsewhere, pass
-`--workspace <root>`. Update the plugin as a whole through its host; its
-Skills are not installed one by one. Keep unrelated host settings and any
-Hooks the user disabled.
-
-After setup, continue with the user's original task.
+Start empty: Nodes form from real work through
+[tent-node](../tent-node/SKILL.md), not from analyzing the project. The folder
+holding `.tent/` is the Workspace every path resolves from; pass
+`--workspace <root>` when your shell runs elsewhere. Update the plugin as a
+whole through its host, and keep any Hooks the user disabled. Then continue
+with the user's original task.

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import { readOnlyFs, withTentMutation, type FsAdapter } from "./adapter.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { isCardId, isRoleId, makeCardId } from "./id.js";
@@ -679,6 +680,45 @@ export function takeCardDocument(
     },
     { operation: "card.take" },
   );
+}
+
+/** Wait for published pending input; idle polls read only the independent Git HEAD. */
+export async function watchCardDocuments(
+  fs: FsAdapter,
+  roleId: string,
+  timeoutSeconds?: number,
+): Promise<Array<{ cardId: string; title?: string }>> {
+  if (timeoutSeconds !== undefined && (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0))
+    throw new Error("--timeout must be a nonnegative number of seconds");
+  await roleAvailable(fs, roleId);
+  const history = await historyOf(fs);
+  const deadline =
+    performance.now() + (timeoutSeconds === undefined ? Infinity : timeoutSeconds * 1000);
+  let observed: string | null | undefined;
+  for (;;) {
+    const head = await history.currentCommit();
+    if (head !== observed) {
+      observed = head;
+      await roleAvailable(fs, roleId);
+      const items: Array<{ cardId: string; title?: string }> = [];
+      for (const [path, raw] of head ? await history.readDirectory(head, CARDS_DIR) : []) {
+        const name = path.slice(CARDS_DIR.length + 1);
+        const id = name.slice(0, -3);
+        if (!name.endsWith(".md") || !isCardId(id)) continue;
+        const card = parseCardDocument(id, raw);
+        if (
+          card.data.state === "pending" &&
+          card.data.target === roleId &&
+          documentLifecycle(card.data).status !== "deprecated"
+        )
+          items.push({ cardId: id, ...(card.data.title ? { title: card.data.title } : {}) });
+      }
+      if (items.length) return items;
+    }
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return [];
+    await delay(Math.min(3000, remaining));
+  }
 }
 
 export async function listCardDocuments(

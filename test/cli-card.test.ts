@@ -2,11 +2,158 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
+import { spawn } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { runCardCommand, cardHelpText } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { git } from "./helpers.js";
+
+async function fileSnapshot(root: string): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  for (const entry of await fs.readdir(root, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const file = path.join(entry.parentPath, entry.name);
+    const stat = await fs.stat(file);
+    files[path.relative(root, file)] =
+      `${stat.mtimeMs}:${(await fs.readFile(file)).toString("base64")}`;
+  }
+  return files;
+}
+
+test("Card watch checks once without any file writes and distinguishes timeout from errors", async (t) => {
+  const { root, globals } = await fixture(t);
+  const role = value(await runRoleCommand("create", ["--title", "Watch"], globals));
+  const systemRoot = path.join(root, ".tent");
+  const before = await fileSnapshot(systemRoot);
+  assert.deepEqual(
+    await runCardCommand("watch", ["--role", role.roleId, "--timeout", "0"], globals),
+    {
+      exitCode: 2,
+      stdout: "",
+      stderr: "",
+    },
+  );
+  assert.deepEqual(await fileSnapshot(systemRoot), before);
+  for (const args of [
+    [],
+    ["--role", "role-missing"],
+    ["--role", role.roleId, "--timeout", "-1"],
+    ["--role", role.roleId, "--timeout", "NaN"],
+    ["--role", role.roleId, "--timeout", ""],
+  ]) {
+    const result = await runCardCommand("watch", args, globals);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout, "");
+    assert.ok(result.stderr);
+  }
+  assert.match(cardHelpText("watch"), /2 = timeout \(no output\); 1 = error/);
+});
+
+test("Card watch returns only committed current pending input for the exact Role", async (t) => {
+  const { root, globals } = await fixture(t);
+  const role = value(await runRoleCommand("create", ["--title", "Watch"], globals));
+  const other = value(await runRoleCommand("create", ["--title", "Other"], globals));
+  const create = (title: string, target?: string) =>
+    runCardCommand(
+      "create",
+      ["--prompt", "Work", "--title", title, ...(target ? ["--target", target] : [])],
+      globals,
+    ).then(value);
+  await create("Public");
+  await create("Other", other.roleId);
+  const consumed = await create("Consumed", role.roleId);
+  value(await runCardCommand("take", [consumed.cardId, "--role", role.roleId], globals));
+  const cancelled = await create("Cancelled", role.roleId);
+  value(
+    await runCardCommand("deprecate", [cancelled.cardId, "--base-etag", cancelled.etag], globals),
+  );
+  const first = await create("First\nline", role.roleId);
+  const second = await create("Second", role.roleId);
+  const systemRoot = path.join(root, ".tent");
+  const unpublished = (await fs.readFile(path.join(systemRoot, first.path), "utf8")).replaceAll(
+    first.cardId,
+    "card-unpublished",
+  );
+  await fs.writeFile(path.join(systemRoot, "cards/card-unpublished.md"), unpublished);
+  const before = await fileSnapshot(systemRoot);
+  const args = ["--role", role.roleId, "--timeout", "0"];
+  const items = value(await runCardCommand("watch", args, globals));
+  assert.deepEqual(
+    items.map((item: { cardId: string }) => item.cardId).sort(),
+    [first.cardId, second.cardId].sort(),
+  );
+  const text = await runCardCommand("watch", args, { workspace: root });
+  assert.equal(text.exitCode, 0);
+  assert.equal(text.stdout.trim().split("\n").length, 2);
+  assert.ok(text.stdout.includes(`tent card take ${first.cardId} --role ${role.roleId}`));
+  assert.match(text.stdout, /First line/);
+  assert.deepEqual(await fileSnapshot(systemRoot), before);
+});
+
+test(
+  "Card watch wakes across processes only when its Role gets input",
+  { timeout: 45000 },
+  async (t) => {
+    const { root, globals } = await fixture(t);
+    const role = value(await runRoleCommand("create", ["--title", "Watch"], globals));
+    const other = value(await runRoleCommand("create", ["--title", "Other"], globals));
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "src/cli/tent.ts",
+        "card",
+        "watch",
+        "--role",
+        role.roleId,
+        "--timeout",
+        "25",
+        "--workspace",
+        root,
+      ],
+      { windowsHide: true },
+    );
+    t.after(() => child.kill());
+    let stdout = "",
+      stderr = "",
+      exited = false;
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const done = new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => {
+        exited = true;
+        resolve(code);
+      });
+    });
+    await delay(1000);
+    value(
+      await runCardCommand("create", ["--prompt", "Other work", "--target", other.roleId], globals),
+    );
+    await delay(3500);
+    assert.equal(exited, false, stderr || stdout);
+    assert.equal(stdout, "");
+    const card = value(
+      await runCardCommand("create", ["--prompt", "Arrived", "--target", role.roleId], globals),
+    );
+    const published = performance.now();
+    assert.equal(await done, 0, stderr);
+    assert.ok(performance.now() - published < 6000, "should wake within one poll plus query time");
+    assert.equal(stderr, "");
+    assert.ok(stdout.includes(`tent card take ${card.cardId} --role ${role.roleId}`));
+    assert.equal(
+      (await runCardCommand("watch", ["--role", role.roleId, "--timeout", "0"], globals)).exitCode,
+      0,
+    );
+  },
+);
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");

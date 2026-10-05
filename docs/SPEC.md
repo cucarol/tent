@@ -166,6 +166,8 @@ Published body, title, ordered sources and unknown metadata are immutable input.
 
 `card list` reads published Cards without capture and returns reception, publication time and derived progress. An unretained handwritten file is not a published Card. `card show/get` previews a bounded body/raw page without receiving or executing it. Omitted oversized source metadata has a raw read address rather than truncated executable references. An exact Node source can be read using `node get --version-json`.
 
+`card watch --role <role-id> [--timeout <seconds>]` waits for committed, nondeprecated pending Cards addressed to exactly the supplied available Role. It checks immediately, then reads only the independent Git HEAD every three seconds while unchanged; a changed HEAD triggers another Card query. Queries read the committed Card directory without history replay, cache writes or any other file writes. Matching Cards return immediately with one text line per Card containing its id, optional title and `tent card take <id> --role <role-id>`; JSON returns an array. Exit codes are 0 for input, 2 for timeout with no output, and 1 for errors. Omitted timeout waits indefinitely; zero checks once. Watching neither receives Cards nor registers waiting Sessions. Agents choose their own host wakeup mechanism and ask before creating a new persistent automation.
+
 ### Reception and outputs
 
 State is `pending` or `consumed`. Pending has no `receivedBy`. An untargeted Card may be received with or without a Role; a selected Role is recorded as `receivedBy`. A targeted Card requires its specified available Role. Missing, invalid, deprecated or unsupported Role targets are diagnostics, never an open fallback.

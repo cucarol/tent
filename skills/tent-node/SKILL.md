@@ -5,86 +5,53 @@ description: "Read the Tent Nodes a task needs before working, and save the deci
 
 # Tent Node
 
-Nodes hold the project context that should outlast one conversation. Use the
-existing Workspace and the [bundled CLI](../../skill-resources/references/access.md).
+Nodes hold project context that should outlast one conversation. Run the
+[bundled CLI](../../skill-resources/references/access.md) against the existing
+Workspace.
 
-## Before working: read what the task needs
+## Before working
 
-1. Use `tent workspace brief` when you need the current situation: state
-   counts, behind Nodes, ahead age, recent inputs/outputs and input Cards.
-   Reread current requirements when a received Card source has changed.
-   Otherwise start from a Node linked from a Role or Card, a Node the user
-   named, or a focused `tent node search`.
-2. Read those bodies. Follow links, parents or children only as far as the
-   task needs; see [context discovery](../../skill-resources/references/input.md).
-3. Treat each Node by its [type](../../skill-resources/references/node-types.md):
-   work toward `goal`, follow `prompt`, and check `output` against its
-   material before relying on it.
+1. For the current situation, run `tent workspace brief`: behind and ahead
+   Nodes, pending Cards and recent files not yet recorded. Otherwise start
+   from a Node the user, a Role or a Card points to, or a focused
+   `tent node search`.
+2. Read those Nodes, following links only as far as the task needs
+   ([finding context](../../skill-resources/references/input.md)).
+3. Treat each by its [type](../../skill-resources/references/node-types.md):
+   work toward `goal`, follow `prompt`, check `output` against its material.
 
-## After working: keep what later work needs
+## After working
 
-Before you deliver, update the Nodes your work actually affected:
+Update only the Nodes your work affected
+([saving](../../skill-resources/references/node-maintenance.md)):
 
-- New confirmed intent, a rule, a decision, a result or a problem: update the
-  Node that already owns that fact, or create one when none does.
+- A new confirmed intent, rule, decision, result or problem: update the Node
+  that owns the fact, or create one.
 - A fact your work made wrong: correct it.
-- A new output: associate it with the confirmed goal it serves using
-  `node link-output`, which creates an output child with the material address.
-  An existing output belongs to its nearest goal ancestor.
-- Changed material with a still-valid judgment: read the Node and material,
-  then use `node confirm`. A goal stays ahead until it has relevant outputs.
-- Changed judgment: correct the Node and confirm the reviewed basis, using
-  `node write --confirm` or `confirm: true` in a write-many update to save both
-  together. A plain save does not clear `behind`.
-- Nothing changed: leave the Nodes as they are.
+- A result that implements a goal:
+  `tent node link-output <goal-id> --resource <path>`.
+- A behind Node whose judgment still holds after you read the changed
+  material: `tent node confirm`. If the judgment changed, save the correction
+  with `node write --confirm`. A plain save does not clear behind.
+- Nothing changed: leave the Nodes alone.
 
-Use `node append` to add a paragraph or section; do not read and rewrite the
-whole Node for an append. Use `node get-section` and `node write-section` for
-a change confined to one heading. The [saving reference](../../skill-resources/references/node-maintenance.md)
-gives the commands and their separate read requirements.
+Add text with `node append` and change one heading with `node write-section`.
+Before replacing a whole body, read it with `tent node get <id> --full --json`
+and write with that ETag. Afterwards run `tent workspace check --json` once.
 
-Saving observes new material versions automatically and preserves existing
-bases in Git until confirmation; do not calculate or enter hashes. `node check`
-inspects synchronization; it does not decide what
-is true. `workspace drift` lists ahead and behind Nodes; the brief also finds
-recent files not recorded as outputs. Stop questions are prompts for this judgment, not
-instructions to save every signal. Conversation-only decisions may remain
-unanchored; do not invent file references to remove that state.
+## Writing
 
-Content changes record native OKF authorship in `generated`; confirmation
-records `verified`. Supply `--by` only for a known actor, or keep the actual
-`tent/<version>` default. Agent confirmation is machine confirmation; only
-`human:<id>` verification claims a human review. Expired `stale_after`
-requires review regardless of an earlier matching version.
+- Open with what the Node is and how to use it, state facts directly, and
+  label anything unverified.
+- Keep one Node per independently useful fact, and facts that change together
+  in one Node; the parent sets scope. Link to material and other Nodes
+  instead of retelling them.
+- `goal` and `prompt` hold confirmed intent, decisions and reasons. Commit
+  ids, test counts and delivery status belong to Git and Cards; keep useful
+  verification as dated `output` evidence. Under a goal, only results that
+  implement it are `output`; its questions and research are `prompt`.
+- Never enter hashes; Tent records versions. Your confirmations are machine
+  confirmations; pass `--by human:<id>` only for a person's actual review.
 
-Write for the next reader, following
-[Node saving](../../skill-resources/references/node-maintenance.md): open with
-what the Node is and how to use it, state facts directly, and keep only the
-caveats that change what a reader should do. Label unverified or pending items
-as such.
-
-Keep one Node per independently useful fact, not one per file, turn or tool
-result. The parent expresses scope; share a fact by linking to its owner.
-When material stays in the Workspace, link to it instead of retelling its
-contents. Save what it does not say: which facts are current, withdrawn or
-superseded, decisions and reasons, and effects across work directions. Keep
-facts that change together in the same Node.
-
-After maintaining Nodes, run `tent workspace check --json` once to find broken
-links, invalid material addresses and missing material files; do not write a
-checking script.
-
-Keep `goal` and `prompt` focused on confirmed intent, agreements, decisions
-and reasons, including who confirmed them and when if known. Keep commit
-ids, test counts and merge or delivery status in Git and Card history;
-preserve useful verification as dated `output` evidence. Card reception alone
-does not prove completion.
-
-Before replacing a whole Node body or raw document, read it with
-`tent node get <node-id> --full --json` (add `--view raw` for raw editing).
-Use that complete live text and its ETag. A partial page or a Card's pinned
-source is not a basis for replacing the current Node.
-
-Ordinary work needs neither a Role nor a Card. Use
-[tent-role](../tent-role/SKILL.md) for a continuing work direction and
-[tent-card](../tent-card/SKILL.md) for a recorded input.
+Ordinary work needs neither a Role nor a Card; see
+[tent-role](../tent-role/SKILL.md) and [tent-card](../tent-card/SKILL.md).

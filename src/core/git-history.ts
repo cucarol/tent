@@ -846,6 +846,36 @@ export class GitDocumentHistory {
     ).toString("utf8");
   }
 
+  /** Read a committed directory without replaying history or writing derived caches. */
+  async readDirectory(commit: string, directory: string): Promise<Map<string, string>> {
+    oid(commit);
+    documentPath(directory);
+    await this.ensureRepository();
+    const entries = (
+      await runGit(this.root, ["ls-tree", "-r", "-z", commit, "--", `${directory}/`])
+    )
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean)
+      .map((row) => {
+        const match = /^[0-7]{6} blob ([a-f0-9]+)\t(.+)$/.exec(row);
+        if (!match) throw new Error("Invalid Git directory entry");
+        return { blob: oid(match[1]!), path: documentPath(match[2]!) };
+      });
+    const blobs = await readBlobs(
+      this.root,
+      new Set(entries.map((entry) => entry.blob)),
+      (raw) => raw,
+    );
+    return new Map(
+      entries.map((entry) => {
+        const raw = blobs.get(entry.blob)!;
+        if (raw instanceof Error) throw raw;
+        return [entry.path, raw];
+      }),
+    );
+  }
+
   /** Verify many retained sources against one HEAD, preserving per-source failures. */
   async readVersions(versions: readonly DocumentVersion[]): Promise<
     Array<
