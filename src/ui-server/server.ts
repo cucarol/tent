@@ -226,7 +226,6 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
             body: optionalString(input.body, "body"),
             raw: optionalString(input.raw, "raw"),
             frontmatter: input.frontmatter === undefined ? undefined : record(input.frontmatter),
-            confirm: optionalBoolean(input.confirm, "confirm"),
             by: optionalString(input.by, "by") ?? `human:${userInfo().username}`,
           }),
         );
@@ -560,13 +559,6 @@ function record(value: unknown): Record<string, unknown> {
 function optionalString(value: unknown, name: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") throw new HttpError(422, "INVALID_INPUT", `${name} must be text`);
-  return value;
-}
-
-function optionalBoolean(value: unknown, name: string): boolean | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "boolean")
-    throw new HttpError(422, "INVALID_INPUT", `${name} must be boolean`);
   return value;
 }
 

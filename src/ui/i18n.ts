@@ -418,13 +418,6 @@ const zh = {
   },
   now: {
     tab: "现在",
-    asks: "等你拍板",
-    asksEmpty: "没有等你拍板的事。需要你决定的提议会以草稿 Node 出现在这里。",
-    approve: "同意",
-    approving: "正在同意…",
-    approveTip: "定下这个提议：草稿转为正式，并记下是你复核的",
-    approved: (name: string) => `已定下「${name}」`,
-    open: "打开看看",
     lanes: "谁在做什么",
     lanesEmpty: "还没有 Role。有 Agent 长期负责一个方向时，可以给它建一个。",
     waiting: (n: number) => `${n} 张新 Card 待接收`,
@@ -862,14 +855,6 @@ const en: Messages = {
   },
   now: {
     tab: "Now",
-    asks: "Waiting on you",
-    asksEmpty:
-      "Nothing waits on your decision. Proposals that need you show up here as draft Nodes.",
-    approve: "Approve",
-    approving: "Approving…",
-    approveTip: "Settle this proposal: the draft becomes stable, recorded as your review",
-    approved: (name) => `Settled “${name}”.`,
-    open: "Open",
     lanes: "Who is doing what",
     lanesEmpty: "No Roles yet. Create one when an Agent keeps working on one direction.",
     waiting: (n) => `${count(n, "new Card")} to take`,

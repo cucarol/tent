@@ -3,7 +3,6 @@ import { cardTitle, primaryOf, type Graph } from "../data/store.js";
 import { isDraft } from "../data/drafts.js";
 import { UNREAD } from "../data/flags.js";
 import type { SnapshotCard, SnapshotNode, SnapshotRef, SyncFlags } from "../data/types.js";
-import { api, ApiError, describe } from "../data/api.js";
 import { CardGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
 import { ago, readStored, when, writeStored } from "../util.js";
@@ -38,71 +37,27 @@ function useSince(workspaceId: string): string | null {
   return since;
 }
 
-/** The first paragraph of a body as plain text, for a two-line preview. */
-function lead(n: SnapshotNode): string {
-  if (n.description) return n.description;
-  const para = n.body.split(/\n\s*\n/).find((p) => p.trim() && !p.trim().startsWith("#")) ?? "";
-  return para
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/[*_`>#]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * Settles a draft proposal as the page showed it: the draft becomes stable and the person's confirmation
- * is recorded. A proposal edited since the snapshot conflicts instead of approving text nobody saw.
- */
-export async function approveProposal(shown: SnapshotNode) {
-  const doc = await api.node(shown.id);
-  const description =
-    typeof doc.frontmatter.description === "string" ? doc.frontmatter.description : "";
-  if (
-    doc.frontmatter.status !== "draft" ||
-    doc.body !== shown.body ||
-    description !== shown.description ||
-    (typeof doc.frontmatter.type === "string" ? doc.frontmatter.type : "") !== shown.type ||
-    doc.path.split("/").at(-1) !== shown.name
-  )
-    throw new ApiError(409, "ETAG_CONFLICT", "The proposal changed after it was shown");
-  await api.saveNode(shown.id, {
-    baseEtag: doc.etag,
-    frontmatter: { status: "stable" },
-    confirm: true,
-  });
-}
-
 const live = (c: SnapshotCard) => !isDraft(c) && c.status !== "deprecated";
 
 /**
- * The home page: what waits for the person's decision, who is doing what, what was finished since the
- * last visit, and what is behind or ahead. Everything is derived from the snapshot and sync flags.
+ * The home page: who is doing what, what was finished since the last visit, and what is behind or ahead.
+ * It only shows what the Agents' work derived; nothing here waits on the person.
  */
 export function NowView({
   graph,
   flags,
   onOpen,
   onPage,
-  onToast,
 }: {
   graph: Graph;
   flags: SyncFlags;
   onOpen: (ref: SnapshotRef) => void;
   onPage: (ref: SnapshotRef) => void;
-  onToast: (text: string) => void;
 }) {
   const since = useSince(graph.snapshot.workspace.id);
-  const [busy, setBusy] = useState<string | null>(null);
   const [allDone, setAllDone] = useState(false);
   const nodes = graph.snapshot.nodes.filter((n) => !n.archived);
   const cards = graph.snapshot.cards.filter(live);
-  const changedAt = (n: SnapshotNode) =>
-    n.history[0] ? graph.commits.get(n.history[0])?.date : undefined;
-
-  const asks = nodes
-    .filter((n) => n.status === "draft")
-    .sort((a, b) => Date.parse(changedAt(b) ?? "") - Date.parse(changedAt(a) ?? ""));
-
   const outputs = nodes
     .filter(
       (n) =>
@@ -147,22 +102,6 @@ export function NowView({
   const behind = flagged.filter((f) => f.flag.behind);
   const ahead = flagged.filter((f) => f.flag.ahead);
 
-  const approve = async (n: SnapshotNode) => {
-    setBusy(n.id);
-    try {
-      await approveProposal(n);
-      onToast(t.now.approved(n.name));
-    } catch (error) {
-      onToast(
-        error instanceof ApiError && error.code === "ETAG_CONFLICT"
-          ? t.review.conflict
-          : describe(error),
-      );
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const cardLink = (c: SnapshotCard) => (
     <button type="button" className="now-link" onClick={() => onPage({ kind: "card", id: c.id })}>
       <CardGlyph size={13} />
@@ -173,92 +112,6 @@ export function NowView({
   return (
     <div className="now">
       <div className="now-grid">
-        <div className="now-col">
-          <section className="now-block" aria-labelledby="now-asks">
-            <h2 id="now-asks" className="now-h">
-              {t.now.asks}
-              {asks.length > 0 && <span className="now-n">{asks.length}</span>}
-            </h2>
-            {asks.length === 0 ? (
-              <p className="now-empty">{t.now.asksEmpty}</p>
-            ) : (
-              asks.map((n) => (
-                <article key={n.id} className="now-ask">
-                  <button
-                    type="button"
-                    className="now-ask-title"
-                    onClick={() => onOpen({ kind: "node", id: n.id })}
-                  >
-                    <TypeGlyph type={n.type} size={14} />
-                    <span>{n.name}</span>
-                  </button>
-                  <p className="now-ask-lead">{lead(n)}</p>
-                  <div className="now-ask-acts">
-                    <button
-                      type="button"
-                      className="btn primary"
-                      disabled={busy !== null}
-                      data-tip={t.now.approveTip}
-                      onClick={() => approve(n)}
-                    >
-                      <Icon name="check" size={13} />
-                      {busy === n.id ? t.now.approving : t.now.approve}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn plain"
-                      onClick={() => onOpen({ kind: "node", id: n.id })}
-                    >
-                      {t.now.open}
-                    </button>
-                    <span className="now-meta">{ago(changedAt(n))}</span>
-                  </div>
-                </article>
-              ))
-            )}
-          </section>
-
-          <section className="now-block is-done" aria-labelledby="now-done">
-            <h2 id="now-done" className="now-h">
-              {since ? t.now.done : t.now.doneRecent}
-              <span className="now-n">{done.length}</span>
-              {since && <span className="now-since">{t.now.since(when(since))}</span>}
-            </h2>
-            {done.length === 0 ? (
-              <p className="now-empty">{t.now.doneEmpty}</p>
-            ) : (
-              <ul className="now-list">
-                {done.slice(0, allDone ? undefined : DONE_SHOWN).map((n) => {
-                  const goal = goalOf(n);
-                  return (
-                    <li key={n.id}>
-                      <button
-                        type="button"
-                        className="now-row"
-                        onClick={() => onOpen({ kind: "node", id: n.id })}
-                      >
-                        <TypeGlyph type={n.type} size={14} />
-                        <span className="now-row-name">
-                          {n.name}
-                          {goal && <small>{goal.name}</small>}
-                        </span>
-                        <span className="now-meta">{ago(n.outputAt)}</span>
-                      </button>
-                    </li>
-                  );
-                })}
-                {!allDone && done.length > DONE_SHOWN && (
-                  <li>
-                    <button type="button" className="now-more" onClick={() => setAllDone(true)}>
-                      {t.now.more(done.length - DONE_SHOWN)}
-                    </button>
-                  </li>
-                )}
-              </ul>
-            )}
-          </section>
-        </div>
-
         <div className="now-col">
           <section className="now-block" aria-labelledby="now-lanes">
             <h2 id="now-lanes" className="now-h">
@@ -331,6 +184,48 @@ export function NowView({
             </ul>
           </section>
 
+          <section className="now-block is-done" aria-labelledby="now-done">
+            <h2 id="now-done" className="now-h">
+              {since ? t.now.done : t.now.doneRecent}
+              <span className="now-n">{done.length}</span>
+              {since && <span className="now-since">{t.now.since(when(since))}</span>}
+            </h2>
+            {done.length === 0 ? (
+              <p className="now-empty">{t.now.doneEmpty}</p>
+            ) : (
+              <ul className="now-list">
+                {done.slice(0, allDone ? undefined : DONE_SHOWN).map((n) => {
+                  const goal = goalOf(n);
+                  return (
+                    <li key={n.id}>
+                      <button
+                        type="button"
+                        className="now-row"
+                        onClick={() => onOpen({ kind: "node", id: n.id })}
+                      >
+                        <TypeGlyph type={n.type} size={14} />
+                        <span className="now-row-name">
+                          {n.name}
+                          {goal && <small>{goal.name}</small>}
+                        </span>
+                        <span className="now-meta">{ago(n.outputAt)}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+                {!allDone && done.length > DONE_SHOWN && (
+                  <li>
+                    <button type="button" className="now-more" onClick={() => setAllDone(true)}>
+                      {t.now.more(done.length - DONE_SHOWN)}
+                    </button>
+                  </li>
+                )}
+              </ul>
+            )}
+          </section>
+        </div>
+
+        <div className="now-col">
           <section className="now-block" aria-labelledby="now-attention">
             <h2 id="now-attention" className="now-h">
               {t.now.attention}

@@ -503,13 +503,7 @@ export function App() {
             <div className="stage-body">
               {view === "now" ? (
                 <Boundary label={t.now.tab}>
-                  <NowView
-                    graph={graph}
-                    flags={flags}
-                    onOpen={open}
-                    onPage={openPage}
-                    onToast={showToast}
-                  />
+                  <NowView graph={graph} flags={flags} onOpen={open} onPage={openPage} />
                 </Boundary>
               ) : (
                 <Boundary label={t.app.map}>

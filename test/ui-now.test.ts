@@ -2,95 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { api, ApiError, type NodeDocument } from "../src/ui/data/api.js";
 import { buildGraph } from "../src/ui/data/store.js";
 import { UNREAD } from "../src/ui/data/flags.js";
 import type { Snapshot, SnapshotNode } from "../src/ui/data/types.js";
-import { approveProposal, NowView } from "../src/ui/now/NowView.js";
+import { NowView } from "../src/ui/now/NowView.js";
 import { setLang } from "../src/ui/i18n.js";
-
-const shown = {
-  id: "node-proposal",
-  body: "Proposal: keep order.json.",
-  description: "",
-  name: "Proposal",
-  type: "prompt",
-} as SnapshotNode;
-
-const live: NodeDocument = {
-  nodeId: shown.id,
-  path: "Proposal",
-  etag: "live-version",
-  body: shown.body,
-  raw: "",
-  frontmatter: { status: "draft", type: "prompt" },
-};
-
-const saved = (etag: string) => async (id: string) => ({
-  nodeId: id,
-  path: live.path,
-  etag,
-  changed: true,
-  body: live.body,
-});
-
-test("approving a proposal saves stable and confirms in one CAS write", async (t) => {
-  t.mock.method(api, "node", async () => live);
-  const save = t.mock.method(api, "saveNode", saved("stable-version"));
-  const confirm = t.mock.method(api, "confirmNode", saved("confirmed-version"));
-  await approveProposal(shown);
-  assert.deepEqual(save.mock.calls[0]!.arguments, [
-    shown.id,
-    { baseEtag: "live-version", frontmatter: { status: "stable" }, confirm: true },
-  ]);
-  assert.equal(save.mock.callCount(), 1);
-  assert.equal(confirm.mock.callCount(), 0);
-});
-
-test("a proposal edited after it was shown conflicts without writing", async (t) => {
-  t.mock.method(api, "node", async () => ({ ...live, body: "Proposal: switch to index.md." }));
-  const save = t.mock.method(api, "saveNode", saved("unexpected"));
-  const confirm = t.mock.method(api, "confirmNode", saved("unexpected"));
-  await assert.rejects(
-    approveProposal(shown),
-    (error) => error instanceof ApiError && error.code === "ETAG_CONFLICT",
-  );
-  assert.equal(save.mock.callCount(), 0);
-  assert.equal(confirm.mock.callCount(), 0);
-});
-
-test("withdrawn proposals and changed visible metadata conflict before any write", async (t) => {
-  for (const changed of [
-    { ...live, frontmatter: { ...live.frontmatter, status: "deprecated" } },
-    { ...live, frontmatter: { ...live.frontmatter, status: "stable" } },
-    { ...live, frontmatter: { ...live.frontmatter, description: "A different reason" } },
-    { ...live, frontmatter: { ...live.frontmatter, type: "goal" } },
-    { ...live, path: "Changed name" },
-  ]) {
-    await t.test(JSON.stringify({ path: changed.path, ...changed.frontmatter }), async (t) => {
-      t.mock.method(api, "node", async () => changed);
-      const save = t.mock.method(api, "saveNode", saved("unexpected"));
-      await assert.rejects(
-        approveProposal(shown),
-        (error) => error instanceof ApiError && error.code === "ETAG_CONFLICT",
-      );
-      assert.equal(save.mock.callCount(), 0);
-    });
-  }
-});
-
-test("a concurrent edit rejects the single approval write without a second confirmation", async (t) => {
-  t.mock.method(api, "node", async () => live);
-  const conflict = new ApiError(409, "ETAG_CONFLICT", "The draft changed");
-  const save = t.mock.method(api, "saveNode", async () => {
-    throw conflict;
-  });
-  const confirm = t.mock.method(api, "confirmNode", saved("unexpected"));
-  await assert.rejects(approveProposal(shown), (error) => error === conflict);
-  assert.equal(save.mock.callCount(), 1);
-  assert.equal(confirm.mock.callCount(), 0);
-  assert.equal(live.frontmatter.status, "draft");
-});
 
 const snapshot = (nodes: SnapshotNode[]): Snapshot => ({
   workspace: { id: "now-test", name: "Now", revision: "revision", generatedAt: "" },
@@ -134,7 +50,6 @@ const renderNow = (s: Snapshot, flags = {}) =>
       flags,
       onOpen: () => {},
       onPage: () => {},
-      onToast: () => {},
     }),
   );
 
@@ -205,4 +120,12 @@ test("attention counts dual flags in both categories while listing each Node onc
   assert.equal((rendered.match(/>both</g) ?? []).length, 1);
   assert.equal((rendered.match(/>only-ahead</g) ?? []).length, 1);
   assert.equal((rendered.match(/>only-behind</g) ?? []).length, 1);
+});
+
+test("the Now page only observes: a draft Node gets no approval control", () => {
+  setLang("en", false);
+  const html = renderNow(
+    snapshot([output("node-draft", undefined, { type: "prompt", status: "draft" })]),
+  );
+  assert.doesNotMatch(html, /Approve|btn primary/);
 });

@@ -93,34 +93,6 @@ async function fixture(t: TestContext) {
 
 const json = <T>(reply: Reply) => JSON.parse(reply.body) as T;
 
-test("Web proposal approval saves stable and human verification together with full-document CAS", async (t) => {
-  const { tent, call } = await fixture(t);
-  const target = "/api/nodes/node-main";
-  const draft = "---\nid: node-main\ntype: prompt\nstatus: draft\n---\nA proposal.\n";
-  await tent.writeFile("Main/Main.md", draft);
-  const shown = json<{ etag: string }>(await call("GET", target));
-  const input = { baseEtag: shown.etag, frontmatter: { status: "stable" }, confirm: true };
-  const malformed = await call("PUT", target, { json: { ...input, confirm: "true" } });
-  assert.equal(malformed.status, 422);
-  assert.equal(await tent.readFile("Main/Main.md"), draft);
-  const incomplete = await call("PUT", target, {
-    json: { ...input, baseEtag: incompleteNodeReadEtag(shown.etag) },
-  });
-  assert.equal(incomplete.status, 422);
-  assert.equal(await tent.readFile("Main/Main.md"), draft);
-  const approved = await call("PUT", target, { json: input });
-  assert.equal(approved.status, 200, approved.body);
-  assert.equal(json<{ trustTier: string }>(approved).trustTier, "human-reviewed");
-  const saved = await tent.readFile("Main/Main.md");
-  const parsed = parseFrontmatter(saved);
-  assert.equal(parsed.data.status, "stable");
-  assert.equal(parsed.body, "A proposal.\n");
-  assert.equal((parsed.data.verified as { by: string }[])[0]?.by, `human:${userInfo().username}`);
-  const stale = await call("PUT", target, { json: input });
-  assert.equal(stale.status, 409);
-  assert.equal(await tent.readFile("Main/Main.md"), saved);
-});
-
 test("Web confirmation records the local human or explicit actor with full-document CAS", async (t) => {
   const { tent, call } = await fixture(t);
   const target = "/api/nodes/node-main";

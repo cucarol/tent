@@ -119,7 +119,6 @@ export type NodeEdit = {
   baseEtag: string;
   body?: string;
   frontmatter?: Record<string, unknown>;
-  confirm?: boolean;
 };
 export type SavedNode = {
   nodeId: string;
