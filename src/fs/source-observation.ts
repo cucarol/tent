@@ -4,9 +4,15 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { checkedSourceFile } from "./checked-source-file.js";
 import { materialLocator, localMaterialPath } from "../core/material.js";
+import { markdownMaterialHeading, materialContent } from "../core/material-section.js";
 
-/** Mechanical byte identity only. Material interpretation belongs to the caller's tools. */
-export async function observeSourceFile(root: string, filename: string, cacheDir?: string) {
+/** Safely read and hash bytes; the Core caller supplies any content selection. */
+export async function observeSourceFile(
+  root: string,
+  filename: string,
+  cacheDir?: string,
+  selection?: { key: string; content: (bytes: Buffer) => string },
+) {
   await checkedSourceFile(root, filename);
   const canonicalPath = await realpath(filename);
   const handle = await open(
@@ -26,7 +32,12 @@ export async function observeSourceFile(root: string, filename: string, cacheDir
       ino: before.ino,
     };
     const cachePath = cacheDir
-      ? path.join(cacheDir, createHash("sha256").update(canonicalPath).digest("hex") + ".json")
+      ? path.join(
+          cacheDir,
+          createHash("sha256")
+            .update(selection ? JSON.stringify([canonicalPath, selection.key]) : canonicalPath)
+            .digest("hex") + ".json",
+        )
       : undefined;
     if (cachePath) {
       const cached = await readFile(cachePath, "utf8")
@@ -49,6 +60,7 @@ export async function observeSourceFile(root: string, filename: string, cacheDir
     }
     const hash = createHash("sha256"),
       buffer = Buffer.alloc(64 * 1024);
+    const chunks: Buffer[] = [];
     let position = 0;
     while (position < before.size) {
       const { bytesRead } = await handle.read(
@@ -58,7 +70,8 @@ export async function observeSourceFile(root: string, filename: string, cacheDir
         position,
       );
       if (!bytesRead) throw new Error("Material truncated while observing");
-      hash.update(buffer.subarray(0, bytesRead));
+      if (selection) chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+      else hash.update(buffer.subarray(0, bytesRead));
       position += bytesRead;
     }
     const after = await handle.stat(),
@@ -72,6 +85,7 @@ export async function observeSourceFile(root: string, filename: string, cacheDir
     ) {
       throw new Error("Material changed while observing");
     }
+    if (selection) hash.update(selection.content(Buffer.concat(chunks)));
     const observedVersion = hash.digest("hex");
     if (cachePath) {
       const temp = `${cachePath}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`;
@@ -103,5 +117,20 @@ export async function observeMaterialResource(
   // An absolute file URI explicitly addresses another location. Check every path
   // segment from its filesystem root; relative addresses remain in this workspace.
   const root = locator.kind === "uri" ? path.parse(filename).root : workspaceRoot;
-  return observeSourceFile(root, filename, cacheDir);
+  const heading = markdownMaterialHeading(locator);
+  return observeSourceFile(
+    root,
+    filename,
+    cacheDir,
+    heading === undefined
+      ? undefined
+      : {
+          key: JSON.stringify(["markdown-section", heading]),
+          content: (bytes) =>
+            materialContent(
+              new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
+              locator,
+            ),
+        },
+  );
 }

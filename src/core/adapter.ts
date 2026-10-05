@@ -6,7 +6,7 @@ import { recoverPendingDeleteUnlocked } from "./delete-recovery.js";
 import type { GitDocumentHistory, CaptureMetadata } from "./git-history.js";
 
 export interface FsAdapter {
-  /** Observe local material bytes without interpreting or copying their content. */
+  /** Observe local material bytes, selecting a Markdown section when its address names one. */
   observeMaterial?(
     resource: string,
     documentPath: string,

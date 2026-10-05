@@ -75,6 +75,14 @@ the Workspace needs a `file:` URI. Point at the narrowest material that
 supports the fact. After saving, run `tent workspace check --json` once to
 find broken links and missing files.
 
+For a Markdown material, use `../Design/Design.md#State` to track only that
+section (including its heading and subsections). Use the heading text from
+`node get-section --heading`; percent-encoded text works too. Editing another
+section leaves this material current. A missing or duplicated heading makes
+it unavailable and is reported by `workspace check`. Without a fragment, or
+for a non-Markdown file, the whole file is tracked. Card sources still pin the
+complete Node version.
+
 ## Behind, ahead and confirming
 
 Tent records material versions in Git when you save; never enter hashes.

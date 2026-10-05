@@ -1,5 +1,5 @@
-import { fromMarkdown } from "mdast-util-from-markdown";
-import type { Nodes } from "mdast";
+import { NodeSectionError, findSection, selectSection } from "./markdown-section.js";
+export { NodeSectionError } from "./markdown-section.js";
 import { withTentMutation, type FsAdapter } from "./adapter.js";
 import { contentEtag } from "./etag.js";
 import { canonicalDocumentReferences } from "./document-links.js";
@@ -12,17 +12,6 @@ import {
   savePreparedNodeDocumentUnlocked,
 } from "./node-document-write.js";
 
-export class NodeSectionError extends Error {
-  constructor(
-    readonly code: "SECTION_NOT_FOUND" | "SECTION_AMBIGUOUS" | "SECTION_ETAG_CONFLICT",
-    message: string,
-    readonly details?: Record<string, unknown>,
-  ) {
-    super(message);
-    this.name = "NodeSectionError";
-  }
-}
-
 export type NodeAppendInput = { body: string; heading?: string; by?: string };
 export type NodeSectionWriteInput = {
   heading: string;
@@ -30,8 +19,6 @@ export type NodeSectionWriteInput = {
   body: string;
   by?: string;
 };
-
-type Section = { start: number; end: number; depth: number; text: string };
 
 /** Append without a caller read; the current body is observed only inside the write lock. */
 export function appendNodeBody(fs: FsAdapter, nodeId: string, input: NodeAppendInput) {
@@ -159,40 +146,6 @@ async function saveBody(
     input,
     operation,
   );
-}
-
-function selectSection(body: string, heading: string): Section {
-  const section = findSection(body, heading);
-  if (!section)
-    throw new NodeSectionError("SECTION_NOT_FOUND", `Markdown section not found: ${heading}`, {
-      heading,
-    });
-  return section;
-}
-
-function findSection(body: string, heading: string): Section | undefined {
-  const headings = fromMarkdown(body).children.filter((node) => node.type === "heading");
-  const matches = headings.filter((node) => inlineText(node).trim() === heading);
-  if (!matches.length) return undefined;
-  if (matches.length !== 1)
-    throw new NodeSectionError(
-      "SECTION_AMBIGUOUS",
-      `Markdown section heading is duplicated: ${heading}`,
-      { heading, count: matches.length },
-    );
-  const selected = matches[0]!;
-  const start = selected.position!.start.offset!;
-  const next = headings.find(
-    (node) => node.position!.start.offset! > start && node.depth <= selected.depth,
-  );
-  const end = next?.position!.start.offset ?? body.length;
-  return { start, end, depth: selected.depth, text: body.slice(start, end) };
-}
-
-function inlineText(node: Nodes): string {
-  if ("value" in node) return node.value;
-  if ("alt" in node) return node.alt ?? "";
-  return "children" in node ? node.children.map(inlineText).join("") : "";
 }
 
 function sectionEtag(nodeId: string, heading: string, text: string) {

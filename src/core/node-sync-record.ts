@@ -3,6 +3,7 @@ import type { FsAdapter } from "./adapter.js";
 import { canonicalSha256 } from "./canonical-digest.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { materialIdentity, materialLocator, materialOccurrences } from "./material.js";
+import { materialContent } from "./material-section.js";
 import { nodeTypePrimary } from "./node-type.js";
 import { recordNodeVerification } from "./node-provenance.js";
 import { loadNodeCatalog, type CatalogNode } from "./node-catalog.js";
@@ -185,17 +186,22 @@ export async function observeNodeMaterials(
 ) {
   return Promise.all(
     materialOccurrences(data).map(async ({ resource, field }) => {
-      let finalRaw: string | undefined;
+      let observed: { version?: string; reason?: string };
       try {
         const locator = materialLocator(resource, documentPath, field === "sources");
-        finalRaw = locator.kind === "path" ? finalDocuments?.get(locator.target) : undefined;
-      } catch {
-        // Existing invalid declarations remain editable; observation reports their diagnostic.
+        const finalRaw = locator.kind === "path" ? finalDocuments?.get(locator.target) : undefined;
+        observed =
+          finalRaw === undefined
+            ? await observeSyncMaterial(fs, resource, documentPath, field === "sources")
+            : {
+                version: createHash("sha256")
+                  .update(materialContent(finalRaw, locator))
+                  .digest("hex"),
+              };
+      } catch (error) {
+        // Existing invalid or unreadable declarations remain editable, with an honest diagnostic.
+        observed = { reason: error instanceof Error ? error.message : String(error) };
       }
-      const observed =
-        finalRaw === undefined
-          ? await observeSyncMaterial(fs, resource, documentPath, field === "sources")
-          : { version: createHash("sha256").update(finalRaw).digest("hex") };
       return {
         resource,
         identity: syncMaterialIdentity(resource, documentPath, nodes),

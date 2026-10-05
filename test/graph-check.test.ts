@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
 import { checkGraph } from "../src/core/graph-check.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { createCardDocument } from "../src/core/card-document.js";
 import { renameNode } from "../src/core/rename-ops.js";
@@ -184,6 +184,90 @@ test("invalid documents and malformed declarations remain visible and inspectabl
       (issue) => issue.kind === "missing-material-file" && issue.path === "Invalid/Invalid.md",
     ),
   );
+});
+
+test("material checks report missing or ambiguous Markdown sections at their occurrences", async (t) => {
+  const { root, workspace, adapter, write, fileExists } = await fixture(t);
+  await fs.writeFile(
+    path.join(workspace, "设计.markdown"),
+    "## 状态\ncurrent\n\n## 重复\none\n\n## 重复\ntwo\n",
+  );
+  await fs.writeFile(path.join(workspace, "opaque.txt"), "no Markdown headings");
+  await write(
+    "Design/Design.md",
+    { id: "node-design" },
+    "## **状态**\nlocal\n\nOther\n-----\nother\n",
+  );
+  await write("Owner/Owner.md", {
+    id: "node-owner",
+    resource: "../Design/Design.md#不存在",
+    sources: [
+      { resource: "../Design/Design.md#%E7%8A%B6%E6%80%81" },
+      { resource: "../../设计.markdown#状态" },
+      { resource: "../../设计.markdown#重复" },
+      { resource: "../../opaque.txt#不存在" },
+      { resource: "../Design/Design.md" },
+      { resource: "../Design/Design.md#Other" },
+      { resource: pathToFileURL(path.join(workspace, "设计.markdown")).href + "#不存在" },
+    ],
+  });
+  const before = await bytes(root);
+  const result = await checkGraph(adapter, workspace, fileExists);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.issues.length, 3);
+  assert.ok(result.issues.every((issue) => issue.kind === "missing-material-section"));
+  assert.ok(
+    result.issues.some(
+      (issue) => "field" in issue && issue.field === "resource" && /不存在/.test(issue.reason),
+    ),
+  );
+  assert.ok(
+    result.issues.some(
+      (issue) => "index" in issue && issue.index === 2 && /duplicated/.test(issue.reason),
+    ),
+  );
+  assert.ok(
+    result.issues.some(
+      (issue) => "index" in issue && issue.index === 6 && /不存在/.test(issue.reason),
+    ),
+  );
+  assert.deepEqual(await bytes(root), before);
+});
+
+test("section observation failures are errors, not false missing-heading findings", async (t) => {
+  const { workspace, adapter, write, fileExists } = await fixture(t);
+  await write("Design/Design.md", { id: "node-design" }, "## State\ncontent\n");
+  await write("Owner/Owner.md", { id: "node-owner", resource: "../Design/Design.md#State" });
+  t.mock.method(adapter, "observeMaterial", async () => {
+    throw new Error("EACCES: material read denied");
+  });
+  const result = await checkGraph(adapter, workspace, fileExists);
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0]!.reason, /EACCES/);
+});
+
+test("Card fragment sources still pin complete Node bytes and survive a missing live section", async (t) => {
+  const { workspace, systemRoot, adapter, write, fileExists } = await fixture(t);
+  await git(systemRoot, "init");
+  await write(
+    "Design/Design.md",
+    { id: "node-design" },
+    "## State\nselected\n\n## Other\nretained too\n",
+  );
+  const original = await adapter.readFile("Design/Design.md");
+  const card = await createCardDocument(adapter, {
+    cardId: "card-sectionpin",
+    prompt: "Use the retained design",
+    sources: [{ resource: "../Design/Design.md#State" }],
+  });
+  const source = (
+    parseFrontmatter(await adapter.readFile(card.path)).data.sources as Array<{ version: unknown }>
+  )[0]!;
+  const version = source.version as { commit: string; path: string };
+  assert.equal(await adapter.history.read(version), original);
+  await write("Design/Design.md", { id: "node-design" }, "## Other\ncurrent only\n");
+  assert.deepEqual((await checkGraph(adapter, workspace, fileExists)).issues, []);
 });
 
 test("retained Card source versions survive live moves and deletion without document or history writes", async (t) => {
