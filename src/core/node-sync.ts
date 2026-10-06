@@ -426,7 +426,7 @@ export function linkNodeOutput(
         {
           parentPath: goal.path,
           name,
-          type: "output",
+          type: "output-asset",
           resource: descriptor.resource,
           ...(cardId ? { sources: [{ resource: `/${cardRecordPath(cardId)}` }] } : {}),
           by: input.by,

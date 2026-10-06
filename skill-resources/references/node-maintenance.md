@@ -112,7 +112,7 @@ identity.
 ## Outputs
 
 `tent node link-output <goal-id> --resource <path-or-node-id> [--name <name>] [--card <id>]`
-creates an `output` child named after the file. Paths resolve from the
+creates an `output-asset` child named after the file. Paths resolve from the
 Workspace root and the file must exist. Link a result only once it is in
 that checkout. Tracked materials retain a repository-relative location and
 can still be observed from a surviving checkout after worktree removal. An output belongs to its nearest goal

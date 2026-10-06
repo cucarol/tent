@@ -4,11 +4,8 @@ export const NODE_TYPE_PRIMARY_VALUES = ["goal", "prompt", "output"] as const;
 export const NODE_TYPE_PRESETS = [
   "goal-direction",
   "goal-requirement",
-  "goal-todo",
-  "goal-question",
-  "prompt-spec",
-  "prompt-rule",
   "prompt-decision",
+  "prompt-spec",
   "prompt-reference",
   "prompt-procedure",
   "output-asset",

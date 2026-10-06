@@ -57,6 +57,7 @@ test("link-output accepts Workspace paths, bundle addresses, Node IDs and URIs w
   const linked = await linkNodeOutput(fs, goal, { resource: "out/page.html" });
   assert.equal(linked.path, "Parent/Goal/page.html");
   const saved = await readNodeForEdit(fs, linked.nodeId);
+  assert.equal(saved.frontmatter.type, "output-asset");
   assert.equal(
     materialLocator(saved.frontmatter.resource as string, nodeNotePath(saved.path)).kind,
     "path",
