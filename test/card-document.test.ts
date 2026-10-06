@@ -251,6 +251,15 @@ test("Card progress counts only outputs explicitly responding to this Card", asy
     ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
     1,
   );
+  await adapter.writeFile(card.path, raw + "\nmanual input edit");
+  const independent = await linkNodeOutput(adapter, "node-other", { resource: "result.txt" });
+  assert.deepEqual(
+    parseFrontmatter(
+      await adapter.readFile(`${independent.path}/${independent.path.split("/").at(-1)}.md`),
+    ).data.sources ?? [],
+    [],
+    "an invalid received Card is not an inference candidate",
+  );
   await adapter.writeFile(
     "Notes/Notes.md",
     serializeFrontmatter({ id: "node-notes", type: "prompt-spec" }, "Notes"),

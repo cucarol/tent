@@ -396,12 +396,13 @@ export function linkNodeOutput(
         const candidates = listed.items.filter(
           (card) => !card.diagnostic && card.progress === "received-no-output",
         );
-        const cards = await Promise.all(
+        const reads = await Promise.all(
           candidates.map(async (card) => {
             const read = (await readCardDocument(fs, String(card.cardId))) as Record<
               string,
               unknown
             >;
+            if (read.diagnostic || !Array.isArray(read.sources)) return undefined;
             return {
               cardId: String(card.cardId),
               state: "consumed",
@@ -409,6 +410,7 @@ export function linkNodeOutput(
             } as CardProgressInput;
           }),
         );
+        const cards = reads.filter((card): card is CardProgressInput => card !== undefined);
         const goals = await readCardGoalIds(fs, cards);
         const matching = cards.filter((card) => goals.get(card.cardId)!.goalIds.has(goalId));
         if (matching.length > 1)
