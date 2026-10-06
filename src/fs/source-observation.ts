@@ -57,6 +57,8 @@ export async function observeSourceFile(
         cached &&
         JSON.stringify(cached.signature) === JSON.stringify(signature) &&
         /^[a-f0-9]{64}$/.test(cached.version) &&
+        /^[a-f0-9]{40}$/.test(cached.blobs?.sha1) &&
+        /^[a-f0-9]{64}$/.test(cached.blobs?.sha256) &&
         after.size === before.size &&
         after.mtimeMs === before.mtimeMs &&
         after.ctimeMs === before.ctimeMs
@@ -68,6 +70,7 @@ export async function observeSourceFile(
           canonicalPath,
           observedVersion: cached.version as string,
           cacheHit: true,
+          blobs: cached.blobs as { sha1: string; sha256: string },
           ...(Array.isArray(cached.legacyVersions) &&
           cached.legacyVersions.every(
             (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
@@ -78,6 +81,8 @@ export async function observeSourceFile(
       }
     }
     const hash = createHash("sha256"),
+      sha1 = createHash("sha1").update(`blob ${before.size}\0`),
+      sha256 = createHash("sha256").update(`blob ${before.size}\0`),
       buffer = Buffer.alloc(64 * 1024);
     const chunks: Buffer[] = [];
     let position = 0;
@@ -89,6 +94,8 @@ export async function observeSourceFile(
         position,
       );
       if (!bytesRead) throw new Error("Material truncated while observing");
+      sha1.update(buffer.subarray(0, bytesRead));
+      sha256.update(buffer.subarray(0, bytesRead));
       if (selection) chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
       else hash.update(buffer.subarray(0, bytesRead));
       position += bytesRead;
@@ -113,13 +120,14 @@ export async function observeSourceFile(
       } else hash.update(selected);
     }
     const observedVersion = hash.digest("hex");
+    const blobs = { sha1: sha1.digest("hex"), sha256: sha256.digest("hex") };
     if (cachePath) {
       const temp = `${cachePath}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`;
       try {
         await mkdir(cacheDir!, { recursive: true });
         await writeFile(
           temp,
-          JSON.stringify({ signature, version: observedVersion, legacyVersions }),
+          JSON.stringify({ signature, version: observedVersion, legacyVersions, blobs }),
         );
         await rename(temp, cachePath);
       } catch {
@@ -130,6 +138,7 @@ export async function observeSourceFile(
       canonicalPath,
       observedVersion,
       cacheHit: false,
+      blobs,
       ...(legacyVersions ? { legacyVersions } : {}),
     };
   } finally {
@@ -143,14 +152,16 @@ export async function observeMaterialResource(
   documentPath: string,
   resource: string,
   cacheDir?: string,
+  relocated?: { root: string; filename: string },
 ) {
   const locator = materialLocator(resource, documentPath, true);
-  const filename = localMaterialPath(locator, workspaceRoot);
+  const filename = relocated?.filename ?? localMaterialPath(locator, workspaceRoot);
   if (filename === undefined)
     throw new Error("Mechanical checks require an explicit local path or file: URI");
   // An absolute file URI explicitly addresses another location. Check every path
   // segment from its filesystem root; relative addresses remain in this workspace.
-  const root = locator.kind === "uri" ? path.parse(filename).root : workspaceRoot;
+  const root =
+    relocated?.root ?? (locator.kind === "uri" ? path.parse(filename).root : workspaceRoot);
   const heading = markdownMaterialHeading(locator);
   return observeSourceFile(root, filename, cacheDir, {
     key: JSON.stringify([

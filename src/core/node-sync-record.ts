@@ -22,6 +22,7 @@ import {
 } from "./node-semantic-history.js";
 
 import type { NodeBasisRecord } from "./node-basis-record.js";
+import type { RepositoryMaterial } from "./repository-material.js";
 export { nodeBasisRecordSchema, type NodeBasisRecord } from "./node-basis-record.js";
 const version = z.string().regex(/^[a-f0-9]{64}$/);
 export const retiredNodeFields = [
@@ -175,7 +176,13 @@ export async function observeSyncMaterial(
   source = true,
   nodes?: Map<string, CatalogNode>,
   finalDocuments?: Map<string, string>,
-): Promise<{ version?: string; reason?: string; legacyVersions?: string[] }> {
+  repository?: RepositoryMaterial,
+): Promise<{
+  version?: string;
+  reason?: string;
+  legacyVersions?: string[];
+  repository?: RepositoryMaterial;
+}> {
   try {
     const locator = materialLocator(resource, documentPath, source);
     if (locator.kind === "unresolved") return { reason: "Source is not an explicit local address" };
@@ -207,7 +214,7 @@ export async function observeSyncMaterial(
       locator.kind === "path" && !/^(?:\.{1,2}\/|\/)/.test(resource.trim())
         ? `./${resource.trim()}`
         : resource;
-    const observation = await fs.observeMaterial(explicitResource, documentPath);
+    const observation = await fs.observeMaterial(explicitResource, documentPath, repository);
     const materialNode =
       observation.systemPath &&
       nodes &&
@@ -231,6 +238,7 @@ export async function observeSyncMaterial(
     return {
       version: version.parse(observation.observedVersion),
       ...(observation.legacyVersions ? { legacyVersions: observation.legacyVersions } : {}),
+      ...(observation.repository ? { repository: observation.repository } : {}),
     };
   } catch (error) {
     return {
@@ -245,6 +253,7 @@ export async function observeNodeMaterials(
   documentPath: string,
   finalDocuments?: Map<string, string>,
   nodes?: Map<string, CatalogNode>,
+  previous?: NodeBasisRecord,
 ) {
   return Promise.all(
     materialOccurrences(data)
@@ -253,7 +262,16 @@ export async function observeNodeMaterials(
           field !== "sources" || !isCardResponseSource(resource, documentPath),
       )
       .map(async ({ resource, field }) => {
-        let observed: { version?: string; reason?: string; legacyVersions?: string[] };
+        const identity = syncMaterialIdentity(resource, documentPath, nodes);
+        const repository = previous?.materials.find(
+          (material) => material.identity === identity,
+        )?.repository;
+        let observed: {
+          version?: string;
+          reason?: string;
+          legacyVersions?: string[];
+          repository?: RepositoryMaterial;
+        };
         try {
           const locator = materialLocator(resource, documentPath, field === "sources");
           const targetNode =
@@ -280,6 +298,7 @@ export async function observeNodeMaterials(
                     field === "sources",
                     nodes,
                     finalDocuments,
+                    repository,
                   )
                 : {
                     legacyVersions: legacyTextVersions(materialContent(finalRaw, locator)),
@@ -293,7 +312,7 @@ export async function observeNodeMaterials(
         }
         return {
           resource,
-          identity: syncMaterialIdentity(resource, documentPath, nodes),
+          identity,
           ...observed,
         };
       }),
@@ -331,8 +350,9 @@ export async function prepareNodeSyncSave(
     documentPath,
     new Map([...(options.finalDocuments ?? []), [documentPath, raw]]),
     nodes,
+    previous,
   );
-  const materials = observations.map(({ identity, version, legacyVersions }) => {
+  const materials = observations.map(({ identity, version, legacyVersions, repository }) => {
     const old = previous?.materials.find((m) => m.identity === identity);
     const equivalentLegacy =
       old?.fingerprintVersion !== 2 &&
@@ -341,10 +361,16 @@ export async function prepareNodeSyncSave(
     const useCurrent = (options.confirm && !!version) || !old || equivalentLegacy;
     const known = useCurrent ? (version ?? old?.version) : old?.version;
     const currentAlgorithm = (useCurrent && !!version) || old?.fingerprintVersion === 2;
+    const materialRepository = useCurrent
+      ? version
+        ? repository
+        : old?.repository
+      : (old?.repository ?? (version === known ? repository : undefined));
     return {
       identity,
       ...(known ? { version: known } : {}),
       ...(known && currentAlgorithm ? { fingerprintVersion: 2 as const } : {}),
+      ...(materialRepository ? { repository: materialRepository } : {}),
     };
   });
   const node =

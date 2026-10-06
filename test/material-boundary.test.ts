@@ -30,6 +30,10 @@ test("material checks observe generic bytes while software/format adapters have 
     canonicalPath: await fs.realpath(filename),
     observedVersion: expected,
     cacheHit: false,
+    blobs: {
+      sha1: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
+      sha256: createHash("sha256").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
+    },
   });
   assert.deepEqual(
     await observeMaterialResource(root, "Node/Node.md", "../../materials/opaque.pen"),

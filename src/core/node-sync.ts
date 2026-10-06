@@ -90,6 +90,7 @@ async function inspectCatalogNodes(
           path,
           undefined,
           nodeCatalog.byId,
+          record,
         );
         const materials: NodeSyncInspection["materials"] = observations.map((observation) => {
           const basis = record?.materials.find((m) => m.identity === observation.identity);

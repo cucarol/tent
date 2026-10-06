@@ -4,13 +4,20 @@ import { MUTATION_LOCK_PATH } from "./paths.js";
 import { recoverPendingNodeMoveUnlocked } from "./node-move-recovery.js";
 import { recoverPendingDeleteUnlocked } from "./delete-recovery.js";
 import type { GitDocumentHistory, CaptureMetadata } from "./git-history.js";
+import type { RepositoryMaterial } from "./repository-material.js";
 
 export interface FsAdapter {
   /** Observe local material content; normalize text lines and select addressed Markdown sections. */
   observeMaterial?(
     resource: string,
     documentPath: string,
-  ): Promise<{ observedVersion: string; systemPath?: string; legacyVersions?: string[] }>;
+    repository?: RepositoryMaterial,
+  ): Promise<{
+    observedVersion: string;
+    systemPath?: string;
+    legacyVersions?: string[];
+    repository?: RepositoryMaterial;
+  }>;
   readonly history?: GitDocumentHistory;
   /** Track selected identity-document writes inside the existing mutation lock. */
   withDocumentHistory?<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T>;

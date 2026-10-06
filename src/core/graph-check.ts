@@ -18,6 +18,7 @@ import { CARDS_DIR, ROLES_DIR, ORDER_PATH, nodeNotePath } from "./paths.js";
 import { isNodeId, isRoleId, isCardId } from "./id.js";
 import { markdownMaterialHeading } from "./material-section.js";
 import { NodeSectionError } from "./markdown-section.js";
+import { retainedNodeRecords, syncMaterialIdentity } from "./node-sync-record.js";
 
 export type GraphCheckIssue =
   | { kind: "unresolved-link"; path: string; target: string; reason: string }
@@ -55,6 +56,7 @@ export async function checkGraph(
   fileExists: GraphFileExists,
 ): Promise<GraphCheckResult> {
   const readonlyFs = readOnlyFs(fs);
+  const nodeRecords = await retainedNodeRecords(readonlyFs);
   const result: GraphCheckResult = { documents: 0, issues: [], errors: [] };
   const documents: Array<{
     path: string;
@@ -303,11 +305,41 @@ export async function checkGraph(
       }
       if (filename === undefined) return;
       try {
+        const repository =
+          typeof value === "string" && document.id
+            ? nodeRecords[document.id]?.materials.find(
+                (material) => material.identity === syncMaterialIdentity(value, document.path),
+              )?.repository
+            : undefined;
+        if (!(await exists(filename)) && repository && readonlyFs.observeMaterial) {
+          try {
+            const resource =
+              typeof value === "string" &&
+              !/^(?:\.{1,2}\/|\/|[a-z][a-z\d+.-]*:)/i.test(value.trim())
+                ? `./${value.trim()}`
+                : String(value);
+            await readonlyFs.observeMaterial(resource, document.path, repository);
+            return;
+          } catch (cause) {
+            if (
+              cause instanceof NodeSectionError &&
+              ["SECTION_NOT_FOUND", "SECTION_AMBIGUOUS"].includes(cause.code)
+            ) {
+              result.issues.push({
+                kind: "missing-material-section",
+                ...occurrence,
+                reason: message(cause),
+              });
+              return;
+            }
+            if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+          }
+        }
         if (await exists(filename)) {
           if (sectionResource !== undefined) {
             if (!readonlyFs.observeMaterial) throw new Error("Material observer is unavailable");
             try {
-              await readonlyFs.observeMaterial(sectionResource, document.path);
+              await readonlyFs.observeMaterial(sectionResource, document.path, repository);
             } catch (cause) {
               if (
                 !(cause instanceof NodeSectionError) ||

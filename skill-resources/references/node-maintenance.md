@@ -111,8 +111,8 @@ identity.
 `tent node link-output <goal-id> --resource <path-or-node-id> [--name <name>] [--card <id>]`
 creates an `output` child named after the file. Paths resolve from the
 Workspace root and the file must exist. Link a result only once it is in
-that checkout: a path inside a worktree becomes unavailable after the merge
-removes the worktree. An output belongs to its nearest goal
+that checkout. Tracked materials retain a repository-relative location and
+can still be observed from a surviving checkout after worktree removal. An output belongs to its nearest goal
 ancestor. For Card progress, its sources must name the Card it answers; pass
 `--card <id>` or let Tent infer a unique incomplete received Card. When a
 goal changes, review its outputs and confirm them. Questions, research and

@@ -1,5 +1,6 @@
 import * as z from "zod/v4";
 import { isNodeId } from "./id.js";
+import { repositoryMaterialSchema } from "./repository-material.js";
 
 const version = z.string().regex(/^[a-f0-9]{64}$/);
 export const nodeBasisRecordSchema = z.strictObject({
@@ -8,6 +9,7 @@ export const nodeBasisRecordSchema = z.strictObject({
       identity: z.string(),
       version: version.optional(),
       fingerprintVersion: z.literal(2).optional(),
+      repository: repositoryMaterialSchema.optional(),
     }),
   ),
   materialsRevision: version.optional(),

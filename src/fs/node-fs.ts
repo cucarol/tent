@@ -11,6 +11,12 @@ import { GitDocumentHistory, type CaptureMetadata } from "../core/git-history.js
 import { isHistoryDocument } from "../core/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 import { observeMaterialResource } from "./source-observation.js";
+import {
+  observedRepositoryMaterial,
+  relocatedRepositoryMaterial,
+  RepositoryMaterialCache,
+} from "./repository-material.js";
+import type { RepositoryMaterial } from "../core/repository-material.js";
 import { workspaceRootFromSystemRoot } from "../core/paths.js";
 import {
   prepareNodeSyncSave,
@@ -25,6 +31,7 @@ export class NodeFs implements FsAdapter {
   readonly history: GitDocumentHistory;
   private historyWrites = new AsyncLocalStorage<Map<string, string | null>>();
   private historyPreimages = new AsyncLocalStorage<Map<string, string | null>>();
+  private repositoryMaterials = new RepositoryMaterialCache();
 
   constructor(
     root: string,
@@ -34,18 +41,40 @@ export class NodeFs implements FsAdapter {
     this.history = new GitDocumentHistory(this.root, entry);
   }
 
-  async observeMaterial(resource: string, documentPath: string) {
+  async observeMaterial(resource: string, documentPath: string, previous?: RepositoryMaterial) {
     const workspaceRoot = workspaceRootFromSystemRoot(this.root);
     if (!workspaceRoot) throw new Error("Material observation requires a Workspace .tent root");
     const cacheDir = (await this.exists(".git")) ? this.abs(".git/tent-material-cache") : undefined;
-    const observed = await observeMaterialResource(workspaceRoot, documentPath, resource, cacheDir);
+    const observed = await observeMaterialResource(
+      workspaceRoot,
+      documentPath,
+      resource,
+      cacheDir,
+    ).catch(async (error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT" || !previous) throw error;
+      const relocated = await relocatedRepositoryMaterial(
+        workspaceRoot,
+        previous,
+        this.repositoryMaterials,
+      );
+      return observeMaterialResource(workspaceRoot, documentPath, resource, cacheDir, relocated);
+    });
+    const repository = await observedRepositoryMaterial(
+      observed.canonicalPath,
+      observed.blobs,
+      this.repositoryMaterials,
+    );
     const relative = nodePath.relative(this.root, observed.canonicalPath);
     const inside =
       relative !== ".." &&
       !relative.startsWith(`..${nodePath.sep}`) &&
       !nodePath.isAbsolute(relative);
     const systemPath = inside ? relative.split(nodePath.sep).join("/") : undefined;
-    return { ...observed, ...(systemPath ? { systemPath } : {}) };
+    return {
+      ...observed,
+      ...(systemPath ? { systemPath } : {}),
+      ...(repository ? { repository } : {}),
+    };
   }
 
   private abs(p: string): string {
