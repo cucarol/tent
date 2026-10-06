@@ -22,7 +22,7 @@ async function fixture(t: TestContext) {
   };
 }
 
-test("output activity uses latest declared generated or verified time without Git replay", async (t) => {
+test("output activity uses earliest valid declared generated or verified time without Git replay", async (t) => {
   const { adapter, write } = await fixture(t);
   await write({ generated: { by: "process:test", at: "2026-01-01T00:00:00Z" } });
   assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-01T00:00:00.000Z");
@@ -33,8 +33,11 @@ test("output activity uses latest declared generated or verified time without Gi
       { by: "process:test", at: "2026-01-02T00:00:00Z" },
     ],
   });
-  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-03T18:00:00.000Z");
-  await write({ verified: { by: "human:cuca", at: "2026-01-05T00:00:00Z" } });
+  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-02T00:00:00.000Z");
+  await write({
+    generated: { by: "process:test", at: "invalid" },
+    verified: { by: "human:cuca", at: "2026-01-05T00:00:00Z" },
+  });
   assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-05T00:00:00.000Z");
 });
 
@@ -60,5 +63,25 @@ test("activity excludes deprecated outputs and non-output Nodes", async (t) => {
   for (const type of ["output", "output-analysis", "output-issue", "output-custom"]) {
     await write({ generated, type });
     assert.deepEqual(await readOutputActivity(adapter), new Map(), type);
+  }
+});
+
+test("completion reads current provenance across confirmation, rewrite and imported-output boundaries", async (t) => {
+  const { adapter, write } = await fixture(t);
+  const generated = { by: "process:test", at: "2026-01-01T00:00:00Z" };
+  for (const at of ["2026-01-03T00:00:00Z", "2026-01-04T00:00:00Z"]) {
+    await write({ generated, verified: [{ by: "human:cuca", at }] });
+    assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-01T00:00:00.000Z");
+  }
+  await write({
+    generated: { ...generated, at: "2026-01-05T00:00:00Z" },
+    verified: [{ by: "human:cuca", at: "2026-01-03T00:00:00Z" }],
+  });
+  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-03T00:00:00.000Z");
+  await write({ generated: { ...generated, at: "2026-01-05T00:00:00Z" } });
+  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-05T00:00:00.000Z");
+  for (const at of ["2026-01-03T00:00:00Z", "2026-01-04T00:00:00Z"]) {
+    await write({ verified: [{ by: "human:cuca", at }] });
+    assert.equal((await readOutputActivity(adapter)).get("node-out"), at.replace("Z", ".000Z"));
   }
 });

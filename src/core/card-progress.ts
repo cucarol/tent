@@ -136,7 +136,7 @@ export async function readOutputActivity(fs: FsAdapter): Promise<Map<string, str
     } catch {
       /* Invalid provenance supplies no verification evidence. */
     }
-    times.sort((a, b) => Date.parse(b) - Date.parse(a));
+    times.sort((a, b) => Date.parse(a) - Date.parse(b));
     if (times[0]) result.set(node.nodeId, new Date(times[0]).toISOString());
   }
   return result;
@@ -206,11 +206,15 @@ export async function readCardProgress(
   );
   for (const card of cards) {
     const { goalIds, diagnostics } = pinned.get(card.cardId)!;
+    const currentGoalIds = [...goalIds].filter((goalId) => {
+      const goal = catalog.byId.get(goalId);
+      return !goal || documentLifecycle(parseFrontmatter(goal.header).data).status !== "deprecated";
+    });
     const completed = new Set<string>(),
       outputIds = new Set<string>(),
       reviewGoals = new Set<string>(),
       reviewOutputIds = new Set<string>();
-    for (const goalId of goalIds) {
+    for (const goalId of currentGoalIds) {
       const goal = catalog.byId.get(goalId);
       if (!goal || !isRequirementNode({ type: goal.type }) || !active(goal)) continue;
       const awaitingReview = new Set<string>();
@@ -235,7 +239,7 @@ export async function readCardProgress(
     result.set(card.cardId, {
       ...deriveCardProgress(
         card.state,
-        goalIds.size,
+        currentGoalIds.length,
         completed.size,
         [...outputIds],
         reviewGoals.size,

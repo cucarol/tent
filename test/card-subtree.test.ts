@@ -335,3 +335,28 @@ test("only assets and evidence count as Card implementation responses", async (t
     assert.equal((await f.query(card)).progress, "has-output", type);
   }
 });
+
+test("deprecated source goals leave the Card denominator and no-goal Cards show reception only", async (t) => {
+  const f = await fixture(t);
+  await f.node("A", "node-a", "goal");
+  await f.node("B", "node-b", "goal");
+  const card = await f.card("card-deprecatedgoals", ["A/A.md", "B/B.md"]);
+  await f.node("A/Result", "node-result", "output-evidence", "result", {
+    sources: [{ resource: "/cards/card-deprecatedgoals.md" }],
+  });
+  assert.equal((await f.query(card)).totalGoalCount, 2);
+  await f.node("B", "node-b", "goal", "obsolete", { status: "deprecated" });
+  assert.deepEqual(await f.query(card), {
+    progress: "has-output",
+    goalCount: 1,
+    totalGoalCount: 1,
+    outputNodeIds: ["node-result"],
+  });
+  await f.node("A", "node-a", "goal", "obsolete", { status: "deprecated" });
+  assert.deepEqual(await f.query(card), {
+    progress: null,
+    goalCount: 0,
+    totalGoalCount: 0,
+    outputNodeIds: [],
+  });
+});

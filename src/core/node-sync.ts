@@ -477,10 +477,14 @@ export function linkNodeOutput(
       }
       let cardId = input.cardId;
       if (cardId) {
-        const card = (await readCardDocument(fs, cardId, { includeProgress: false })) as Record<
-          string,
-          unknown
-        >;
+        let card: Record<string, unknown>;
+        try {
+          card = await readCardDocument(fs, cardId, { includeProgress: false });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT")
+            throw new NodeWriteError("INVALID_INPUT", `Card ${cardId} does not exist.`);
+          throw error;
+        }
         if (card.diagnostic || card.status === "deprecated" || card.state !== "consumed")
           throw new NodeWriteError(
             "INVALID_INPUT",

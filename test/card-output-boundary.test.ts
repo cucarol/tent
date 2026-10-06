@@ -153,3 +153,14 @@ test("explicit responses accept selected and ancestor goals across Role boundari
     assert.deepEqual(read.outputNodeIds, [receipt.nodeId]);
   }
 });
+
+test("a missing explicit Card is rejected before any write without exposing a filesystem path", async (t) => {
+  const { fs, innerId } = await fixture();
+  await assertRejectedWithoutWrites(
+    t,
+    fs,
+    innerId,
+    "card-missingoutput",
+    /^Card card-missingoutput does not exist\.$/,
+  );
+});

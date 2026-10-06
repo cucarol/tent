@@ -1,6 +1,11 @@
 import path from "node:path";
 import { stat } from "node:fs/promises";
-import { materialFields, materialLocator, localMaterialPath } from "../core/material.js";
+import {
+  materialFields,
+  materialLocator,
+  localMaterialPath,
+  isCardResponseSource,
+} from "../core/material.js";
 import { isNodeId } from "../core/id.js";
 
 /** CLI file declarations use the Workspace root; serialized documents use Core addresses. */
@@ -24,6 +29,8 @@ export async function workspaceMaterialFields(
       }
     }
     const value = resource.trim();
+    if (source && value.startsWith("/cards/") && isCardResponseSource(value, documentPath))
+      return resource;
     if (value.startsWith("//")) materialLocator(value, "index.md");
     const target = value.split(/[?#]/, 1)[0]!;
     if (isNodeId(target) || target.startsWith("@") || /^[a-z][a-z\d+.-]*:/i.test(value))

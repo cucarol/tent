@@ -10,6 +10,11 @@ import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { git } from "./helpers.js";
+import { buildSnapshot } from "../src/ui-server/snapshot.js";
+import { buildGraph } from "../src/ui/data/store.js";
+import { NowView } from "../src/ui/now/NowView.js";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
@@ -268,5 +273,100 @@ test("successful mutation output identifies the resolved Workspace in human and 
     parseFrontmatter(await fs.readFile(path.join(root, ".tent/Goal/Goal.md"), "utf8")).data
       .resource,
     undefined,
+  );
+});
+
+test("Card response source roots match stored documents while ordinary CLI paths stay Workspace-rooted", async (t) => {
+  const { root, globals, parse, cli, get } = await fixture(t);
+  const card = parse(
+    await runCardCommand("create", ["--prompt", "Respond", "--source", "node-goal"], globals),
+  );
+  parse(await runCardCommand("take", [card.cardId], globals));
+  const created = (
+    await cli("create", [
+      "Manual response",
+      "--type",
+      "output-evidence",
+      "--parent",
+      "node-goal",
+      "--sources-json",
+      JSON.stringify([
+        { resource: `/cards/${card.cardId}.md`, title: "Response" },
+        { resource: "/docs/req.md" },
+      ]),
+    ])
+  ).node;
+  assert.deepEqual((await get(created.nodeId)).sources, [
+    { resource: `/cards/${card.cardId}.md`, title: "Response" },
+    { resource: "../../../docs/req.md" },
+  ]);
+  const read = parse(await runCardCommand("show", [card.cardId], globals));
+  assert.equal(read.progress, "has-output");
+  assert.deepEqual(read.outputNodeIds, [created.nodeId]);
+  await fs.mkdir(path.join(root, "cards"));
+  await fs.writeFile(path.join(root, `cards/${card.cardId}.md`), "Workspace file");
+  const ordinary = (
+    await cli("create", ["Ordinary", "--type", "prompt", "--resource", `/cards/${card.cardId}.md`])
+  ).node;
+  assert.equal((await get(ordinary.nodeId)).resource, `../../cards/${card.cardId}.md`);
+});
+
+test("ordinary link-output confirmation preserves completion time and the home page's finished list", async (t) => {
+  const { root, cli, get } = await fixture(t);
+  const linked = await cli("link-output", [
+    "node-goal",
+    "--resource",
+    "docs/proof.txt",
+    "--name",
+    "Linked proof",
+  ]);
+  const adapter = new NodeFs(path.join(root, ".tent"));
+  const source = {
+    fs: adapter,
+    workspace: { id: "confirm-completion", name: "Confirm" },
+    revision: "test",
+  };
+  const before = await buildSnapshot(source);
+  const at = before.nodes.find((node) => node.id === linked.nodeId)!.outputAt!;
+  assert.ok(at);
+  for (const name of ["localStorage", "sessionStorage"] as const) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      value: {
+        getItem: () => (name === "localStorage" ? JSON.stringify(at) : at),
+        setItem: () => {},
+      },
+    });
+    t.after(() =>
+      descriptor
+        ? Object.defineProperty(globalThis, name, descriptor)
+        : Reflect.deleteProperty(globalThis, name),
+    );
+  }
+  const render = (snapshot: typeof before) =>
+    renderToStaticMarkup(
+      createElement(NowView, {
+        graph: buildGraph(snapshot),
+        flags: {},
+        onOpen: () => {},
+        onPage: () => {},
+      }),
+    );
+  assert.doesNotMatch(render(before), /Linked proof/);
+  for (let index = 0; index < 2; index++) {
+    const observed = await get(linked.nodeId);
+    await cli("confirm", [linked.nodeId, "--base-etag", observed.etag, "--by", "human:cuca"]);
+    const after = await buildSnapshot(source);
+    assert.equal(after.nodes.find((node) => node.id === linked.nodeId)!.outputAt, at);
+    assert.doesNotMatch(render(after), /Linked proof/);
+  }
+  const saved = parseFrontmatter(
+    await fs.readFile(path.join(root, ".tent", linked.path, "Linked proof.md"), "utf8"),
+  ).data;
+  assert.equal(
+    (saved.verified as unknown[]).length,
+    1,
+    "verification still retains only the latest entry per actor",
   );
 });
