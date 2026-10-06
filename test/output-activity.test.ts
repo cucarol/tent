@@ -25,7 +25,7 @@ async function fixture(t: TestContext) {
 test("output activity uses latest declared generated or verified time without Git replay", async (t) => {
   const { adapter, write } = await fixture(t);
   await write({ generated: { by: "process:test", at: "2026-01-01T00:00:00Z" } });
-  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-01T00:00:00Z");
+  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-01T00:00:00.000Z");
   await write({
     generated: { by: "process:test", at: "2026-01-03T00:00:00Z" },
     verified: [
@@ -33,9 +33,9 @@ test("output activity uses latest declared generated or verified time without Gi
       { by: "process:test", at: "2026-01-02T00:00:00Z" },
     ],
   });
-  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-04T02:00:00+08:00");
+  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-03T18:00:00.000Z");
   await write({ verified: { by: "human:cuca", at: "2026-01-05T00:00:00Z" } });
-  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-05T00:00:00Z");
+  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-05T00:00:00.000Z");
 });
 
 test("outputs without valid declared time provide no completion timestamp", async (t) => {

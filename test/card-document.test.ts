@@ -231,13 +231,9 @@ test("Card progress counts only outputs explicitly responding to this Card", asy
     ((await readCardDocument(adapter, confirmedCard.cardId)) as Record<string, unknown>).progress,
     "received-no-output",
   );
-  const unassigned = await linkNodeOutput(adapter, "node-other", { resource: "result.txt" });
-  assert.deepEqual(
-    parseFrontmatter(
-      await adapter.readFile(`${unassigned.path}/${unassigned.path.split("/").at(-1)}.md`),
-    ).data.sources ?? [],
-    [],
-    "multiple incomplete Cards require an explicit response target",
+  await assert.rejects(
+    linkNodeOutput(adapter, "node-other", { resource: "result.txt" }),
+    /Multiple incomplete Cards.*--card/,
   );
   const linked = await runNodeCommand(
     "link-output",

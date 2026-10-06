@@ -114,7 +114,7 @@ export async function readOutputActivity(fs: FsAdapter): Promise<Map<string, str
       /* Invalid provenance supplies no verification evidence. */
     }
     times.sort((a, b) => Date.parse(b) - Date.parse(a));
-    if (times[0]) result.set(node.nodeId, times[0]);
+    if (times[0]) result.set(node.nodeId, new Date(times[0]).toISOString());
   }
   return result;
 }

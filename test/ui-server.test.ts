@@ -450,7 +450,9 @@ test("direct Card publication supports immutable reads, pending moves and recept
     200,
   );
   const edited = json<Snapshot>(await call("GET", "/api/snapshot"));
-  assert.equal(edited.nodes.find((n) => n.id === output.nodeId)!.outputAt, activity);
+  assert.ok(
+    Date.parse(edited.nodes.find((n) => n.id === output.nodeId)!.outputAt!) > Date.parse(activity),
+  );
   assert.equal(await tent.readFile(`cards/${cardId}.md`), cardBytes);
 });
 

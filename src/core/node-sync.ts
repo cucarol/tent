@@ -396,6 +396,11 @@ export function linkNodeOutput(
         );
         const goals = await readCardGoalIds(fs, cards);
         const matching = cards.filter((card) => goals.get(card.cardId)!.goalIds.has(goalId));
+        if (matching.length > 1)
+          throw new NodeWriteError(
+            "INVALID_INPUT",
+            `Multiple incomplete Cards point to this goal: ${matching.map((card) => card.cardId).join(", ")}. Choose one with --card <id>.`,
+          );
         if (matching.length === 1) cardId = matching[0]!.cardId;
       }
       const nodeId = await createNodeUnlocked(
