@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as z from "zod/v4";
+import { isCardId } from "./id.js";
 
 // Keep user spelling and source order; these declarations are not a set of URLs.
 export const resourceSchema = z
@@ -31,6 +32,18 @@ export function materialOccurrences(data: Record<string, unknown>) {
     occurrences.push({ field: "sources", index, resource: source.resource }),
   );
   return occurrences;
+}
+
+/** A Card source records the output's response relationship, never material content. */
+export function isCardResponseSource(resource: string, documentPath: string): boolean {
+  try {
+    const locator = materialLocator(resource, documentPath, true);
+    if (locator.kind !== "path") return false;
+    const match = /^cards\/(card-[^/]+)\.md$/.exec(locator.target);
+    return !!match && isCardId(match[1]!);
+  } catch {
+    return false;
+  }
 }
 
 export class MaterialAddressError extends Error {}

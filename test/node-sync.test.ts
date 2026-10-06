@@ -22,6 +22,9 @@ import { loadNodeCatalog } from "../src/core/node-catalog.js";
 import { incompleteNodeReadEtag } from "../src/core/node-read-basis.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
+import { createHash } from "node:crypto";
+import { canonicalSha256 } from "../src/core/canonical-digest.js";
+import { syncMaterialIdentity } from "../src/core/node-sync-record.js";
 
 async function fixture(t: TestContext, history = true) {
   await mkdir(testScratchRoot(), { recursive: true });
@@ -206,6 +209,254 @@ test("goal and hierarchical output follow the two-stage production and confirmat
   assert.equal((await inspectNodeSync(fs, bodyOutput)).state, "synced");
   assert.equal((await inspectNodeSync(fs, goal)).state, "synced");
   assert.equal((await inspectNodeSync(fs, bodyOutput)).trustTier, "human-reviewed");
+});
+
+test("review regression: goal addresses and body drift, metadata and line endings do not", async (t) => {
+  const { fs, create, edit, resource } = await fixture(t);
+  const goal = await create("Goal", "goal-requirement");
+  const output = await create("Evidence", "output", "Goal");
+  for (const frontmatter of [
+    { tags: ["reviewed"] },
+    { type: "goal-direction" },
+    { description: "metadata" },
+  ]) {
+    await edit(goal, { frontmatter });
+    assert.equal((await inspectNodeSync(fs, output)).state, "synced");
+  }
+  await edit(goal, { body: "original\r\n", confirm: true });
+  assert.equal((await inspectNodeSync(fs, output)).state, "synced");
+  await edit(goal, { body: "original!\n" });
+  assert.equal((await inspectNodeSync(fs, output)).state, "behind");
+  await edit(output, { confirm: true });
+  await edit(goal, { frontmatter: { sources: [{ resource, description: "first" }] } });
+  assert.equal((await inspectNodeSync(fs, output)).state, "behind");
+  await edit(output, { confirm: true });
+  await edit(goal, { frontmatter: { sources: [{ resource, description: "second" }] } });
+  assert.equal((await inspectNodeSync(fs, output)).state, "synced");
+  await edit(goal, { frontmatter: { sources: [] } });
+  assert.equal((await inspectNodeSync(fs, output)).state, "behind");
+});
+
+test("review regression: confirming changed goal materials keeps owned outputs pending review", async (t) => {
+  const { fs, env, workspace, resource, create, edit } = await fixture(t);
+  const goal = await createNode(env, {
+    parentPath: "",
+    name: "Goal",
+    type: "goal",
+    sources: [{ resource }],
+  });
+  const output = await create("Evidence", "output", "Goal");
+  await create("Transparent", "prompt", "Goal");
+  const deep = await create("Deep", "output", "Goal/Transparent");
+  const nested = await create("Nested", "goal", "Goal");
+  const nestedOutput = await create("Nested Evidence", "output", "Goal/Nested");
+  await writeFile(path.join(workspace, "input.txt"), "new requirement\n");
+  assert.equal((await inspectNodeSync(fs, goal)).state, "behind");
+  const beforeConfirm = await fs.history.currentCommit();
+  await edit(goal, { confirm: true });
+  assert.equal((await inspectNodeSync(fs, goal)).state, "ahead");
+  for (const id of [output, deep]) {
+    const inspected = await inspectNodeSync(fs, id);
+    assert.equal(inspected.state, "behind");
+    assert.deepEqual(inspected.behind?.reasons, ["Goal materials changed"]);
+  }
+  assert.equal((await inspectNodeSync(fs, nestedOutput)).state, "synced");
+  assert.equal((await inspectNodeSync(fs, nested)).state, "synced");
+  await edit(goal, { confirm: true });
+  assert.equal(
+    (await inspectNodeSync(fs, output)).state,
+    "behind",
+    "repeat confirmation does not clear output basis",
+  );
+  await edit(output, { confirm: true });
+  assert.equal((await inspectNodeSync(fs, output)).state, "synced");
+  await writeFile(path.join(workspace, "input.txt"), "second requirement\n");
+  const outputRead = await readNodeForEdit(fs, output);
+  const goalRead = await readNodeForEdit(fs, goal);
+  await writeNodesBatch(env, {
+    items: [
+      { op: "update", nodeId: output, baseEtag: outputRead.etag, confirm: true },
+      { op: "update", nodeId: goal, baseEtag: goalRead.etag, confirm: true },
+    ],
+  });
+  assert.equal(
+    (await inspectNodeSync(fs, output)).state,
+    "synced",
+    "same batch output confirmation acknowledges final goal material event independent of input order",
+  );
+  assert.equal((await inspectNodeSync(fs, deep)).state, "behind");
+  await git(
+    path.join(workspace, ".tent"),
+    "-c",
+    "core.autocrlf=false",
+    "reset",
+    "--hard",
+    beforeConfirm!,
+  );
+  assert.equal(
+    (await inspectNodeSync(fs, output)).state,
+    "synced",
+    "reset rolls material events and output basis back together",
+  );
+  assert.equal((await inspectNodeSync(fs, goal)).state, "behind");
+});
+
+test("review regression: confirming Node materials and converting LF to CRLF does not drift consumers", async (t) => {
+  const { fs, env, workspace, resource, create, edit } = await fixture(t);
+  const upstream = await create("Upstream", "prompt");
+  const consumer = await createNode(env, {
+    parentPath: "",
+    name: "Consumer",
+    type: "goal",
+    sources: [{ resource: "/Upstream/Upstream.md" }, { resource }],
+  });
+  const uriConsumer = await createNode(env, {
+    parentPath: "",
+    name: "URI Consumer",
+    type: "prompt",
+    sources: [{ resource: pathToFileURL(path.join(workspace, ".tent/Upstream/Upstream.md")).href }],
+  });
+  await edit(upstream, { confirm: true });
+  assert.equal((await inspectNodeSync(fs, consumer)).behind, undefined);
+  assert.equal((await inspectNodeSync(fs, uriConsumer)).behind, undefined);
+  await writeFile(path.join(workspace, "input.txt"), "first\nsecond\n");
+  await edit(consumer, { confirm: true });
+  await writeFile(path.join(workspace, "input.txt"), "first\r\nsecond\r\n");
+  assert.equal((await inspectNodeSync(fs, consumer)).behind, undefined);
+  await edit(upstream, { body: "actual material change" });
+  assert.ok((await inspectNodeSync(fs, consumer)).behind);
+  assert.ok((await inspectNodeSync(fs, uriConsumer)).behind);
+});
+
+test("review regression: ahead.since follows the latest transition, survives metadata and resets", async (t) => {
+  const { fs, workspace, create, edit } = await fixture(t);
+  const goal = await create("Goal", "goal");
+  const first = (await inspectNodeSync(fs, goal)).ahead?.since;
+  const output = await create("Evidence", "output", "Goal");
+  assert.equal((await inspectNodeSync(fs, goal)).ahead, undefined);
+  await edit(goal, { body: "new goal" });
+  const head = (await fs.history.currentCommit())!;
+  // Distinct commit timestamps make a creation-time regression observable without waits.
+  await git(path.join(workspace, ".tent"), "read-tree", "HEAD");
+  const previousDate = process.env.GIT_COMMITTER_DATE;
+  process.env.GIT_COMMITTER_DATE = "2026-10-06T02:00:00Z";
+  try {
+    await git(
+      path.join(workspace, ".tent"),
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "--amend",
+      "--no-edit",
+      "--date=2026-10-06T02:00:00Z",
+    );
+  } finally {
+    if (previousDate === undefined) delete process.env.GIT_COMMITTER_DATE;
+    else process.env.GIT_COMMITTER_DATE = previousDate;
+  }
+  const expected = await fs.history.commitTime((await fs.history.currentCommit())!);
+  const inspected = await inspectNodeSync(fs, goal);
+  assert.equal(inspected.ahead?.since, expected);
+  assert.notEqual(inspected.ahead?.since, first);
+  await edit(goal, { frontmatter: { tags: ["review"] } });
+  assert.equal((await inspectNodeSync(fs, goal)).ahead?.since, expected);
+  await edit(output, { confirm: true });
+  assert.equal((await inspectNodeSync(fs, goal)).ahead, undefined);
+  await edit(goal, { body: "another goal" });
+  assert.equal(
+    (await inspectNodeSync(fs, goal)).ahead?.since,
+    await fs.history.commitTime((await fs.history.currentCommit())!),
+  );
+  assert.ok(first && head);
+});
+
+test("legacy baselines use acquisition history, preserve actual drift and do not reconfirm live content", async (t) => {
+  const { fs, env, workspace, resource, create, edit } = await fixture(t);
+  const upstream = await create("Upstream", "prompt");
+  const goal = await createNode(env, {
+    parentPath: "",
+    name: "Goal",
+    type: "goal-requirement",
+    tags: ["old"],
+    resource,
+    sources: [{ resource: "/Upstream/Upstream.md" }],
+    body: "old requirement\n",
+  });
+  const output = await create("Evidence", "output", "Goal");
+  const upstreamRead = await readNodeForEdit(fs, upstream);
+  const hash = (raw: string) => createHash("sha256").update(raw).digest("hex");
+  const catalog = (await loadNodeCatalog(fs)).byId;
+  const legacyGoalVersion = canonicalSha256({
+    data: {
+      type: "goal-requirement",
+      tags: ["old"],
+      resource: JSON.stringify(["uri", resource]),
+      sources: [{ resource: `node:${upstream}` }],
+    },
+    body: "old requirement\n",
+  });
+  const legacy = {
+    [goal]: {
+      materials: [
+        {
+          identity: syncMaterialIdentity(resource, "Goal/Goal.md", catalog),
+          version: hash("input v1\nnext\n"),
+        },
+        { identity: `node:${upstream}`, version: hash(upstreamRead.raw) },
+      ],
+    },
+    [output]: { materials: [], goal: { nodeId: goal, version: legacyGoalVersion } },
+  };
+  await fs.history.captureUnlocked([], { operation: "test.legacy-basis", nodeRecords: legacy });
+  const retainedHead = await fs.history.currentCommit();
+  await writeFile(path.join(workspace, "input.txt"), "input v1\r\nnext\r\n");
+  assert.equal((await inspectNodeSync(fs, output)).state, "synced");
+  assert.equal((await inspectNodeSync(fs, goal)).state, "synced");
+  assert.equal(await fs.history.currentCommit(), retainedHead);
+  assert.deepEqual(
+    (await fs.history.nodeRecords())[output],
+    legacy[output],
+    "reads reinterpret without rewriting receipts or confirmations",
+  );
+  await edit(upstream, { confirm: true });
+  assert.equal(
+    (await inspectNodeSync(fs, goal)).state,
+    "synced",
+    "legacy Node byte basis is reconstructed before upstream verified changes",
+  );
+  await edit(goal, { frontmatter: { tags: ["new metadata"] } });
+  assert.equal(
+    (await inspectNodeSync(fs, output)).state,
+    "synced",
+    "metadata cannot become a semantic change during upgrade",
+  );
+  await writeFile(path.join(workspace, "input.txt"), "actual new requirement\n");
+  await edit(goal, { frontmatter: { tags: ["other metadata"] } });
+  assert.equal(
+    (await inspectNodeSync(fs, goal)).state,
+    "behind",
+    "ordinary save retains the reconstructed older material baseline",
+  );
+  await edit(goal, { body: "changed requirement\n" });
+  assert.equal(
+    (await inspectNodeSync(fs, output)).state,
+    "behind",
+    "historic output basis never uses latest live goal bytes",
+  );
+  await rm(path.join(workspace, "input.txt"));
+  assert.equal((await inspectNodeSync(fs, goal)).materials[0]!.state, "unavailable");
+  const unknown = (await fs.history.nodeRecords())[goal]!;
+  const oldUnknownVersion = hash("unreconstructable old material");
+  unknown.materials[0] = { identity: unknown.materials[0]!.identity, version: oldUnknownVersion };
+  await fs.history.captureUnlocked([], {
+    operation: "test.legacy-unknown",
+    nodeRecords: { [goal]: unknown },
+  });
+  await edit(goal, { frontmatter: { tags: ["unavailable material stays unknown"] } });
+  const preserved = (await fs.history.nodeRecords())[goal]!.materials[0]!;
+  assert.equal(preserved.version, oldUnknownVersion);
+  assert.equal(preserved.fingerprintVersion, undefined);
+  assert.equal((await inspectNodeSync(fs, goal)).materials[0]!.state, "unavailable");
 });
 
 test("single Node sync reads only its body and the required goal or subtree output bodies", async (t) => {
@@ -397,7 +648,7 @@ test("confirmation and structure edits do not drift goal version; moving existin
   await moveNode(env, goal, parent, { mode: "inside" });
   assert.equal((await inspectNodeSync(fs, output)).state, "synced");
   await edit(goal, { frontmatter: { description: "real semantic change" } });
-  assert.equal((await inspectNodeSync(fs, output)).state, "behind");
+  assert.equal((await inspectNodeSync(fs, output)).state, "synced");
 });
 
 test("batch new output uses final goal and self material bytes, without embedded hash metadata", async (t) => {

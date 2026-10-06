@@ -13,8 +13,21 @@ import { writeNodesBatch } from "../src/core/node-write-batch.js";
 import { confirmNodeSync, inspectNodeSync } from "../src/core/node-sync.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
+import { nodeSemanticFingerprint } from "../src/core/node-sync-record.js";
+import { loadNodeCatalog } from "../src/core/node-catalog.js";
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+
+async function nodeSectionDigest(fs: NodeFs, id: string, section: string) {
+  const read = await readNodeForEdit(fs, id);
+  const selected = await readNodeSection(fs, id, section);
+  return nodeSemanticFingerprint(
+    read.frontmatter,
+    selected.text,
+    `${read.path}/${read.path.split("/").at(-1)}.md`,
+    (await loadNodeCatalog(fs)).byId,
+  );
+}
 
 async function fixture(t: TestContext) {
   const workspace = await mkdtemp(path.join(testScratchRoot(), "material-section-sync-"));
@@ -124,7 +137,10 @@ test("atomic batches record final peer and self sections, including missing-sect
   ]) {
     const sync = await inspectNodeSync(fs, id!);
     assert.equal(sync.state, "synced");
-    assert.equal(sync.materials[0]!.recordedVersion, digest(text!));
+    assert.equal(
+      sync.materials[0]!.recordedVersion,
+      await nodeSectionDigest(fs, id === consumer ? peer : self, "状态"),
+    );
   }
   const reads = await Promise.all([consumer, self, peer].map((id) => readNodeForEdit(fs, id)));
   await writeNodesBatch(env, {
@@ -152,7 +168,10 @@ test("atomic batches record final peer and self sections, including missing-sect
     const sync = await inspectNodeSync(fs, id!);
     assert.equal(sync.state, "synced");
     const selected = await readNodeSection(fs, materialId!, "状态");
-    assert.equal(sync.materials[0]!.recordedVersion, digest(selected.text));
+    assert.equal(
+      sync.materials[0]!.recordedVersion,
+      await nodeSectionDigest(fs, materialId!, "状态"),
+    );
   }
   const beforeMissing = await inspectNodeSync(fs, consumer);
   const consumerRead = await readNodeForEdit(fs, consumer),
@@ -182,10 +201,7 @@ test("single self-reference save observes its final selected body and ignores ot
   });
   const initial = await inspectNodeSync(fs, id);
   assert.equal(initial.state, "synced");
-  assert.equal(
-    initial.materials[0]!.recordedVersion,
-    digest((await readNodeSection(fs, id, "状态")).text),
-  );
+  assert.equal(initial.materials[0]!.recordedVersion, await nodeSectionDigest(fs, id, "状态"));
   await edit(id, { body: body.replace("其他内容", "其他新内容") });
   assert.equal((await inspectNodeSync(fs, id)).state, "synced");
   await edit(id, { body: body.replace("状态材料", "状态新材料") });
@@ -194,7 +210,7 @@ test("single self-reference save observes its final selected body and ignores ot
   assert.equal((await inspectNodeSync(fs, id)).state, "synced");
   assert.equal(
     (await inspectNodeSync(fs, id)).materials[0]!.recordedVersion,
-    digest((await readNodeSection(fs, id, "状态")).text),
+    await nodeSectionDigest(fs, id, "状态"),
   );
   await edit(id, { body: "## 其他\n\n缺少目标小节。\n", confirm: true });
   assert.equal((await inspectNodeSync(fs, id)).state, "behind");

@@ -28,7 +28,12 @@ import { rewriteMarkdownDestinations } from "../markdown/links.js";
 import { ReaderError } from "./context-reader.js";
 import { recoverPendingNodeMoveUnlocked } from "./node-move-recovery.js";
 import { recoverPendingDeleteUnlocked } from "./delete-recovery.js";
-import { prepareNodeSyncSave, type NodeBasisRecord } from "./node-sync-record.js";
+import {
+  prepareNodeSyncSave,
+  retainedNodeRecords,
+  isOutputNode,
+  type NodeBasisRecord,
+} from "./node-sync-record.js";
 
 import {
   prepareNodeProvenanceSave,
@@ -297,16 +302,23 @@ async function writeNodesBatchUnlocked(
       invalid: false,
     });
   }
-  for (const node of planned) {
+  const basisRecords = await retainedNodeRecords(fs);
+  for (const node of [...planned].sort(
+    (a, b) =>
+      Number(isOutputNode(parseFrontmatter(a.raw).data)) -
+      Number(isOutputNode(parseFrontmatter(b.raw).data)),
+  )) {
     const prepared = await prepareNodeSyncSave(fs, nodeNotePath(node.path), node.raw, {
       now,
       confirm: node.confirm,
       by: node.by,
       nodes,
       finalDocuments,
+      records: basisRecords,
     });
     node.raw = prepared.raw;
     nodeRecords[node.nodeId] = prepared.record;
+    basisRecords[node.nodeId] = prepared.record;
   }
   const beforeOrder = (await fs.exists(ORDER_PATH)) ? await fs.readFile(ORDER_PATH) : null;
   const order = await loadOrder(readOnlyFs(fs));

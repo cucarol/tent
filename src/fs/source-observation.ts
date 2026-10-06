@@ -5,13 +5,22 @@ import path from "node:path";
 import { checkedSourceFile } from "./checked-source-file.js";
 import { materialLocator, localMaterialPath } from "../core/material.js";
 import { markdownMaterialHeading, materialContent } from "../core/material-section.js";
+import { parseFrontmatter } from "../core/frontmatter.js";
+import { isNodeId } from "../core/id.js";
+import { nodeSemanticContent } from "../core/node-sync-record.js";
+import { legacyTextVersions } from "../core/node-semantic-history.js";
 
 /** Safely read and hash bytes; the Core caller supplies any content selection. */
 export async function observeSourceFile(
   root: string,
   filename: string,
   cacheDir?: string,
-  selection?: { key: string; content: (bytes: Buffer) => string },
+  selection?: {
+    key: string;
+    content: (
+      bytes: Buffer,
+    ) => string | Buffer | { content: string | Buffer; legacyVersions: string[] };
+  },
 ) {
   await checkedSourceFile(root, filename);
   const canonicalPath = await realpath(filename);
@@ -55,7 +64,17 @@ export async function observeSourceFile(
         const final = await checkedSourceFile(root, filename);
         if (final.dev !== before.dev || final.ino !== before.ino)
           throw new Error("Material changed during cache lookup");
-        return { canonicalPath, observedVersion: cached.version as string, cacheHit: true };
+        return {
+          canonicalPath,
+          observedVersion: cached.version as string,
+          cacheHit: true,
+          ...(Array.isArray(cached.legacyVersions) &&
+          cached.legacyVersions.every(
+            (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
+          )
+            ? { legacyVersions: cached.legacyVersions as string[] }
+            : {}),
+        };
       }
     }
     const hash = createHash("sha256"),
@@ -85,19 +104,34 @@ export async function observeSourceFile(
     ) {
       throw new Error("Material changed while observing");
     }
-    if (selection) hash.update(selection.content(Buffer.concat(chunks)));
+    let legacyVersions: string[] | undefined;
+    if (selection) {
+      const selected = selection.content(Buffer.concat(chunks));
+      if (typeof selected === "object" && !Buffer.isBuffer(selected)) {
+        hash.update(selected.content);
+        legacyVersions = selected.legacyVersions;
+      } else hash.update(selected);
+    }
     const observedVersion = hash.digest("hex");
     if (cachePath) {
       const temp = `${cachePath}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`;
       try {
         await mkdir(cacheDir!, { recursive: true });
-        await writeFile(temp, JSON.stringify({ signature, version: observedVersion }));
+        await writeFile(
+          temp,
+          JSON.stringify({ signature, version: observedVersion, legacyVersions }),
+        );
         await rename(temp, cachePath);
       } catch {
         await rm(temp, { force: true }).catch(() => undefined);
       }
     }
-    return { canonicalPath, observedVersion, cacheHit: false };
+    return {
+      canonicalPath,
+      observedVersion,
+      cacheHit: false,
+      ...(legacyVersions ? { legacyVersions } : {}),
+    };
   } finally {
     await handle.close();
   }
@@ -118,19 +152,42 @@ export async function observeMaterialResource(
   // segment from its filesystem root; relative addresses remain in this workspace.
   const root = locator.kind === "uri" ? path.parse(filename).root : workspaceRoot;
   const heading = markdownMaterialHeading(locator);
-  return observeSourceFile(
-    root,
-    filename,
-    cacheDir,
-    heading === undefined
-      ? undefined
-      : {
-          key: JSON.stringify(["markdown-section", heading]),
-          content: (bytes) =>
-            materialContent(
-              new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
-              locator,
-            ),
-        },
-  );
+  return observeSourceFile(root, filename, cacheDir, {
+    key: JSON.stringify([
+      "semantic-text-v3",
+      locator.kind === "path" ? locator.target : "",
+      heading,
+    ]),
+    content: (bytes) => {
+      let raw: string;
+      try {
+        raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+      } catch (error) {
+        if (heading !== undefined) throw error;
+        return bytes;
+      }
+      if (raw.includes("\0")) return bytes;
+      const normalized = raw.replace(/\r\n?/g, "\n");
+      if (/\.(?:md|markdown)$/i.test(path.extname(filename))) {
+        try {
+          const parsed = parseFrontmatter(normalized);
+          if (typeof parsed.data.id === "string" && isNodeId(parsed.data.id))
+            return {
+              legacyVersions: legacyTextVersions(materialContent(raw, locator)),
+              content: nodeSemanticContent(
+                parsed.data,
+                heading === undefined ? parsed.body : materialContent(normalized, locator),
+                locator.kind === "path" ? locator.target : "",
+              ),
+            };
+        } catch {
+          // Ordinary Markdown is material text even when its optional YAML is malformed.
+        }
+      }
+      return {
+        content: materialContent(normalized, locator),
+        legacyVersions: legacyTextVersions(materialContent(raw, locator)),
+      };
+    },
+  });
 }

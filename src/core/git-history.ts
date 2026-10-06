@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import * as z from "zod/v4";
 import { parseFrontmatter } from "./frontmatter.js";
 import { isCardId, isNodeId, isRoleId } from "./id.js";
@@ -598,6 +599,28 @@ export class GitDocumentHistory {
     return structuredClone(this.records);
   }
 
+  /** Material basis updates per retained first-parent capture. */
+  async nodeRecordEvents(): Promise<Record<string, Record<string, NodeBasisRecord>>> {
+    await this.ensureRepository();
+    const head = await this.retainedHead();
+    if (!head) return {};
+    const result: Record<string, Record<string, NodeBasisRecord>> = {};
+    for (const event of this.firstParentRecords({
+      head,
+      records: await this.snapshotRecords(head),
+    })) {
+      const records: Record<string, NodeBasisRecord> = {};
+      for (const line of event.message.split("\n")) {
+        if (!line.startsWith("Tent-Node-Record: ")) continue;
+        const [id, record] = JSON.parse(line.slice("Tent-Node-Record: ".length));
+        if (!isNodeId(id)) throw new Error("Invalid retained Node record id");
+        records[id] = nodeBasisRecordSchema.parse(record);
+      }
+      if (Object.keys(records).length) result[event.commit] = records;
+    }
+    return result;
+  }
+
   /** First retained identity event, independent of its current filename. */
   async firstNodeTime(nodeId: string): Promise<string | undefined> {
     if (!isNodeId(nodeId)) throw new Error("Invalid Node id");
@@ -625,6 +648,25 @@ export class GitDocumentHistory {
   constructor(systemRoot: string, entry: CaptureMetadata["entry"] = "core") {
     this.root = path.resolve(systemRoot);
     this.defaultEntry = entry;
+  }
+
+  /** Exact independent-repository boundary, never a filename-suffix identity guess. */
+  localFileUriDocumentPath(uri: string): string | undefined {
+    try {
+      const url = new URL(uri);
+      if (url.protocol !== "file:") return undefined;
+      const relative = path.relative(this.root, fileURLToPath(url));
+      if (
+        !relative ||
+        relative === ".." ||
+        relative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relative)
+      )
+        return undefined;
+      return documentPath(relative.split(path.sep).join("/"));
+    } catch {
+      return undefined;
+    }
   }
 
   async available(): Promise<boolean> {

@@ -27,6 +27,7 @@ import { ReaderError } from "./context-reader.js";
 import { validateNodeName } from "./scaffold.js";
 import { listCardDocuments, readCardDocument } from "./card-document.js";
 import { readCardGoalIds, type CardProgressInput } from "./card-progress.js";
+import { latestGoalAheadTimes } from "./node-ahead-history.js";
 
 export type NodeSyncState = "synced" | "ahead" | "behind" | "unanchored";
 export type NodeSyncInspection = {
@@ -91,13 +92,16 @@ async function inspectCatalogNodes(
           nodeCatalog.byId,
         );
         const materials: NodeSyncInspection["materials"] = observations.map((observation) => {
-          const recordedVersion = record?.materials.find(
-            (m) => m.identity === observation.identity,
-          )?.version;
+          const basis = record?.materials.find((m) => m.identity === observation.identity);
+          const recordedVersion = basis?.version;
+          const equivalentLegacy =
+            basis?.fingerprintVersion !== 2 &&
+            !!recordedVersion &&
+            observation.legacyVersions?.includes(recordedVersion);
           const state = recordedVersion
             ? !observation.version
               ? "unavailable"
-              : observation.version === recordedVersion
+              : observation.version === recordedVersion || equivalentLegacy
                 ? "current"
                 : "changed"
             : "unanchored";
@@ -121,15 +125,26 @@ async function inspectCatalogNodes(
           );
           const recordedVersion =
             record?.goal?.nodeId === goal.nodeId ? record.goal.version : undefined;
+          const materialsChanged =
+            !!recordedVersion &&
+            record?.goal?.materialsRevision !== records[goal.nodeId]?.materialsRevision;
+          const legacyBasisUnknown = !!recordedVersion && record?.goal?.fingerprintVersion !== 2;
           materials.push({
             resource: `/${nodeNotePath(goal.path)}`,
             currentVersion,
             ...(recordedVersion ? { recordedVersion } : {}),
             state: recordedVersion
-              ? currentVersion === recordedVersion
-                ? "current"
-                : "changed"
+              ? legacyBasisUnknown
+                ? "unavailable"
+                : currentVersion === recordedVersion && !materialsChanged
+                  ? "current"
+                  : "changed"
               : "unanchored",
+            ...(legacyBasisUnknown
+              ? { reason: "Legacy goal baseline cannot be reconstructed from retained history" }
+              : materialsChanged
+                ? { reason: "Goal materials changed" }
+                : {}),
           });
           if ((await fs.readFile(nodeNotePath(goal.path))) !== goalRaw)
             throw new NodeWriteError("ETAG_CONFLICT", "Goal changed during sync inspection");
@@ -234,7 +249,7 @@ async function inspectCatalogNodes(
       ];
       goal.reasons.push(...reasons);
       if (fs.history && (await fs.exists(".git")))
-        goal.aheadSince = await fs.history.firstNodeTime(goal.nodeId);
+        goal.aheadSince = (await latestGoalAheadTimes(fs.history))[goal.nodeId];
       goal.ahead = { ...(goal.aheadSince ? { since: goal.aheadSince } : {}), reasons };
     } else if (!goal.behind && owned.length && owned.every((n) => n.state === "synced"))
       goal.state = "synced";
