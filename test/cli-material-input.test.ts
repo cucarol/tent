@@ -218,6 +218,55 @@ test("structured writes convert new material paths and preserve descriptors read
   assert.match(outside.stderr, /outside the Workspace/);
 });
 
+test("Card CLI file sources use the Workspace root while Node sources retain their versions", async (t) => {
+  const { root, globals, parse } = await fixture(t);
+  const sources = [
+    "docs/req.md",
+    "./docs/req.md",
+    "/docs/req.md",
+    JSON.stringify({ resource: "/docs/req.md", title: "Requirements", custom: true }),
+    "node-goal",
+    ".tent/Goal/Goal.md",
+  ];
+  const card = parse(
+    await runCardCommand(
+      "create",
+      ["--prompt", "Read the requirements.", ...sources.flatMap((source) => ["--source", source])],
+      globals,
+    ),
+  );
+  const shown = parse(await runCardCommand("show", [card.cardId], globals));
+  assert.deepEqual(shown.sources.slice(0, 4), [
+    { resource: "../../docs/req.md" },
+    { resource: "../../docs/req.md" },
+    { resource: "../../docs/req.md" },
+    { resource: "../../docs/req.md", title: "Requirements", custom: true },
+  ]);
+  for (const source of shown.sources.slice(4)) {
+    assert.equal(source.resource, "../Goal/Goal.md");
+    assert.equal(source.version.path, "Goal/Goal.md");
+    assert.match(source.version.commit, /^[a-f0-9]{40}$/);
+  }
+  const retained = shown.sources[4].version;
+  const selected = parse(
+    await runCardCommand(
+      "create",
+      [
+        "--prompt",
+        "Read the retained requirements.",
+        "--source",
+        JSON.stringify({ resource: "/.tent/Goal/Goal.md", version: retained }),
+      ],
+      globals,
+    ),
+  );
+  const selectedRead = parse(await runCardCommand("show", [selected.cardId], globals));
+  assert.deepEqual(selectedRead.sources[0].version, retained);
+  const checked = parse(await runWorkspaceCommand("check", [], { workspace: root, json: true }));
+  assert.deepEqual(checked.issues, []);
+  assert.deepEqual(checked.errors, []);
+});
+
 test("actor validation explains all formats without exposing a validation JSON dump", async (t) => {
   const { root, cli, get } = await fixture(t);
   for (const actor of ["human:reviewer", "process:import", "producer/1.0"])

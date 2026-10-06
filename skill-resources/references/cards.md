@@ -20,10 +20,15 @@ with `--json`); exit 2 means timeout with no output; exit 1 means error.
 
 ## Sources
 
-Repeat `--source` in reading order. Each is a Node id, a path (relative to
-`.tent/cards/`, or from `.tent/` with a leading `/`) or a JSON
-`{"resource": ...}`. Nodes and Roles are pinned to their current version;
-other addresses stay addresses.
+Repeat `--source` in reading order. Each is a Node id, a Workspace-root
+file path or a JSON `{"resource": ...}` using the same rules. For example,
+`--source docs/req.md`, `--source ./docs/req.md` and `--source /docs/req.md`
+all name the Workspace file `docs/req.md`, regardless of the shell's current
+directory. Use `--source node-ID` for a Node, or its Workspace path such as
+`.tent/Area/Topic/Topic.md`. Absolute external paths use a `file:` URI;
+remote URIs remain addresses. Nodes and Roles are pinned to their selected
+version; other addresses stay addresses. Stored Card paths are relative to
+the Card document, after CLI conversion.
 
 ## Reception and progress
 

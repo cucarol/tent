@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import { NodeFs } from "../fs/node-fs.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
+import { workspaceMaterialFields } from "./material-input.js";
 import {
   createCardDocument,
   readCardDocument,
@@ -142,7 +143,7 @@ export async function runCardCommand(
         prompt,
         title: value("title"),
         target: value("target"),
-        sources,
+        ...(await workspaceMaterialFields({ sources }, "cards/input.md", workspaceRoot)),
       });
     } else if (sub === "deprecate")
       result = await deprecateCardDocument(fs, id, value("base-etag")!);
@@ -208,7 +209,7 @@ export async function runCardCommand(
 
 export function cardHelpText(_sub?: string) {
   return `tent card — recorded prompt input with optional Role context
-  tent card create --prompt TEXT|- [--title TEXT] [--source PATH|JSON ...] [--target role-ID] [--id card-ID]
+  tent card create --prompt TEXT|- [--title TEXT] [--source NODE-ID|PATH|JSON ...] [--target role-ID] [--id card-ID]
   tent card list [--role role-ID --include-open] [--state pending|consumed] [--include-deprecated]
                  [--start N --expected-revision HASH] [--limit N]
   tent card show card-ID [--view body|raw] [--start N --end N --expected-etag HASH]
@@ -218,6 +219,8 @@ export function cardHelpText(_sub?: string) {
   tent card watch --role role-ID [--timeout SECONDS]
 All commands accept --workspace PATH and --json. CLI output is paged; Core returns complete data.
 Sources keep their order. Selected Node/Role sources retain commit/path; external sources are addresses only.
+--source file paths use the Workspace root: docs/req.md, ./docs/req.md and /docs/req.md name the same file.
+Use --source node-ID for a Node, or --source .tent/Area/Topic/Topic.md for its Workspace path. JSON resource uses the same rules.
 Show is a preview; take records reception and returns an input page. A replay is not a new execution.
 Use page.next for long input. Put requirements in Nodes; a Card briefly points to them. Update Nodes when requirements change.
 Targeted Cards require their Role; untargeted Cards can be received without one.

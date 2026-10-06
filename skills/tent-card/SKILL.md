@@ -15,6 +15,10 @@ requirements, optionally addressed to a Role. Commands:
    per requested result. The receiver starts without this conversation.
 2. Create the Card with one or two sentences pointing at those goals:
    `tent card create --prompt - --source <node-id> ... --target <role-id>`.
+   File sources use the Workspace root: `--source docs/req.md` (also
+   `./docs/req.md` or `/docs/req.md`). For a Node, use its `node-ID` or its
+   Workspace path such as `.tent/Area/Topic/Topic.md`. A JSON source's
+   `resource` follows the same rules.
 3. When requirements change, edit the Nodes, not the Card; the receiver is
    told its source changed. Keep undecided requirements in Nodes with
    `status: draft` until ready, and cancel a task with `tent card deprecate`.
