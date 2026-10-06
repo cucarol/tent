@@ -96,7 +96,11 @@ test("cold-start material declarations share the Workspace root and detect subse
   assert.equal((await cli("check", [goal.nodeId])).state, "behind");
   const observed = await get(goal.nodeId);
   await cli("confirm", [goal.nodeId, "--base-etag", observed.etag, "--by", "human:reviewer"]);
-  assert.equal((await cli("check", [goal.nodeId])).state, "synced");
+  assert.equal(
+    (await cli("check", [goal.nodeId])).state,
+    "ahead",
+    "confirming changed goal material leaves its existing outputs awaiting review",
+  );
 });
 
 test("structured writes convert new material paths and preserve descriptors read from disk", async (t) => {
