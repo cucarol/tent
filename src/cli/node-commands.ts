@@ -66,6 +66,8 @@ import {
 import { canonicalSha256 } from "../core/canonical-digest.js";
 import { nodeReadRevisionEtag } from "../core/node-read-basis.js";
 import { inspectNodeSync, confirmNodeSync, linkNodeOutput } from "../core/node-sync.js";
+import { nodeTypePrimary } from "../core/node-type.js";
+import { goalContextText } from "./goal-context.js";
 
 export type NodeCommandOptions = {
   workspace?: string;
@@ -340,6 +342,10 @@ export async function runNodeCommand(
         const target = oneTarget(positionals, "tent node get <nodeId> [--full] [--json]");
         if (typeof target !== "string") return target;
         const ref = nodeRef(target);
+        const withContext = async <T extends { node: { type?: string } }>(value: T) =>
+          !flags["version-json"] && !flags.cursor && nodeTypePrimary(value.node.type) === "goal"
+            ? { ...value, context: await goalContextText(fs, ref) }
+            : value;
         if (flags.full === "true") {
           const { view, ...filters } = readerFlags(flags);
           if (
@@ -349,7 +355,9 @@ export async function runNodeCommand(
             return usage("--full cannot be combined with reader filters or paging.");
           if (view === "raw")
             return print(
-              await readNode(fs, workspaceId, { nodeId: ref, view: "raw", capture: true }),
+              await withContext(
+                await readNode(fs, workspaceId, { nodeId: ref, view: "raw", capture: true }),
+              ),
               json,
               formatReader,
             );
@@ -364,7 +372,7 @@ export async function runNodeCommand(
             throw new Error(`Node editing read returned mismatched Node type for ${ref}.`);
           }
           return print(
-            {
+            await withContext({
               source: { kind: "live" },
               workspaceId,
               node: {
@@ -381,9 +389,9 @@ export async function runNodeCommand(
                 ...(edit.statusDiagnostic ? { statusDiagnostic: edit.statusDiagnostic } : {}),
                 archived: edit.archived,
               },
-            },
+            }),
             json,
-            (value) => formatNode(value),
+            (value) => formatWithContext(value, formatNode),
           );
         }
         const { nodeId, ...options } = readerReadSchema.parse({
@@ -391,10 +399,14 @@ export async function runNodeCommand(
           ...coreReaderFlags(flags),
         });
         const observed = await readNode(fs, workspaceId, { nodeId, ...options });
+        const maxBytes =
+          16 * 1024 -
+          256 -
+          (!flags["version-json"] && nodeTypePrimary(observed.node.type) === "goal" ? 1024 : 0);
         if (observed.node.view !== "summary")
           pageText(observed.node, `node.get:${nodeId}`, {
             cursor: flags.cursor,
-            maxBytes: 16 * 1024 - 256,
+            maxBytes,
           });
         const result =
           observed.node.view === "summary"
@@ -414,10 +426,10 @@ export async function runNodeCommand(
                 ...result,
                 node: pageText(result.node, `node.get:${nodeId}`, {
                   cursor: flags.cursor,
-                  maxBytes: 16 * 1024 - 256,
+                  maxBytes,
                 }),
               };
-        return print(output, json, formatReader);
+        return print(await withContext(output), json, formatReader);
       }
       case "read-many": {
         if (flags.full === "true") return usage("read-many uses paged output");
@@ -896,7 +908,7 @@ export function nodeHelpText(sub?: string): string {
   const commands = NODE_COMMAND_HELP;
   const notes: Record<string, string> = {
     list: "Default reads scan headers and return bounded metadata without full-document ETags. --full explicitly reads the complete tree.",
-    get: 'All body/raw reads return text, including --full; view chooses the content, never the field name. Before replacing body/raw content, read --full or --view raw --full. Incomplete reads expose read:<etag> for continuation and metadata-only edits, never content replacement. Range JSON uses {"unit":"utf16","start":0,"end":10}. Continue a cursor with the same source, expected ETag and query. --version-json reads the captured Git document even after live edits/deletion.',
+    get: 'All body/raw reads return text, including --full; view chooses the content, never the field name. Live goal first/full reads append a separate context summary up to 1 KiB; follow its ids for full content. Before replacing body/raw content, read --full or --view raw --full. Incomplete reads expose read:<etag> for continuation and metadata-only edits, never content replacement. Range JSON uses {"unit":"utf16","start":0,"end":10}. Continue a cursor with the same source, expected ETag and query. --version-json reads the captured Git document even after live edits/deletion.',
     "read-many":
       "All items share 16 KiB. Resume the input list using page.nextIndex as --start with the same Node IDs. A partial item has its own cursor: continue with node get --version-json <item.version> --cursor <item.page.nextCursor> and the same view. Each new batch observes current live documents.",
     check:
@@ -1034,6 +1046,15 @@ function coreReaderFlags(flags: Record<string, string>) {
 }
 
 function formatReader(value: unknown): string {
+  return formatWithContext(value, formatReaderContent);
+}
+
+function formatWithContext(value: unknown, format: (value: unknown) => string): string {
+  const context = (value as { context?: string }).context;
+  return format(value) + (context ? `\n\n${context}` : "");
+}
+
+function formatReaderContent(value: unknown): string {
   const result = value as {
     node?: { nodeId: string; name?: string; description?: string; text?: string; view?: string };
     items?: Array<{

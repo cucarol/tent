@@ -26,6 +26,12 @@ a passing mention, so read the Node before relying on it. Type, tags and
   the whole document. `--full` reads all of it.
 - `tent node read-many <node-id> <node-id> ... --json` reads several Nodes.
 - `--view raw` includes the frontmatter.
+- Live goal reads add a `context` summary of ancestors, scoped prompts,
+  subtree outputs with status, and Cards with receiver and progress. It is
+  separate from `text`, limited to 1 KiB, and appears on the first page or
+  with `--full`. Follow the listed ids for full content; omitted counts can
+  be explored with `node relations`, `node list` and `card list`. Historical
+  reads retain their pinned content without this live summary.
 
 ## Versions
 
