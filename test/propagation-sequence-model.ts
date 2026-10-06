@@ -425,13 +425,21 @@ export class SequenceRunner {
       );
       const complete = responding.filter((o) => !this.behind(o));
       const review = responding.filter((o) => this.behind(o));
-      const expected = !card.received
-        ? "pending"
-        : complete.length
-          ? "has-output"
-          : review.length
-            ? "needs-review"
-            : "received-no-output";
+      const goalActive = this.goals[card.goal]!.active;
+      const expected = !goalActive
+        ? null
+        : !card.received
+          ? "pending"
+          : complete.length
+            ? "has-output"
+            : review.length
+              ? "needs-review"
+              : "received-no-output";
+      this.expect(
+        actualCard!.totalGoalCount === Number(goalActive),
+        "I2/I4",
+        `${card.id} goal denominator must exclude deprecated goals`,
+      );
       this.expect(
         actualCard!.progress === expected,
         "I2/I4",

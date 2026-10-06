@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const help = `Tent product-CLI scale probe
 
@@ -39,7 +39,7 @@ new Node subprocess. Cold means application caches, not flushed OS caches.
 No UI snapshot or in-process Core substitute is used for the three CLI gates.
 
 Examples (PowerShell; paths are explicit):
-  $root = 'C:/cucarol/_code/Tent'
+  $root = '${path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..").replaceAll("\\", "/")}'
   $bench = "$root/scripts/bench-scale.mjs"
   $old = "$root/.scratch/scale-old-build/cli.mjs" # built from e8165b20
   $new = "$root/cli.mjs" # build intended candidate before measuring

@@ -193,7 +193,7 @@ test("Role CLI works without Service and legacy or missing Roles never become em
   const { root, adapter } = await fixture(t);
   const registry = "legacy registry is not consulted";
   await adapter.writeFile("roles.json", registry);
-  const created = await runRoleCommand("create", ["--title", "审查", "--body", "-"], {
+  const created = await runRoleCommand("create", ["--title", "审查", "--body", "-", "--json"], {
     workspace: root,
     stdin: "--instructions\r\n",
   });

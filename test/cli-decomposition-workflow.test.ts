@@ -53,7 +53,7 @@ test("CLI writes a mutually linked batch from stdin and rejects a failed mixed b
   assert.equal((await git(systemRoot, "rev-list", "--count", "HEAD")).trim(), "1");
   const check = await runWorkspaceCommand("check", [], globals);
   assert.equal(check.exitCode, 0, check.stderr || check.stdout);
-  assert.deepEqual(JSON.parse(check.stdout), { documents: 2, issues: [], errors: [] });
+  assert.deepEqual(JSON.parse(check.stdout), { documents: 2, issues: [], notices: [], errors: [] });
   const parent = created.results[1];
   const complete = await runNodeCommand("get", [parent.nodeId, "--full"], globals);
   assert.equal(complete.exitCode, 0, complete.stderr);

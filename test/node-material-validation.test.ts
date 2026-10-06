@@ -176,10 +176,7 @@ test("CLI writes retain legacy addresses and read-only node check reports their 
         : ["--sources-json", JSON.stringify(fields.sources)];
     const created = await cli("create", ["Rejected", "--type", "output", "--parent", id, ...args]);
     assert.equal(created.exitCode, 1);
-    assert.match(
-      created.stderr,
-      /Material outside the Workspace requires an absolute URI/,
-    );
+    assert.match(created.stderr, /Material outside the Workspace requires an absolute URI/);
     assert.equal(await adapter.exists("A/B/Rejected"), false);
   }
 });

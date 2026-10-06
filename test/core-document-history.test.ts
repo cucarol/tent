@@ -191,7 +191,12 @@ test("public standard material edits retain exact history and reject invalid sou
       "--input-json",
       JSON.stringify({
         baseEtag: original.etag,
-        frontmatter: { resource: "../../src/main.ts", sources },
+        frontmatter: {
+          resource: "src/main.ts",
+          sources: sources.map((source) =>
+            source.resource === "../B/B.md" ? { ...source, resource: "node-bravo" } : source,
+          ),
+        },
         readBack: true,
       }),
     ],
@@ -200,7 +205,7 @@ test("public standard material edits retain exact history and reject invalid sou
   assert.equal(result.exitCode, 0, result.stderr);
   const saved = JSON.parse(result.stdout);
   assert.deepEqual(saved.readBack.sources, sources);
-  const search = await runNodeCommand("search", ["--resource", "../src/main.ts"], {
+  const search = await runNodeCommand("search", ["--resource", "src/main.ts"], {
     workspace: h.workspace,
     json: true,
   });
@@ -257,14 +262,16 @@ test("explicit read capture and Core saves retain only selected documents; Git d
   assert.equal(await git("ls-tree", "-r", "--name-only", "HEAD"), "A/A.md");
   assert.equal(await adapter.readFile("A/A.md"), original.raw);
   await git("add", "B/B.md");
-  const index = await fs.readFile(path.join(h.mount.systemRoot, ".git/index"));
+  const unselected = await adapter.readFile("B/B.md");
   const saved = (await writeNodeDocument(adapter, original.nodeId, {
     baseEtag: original.etag,
     body: "Saved A",
   })) as { etag: string; version: DocumentVersion };
   assert.equal(await adapter.history!.read(saved.version), await adapter.readFile("A/A.md"));
   assert.equal(await git("ls-tree", "-r", "--name-only", "HEAD"), "A/A.md");
-  assert.deepEqual(await fs.readFile(path.join(h.mount.systemRoot, ".git/index")), index);
+  assert.equal(await git("write-tree"), await git("rev-parse", "HEAD^{tree}"));
+  assert.equal(await adapter.readFile("B/B.md"), unselected);
+  assert.match(await git("status", "--porcelain"), /\?\? B\//);
   const head = await git("rev-parse", "HEAD");
   await writeNodeDocument(adapter, original.nodeId, { baseEtag: saved.etag, body: "Saved A" });
   await readNode(adapter, workspaceId, { nodeId: original.nodeId, ...{} });

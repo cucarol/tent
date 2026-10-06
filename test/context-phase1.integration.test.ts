@@ -51,7 +51,7 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
     "--type",
     "goal-requirement",
     "--resource",
-    "../../requirement.md",
+    "requirement.md",
     "--body",
     "Confirmed requirement",
   ]);
@@ -75,8 +75,11 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   await fs.writeFile(path.join(f.root, "requirement.md"), "Requirement version two");
   const headBefore = await git(path.join(f.root, ".tent"), "rev-parse", "HEAD");
   let brief = await f.workspace("brief");
-  assert.equal(brief.value.counts.behind, 1);
-  assert.equal(brief.value.behind[0].nodeId, id);
+  assert.equal(brief.value.counts.behind, 2);
+  assert.deepEqual(
+    brief.value.behind.map((item: { nodeId: string }) => item.nodeId).sort(),
+    [id, linked.nodeId].sort(),
+  );
   assert.ok(Buffer.byteLength(brief.stdout) <= 4096);
   let drift = (await f.workspace("drift")).value;
   assert.equal(
@@ -90,6 +93,10 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   );
   let read = await f.node("get", [id, "--full"]);
   await f.node("confirm", [id, "--base-etag", read.node.etag]);
+  assert.equal((await f.node("check", [id])).state, "ahead");
+  assert.equal((await f.node("check", [linked.nodeId])).state, "behind");
+  const outputRead = await f.node("get", [linked.nodeId, "--full"]);
+  await f.node("confirm", [linked.nodeId, "--base-etag", outputRead.node.etag]);
   assert.equal((await f.node("check", [id])).state, "synced");
   read = await f.node("get", [id, "--full"]);
   await f.node("write", [
@@ -136,13 +143,7 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   assert.ok(
     brief.value.unlinkedOutputs.some((item: { address?: string }) => item.address === "loose.svg"),
   );
-  await f.node("create", [
-    "Loose output",
-    "--type",
-    "output-asset",
-    "--resource",
-    "../../loose.svg",
-  ]);
+  await f.node("create", ["Loose output", "--type", "output-asset", "--resource", "loose.svg"]);
   brief = await f.workspace("brief");
   assert.deepEqual(brief.value.unlinkedOutputs, []);
   drift = (await f.workspace("drift")).value;
@@ -177,7 +178,7 @@ test("CLI rejects retired flags and confirmation still requires a full live read
     "--type",
     "prompt-rule",
     "--resource",
-    "../../basis.txt",
+    "basis.txt",
   ]);
   const id = created.node.nodeId;
   assert.equal((await f.node("check", [id])).state, "synced");
@@ -239,14 +240,20 @@ test("brief shows multi-goal Card completion and only warns for changed source g
   assert.deepEqual(received.changedCardSources, []);
   assert.equal(received.cardInputs[0].progress, "received-no-output");
   await fs.writeFile(path.join(f.root, "result.html"), "<h1>result</h1>");
-  const output = await f.node("link-output", [source.node.nodeId, "--resource", "result.html"]);
+  const output = await f.node("link-output", [
+    source.node.nodeId,
+    "--resource",
+    "result.html",
+    "--card",
+    published.cardId,
+  ]);
   const outputRaw = await fs.readFile(
     path.join(f.root, ".tent", output.path, path.basename(output.path) + ".md"),
     "utf8",
   );
   assert.equal(
     JSON.stringify(parseFrontmatter(outputRaw).data.sources ?? []).includes(published.cardId),
-    false,
+    true,
   );
   const withOutput = (await f.workspace("brief")).value;
   assert.equal(withOutput.cardInputs[0].progress, "received-no-output");
@@ -272,7 +279,13 @@ test("brief shows multi-goal Card completion and only warns for changed source g
     [],
     "completed source goal removes old changed Card warning",
   );
-  await f.node("link-output", [second.node.nodeId, "--resource", "result.html"]);
+  await f.node("link-output", [
+    second.node.nodeId,
+    "--resource",
+    "result.html",
+    "--card",
+    published.cardId,
+  ]);
   assert.deepEqual(
     (await f.workspace("brief")).value.cardInputs,
     [],
