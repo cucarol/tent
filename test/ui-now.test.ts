@@ -129,3 +129,72 @@ test("the Now page only observes: a draft Node gets no approval control", () => 
   );
   assert.doesNotMatch(html, /Approve|btn primary/);
 });
+
+test("a goal edit is listed once on the goal, with the outputs it leaves to review", () => {
+  setLang("en", false);
+  const goal = output("goal", undefined, {
+    type: "goal",
+    notePath: "Goal/Goal.md",
+    childIds: ["o1", "o2", "o3"],
+  });
+  const under = (id: string) =>
+    output(id, undefined, { parentId: "goal", notePath: `Goal/${id}/${id}.md` });
+  const rendered = renderNow(snapshot([goal, under("o1"), under("o2"), under("o3")]), {
+    goal: { ahead: { reasons: [] } },
+    o1: { behind: { reasons: ["Material changed: ../Goal.md"] } },
+    o2: { behind: { reasons: ["Goal materials changed"] } },
+    o3: {
+      behind: { reasons: ["Material changed: ../Goal.md", "Material changed: ../../src/a.ts"] },
+    },
+  });
+  assert.match(rendered, /2 outputs to review/);
+  assert.doesNotMatch(rendered, />o1</);
+  assert.doesNotMatch(rendered, />o2</);
+  // Also behind for its own material, so it still needs its own line.
+  assert.equal((rendered.match(/>o3</g) ?? []).length, 1);
+  assert.match(rendered, /3 behind/);
+});
+
+test("attention keeps same-named external materials and unknown causes visible", () => {
+  setLang("en", false);
+  const goal = output("goal", undefined, {
+    type: "goal",
+    notePath: "Goal/Goal.md",
+    childIds: ["same-name", "unknown"],
+  });
+  const under = (id: string) =>
+    output(id, undefined, { parentId: "goal", notePath: `Goal/${id}/${id}.md` });
+  const rendered = renderNow(snapshot([goal, under("same-name"), under("unknown")]), {
+    goal: { ahead: { reasons: [] } },
+    "same-name": { behind: { reasons: ["Material changed: /Other/Goal.md"] } },
+    unknown: { behind: { reasons: [] } },
+  });
+  assert.match(rendered, />same-name</);
+  assert.match(rendered, />unknown</);
+  assert.doesNotMatch(rendered, /outputs? to review/);
+});
+
+test("a goal's material warning and folded output review both remain visible", () => {
+  setLang("en", false);
+  const goal = output("goal", undefined, {
+    type: "goal",
+    notePath: "Goal/Goal.md",
+    childIds: ["result"],
+  });
+  const result = output("result", undefined, {
+    parentId: "goal",
+    notePath: "Goal/result/result.md",
+  });
+  const rendered = renderNow(snapshot([goal, result]), {
+    goal: {
+      ahead: { reasons: [] },
+      behind: { reasons: ["Material changed: ../requirements.md"] },
+    },
+    result: { behind: { reasons: ["Material changed: /Goal/Goal.md"] } },
+  });
+  assert.match(rendered, /requirements.md/);
+  assert.match(rendered, /1 output to review/);
+  assert.doesNotMatch(rendered, />result</);
+  assert.match(rendered, /2 behind/);
+  assert.match(rendered, /1 ahead/);
+});

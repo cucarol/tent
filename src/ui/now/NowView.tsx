@@ -5,7 +5,7 @@ import { UNREAD } from "../data/flags.js";
 import type { SnapshotCard, SnapshotNode, SnapshotRef, SyncFlags } from "../data/types.js";
 import { CardGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
-import { ago, readStored, when, writeStored } from "../util.js";
+import { ago, readStored, resolveHref, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
 
 const DONE_SHOWN = 8;
@@ -101,6 +101,25 @@ export function NowView({
   });
   const behind = flagged.filter((f) => f.flag.behind);
   const ahead = flagged.filter((f) => f.flag.ahead);
+  // One goal edit makes the goal ahead and each of its outputs behind. List it once, on the goal, unless
+  // an output is also behind for another reason.
+  const reviewing = new Map<string, number>();
+  const folded = (n: SnapshotNode, reasons: string[]) => {
+    const goal = primaryOf(n.type) === "output" ? goalOf(n) : undefined;
+    if (!goal || !flags[goal.id]?.ahead || !reasons.length) return false;
+    const fromGoal = (r: string) => {
+      if (r === "Goal materials changed") return true;
+      const at = r.startsWith("Material changed: ") ? r.slice(18) : null;
+      return !!at && resolveHref(n.notePath, at).tentPath === goal.notePath;
+    };
+    if (!reasons.every(fromGoal)) return false;
+    reviewing.set(goal.id, (reviewing.get(goal.id) ?? 0) + 1);
+    return true;
+  };
+  const listed = [
+    ...behind.filter((f) => f.flag.ahead || !folded(f.n, f.flag.behind!.reasons)),
+    ...ahead.filter((f) => !f.flag.behind),
+  ];
 
   const cardLink = (c: SnapshotCard) => (
     <button type="button" className="now-link" onClick={() => onPage({ kind: "card", id: c.id })}>
@@ -244,7 +263,7 @@ export function NowView({
               </p>
             ) : (
               <ul className="now-list">
-                {[...behind, ...ahead.filter((f) => !f.flag.behind)].map(({ n, flag }) => (
+                {listed.map(({ n, flag }) => (
                   <li key={n.id}>
                     <button
                       type="button"
@@ -259,7 +278,18 @@ export function NowView({
                         <small>
                           {flag.behind
                             ? t.map.behindWhy(flag.behind.reasons)
-                            : t.map.aheadWhy(flag.ahead?.since ? ago(flag.ahead.since) : null)}
+                            : !reviewing.has(n.id)
+                              ? t.map.aheadWhy(flag.ahead?.since ? ago(flag.ahead.since) : null)
+                              : null}
+                          {reviewing.has(n.id) && (
+                            <>
+                              {flag.behind && " · "}
+                              {t.now.goalChanged(
+                                flag.ahead?.since ? ago(flag.ahead.since) : null,
+                                reviewing.get(n.id)!,
+                              )}
+                            </>
+                          )}
                         </small>
                       </span>
                     </button>

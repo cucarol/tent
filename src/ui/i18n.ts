@@ -433,6 +433,8 @@ const zh = {
     attention: "需要注意",
     calm: "都同步了，没有落后或领先的 Node。",
     checking: "正在对照材料检查…",
+    goalChanged: (since: string | null, n: number) =>
+      `领先：${since ? `${since}改过` : "改过"}，${n} 个产出要按新要求复核`,
   },
   doc: {
     workspaceFile: (path: string) => `工作区文件：${path}`,
@@ -870,6 +872,8 @@ const en: Messages = {
     attention: "Needs attention",
     calm: "All in sync: nothing is behind or ahead.",
     checking: "Checking against the materials…",
+    goalChanged: (since, n) =>
+      `Ahead: changed${since ? ` ${since}` : ""}; ${count(n, "output")} to review against it`,
   },
   doc: {
     workspaceFile: (path) => `Workspace file: ${path}`,

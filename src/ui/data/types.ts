@@ -55,7 +55,7 @@ export type SnapshotNode = {
   materials: SnapshotMaterial[];
   incoming: SnapshotIncoming[];
   history: string[];
-  /** Latest output attachment or confirmation in retained history; ordinary edits do not advance it. */
+  /** Latest valid generation or verification time in the current output, normalized to UTC ISO. */
   outputAt?: string;
 };
 
