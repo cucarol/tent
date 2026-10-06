@@ -5,10 +5,12 @@ import { UNREAD } from "../data/flags.js";
 import type { SnapshotCard, SnapshotNode, SnapshotRef, SyncFlags } from "../data/types.js";
 import { CardGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
-import { ago, readStored, resolveHref, when, writeStored } from "../util.js";
+import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
 
 const DONE_SHOWN = 8;
+/** A behind reason caused by a goal's own material changing, e.g. "Goal node-ab12cd: Material changed: /A/A.md". */
+const GOAL_CHANGE = /^Goal ([^:\s]+): Material changed: /;
 
 /**
  * When this viewer last opened the workspace before this tab. The mark is pinned for the tab, so a
@@ -56,6 +58,7 @@ export function NowView({
 }) {
   const since = useSince(graph.snapshot.workspace.id);
   const [allDone, setAllDone] = useState(false);
+  const [openReviews, setOpenReviews] = useState<ReadonlySet<string>>(new Set());
   const nodes = graph.snapshot.nodes.filter((n) => !n.archived);
   const cards = graph.snapshot.cards.filter(live);
   const outputs = nodes
@@ -87,13 +90,15 @@ export function NowView({
         ...lane,
         waiting: cards.filter((c) => mine(c) && c.state === "pending"),
         doing: cards.filter((c) => mine(c) && c.progress === "received-no-output"),
+        // Old Cards whose goals changed later; listed one line per lane so they do not bury current work.
+        review: cards.filter((c) => mine(c) && c.progress === "needs-review"),
         last: cards
           .filter((c) => mine(c) && c.progress === "has-output")
           .sort((a, b) => completedAt(b).localeCompare(completedAt(a)))[0],
       };
     })
     // The public area only shows while something waits there.
-    .filter((lane) => lane.id || lane.waiting.length || lane.doing.length);
+    .filter((lane) => lane.id || lane.waiting.length || lane.doing.length || lane.review.length);
 
   const flagged = Object.entries(flags).flatMap(([id, flag]) => {
     const n = graph.nodes.get(id);
@@ -101,19 +106,18 @@ export function NowView({
   });
   const behind = flagged.filter((f) => f.flag.behind);
   const ahead = flagged.filter((f) => f.flag.ahead);
-  // One goal edit makes the goal ahead and each of its outputs behind. List it once, on the goal, unless
-  // an output is also behind for another reason.
+  // One goal edit makes the goal ahead and every output under it behind, down the whole goal chain.
+  // List it once, on each changed goal, unless an output is also behind for another reason.
   const reviewing = new Map<string, number>();
   const folded = (n: SnapshotNode, reasons: string[]) => {
-    const goal = primaryOf(n.type) === "output" ? goalOf(n) : undefined;
-    if (!goal || !flags[goal.id]?.ahead || !reasons.length) return false;
-    const fromGoal = (r: string) => {
-      if (r === "Goal materials changed") return true;
-      const at = r.startsWith("Material changed: ") ? r.slice(18) : null;
-      return !!at && resolveHref(n.notePath, at).tentPath === goal.notePath;
-    };
-    if (!reasons.every(fromGoal)) return false;
-    reviewing.set(goal.id, (reviewing.get(goal.id) ?? 0) + 1);
+    if (primaryOf(n.type) !== "output" || !reasons.length) return false;
+    const goals = new Set<string>();
+    for (const r of reasons) {
+      const goal = GOAL_CHANGE.exec(r)?.[1];
+      if (!goal || !flags[goal]?.ahead) return false;
+      goals.add(goal);
+    }
+    for (const goal of goals) reviewing.set(goal, (reviewing.get(goal) ?? 0) + 1);
     return true;
   };
   const listed = [
@@ -186,7 +190,38 @@ export function NowView({
                         )}
                       </div>
                     ))}
-                    {!lane.waiting.length && !lane.doing.length && (
+                    {lane.review.length > 0 && (
+                      <div className="now-line">
+                        <span className="now-label is-review">
+                          {t.cardProgress["needs-review"]}
+                        </span>
+                        <button
+                          type="button"
+                          className="now-toggle"
+                          aria-expanded={openReviews.has(lane.id)}
+                          onClick={() =>
+                            setOpenReviews((open) => {
+                              const next = new Set(open);
+                              if (!next.delete(lane.id)) next.add(lane.id);
+                              return next;
+                            })
+                          }
+                        >
+                          {t.now.reviewCards(lane.review.length)}
+                          <Icon name={openReviews.has(lane.id) ? "down" : "chevron"} size={12} />
+                        </button>
+                      </div>
+                    )}
+                    {openReviews.has(lane.id) &&
+                      lane.review.map((c) => (
+                        <div key={c.id} className="now-line is-nested">
+                          {cardLink(c)}
+                          <span className="now-meta">
+                            {t.now.reviewOutputs(c.reviewOutputNodeIds?.length ?? 0)}
+                          </span>
+                        </div>
+                      ))}
+                    {!lane.waiting.length && !lane.doing.length && !lane.review.length && (
                       <div className="now-line">
                         <span className="now-label">{t.now.idle}</span>
                         {lane.last && (

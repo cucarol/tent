@@ -187,6 +187,7 @@ function Faces({ graph, hands }: { graph: Graph; hands: Hand[] }) {
           h.waiting,
           h.old,
           h.outputs,
+          h.reviews,
           h.goalCount,
           h.totalGoalCount,
         );
@@ -199,10 +200,16 @@ function Faces({ graph, hands }: { graph: Graph; hands: Hand[] }) {
           ) : (
             <Pet id={h.lane} size={16} />
           );
-        const working = !h.waiting && h.goalCount < h.totalGoalCount;
-        const envelope = (h.waiting > 0 || working) && (
-          <i className={`face-env${working ? " is-working" : ""}`}>
-            <Icon name={working ? "working" : "mail"} size={8} />
+        const badge = h.waiting
+          ? "mail"
+          : h.reviews
+            ? "review"
+            : h.goalCount < h.totalGoalCount
+              ? "working"
+              : null;
+        const envelope = badge && (
+          <i className={`face-env${badge === "mail" ? "" : ` is-${badge}`}`}>
+            <Icon name={badge} size={8} />
           </i>
         );
         return role ? (

@@ -397,7 +397,7 @@ function Step({
   title,
   sub,
 }: {
-  state: "done" | "ok" | "now" | "todo";
+  state: "done" | "ok" | "now" | "review" | "todo";
   dot: ReactNode;
   title: string;
   sub?: string;
@@ -1015,6 +1015,7 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
   };
   const open = since === null ? undefined : card.sources[since];
   const status = cardProgressLabel(card);
+  const progress = card.progress;
   return (
     <>
       <PageTop
@@ -1054,7 +1055,9 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
                 <>
                   <b>Card</b>
                   <span className="dot-sep">·</span>
-                  <span className={`pill ${pending ? "pill-pending" : "pill-consumed"}`}>
+                  <span
+                    className={`pill ${pending ? "pill-pending" : progress === "needs-review" ? "pill-review" : "pill-consumed"}`}
+                  >
                     {status}
                   </span>
                 </>
@@ -1077,11 +1080,36 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
               />
               <Line todo={pending} />
               <Step
-                state={pending ? "todo" : "ok"}
+                state={pending ? "todo" : progress ? "done" : "ok"}
                 dot={<Icon name="check" size={15} />}
                 title={pending ? t.page.receive : t.page.receivedBy(laneName)}
                 sub={pending ? t.page.thenFixed : when(card.updatedAt)}
               />
+              {progress && (
+                <>
+                  <Line todo={progress !== "has-output"} />
+                  <Step
+                    state={
+                      progress === "has-output"
+                        ? "ok"
+                        : progress === "needs-review"
+                          ? "review"
+                          : progress === "pending"
+                            ? "todo"
+                            : "now"
+                    }
+                    dot={<Icon name={progress === "needs-review" ? "review" : "out"} size={15} />}
+                    title={progress === "pending" ? t.page.outputs : status}
+                    sub={
+                      progress === "needs-review"
+                        ? t.page.toReview(card.reviewOutputNodeIds?.length ?? 0)
+                        : progress === "has-output"
+                          ? undefined
+                          : t.page.noOutputYet
+                    }
+                  />
+                </>
+              )}
             </div>
             {pending && (
               <Section title={t.page.where} note={t.page.whereNote}>
@@ -1104,6 +1132,13 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
             {card.outputNodeIds.length > 0 && (
               <Section title={t.page.outputs}>
                 {card.outputNodeIds.map((id) => (
+                  <RefLink key={id} graph={graph} target={{ kind: "node", id }} onOpen={onOpen} />
+                ))}
+              </Section>
+            )}
+            {!!card.reviewOutputNodeIds?.length && (
+              <Section title={t.page.reviewOutputs} note={t.page.reviewOutputsNote}>
+                {card.reviewOutputNodeIds.map((id) => (
                   <RefLink key={id} graph={graph} target={{ kind: "node", id }} onOpen={onOpen} />
                 ))}
               </Section>

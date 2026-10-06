@@ -434,6 +434,7 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .face-env { position: absolute; right: -5px; bottom: -4px; display: grid; place-items: center; width: 12px; height: 12px; border-radius: 50%; background: var(--new); color: #fff; box-shadow: 0 0 0 1.5px var(--bg); }
 .face-env .icon { stroke-width: 3; }
 .face-env.is-working { background: var(--text-3); }
+.face-env.is-review { background: var(--warn); }
 .mcard-face.is-old .face-env { background: var(--warn); }
 .mcard-more { flex: none; margin-left: 4px; font-size: 11px; color: var(--text-3); }
 /* Its number in the draft being written, pinned to the corner like the tree's. */
@@ -639,7 +640,7 @@ button.ref-link:hover, span.ref-link:hover { background: var(--hover); }
 
 .pill { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 5px; background: var(--bg-muted); color: var(--text-2); font-size: 11.5px; font-weight: 500; white-space: nowrap; }
 .pill-recent, .pill-pending { background: var(--new-soft); color: var(--new); }
-.pill-drift { background: var(--warn-soft); color: var(--warn); }
+.pill-drift, .pill-review { background: var(--warn-soft); color: var(--warn); }
 .pill-consumed { background: var(--output-soft); color: var(--output); }
 
 /* ---------- pages: an object read and written over the map ---------- */
@@ -732,6 +733,7 @@ button.pg-crumb:hover { background: var(--hover); color: var(--text); }
 .step.is-todo .lb b { font-weight: 550; color: var(--text-3); }
 .step.is-now .dot { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1.5px var(--accent-line); }
 .step.is-ok .dot { background: var(--output-soft); color: var(--output); }
+.step.is-review .dot { background: var(--warn-soft); color: var(--warn); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--warn) 45%, transparent); }
 .step-line { flex: 1; min-width: 18px; height: 1.5px; margin: 0 10px; background: var(--border-strong); }
 .step-line.is-todo { height: 0; background: none; border-top: 1.5px dashed var(--border-strong); }
 .lanes-pick { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -837,6 +839,10 @@ button.now-pet:hover { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--border
 .now-line { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12.5px; color: var(--text-2); }
 .now-label { flex: none; color: var(--text-3); }
 .now-label.is-soft::before { content: "·"; margin-right: 6px; }
+.now-label.is-review { color: var(--warn); }
+.now-toggle { display: inline-flex; align-items: center; gap: 3px; color: var(--text-2); }
+.now-toggle:hover { color: var(--text); }
+.now-line.is-nested { padding-left: 14px; }
 .now-link { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-2); }
 .now-link .icon, .now-link svg { flex: none; }
 .now-link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

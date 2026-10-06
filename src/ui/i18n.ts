@@ -13,8 +13,16 @@ const phrase = (...parts: ReactNode[]) => createElement(Fragment, null, ...parts
 const names = (paths: string[], sep: string) =>
   paths
     .slice(0, 2)
-    .map((p) => p.split(/[\\/]/).pop())
+    .map((p) => decode(p.split(/[\\/]/).pop()!))
     .join(sep);
+/** Reasons carry encoded addresses such as "SPEC.md#Reception%20and%20outputs". */
+const decode = (s: string) => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+};
 /** "1 source", "2 sources". */
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -126,6 +134,7 @@ const zh = {
       waiting: number,
       old: boolean,
       outputs: number,
+      reviews: number,
       goalCount: number,
       totalGoalCount: number,
     ) =>
@@ -134,6 +143,7 @@ const zh = {
         waiting > 0 && (role ? `${waiting} 张等 ${role} 接收` : `${waiting} 张在公共区待认领`),
         old && "其中有 Card 固定的是它的旧版本",
         outputs > 0 && `${outputs} 张 Card 已有产出`,
+        reviews > 0 && `${reviews} 张 Card 的产出待按新要求复核`,
         totalGoalCount > 1 && `${goalCount}/${totalGoalCount} 个 goal 已有产出`,
       ]
         .filter(Boolean)
@@ -357,6 +367,10 @@ const zh = {
     canMove: "接收之前还能换",
     receive: "接收",
     thenFixed: "之后位置固定",
+    noOutputYet: "还没有回应它的产出",
+    toReview: (n: number) => `${n} 个产出要按新要求复核`,
+    reviewOutputs: "待复核的产出",
+    reviewOutputsNote: "它们回应过这张 Card，之后对应的 goal 又改了",
     where: "放在哪一栏",
     whereLabel: "放在哪一栏",
     whereNote: "接收之前随时能换，也可以在左边拖",
@@ -430,6 +444,8 @@ const zh = {
     doneRecent: "最近做完的",
     doneEmpty: "这段时间没有新产出。",
     more: (n: number) => `还有 ${n} 个`,
+    reviewCards: (n: number) => `${n} 张 Card 的产出要按新要求复核`,
+    reviewOutputs: (n: number) => `${n} 个产出`,
     since: (when: string) => `上次来：${when}`,
     attention: "需要注意",
     calm: "都同步了，没有落后或领先的 Node。",
@@ -551,7 +567,7 @@ const en: Messages = {
     role: (title) => `Role ${title}`,
   },
   map: {
-    handed: (role, cards, waiting, old, outputs, goalCount, totalGoalCount) =>
+    handed: (role, cards, waiting, old, outputs, reviews, goalCount, totalGoalCount) =>
       [
         cards > 0 &&
           (role
@@ -563,6 +579,7 @@ const en: Messages = {
             : `${count(waiting, "Card")} unclaimed in the public area`),
         old && "one pins an older version",
         outputs > 0 && `${count(outputs, "Card")} with output`,
+        reviews > 0 && `${count(reviews, "Card")} with output to review against a changed goal`,
         totalGoalCount > 1 && `${goalCount}/${totalGoalCount} goals with output`,
       ]
         .filter(Boolean)
@@ -795,6 +812,10 @@ const en: Messages = {
     canMove: "Can move until received",
     receive: "Received",
     thenFixed: "Then its lane is fixed",
+    noOutputYet: "No output answers it yet",
+    toReview: (n) => `${count(n, "output")} to review against the changed goal`,
+    reviewOutputs: "Outputs to review",
+    reviewOutputsNote: "They answered this Card, then the goal they answer changed",
     where: "Lane",
     whereLabel: "Lane",
     whereNote: "Change it any time before it is received, or drag it on the left",
@@ -870,6 +891,8 @@ const en: Messages = {
     doneRecent: "Recently finished",
     doneEmpty: "No new outputs in this time.",
     more: (n) => `${n} more`,
+    reviewCards: (n) => `${count(n, "Card")} with output to review against a changed goal`,
+    reviewOutputs: (n) => count(n, "output"),
     since: (when) => `Last visit: ${when}`,
     attention: "Needs attention",
     calm: "All in sync: nothing is behind or ahead.",

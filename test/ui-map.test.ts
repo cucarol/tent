@@ -178,6 +178,7 @@ test("a Node's faces are the lanes its published Cards went to, Roles first, wit
       cards: 0,
       waiting: 1,
       outputs: 0,
+      reviews: 0,
       goalCount: 0,
       totalGoalCount: 0,
       old: true,
@@ -187,11 +188,21 @@ test("a Node's faces are the lanes its published Cards went to, Roles first, wit
       cards: 2,
       waiting: 0,
       outputs: 0,
+      reviews: 0,
       goalCount: 0,
       totalGoalCount: 0,
       old: false,
     },
-    { lane: "", cards: 0, waiting: 1, outputs: 0, goalCount: 0, totalGoalCount: 0, old: false },
+    {
+      lane: "",
+      cards: 0,
+      waiting: 1,
+      outputs: 0,
+      reviews: 0,
+      goalCount: 0,
+      totalGoalCount: 0,
+      old: false,
+    },
   ]);
   assert.deepEqual(graph.handedTo("b"), [
     {
@@ -199,6 +210,7 @@ test("a Node's faces are the lanes its published Cards went to, Roles first, wit
       cards: 1,
       waiting: 0,
       outputs: 0,
+      reviews: 0,
       goalCount: 0,
       totalGoalCount: 0,
       old: false,
@@ -222,6 +234,7 @@ test("Card output progress is reflected on each carried Node without counting re
       cards: 1,
       waiting: 0,
       outputs: 1,
+      reviews: 0,
       goalCount: 1,
       totalGoalCount: 1,
       old: false,
@@ -266,8 +279,30 @@ test("map badges keep partial goal counts without treating a Card as completed",
       cards: 2,
       waiting: 0,
       outputs: 0,
+      reviews: 0,
       goalCount: 1,
       totalGoalCount: 2,
+      old: false,
+    },
+  ]);
+});
+
+test("map badges count Cards whose outputs wait for review", () => {
+  const review = card("review", { receivedBy: "role-x" }, "consumed", [["a", false]]);
+  review.progress = "needs-review";
+  review.totalGoalCount = 1;
+  review.reviewGoalCount = 1;
+  review.reviewOutputNodeIds = ["result"];
+  const graph = graphOf([node("a", null)], [role("role-x")], [review]);
+  assert.deepEqual(graph.handedTo("a"), [
+    {
+      lane: "role-x",
+      cards: 1,
+      waiting: 0,
+      outputs: 0,
+      reviews: 1,
+      goalCount: 0,
+      totalGoalCount: 1,
       old: false,
     },
   ]);
@@ -294,6 +329,7 @@ test("a repeated Node source counts its Card once and keeps drift from any of it
       cards: 1,
       waiting: 1,
       outputs: 0,
+      reviews: 0,
       goalCount: 0,
       totalGoalCount: 0,
       old: true,

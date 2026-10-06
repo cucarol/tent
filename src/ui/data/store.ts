@@ -106,6 +106,7 @@ export function buildGraph(snapshot: Snapshot, visits: Visits | null = null) {
         cards: 0,
         waiting: 0,
         outputs: 0,
+        reviews: 0,
         goalCount: 0,
         totalGoalCount: 0,
         old: false,
@@ -116,6 +117,7 @@ export function buildGraph(snapshot: Snapshot, visits: Visits | null = null) {
         if (waits) hand.waiting++;
         else hand.cards++;
         if (c.progress === "has-output") hand.outputs++;
+        if (c.progress === "needs-review") hand.reviews++;
         if (c.progress !== null) {
           hand.goalCount += c.goalCount;
           hand.totalGoalCount += c.totalGoalCount;
@@ -224,6 +226,8 @@ export type Hand = {
   cards: number;
   waiting: number;
   outputs: number;
+  /** Cards whose responding outputs wait for review against a changed goal. */
+  reviews: number;
   goalCount: number;
   totalGoalCount: number;
   old: boolean;
