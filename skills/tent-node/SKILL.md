@@ -29,7 +29,8 @@ Update only the Nodes your work affected
   that owns the fact, or create one.
 - A fact your work made wrong: correct it.
 - A result that implements a goal:
-  `tent node link-output <goal-id> --resource <path>`.
+  `tent node link-output <goal-id> --resource <path>`, once the file is in
+  the Workspace checkout (after merging a worktree or branch).
 - A behind Node whose judgment still holds after you read the changed
   material: `tent node confirm`. If the judgment changed, save the correction
   with `node write --confirm`. A plain save does not clear behind.
