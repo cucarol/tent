@@ -45,6 +45,7 @@ export class NodeFs implements FsAdapter {
     const workspaceRoot = workspaceRootFromSystemRoot(this.root);
     if (!workspaceRoot) throw new Error("Material observation requires a Workspace .tent root");
     const cacheDir = (await this.exists(".git")) ? this.abs(".git/tent-material-cache") : undefined;
+    let readFrom: string | undefined;
     const observed = await observeMaterialResource(
       workspaceRoot,
       documentPath,
@@ -57,6 +58,7 @@ export class NodeFs implements FsAdapter {
         previous,
         this.repositoryMaterials,
       );
+      readFrom = relocated.root;
       return observeMaterialResource(workspaceRoot, documentPath, resource, cacheDir, relocated);
     });
     const repository = await observedRepositoryMaterial(
@@ -74,6 +76,7 @@ export class NodeFs implements FsAdapter {
       ...observed,
       ...(systemPath ? { systemPath } : {}),
       ...(repository ? { repository } : {}),
+      ...(readFrom ? { readFrom } : {}),
     };
   }
 

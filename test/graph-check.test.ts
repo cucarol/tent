@@ -335,6 +335,7 @@ test("retained Card source versions survive live moves and deletion without docu
   assert.deepEqual(await checkGraph(adapter, workspace, fileExists), {
     documents: 1,
     issues: [],
+    notices: [],
     errors: [],
   });
   assert.equal(await git(systemRoot, "rev-parse", "HEAD"), head);

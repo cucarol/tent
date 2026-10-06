@@ -201,11 +201,11 @@ export async function runNodeCommand(
           cardId: flags.card,
           roleId: flags.role,
         });
-        return mutationPrint(
-          result,
-          json,
-          () =>
+        return mutationPrint(result, json, () =>
+          [
             `Created ${result.nodeId}  ${result.path}  ${result.etag}${result.cardId ? `\nCard: ${result.cardId}` : ""}`,
+            ...(result.warnings ?? []),
+          ].join("\n"),
         );
       }
       case "confirm": {

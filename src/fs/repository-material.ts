@@ -171,6 +171,37 @@ export async function relocatedRepositoryMaterial(
     cache.worktrees.set(commonDir, listing);
   }
   const checkouts = [...(await listing.roots)];
+  // Git lists the main checkout first. Its committed deletions must not be
+  // hidden by a live copy left in an older worktree.
+  const main = checkouts[0];
+  if (main) {
+    let missing = false;
+    try {
+      await checkedSourceFile(main, path.join(main, ...basis.path.split("/")));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      missing = true;
+    }
+    if (
+      missing &&
+      (await git([
+        "-C",
+        main,
+        "log",
+        "--full-history",
+        "-1",
+        "--format=%H",
+        "--diff-filter=D",
+        "--no-renames",
+        "--",
+        `:(literal)${basis.path}`,
+      ]))
+    )
+      throw Object.assign(
+        new Error(`Repository material was deleted in the main checkout: ${basis.path}`),
+        { code: "ENOENT" },
+      );
+  }
   const current = await repository(workspaceRoot, cache).catch(() => undefined);
   if (current && samePath(current.commonDir, commonDir)) checkouts.unshift(current.root);
   for (const checkout of new Set(checkouts)) {

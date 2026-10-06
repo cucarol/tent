@@ -151,6 +151,9 @@ export async function runWorkspaceCommand(
                   `${issue.path}: ${issue.kind}: ${"target" in issue ? issue.target : (issue.resource ?? issue.field)} — ${issue.reason}`,
               ),
               ...result.errors.map((error) => `${error.path}: ${error.reason}`),
+              ...result.notices.map(
+                (notice) => `${notice.path}: ${notice.resource ?? notice.field} — ${notice.reason}`,
+              ),
             ].join("\n");
       return {
         exitCode: result.issues.length || result.errors.length ? 1 : 0,

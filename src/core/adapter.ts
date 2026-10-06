@@ -17,6 +17,8 @@ export interface FsAdapter {
     systemPath?: string;
     legacyVersions?: string[];
     repository?: RepositoryMaterial;
+    /** Present only when a missing declaration was read from another checkout. */
+    readFrom?: string;
   }>;
   readonly history?: GitDocumentHistory;
   /** Track selected identity-document writes inside the existing mutation lock. */

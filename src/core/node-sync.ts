@@ -429,6 +429,15 @@ export function linkNodeOutput(
         descriptor.resource = `../${input.resource.trim()}`;
       validateMaterialAddresses(descriptor, addressOwner);
       const locator = materialLocator(descriptor.resource, addressOwner, false);
+      const localPath =
+        locator.kind === "path"
+          ? locator.target
+          : locator.kind === "uri" && locator.uri.startsWith("file:")
+            ? decodeURIComponent(new URL(locator.uri).pathname)
+            : undefined;
+      const warnings = localPath?.split("/").slice(0, -1).includes(".worktrees")
+        ? ["材料位于 .worktrees/：先合并到主检出，再挂产出。"]
+        : [];
       if (locator.kind === "path" || (locator.kind === "uri" && locator.uri.startsWith("file:"))) {
         if (!fs.observeMaterial)
           throw new NodeWriteError(
@@ -546,7 +555,14 @@ export function linkNodeOutput(
         fs.history && (await fs.exists(".git"))
           ? { commit: (await fs.history.currentCommit())!, path: nodeNotePath(path) }
           : undefined;
-      return { nodeId, path, etag: contentEtag(raw), version, ...(cardId ? { cardId } : {}) };
+      return {
+        nodeId,
+        path,
+        etag: contentEtag(raw),
+        version,
+        ...(cardId ? { cardId } : {}),
+        ...(warnings.length ? { warnings } : {}),
+      };
     },
     { operation: "node.output-link" },
   );

@@ -39,6 +39,15 @@ export type GraphCheckIssue =
 export type GraphCheckResult = {
   documents: number;
   issues: GraphCheckIssue[];
+  notices: {
+    kind: "relocated-material-file";
+    path: string;
+    field: "resource" | "sources";
+    index?: number;
+    resource?: string;
+    checkout: string;
+    reason: string;
+  }[];
   errors: { path: string; reason: string }[];
 };
 
@@ -57,7 +66,7 @@ export async function checkGraph(
 ): Promise<GraphCheckResult> {
   const readonlyFs = readOnlyFs(fs);
   const nodeRecords = await retainedNodeRecords(readonlyFs);
-  const result: GraphCheckResult = { documents: 0, issues: [], errors: [] };
+  const result: GraphCheckResult = { documents: 0, issues: [], notices: [], errors: [] };
   const documents: Array<{
     path: string;
     data: Record<string, unknown>;
@@ -318,7 +327,14 @@ export async function checkGraph(
               !/^(?:\.{1,2}\/|\/|[a-z][a-z\d+.-]*:)/i.test(value.trim())
                 ? `./${value.trim()}`
                 : String(value);
-            await readonlyFs.observeMaterial(resource, document.path, repository);
+            const observed = await readonlyFs.observeMaterial(resource, document.path, repository);
+            if (observed.readFrom)
+              result.notices.push({
+                kind: "relocated-material-file",
+                ...occurrence,
+                checkout: observed.readFrom,
+                reason: `从 ${observed.readFrom} 读取`,
+              });
             return;
           } catch (cause) {
             if (
@@ -392,6 +408,7 @@ export async function checkGraph(
     return left < right ? -1 : left > right ? 1 : 0;
   };
   result.issues.sort(compare);
+  result.notices.sort(compare);
   result.errors.sort(compare);
   return result;
 }

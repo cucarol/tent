@@ -17,14 +17,15 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { createNode } from "../src/core/ops.js";
 import { inspectNodeSync, linkNodeOutput } from "../src/core/node-sync.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
+import { runNodeCommand } from "../src/cli/node-commands.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, nestedWorktree = false) {
   const base = await fs.mkdtemp(path.join(testScratchRoot(), "repository-material-"));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const main = path.join(base, "main"),
-    worktree = path.join(base, "topic");
+    worktree = nestedWorktree ? path.join(main, ".worktrees/topic") : path.join(base, "topic");
   await fs.mkdir(main);
   await git(main, "init", "--quiet", "--initial-branch=main");
   await git(main, "config", "core.autocrlf", "false");
@@ -130,9 +131,20 @@ test("Node material survives merge and deleted worktree, while live edits and tr
   const after = await inspectNodeSync(fresh, output.nodeId);
   assert.equal(after.state, "synced");
   assert.equal(after.materials[0]!.state, "current");
+  assert.equal(after.materials[0]!.reason, `从 ${await fs.realpath(main)} 读取`);
+  const nodeCheck = await runNodeCommand("check", [output.nodeId], { workspace: main });
+  assert.equal(
+    JSON.parse(nodeCheck.stdout).materials[0].reason,
+    `从 ${await fs.realpath(main)} 读取`,
+  );
   const check = await runWorkspaceCommand("check", [], { workspace: main, json: true });
   assert.equal(check.exitCode, 0, check.stderr || check.stdout);
   assert.deepEqual(JSON.parse(check.stdout).issues, []);
+  assert.equal(JSON.parse(check.stdout).notices[0].checkout, await fs.realpath(main));
+  assert.equal(JSON.parse(check.stdout).notices[0].reason, `从 ${await fs.realpath(main)} 读取`);
+  const textCheck = await runWorkspaceCommand("check", [], { workspace: main });
+  assert.equal(textCheck.exitCode, 0);
+  assert.ok(textCheck.stdout.includes(`从 ${await fs.realpath(main)} 读取`));
   const current = await readNodeForEdit(fresh, output.nodeId);
   await writeNodeDocument(fresh, output.nodeId, { baseEtag: current.etag, body: "More context" });
   assert.equal(
@@ -254,4 +266,119 @@ test("retained observations reuse Git discovery and refresh cached ownership whe
     mocked.mock.restore();
     syncBuiltinESMExports();
   }
+});
+
+test("committed main deletion stays unavailable with a retained or reused worktree path", async (t) => {
+  const { main, worktree } = await fixture(t, true);
+  await initializeTentWorkspace(main);
+  const adapter = new NodeFs(path.join(main, ".tent"));
+  const goal = await createNode(
+    { fs: adapter, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Deletion" },
+    { name: "Goal", parentPath: "", type: "goal-requirement", body: "Requirement" },
+  );
+  const output = await linkNodeOutput(adapter, goal, { resource: "assets/result.txt" });
+  assert.equal((await inspectNodeSync(adapter, output.nodeId)).state, "synced");
+  await git(main, "rm", "assets/result.txt");
+  await git(main, "commit", "--quiet", "-m", "test: delete material in main");
+  const unavailable = async () => {
+    const state = await inspectNodeSync(adapter, output.nodeId);
+    assert.equal(state.state, "behind");
+    assert.equal(state.materials[0]!.state, "unavailable");
+    assert.match(state.materials[0]!.reason!, /deleted in the main checkout/);
+    const node = await runNodeCommand("check", [output.nodeId], { workspace: main, json: true });
+    assert.equal(JSON.parse(node.stdout).materials[0].state, "unavailable");
+    const check = await runWorkspaceCommand("check", [], { workspace: main, json: true });
+    assert.equal(check.exitCode, 1, check.stderr || check.stdout);
+    assert.ok(
+      JSON.parse(check.stdout).issues.some(
+        (issue: { kind: string }) => issue.kind === "missing-material-file",
+      ),
+    );
+    assert.deepEqual(JSON.parse(check.stdout).notices, []);
+  };
+  assert.equal(await fs.readFile(path.join(worktree, "assets/result.txt"), "utf8"), "initial\n");
+  await unavailable();
+  // The same declared main path cannot follow a new branch reusing the old checkout.
+  await git(main, "worktree", "remove", worktree);
+  await git(main, "worktree", "add", "--quiet", "-b", "reused", worktree, "topic");
+  await fs.writeFile(path.join(worktree, "assets/result.txt"), "new branch WIP\n");
+  await unavailable();
+  // A live main file is still authoritative after an earlier deletion of its path.
+  await fs.mkdir(path.join(main, "assets"), { recursive: true });
+  await fs.writeFile(path.join(main, "assets/result.txt"), "initial\n");
+  assert.equal((await inspectNodeSync(adapter, output.nodeId)).materials[0]!.state, "current");
+  await git(main, "add", "assets/result.txt");
+  await git(main, "commit", "--quiet", "-m", "test: restore material");
+  await fs.unlink(path.join(main, "assets/result.txt"));
+  await unavailable();
+  // A moved main HEAD is inspected afresh, including removal of the deletion history.
+  await git(main, "reset", "--hard", "HEAD~2");
+  await fs.unlink(path.join(main, "assets/result.txt"));
+  const legal = await inspectNodeSync(adapter, output.nodeId);
+  assert.equal(legal.materials[0]!.state, "changed");
+  assert.equal(legal.materials[0]!.reason, `从 ${await fs.realpath(worktree)} 读取`);
+});
+
+test("worktree path warnings preserve creation and the declared live-path observation contract", async (t) => {
+  const { main, worktree } = await fixture(t, true);
+  await initializeTentWorkspace(main);
+  const adapter = new NodeFs(path.join(main, ".tent"));
+  const goal = await createNode(
+    { fs: adapter, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Live checkout" },
+    { name: "Goal", parentPath: "", type: "goal-requirement", body: "Requirement" },
+  );
+  const relative = ".worktrees/topic/assets/result.txt";
+  const linked = await runNodeCommand("link-output", [goal, "--resource", relative], {
+    workspace: main,
+    json: true,
+  });
+  assert.equal(linked.exitCode, 0, linked.stderr);
+  const receipt = JSON.parse(linked.stdout);
+  assert.ok(receipt.nodeId);
+  assert.match(receipt.warnings[0], /先合并到主检出，再挂产出/);
+  const text = await runNodeCommand("link-output", [goal, "--resource", `/${relative}`], {
+    workspace: main,
+  });
+  assert.equal(text.exitCode, 0, text.stderr);
+  assert.match(text.stdout, /先合并到主检出，再挂产出/);
+  const uri = await linkNodeOutput(adapter, goal, {
+    resource: pathToFileURL(path.join(worktree, "assets/result.txt")).href,
+  });
+  assert.match(uri.warnings![0]!, /先合并到主检出，再挂产出/);
+  await fs.writeFile(path.join(main, "assets/result.txt"), "main changed\n");
+  const retained = await inspectNodeSync(adapter, receipt.nodeId);
+  assert.equal(
+    retained.materials[0]!.state,
+    "current",
+    "a surviving declared worktree file still wins",
+  );
+  assert.equal(retained.materials[0]!.reason, undefined);
+  await git(main, "worktree", "remove", worktree);
+  await git(main, "worktree", "add", "--quiet", "-b", "reused", worktree, "topic");
+  await fs.writeFile(path.join(worktree, "assets/result.txt"), "reused branch WIP\n");
+  assert.equal((await inspectNodeSync(adapter, receipt.nodeId)).materials[0]!.state, "changed");
+});
+
+test("deletion history matches the exact literal repository path", async (t) => {
+  const { main, worktree } = await fixture(t);
+  const literal = "assets/[result].txt";
+  await fs.writeFile(path.join(main, literal), "literal\n");
+  await git(main, "add", literal);
+  await git(main, "commit", "--quiet", "-m", "test: literal filename");
+  await git(worktree, "merge", "--quiet", "main");
+  const basis = await observedRepositoryMaterial(path.join(main, literal), blobs("literal\n"));
+  assert.ok(basis);
+  await git(main, "rm", literal);
+  await git(main, "commit", "--quiet", "-m", "test: delete literal filename");
+  await assert.rejects(relocatedRepositoryMaterial(main, basis), /deleted in the main checkout/);
+  const other = await observedRepositoryMaterial(
+    path.join(main, "assets/result.txt"),
+    blobs("initial\n"),
+  );
+  assert.ok(other);
+  await fs.unlink(path.join(main, "assets/result.txt"));
+  assert.equal(
+    (await relocatedRepositoryMaterial(main, other)).filename,
+    path.join(worktree, "assets/result.txt"),
+  );
 });

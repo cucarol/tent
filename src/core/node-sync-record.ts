@@ -245,6 +245,7 @@ export async function observeSyncMaterial(
     }
     return {
       version: version.parse(observation.observedVersion),
+      ...(observation.readFrom ? { reason: `从 ${observation.readFrom} 读取` } : {}),
       ...(observation.legacyVersions ? { legacyVersions: observation.legacyVersions } : {}),
       ...(observation.repository ? { repository: observation.repository } : {}),
     };
