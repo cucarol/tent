@@ -75,6 +75,9 @@ the Workspace needs a `file:` URI. Point at the narrowest material that
 supports the fact. After saving, run `tent workspace check --json` once to
 find broken links and missing files.
 
+For large documents, reference the relevant section or sections instead of
+the whole file unless the fact genuinely depends on the entire document.
+
 For a Markdown material, use `../Design/Design.md#State` to track only that
 section (including its heading and subsections). Use the heading text from
 `node get-section --heading`; percent-encoded text works too. Editing another
