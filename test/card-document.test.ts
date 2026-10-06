@@ -8,6 +8,7 @@ import {
   createCardDocument,
   readCardDocument,
   takeCardDocument,
+  watchCardDocuments,
   listCardDocuments,
   moveCardDocument,
   deprecateCardDocument,
@@ -42,6 +43,77 @@ async function fixture(t: TestContext) {
 }
 const code = (expected: string) => (error: unknown) =>
   (error as { code?: string }).code === expected;
+
+test("take completes an interrupted reception from consumed files and pending Git exactly once", async (t) => {
+  const { adapter, root } = await fixture(t);
+  for (const roleId of [undefined, "role-a"]) {
+    const card = await createCardDocument(adapter, {
+      cardId: roleId ? "card-recoverrole" : "card-recoveropen",
+      prompt: "Keep the original input",
+      ...(roleId ? { target: roleId } : {}),
+    });
+    const capture = adapter.history.captureUnlocked.bind(adapter.history);
+    adapter.history.captureUnlocked = async (changes, metadata) => {
+      if (metadata?.operation === "card.take") throw new Error("interrupted before publication");
+      return capture(changes, metadata);
+    };
+    await assert.rejects(
+      takeCardDocument(adapter, card.cardId, roleId),
+      /interrupted before publication/,
+    );
+    adapter.history.captureUnlocked = capture;
+    const savedBytes = await adapter.readFile(card.path);
+    assert.equal(parseFrontmatter(savedBytes).data.state, "consumed");
+    assert.equal(parseFrontmatter(await adapter.history.read(card.version)).data.state, "pending");
+    assert.equal(
+      ((await readCardDocument(adapter, card.cardId)) as any).diagnostic.code,
+      "STATE_CHANGED",
+    );
+    if (roleId)
+      assert.equal((await watchCardDocuments(adapter, roleId, 0))[0]!.cardId, card.cardId);
+    const taken = (await takeCardDocument(adapter, card.cardId, roleId)) as Record<string, any>;
+    assert.equal(taken.replayed, false);
+    assert.equal(await adapter.history.read(taken.version!), savedBytes);
+    assert.equal(await adapter.readFile(card.path), savedBytes);
+    if (roleId) assert.deepEqual(await watchCardDocuments(adapter, roleId, 0), []);
+    const head = await adapter.history.currentCommit();
+    assert.equal(
+      ((await takeCardDocument(adapter, card.cardId, roleId)) as Record<string, any>).replayed,
+      true,
+    );
+    assert.equal(await adapter.history.currentCommit(), head);
+  }
+  // The fixture contains two uncaptured source Nodes; retained Cards have no staged deletion.
+  assert.equal((await git(root, "diff", "--cached", "--name-only")).trim(), "");
+});
+
+test("interrupted reception recovery rejects simultaneous status, target and input changes", async (t) => {
+  const { adapter } = await fixture(t);
+  const card = await createCardDocument(adapter, {
+    cardId: "card-recoverconflict",
+    prompt: "original",
+  });
+  const original = await adapter.readFile(card.path);
+  for (const [changes, expected] of [
+    [{ state: "consumed", receivedBy: "role-a", status: "deprecated" }, "STATE_CHANGED"],
+    [{ state: "consumed", receivedBy: "role-a", target: "role-a" }, "STATE_CHANGED"],
+  ] as const) {
+    const parsed = parseFrontmatter(original);
+    await adapter.writeFile(
+      card.path,
+      serializeFrontmatter({ ...parsed.data, ...changes }, parsed.body),
+    );
+    await assert.rejects(takeCardDocument(adapter, card.cardId, "role-a"), code(expected));
+  }
+  await adapter.writeFile(
+    card.path,
+    original
+      .replace("state: pending", "state: consumed\nreceivedBy: role-a")
+      .replace("original", "changed"),
+  );
+  await assert.rejects(takeCardDocument(adapter, card.cardId, "role-a"), code("INPUT_CHANGED"));
+  assert.equal((await adapter.history.pathVersions(card.path)).latest!.commit, card.version.commit);
+});
 
 test("Card progress derives from post-publication goal outputs and confirmations", async (t) => {
   const scratch = path.resolve(".scratch");
@@ -628,7 +700,7 @@ test("manual input or management edits stay raw-readable without being retained 
   for (const [changed, expected] of [
     [initial.replace("original", "changed prompt"), "INPUT_CHANGED"],
     [initial.replace("keep: true", "keep: false"), "INPUT_CHANGED"],
-    [initial.replace("state: pending", "state: consumed\nreceivedBy: role-a"), "STATE_CHANGED"],
+    [initial.replace("state: pending", "state: consumed\nreceivedBy: role-b"), "STATE_CHANGED"],
     [initial.replace("state: pending", "state: interrupted"), "INVALID_DOCUMENT"],
   ]) {
     await adapter.writeFile(path, changed!);

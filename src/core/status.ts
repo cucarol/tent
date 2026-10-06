@@ -23,6 +23,9 @@ export async function findTentSystemRoot(
     const nested = path.join(dir, ".tent");
     if (await isSystemRoot(nested)) return nested;
     if (boundary && dir === boundary) return undefined;
+    // A clone or worktree owns its workspace boundary even without a Tent.
+    // .git can be a directory (checkout) or a file (linked worktree).
+    if (await fs.lstat(path.join(dir, ".git")).catch(() => undefined)) return undefined;
     const parent = path.dirname(dir);
     if (parent === dir) return undefined;
     dir = parent;

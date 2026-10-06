@@ -9,6 +9,7 @@ import { isCardId, isNodeId, isRoleId } from "./id.js";
 import { isHistoryDocument } from "./document-history.js";
 import { isDeepStrictEqual } from "node:util";
 import { nodeBasisRecordSchema, type NodeBasisRecord } from "./node-basis-record.js";
+import { SYSTEM_REGISTRY_FILES, TEMP_DIR, ATTACHMENTS_DIR, TENT_SYSTEM_DIR } from "./paths.js";
 
 export type DocumentVersion = { commit: string; path: string };
 export type DocumentChange = { path: string; raw: string | null };
@@ -720,6 +721,24 @@ export class GitDocumentHistory {
         throw new Error(`Invalid raw document: ${change.path}`);
     }
     const gitDir = await this.ensureRepository();
+    const excludePath = path.join(gitDir, "info", "exclude");
+    const exclude = await fs.readFile(excludePath, "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return "";
+      throw error;
+    });
+    const excluded = new Set(exclude.split(/\r?\n/));
+    const rules = [
+      ...[...SYSTEM_REGISTRY_FILES].map((file) => `/${file}`),
+      ...[TEMP_DIR, ATTACHMENTS_DIR, TENT_SYSTEM_DIR].map((dir) => `/${dir}/`),
+      "/mutation.lock.guard*",
+    ].filter((rule) => !excluded.has(rule));
+    if (rules.length) {
+      await fs.mkdir(path.dirname(excludePath), { recursive: true });
+      await fs.writeFile(
+        excludePath,
+        `${exclude}${exclude && !exclude.endsWith("\n") ? "\n" : ""}${rules.join("\n")}\n`,
+      );
+    }
     const before = await this.head();
     const records = Object.keys(metadata.nodeRecords ?? {}).length ? await this.nodeRecords() : {};
     const recordChanges = Object.fromEntries(
@@ -768,6 +787,7 @@ export class GitDocumentHistory {
     ) {
       if ((await this.head()) !== before)
         throw new Error("Tent Git history HEAD changed during capture");
+      if (before) await runGit(this.root, ["read-tree", before]);
       return {
         commit: before,
         created: false,
@@ -823,13 +843,9 @@ export class GitDocumentHistory {
       );
       const commit = oid(
         (
-          await runGit(this.root, [
-            "commit-tree",
-            tree,
-            ...(before ? ["-p", before] : []),
-            "-m",
-            message,
-          ])
+          await runGit(this.root, ["commit-tree", tree, ...(before ? ["-p", before] : [])], {
+            input: Buffer.from(message, "utf8"),
+          })
         )
           .toString("ascii")
           .trim(),
@@ -845,6 +861,9 @@ export class GitDocumentHistory {
         throw new Error(`Tent Git history HEAD changed during capture: ${String(error)}`);
       }
       committed = true;
+      // The independent repository's ordinary index mirrors retained HEAD.
+      // read-tree updates only the index; external worktree edits remain visible.
+      await runGit(this.root, ["read-tree", commit]);
       this.knownHead = commit;
       for (const [path, entry] of expected) {
         if (entry === undefined) this.knownEntries.delete(path);

@@ -288,7 +288,7 @@ function validateSource(file: string, raw: string) {
   }
 }
 
-async function checkedCard(fs: FsAdapter, id: string) {
+async function checkedCard(fs: FsAdapter, id: string, reception?: { roleId?: string }) {
   const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
     await fs.readBinary(cardPath(id)),
   );
@@ -305,13 +305,24 @@ async function checkedCard(fs: FsAdapter, id: string) {
   if (retained[1] instanceof Error) throw retained[1];
   const published = parseCardDocument(id, retained[0]!.raw);
   const latest = parseCardDocument(id, retained[1]!.raw);
-  validateRetainedCard(current, published, latest);
-  return { current, publishedVersion: versions.first, version: versions.latest, history };
+  const recovery =
+    reception !== undefined &&
+    latest.data.state === "pending" &&
+    current.data.state === "consumed" &&
+    current.data.receivedBy === reception.roleId &&
+    isDeepStrictEqual(stateOf(current), {
+      ...stateOf(latest),
+      state: "consumed",
+      receivedBy: reception.roleId,
+    });
+  validateRetainedCard(current, published, latest, recovery);
+  return { current, publishedVersion: versions.first, version: versions.latest, history, recovery };
 }
 function validateRetainedCard(
   current: CardDocument,
   published: CardDocument,
   latest: CardDocument,
+  recovery = false,
 ) {
   requireInput(published);
   if (published.data.state !== "pending") invalid("Initial Card publication is not pending");
@@ -323,7 +334,7 @@ function validateRetainedCard(
       "INPUT_CHANGED",
       "Published Card input changed; restore it and edit the requirement Nodes",
     );
-  if (!isDeepStrictEqual(stateOf(current), stateOf(latest)))
+  if (!recovery && !isDeepStrictEqual(stateOf(current), stateOf(latest)))
     throw new CardDocumentError(
       "STATE_CHANGED",
       "Card management fields differ from retained state; inspect the diff before reconciling",
@@ -612,7 +623,9 @@ export function takeCardDocument(
   return withTentMutation(
     fs,
     async () => {
-      const { current, history, version, publishedVersion } = await checkedCard(fs, id);
+      const { current, history, publishedVersion, recovery } = await checkedCard(fs, id, {
+        roleId,
+      });
       if (roleId !== undefined) await roleAvailable(fs, roleId);
       const status = documentLifecycle(current.data).status;
       if (status !== "stable" && status !== "draft" && status !== "deprecated")
@@ -631,7 +644,7 @@ export function takeCardDocument(
         );
       const state = current.data.state;
       const nextState = "consumed";
-      const replayed = state === "consumed";
+      const replayed = state === "consumed" && !recovery;
       const raw =
         state === nextState
           ? current.raw
@@ -668,14 +681,11 @@ export function takeCardDocument(
           "Card changed during reception checks; reread before continuing",
         );
       if (raw !== current.raw) await fs.writeFile(current.path, raw);
-      const savedVersion =
-        raw === current.raw
-          ? version
-          : (
-              await history.captureUnlocked([{ path: current.path, raw }], {
-                operation: "card.take",
-              })
-            ).versions[0];
+      const savedVersion = (
+        await history.captureUnlocked([{ path: current.path, raw }], {
+          operation: "card.take",
+        })
+      ).versions[0];
       return cardPage(id, raw, {}, { ...metadata, version: savedVersion });
     },
     { operation: "card.take" },

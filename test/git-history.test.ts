@@ -243,20 +243,19 @@ test("one HEAD shares a single history traversal, durable hits skip replay, and 
   assert.equal(calls.filter((args) => args.includes("log")).length, 1);
 });
 
-test("captures selected raw Markdown without touching the user index or unrelated files", async (t) => {
+test("captures selected raw Markdown and aligns the real index without changing unrelated files", async (t) => {
   const { root, git, history } = await fixture(t);
   git("config", "core.autocrlf", "true");
   await fs.writeFile(path.join(root, ".gitattributes"), "*.md text eol=lf\n");
   await fs.writeFile(path.join(root, "staged.md"), "staged\n");
   await fs.writeFile(path.join(root, "dirty.md"), "dirty\n");
   git("add", "staged.md");
-  const stagedBefore = git("ls-files", "--stage");
   const raw = "\ufeff# One\r\nbody\r\n";
   const first = await history.captureUnlocked([{ path: "nodes/one.md", raw }]);
   assert.equal(first.created, true);
   assert.equal(first.versions.length, 1);
   assert.equal(await history.read(first.versions[0]!), raw);
-  assert.equal(git("ls-files", "--stage"), stagedBefore);
+  assert.equal(git("write-tree"), git("rev-parse", "HEAD^{tree}"));
   assert.equal(git("ls-tree", "-r", "--name-only", "HEAD"), "nodes/one.md");
   assert.equal(git("rev-list", "--count", "HEAD"), "1");
   assert.equal(await fs.readFile(path.join(root, "staged.md"), "utf8"), "staged\n");
@@ -264,6 +263,49 @@ test("captures selected raw Markdown without touching the user index or unrelate
   const again = await history.captureUnlocked([{ path: "nodes/one.md", raw }]);
   assert.deepEqual(again, { commit: first.commit, created: false, versions: first.versions });
   assert.equal(git("rev-list", "--count", "HEAD"), "1");
+});
+
+test("capture leaves a clean index, repairs legacy staging and makes manual commits retain documents", async (t) => {
+  const { root, git, history } = await fixture(t);
+  const file = "Node/Node.md";
+  await fs.mkdir(path.join(root, "Node"));
+  await fs.writeFile(path.join(root, file), "document\n");
+  for (const name of ["index.md", "settings.json", "order.json", "mutation.lock"])
+    await fs.writeFile(path.join(root, name), "operational\n");
+  await fs.appendFile(path.join(root, ".git/info/exclude"), "\n/custom-cache\n");
+  await fs.writeFile(path.join(root, "custom-cache"), "cache\n");
+  const captured = await history.captureUnlocked([{ path: file, raw: "document\n" }]);
+  assert.equal(git("status", "--porcelain"), "");
+  git("read-tree", "--empty");
+  assert.equal((await history.captureUnlocked([{ path: file, raw: "document\n" }])).created, false);
+  assert.equal(git("status", "--porcelain"), "");
+  git(
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@invalid",
+    "commit",
+    "--allow-empty",
+    "-qm",
+    "Manual",
+  );
+  assert.equal(git("rev-parse", "HEAD^{tree}"), git("rev-parse", `${captured.commit}^{tree}`));
+  await fs.writeFile(path.join(root, file), "external edit\n");
+  await history.captureUnlocked([{ path: file, raw: "document\n" }]);
+  assert.match(git("status", "--porcelain"), /M Node\/Node.md/);
+  assert.equal(await fs.readFile(path.join(root, file), "utf8"), "external edit\n");
+});
+
+test("large commit metadata passes through stdin without command-line length limits", async (t) => {
+  const { git, history } = await fixture(t);
+  const objectIds = Array.from({ length: 3000 }, (_, index) => `node-message${index}`);
+  const saved = await history.captureUnlocked([{ path: "Node/Node.md", raw: "document\n" }], {
+    operation: "node.write-many",
+    objectIds,
+  });
+  const message = git("show", "-s", "--format=%B", saved.commit!);
+  assert.ok(Buffer.byteLength(message) > 32768);
+  assert.match(message, /Tent-Object: node-message2999/);
 });
 
 test("batch changes, deletion and old versions remain reachable after garbage collection", async (t) => {
