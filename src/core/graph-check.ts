@@ -1,4 +1,5 @@
 import type { FsAdapter } from "./adapter.js";
+import path from "node:path";
 import { readOnlyFs } from "./adapter.js";
 import { loadTent } from "./tree.js";
 import { buildNodeIndex } from "./okf-index.js";
@@ -21,11 +22,16 @@ import { NodeSectionError } from "./markdown-section.js";
 export type GraphCheckIssue =
   | { kind: "unresolved-link"; path: string; target: string; reason: string }
   | {
-      kind: "invalid-material-address" | "missing-material-file" | "missing-material-section";
+      kind:
+        | "invalid-material-address"
+        | "missing-material-file"
+        | "missing-material-section"
+        | "unanchored-material-file";
       path: string;
       field: "resource" | "sources";
       index?: number;
       resource?: string;
+      suggestion?: string;
       reason: string;
     };
 
@@ -240,6 +246,47 @@ export async function checkGraph(
         if (!parsed.success) throw new Error("Material resource must be nonempty text");
         const resource = parsed.data;
         const locator = materialLocator(resource, document.path, field === "sources");
+        if (locator.kind === "unresolved") {
+          // Descriptive sources stay descriptive. Warn only when today's local
+          // files make a bare source look like an accidentally unanchored file.
+          const candidates = [
+            () => materialLocator(`../${resource.trim()}`, "index.md"),
+            () => materialLocator(`./${resource.trim()}`, document.path),
+          ];
+          for (const candidate of candidates) {
+            let possible;
+            try {
+              possible = candidate();
+            } catch {
+              continue;
+            }
+            const filename = localMaterialPath(possible, workspaceRoot);
+            if (filename === undefined || possible.kind !== "path") continue;
+            let present;
+            try {
+              present = await exists(filename);
+            } catch (cause) {
+              error(document.path, `Cannot inspect ${JSON.stringify(resource)}: ${message(cause)}`);
+              return;
+            }
+            if (!present) continue;
+            const relative = path.posix.relative(
+              path.posix.dirname(document.path),
+              possible.target,
+            );
+            const encoded = relative.split("/").map(encodeURIComponent).join("/");
+            const suggestion =
+              (encoded.startsWith("../") ? encoded : `./${encoded}`) + possible.suffix;
+            result.issues.push({
+              kind: "unanchored-material-file",
+              ...occurrence,
+              suggestion,
+              reason: `Bare source text matches an existing file but is not tracked; use ${JSON.stringify(suggestion)} relative to the declaring document`,
+            });
+            return;
+          }
+          return;
+        }
         filename = localMaterialPath(locator, workspaceRoot);
         if (markdownMaterialHeading(locator) !== undefined)
           sectionResource =

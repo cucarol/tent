@@ -69,7 +69,7 @@ export async function runRoleCommand(
       throw new Error("--start after zero requires --expected-etag from the previous page");
     if (value("view") !== undefined && !["raw", "body"].includes(value("view")!))
       throw new Error("--view must be raw or body");
-    const { systemRoot } = await resolveWorkspacePaths({
+    const { systemRoot, workspaceRoot } = await resolveWorkspacePaths({
       cwd: globals.cwd,
       workspace: value("workspace") ?? globals.workspace,
     });
@@ -121,9 +121,13 @@ export async function runRoleCommand(
       });
     }
     const json = values.json === true || globals.json === true;
+    const mutation = ["create", "write"].includes(sub);
     return {
       exitCode: 0,
-      stdout: (json ? JSON.stringify(result) : formatRole(result, sub)) + "\n",
+      stdout:
+        (json
+          ? JSON.stringify(mutation ? { ...(result as object), workspaceRoot } : result)
+          : formatRole(result, sub) + (mutation ? `\nWorkspace: ${workspaceRoot}` : "")) + "\n",
       stderr: "",
     };
   } catch (error) {

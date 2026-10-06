@@ -83,7 +83,7 @@ test("Node, Role, Card and batch reads use text for body and raw content without
 test("direct Node CLI creates standard materials and uses observed CAS for metadata and structure", async (t) => {
   const { root, tent, cli } = await fixture(t, "direct-node-");
   const sources = [
-    { resource: "../../spec.md", custom: { order: [2, 1] } },
+    { resource: "./spec.md", custom: { order: [2, 1] } },
     { resource: "customer discussion" },
   ];
   const created = (
@@ -98,7 +98,7 @@ test("direct Node CLI creates standard materials and uses observed CAS for metad
         "--body",
         "-",
         "--resource",
-        "../../../src/main.ts",
+        "src/main.ts",
         "--sources-json",
         JSON.stringify(sources),
         "--tags",
@@ -112,7 +112,7 @@ test("direct Node CLI creates standard materials and uses observed CAS for metad
   assert.equal(old.path, "Parent/Child");
   assert.equal(old.text, "exact body\n");
   assert.equal("body" in old, false);
-  assert.deepEqual(old.sources, sources);
+  assert.deepEqual(old.sources, [{ ...sources[0], resource: "../../../spec.md" }, sources[1]]);
   const saved = await cli(
     "write",
     [id, "--input-json", "-"],

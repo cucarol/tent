@@ -1,4 +1,7 @@
 import { parseArgs } from "node:util";
+import { workspaceMaterialFields } from "./material-input.js";
+import { validateNodeName } from "../core/scaffold.js";
+import { nodeActorSchema } from "../core/node-provenance.js";
 import { isNodeId } from "../core/id.js";
 // Agent-facing parsing and rendering; document semantics and locking belong to Core.
 
@@ -147,6 +150,7 @@ export async function runNodeCommand(
       return usage("--input-json supplies the entire write; do not combine it with write fields");
     }
     const json = globals.json === true || flags.json === "true";
+    if (flags.by !== undefined) validateActor(flags.by, "--by");
     const { systemRoot, workspaceRoot } = await resolveWorkspacePaths({
       cwd: globals.cwd,
       workspace: flags.workspace ?? globals.workspace,
@@ -158,6 +162,12 @@ export async function runNodeCommand(
         "Tent workspace identity is missing; explicitly initialize or convert this workspace",
       );
     const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot: systemRoot };
+    const mutationPrint = <T>(result: T, json: boolean, format: (value: T) => string) =>
+      print(
+        { ...result, workspaceRoot },
+        json,
+        () => `${format(result)}\nWorkspace: ${workspaceRoot}`,
+      );
 
     switch (sub) {
       case "check": {
@@ -174,13 +184,19 @@ export async function runNodeCommand(
         const allowed = ["json", "workspace", "resource", "name", "by", "card"];
         if (Object.keys(flags).some((key) => !allowed.includes(key)) || !flags.resource)
           return usage(nodeHelpText(sub));
+        const material = await workspaceMaterialFields(
+          { resource: flags.resource },
+          "index.md",
+          workspaceRoot,
+        );
+        const resource = material.resource as string;
         const result = await linkNodeOutput(fs, nodeRef(target), {
-          resource: flags.resource,
+          resource: resource.startsWith("../") ? resource.slice(3) : resource,
           name: flags.name,
           by: flags.by,
           cardId: flags.card,
         });
-        return print(
+        return mutationPrint(
           result,
           json,
           () => `Created ${result.nodeId}  ${result.path}  ${result.etag}`,
@@ -204,22 +220,71 @@ export async function runNodeCommand(
           changed: saved.changed,
           ...(saved.version ? { version: saved.version } : {}),
         };
-        return print(result, json, () => `${result.nodeId}  ${result.path}  ${result.etag}`);
+        return mutationPrint(
+          result,
+          json,
+          () => `${result.nodeId}  ${result.path}  ${result.etag}`,
+        );
       }
       case "write-many": {
         if (positionals.length || flags["input-json"] === undefined)
           return usage(nodeHelpText("write-many"));
         if (Object.keys(flags).some((key) => !["input-json", "json", "workspace"].includes(key)))
           return usage(nodeHelpText("write-many"));
-        const input = nodeWriteBatchInputSchema.parse(
-          JSON.parse(
-            flags["input-json"] === "-"
-              ? (globals.stdin ?? (await readStdin()))
-              : flags["input-json"],
-          ),
+        const supplied = JSON.parse(
+          flags["input-json"] === "-"
+            ? (globals.stdin ?? (await readStdin()))
+            : flags["input-json"],
         );
+        if (Array.isArray(supplied?.items))
+          for (const item of supplied.items)
+            if (item?.by !== undefined) validateActor(item.by, "by");
+        const input = nodeWriteBatchInputSchema.parse(supplied);
+        const paths = new Map<string, string>();
+        const creates = new Map(
+          input.items.filter((item) => item.op === "create").map((item) => [item.ref, item]),
+        );
+        const visiting = new Set<string>();
+        async function locate(ref: string): Promise<string> {
+          if (paths.has(ref)) return paths.get(ref)!;
+          if (!ref.startsWith("@")) {
+            const result = await selectedPath(fs, ref);
+            paths.set(ref, result);
+            return result;
+          }
+          const item = creates.get(ref.slice(1));
+          if (!item) throw new Error(`Unknown batch ref: ${ref}`);
+          if (visiting.has(ref)) throw new Error(`Cyclic batch parent: ${ref}`);
+          visiting.add(ref);
+          const parent = item.parent ? await locate(item.parent) : "";
+          const name = validateNodeName(item.name, parent);
+          const result = parent ? `${parent}/${name}` : name;
+          visiting.delete(ref);
+          paths.set(ref, result);
+          return result;
+        }
+        for (const item of input.items) {
+          if (item.op === "create")
+            Object.assign(
+              item,
+              await workspaceMaterialFields(
+                item,
+                nodeNotePath(await locate(`@${item.ref}`)),
+                workspaceRoot,
+              ),
+            );
+          else if (item.frontmatter !== undefined) {
+            const previous = await readNodeForEdit(fs, item.nodeId);
+            item.frontmatter = await workspaceMaterialFields(
+              item.frontmatter,
+              nodeNotePath(previous.path),
+              workspaceRoot,
+              previous.frontmatter,
+            );
+          }
+        }
         const result = await writeNodesBatch(env, input);
-        return print(result, json, () =>
+        return mutationPrint(result, json, () =>
           result.results.map((item) => `${item.nodeId}  ${item.path}  ${item.etag}`).join("\n"),
         );
       }
@@ -419,6 +484,13 @@ export async function runNodeCommand(
         const input = readerSearchSchema.parse({
           ...(positionals[0] !== undefined ? { query: positionals[0] } : {}),
           ...coreReaderFlags(flags),
+          ...(flags.resource === undefined
+            ? {}
+            : await workspaceMaterialFields(
+                { resource: flags.resource },
+                "index.md",
+                workspaceRoot,
+              )),
         });
         const result = pageItems(await searchNodes(fs, workspaceId, input), "node.search", {
           limit: numberFlag(flags, "limit"),
@@ -475,6 +547,15 @@ export async function runNodeCommand(
             ? ""
             : await selectedPath(fs, nodeRef(flags.parent));
         const tags = parseCsv(flags.tags).map(normalizeTagName);
+        const normalizedMaterials = await workspaceMaterialFields(
+          materials,
+          nodeNotePath(
+            parentPath
+              ? `${parentPath}/${validateNodeName(name, parentPath)}`
+              : validateNodeName(name),
+          ),
+          workspaceRoot,
+        );
         const created = await createNode(env, {
           name,
           type,
@@ -482,7 +563,7 @@ export async function runNodeCommand(
           ...(body !== undefined
             ? { body: body && !body.endsWith("\n") ? body + "\n" : body }
             : {}),
-          ...materials,
+          ...normalizedMaterials,
           ...(flags.by !== undefined ? { by: flags.by } : {}),
           ...(tags.length > 0 ? { tags } : {}),
         });
@@ -491,10 +572,15 @@ export async function runNodeCommand(
           ...result,
           node:
             "text" in result.node
-              ? pageText(result.node, `node.get:${created}`, { maxBytes: 16 * 1024 - 256 })
+              ? pageText(result.node, `node.get:${created}`, {
+                  maxBytes:
+                    16 * 1024 -
+                    Buffer.byteLength(JSON.stringify({ ...result, workspaceRoot, node: null })) +
+                    4,
+                })
               : compactItem(result.node),
         };
-        return print(output, json, (value) => `Created ${formatNode(value)}`);
+        return mutationPrint(output, json, (value) => `Created ${formatNode(value)}`);
       }
       case "append":
       case "get-section":
@@ -538,7 +624,7 @@ export async function runNodeCommand(
           changed: saved.changed,
           ...(saved.version ? { version: saved.version } : {}),
         };
-        return print(result, json, () => `Updated ${nodeId}  ${saved.etag}`);
+        return mutationPrint(result, json, () => `Updated ${nodeId}  ${saved.etag}`);
       }
       case "write": {
         const target = oneTarget(
@@ -558,7 +644,7 @@ export async function runNodeCommand(
           );
         }
         if (body === "-") body = globals.stdin ?? (await readStdin());
-        const input = nodeWriteInputSchema.parse(
+        const writeInput =
           supplied !== undefined
             ? JSON.parse(supplied === "-" ? (globals.stdin ?? (await readStdin())) : supplied)
             : {
@@ -567,10 +653,20 @@ export async function runNodeCommand(
                 ...(flags.confirm === "true" ? { confirm: true } : {}),
                 ...(flags.by !== undefined ? { by: flags.by } : {}),
                 ...(flags["read-back"] === "true" ? { readBack: true } : {}),
-              },
-        );
+              };
+        if (writeInput?.by !== undefined) validateActor(writeInput.by, "by");
+        const input = nodeWriteInputSchema.parse(writeInput);
         const ref = nodeRef(target);
-        const frontmatter = input.frontmatter ?? {};
+        const previous =
+          input.frontmatter === undefined ? undefined : await readNodeForEdit(fs, ref);
+        const frontmatter = previous
+          ? await workspaceMaterialFields(
+              input.frontmatter!,
+              nodeNotePath(previous.path),
+              workspaceRoot,
+              previous.frontmatter,
+            )
+          : {};
         const saved = await writeNodeDocument(fs, ref, {
           body: input.body,
           frontmatter,
@@ -597,6 +693,7 @@ export async function runNodeCommand(
         ).read({ nodeId: ref });
         const savedResult = {
           workspaceId,
+          workspaceRoot,
           nodeId: ref,
           path: saved.path,
           etag: saved.etag,
@@ -622,14 +719,14 @@ export async function runNodeCommand(
         const output = (readBack ? readBack.partial : input.body === undefined)
           ? incompleteNodeRead(result)
           : result;
-        return print(output, json, () =>
+        return mutationPrint(output, json, () =>
           input.readBack ? JSON.stringify(output, null, 2) : `Updated ${ref}`,
         );
       }
       case "rename": {
         if (positionals.length !== 2) return usage("tent node rename <nodeId> <new-name> [--json]");
         const result = await renameNode(env, nodeRef(positionals[0]), positionals[1]);
-        return print(result, json, (value) => `Renamed ${formatNode(value)}`);
+        return mutationPrint(result, json, (value) => `Renamed ${formatNode(value)}`);
       }
       case "move": {
         const target = oneTarget(
@@ -651,7 +748,7 @@ export async function runNodeCommand(
           return usage("tent node move --parent must be root or a stable node- id");
         }
         const result = await moveNode(env, target, newParentId, { mode: "inside" }, expectedPath);
-        return print(result, json, () => `Moved ${target}`);
+        return mutationPrint(result, json, () => `Moved ${target}`);
       }
       case "archive":
       case "restore": {
@@ -664,7 +761,7 @@ export async function runNodeCommand(
           sub === "archive"
             ? await archiveNode(env, nodeRef(target))
             : await restoreNode(env, nodeRef(target), archiveCommit!);
-        return print(
+        return mutationPrint(
           result,
           json,
           () => `${sub === "archive" ? "Archived" : "Restored"} ${target}`,
@@ -674,7 +771,7 @@ export async function runNodeCommand(
         const target = oneTarget(positionals, "tent node delete <nodeId> [--json]");
         if (typeof target !== "string") return target;
         const result = await deleteNode(env, nodeRef(target));
-        return print(result, json, () => `Deleted ${target}`);
+        return mutationPrint(result, json, () => `Deleted ${target}`);
       }
       case "type": {
         const baseEtag = flagValue(flags, "base-etag");
@@ -687,7 +784,7 @@ export async function runNodeCommand(
           by: flags.by,
         });
         const result = { nodeId: ref, etag: saved.etag, version: saved.version };
-        return print(incompleteNodeRead(result), json, () => `Updated type for ${ref}`);
+        return mutationPrint(incompleteNodeRead(result), json, () => `Updated type for ${ref}`);
       }
       case "tags": {
         const action = positionals[0];
@@ -724,7 +821,7 @@ export async function runNodeCommand(
           by: flags.by,
         });
         const result = { nodeId: ref, etag: saved.etag, version: saved.version };
-        return print(incompleteNodeRead(result), json, () => `Updated tags for ${target}`);
+        return mutationPrint(incompleteNodeRead(result), json, () => `Updated tags for ${target}`);
       }
       default:
         return usage(nodeHelpText());
@@ -807,12 +904,12 @@ export function nodeHelpText(sub?: string): string {
     confirm:
       "After reviewing the complete live Node and its evidence, confirm that it remains valid. Tent records current material versions and, for an output, its nearest goal's current version. This does not prove semantic correctness.",
     "link-output":
-      "Create an output child of the selected goal. Relative file paths resolve from the Workspace root; / addresses resolve from .tent, and Node IDs and absolute URIs are supported. Local files must exist and be readable. The default name is the file name. Remote addresses are never fetched. The returned nodeId identifies the new output. --card records the Card this output responds to; when exactly one incomplete received Card points to this goal, Tent supplies it automatically.",
+      "Create an output child of the selected goal. Local file paths, including / addresses, resolve from the Workspace root and are saved relative to the output document. Node IDs and absolute URIs are supported. Local files must exist and be readable. The default name is the file name. Remote addresses are never fetched. The returned nodeId identifies the new output. --card records the Card this output responds to; when exactly one incomplete received Card points to this goal, Tent supplies it automatically.",
     search:
-      "resource is an explicit path from .tent (for example /Node/Node.md or ../src/file.ts) or an absolute URI. Exact resource matching preserves query/fragment identity and does not infer bare source text.",
-    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output inherits its nearest goal ancestor as an implicit source. Suggested types: ${NODE_TYPE_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; explicit relative paths resolve from the new Node document, / from .tent. Inspect an uncertain result before retrying.`,
+      "resource is a file path from the Workspace root (for example .tent/Node/Node.md or src/file.ts) or an absolute URI. Exact resource matching preserves query/fragment identity and does not infer bare source text.",
+    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output inherits its nearest goal ancestor as an implicit source. Suggested types: ${NODE_TYPE_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; local paths resolve from the Workspace root, including / addresses, and are saved relative to the new Node document. Bare sources are descriptive unless they match an existing Workspace file; use ./ for a file that does not exist yet. Node IDs and absolute URIs are supported. Inspect an uncertain result before retrying.`,
     write:
-      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"../../src/file.ts","sources":[{"resource":"../Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields are preserved. Ordinary saves retain recorded material and goal baselines and observe new declarations. --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
+      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"src/file.ts","sources":[{"resource":".tent/Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields and unchanged material declarations are preserved. New local material declarations in frontmatter use Workspace-root paths, as in create. Ordinary saves retain recorded material and goal baselines and observe new declarations. --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
     append:
       "Append under the Workspace lock without a prior read or ETag. --heading adds a level-two Markdown heading. Existing and new content are separated by one blank line; the saved body ends with one newline. Ordinary saves retain material baselines.",
     "get-section":
@@ -820,7 +917,7 @@ export function nodeHelpText(sub?: string): string {
     "write-section":
       "Replace the selected section with complete Markdown from --body, including any replacement heading. The title may change or be removed. Other body bytes are preserved. Use sectionEtag from get-section; changes to other sections do not conflict. Ordinary saves retain material baselines.",
     "write-many":
-      'Batch JSON: {"items":[{"op":"create","ref":"rules","name":"Rules","type":"prompt","body":"..."},{"op":"update","nodeId":"node-existing","baseEtag":"<complete-read etag>","body":"...","confirm":true}]}. Create parent is null/omitted, an existing Node ID or @ref. @ref also works in Markdown links and material addresses, including forward references. Ordinary updates retain recorded material baselines; confirm:true refreshes the final saved content and output bases. All items validate before saving under one lock and one Tent commit; failures roll back the batch. Ordered results contain nodeId, path and etag. Existing Node updates require a complete read ETag; read: bases are rejected.',
+      'Batch JSON: {"items":[{"op":"create","ref":"rules","name":"Rules","type":"prompt","body":"..."},{"op":"update","nodeId":"node-existing","baseEtag":"<complete-read etag>","body":"...","confirm":true}]}. Create parent is null/omitted, an existing Node ID or @ref. @ref also works in Markdown links and material addresses, including forward references. New resource and sources fields use Workspace-root file paths, as in create; raw updates use stored document-relative addressing. Unchanged material declarations are preserved. Ordinary updates retain recorded material baselines; confirm:true refreshes the final saved content and output bases. All items validate before saving under one lock and one Tent commit; failures roll back the batch. Ordered results contain nodeId, path and etag. Existing Node updates require a complete read ETag; read: bases are rejected.',
   };
   const selected =
     sub && Object.prototype.hasOwnProperty.call(commands, sub) ? [sub] : Object.keys(commands);
@@ -831,7 +928,7 @@ export function nodeHelpText(sub?: string): string {
     "",
     ...new Set(selected.map((key) => notes[key]).filter(Boolean)),
     "All commands accept --workspace <path>. Options accept --key=value; use -- to end options.",
-    "Content writes and confirmations accept --by <actor>; JSON writes accept by in the input. Use human:<id> for a person. Without a known actor, Tent records tent/<version>.",
+    "Content writes and confirmations accept --by <actor>; JSON writes accept by in the input. Accepted actor formats are human:<id>, process:<id>, and <producer>/<version>. Without a known actor, Tent records tent/<version>.",
     "Use --body - or --prompt - where supported to read stdin. Mutations use the Workspace lock and capture selected Git versions.",
   ].join("\n");
 }
@@ -839,6 +936,11 @@ export function nodeHelpText(sub?: string): string {
 function nodeRef(value: string): string {
   if (!isNodeId(value)) throw new Error(`Expected canonical Node id (node-*): ${value}`);
   return value;
+}
+
+function validateActor(value: unknown, field: string): void {
+  if (!nodeActorSchema.safeParse(value).success)
+    throw new Error(`${field} must use human:<id>, process:<id>, or <producer>/<version>.`);
 }
 
 async function selectedPath(fs: NodeFs, id: string) {

@@ -67,7 +67,10 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
     ).node;
     const saved = result(await runNodeCommand("get", [note.nodeId, "--full"], globals)).node;
     assert.equal(saved.text, "Independent Markdown\n");
-    assert.deepEqual(saved.sources, refs);
+    assert.deepEqual(
+      saved.sources,
+      refs.map((source) => ({ ...source, resource: "../../refs/example.pdf" })),
+    );
     assert.equal(
       (
         await runNodeCommand(

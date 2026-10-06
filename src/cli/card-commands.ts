@@ -92,7 +92,7 @@ export async function runCardCommand(
       (!value("base-etag") || (value("to") !== undefined) === (values.public === true))
     )
       throw new Error("Move requires --base-etag and exactly one of --to role-ID or --public");
-    const { systemRoot } = await resolveWorkspacePaths({
+    const { systemRoot, workspaceRoot } = await resolveWorkspacePaths({
       cwd: globals.cwd,
       workspace: value("workspace") ?? globals.workspace,
     });
@@ -182,11 +182,19 @@ export async function runCardCommand(
         `card.${sub}:${id}`,
         { start: number("start"), end: number("end") },
       );
-    } else result = pageText(await takeCardDocument(fs, id, value("role")), `card.get:${id}`);
+    } else
+      result = pageText(
+        { ...(await takeCardDocument(fs, id, value("role"))), workspaceRoot },
+        `card.get:${id}`,
+      );
     const json = values.json === true || globals.json === true;
+    const mutation = ["create", "move", "deprecate", "take"].includes(sub);
     return {
       exitCode: 0,
-      stdout: (json ? JSON.stringify(result) : formatCard(result, sub)) + "\n",
+      stdout:
+        (json
+          ? JSON.stringify(mutation ? { ...(result as object), workspaceRoot } : result)
+          : formatCard(result, sub) + (mutation ? `\nWorkspace: ${workspaceRoot}` : "")) + "\n",
       stderr: "",
     };
   } catch (error) {
@@ -216,7 +224,7 @@ Targeted Cards require their Role; untargeted Cards can be received without one.
 Watch reads committed pending Cards for exactly that Role, writes no files, and exits when input exists.
 It checks HEAD every 3 seconds; omit --timeout to wait indefinitely, or use 0 for one immediate check.
 Watch exit codes: 0 = Cards (one line per Card, or a JSON array); 2 = timeout (no output); 1 = error.
-Progress counts outputs attached or confirmed after publication anywhere in each referenced goal's subtree, including outputs without a resource.
+Progress counts active output Nodes whose sources explicitly name this Card. goalCount counts pinned goals containing those outputs; generated/verified timestamps provide completion times. Progress reads current documents without replaying history.
 Only published pending Cards can move. Requirements awaiting a decision belong in Nodes marked status: draft.
 Cancelled published tasks can be deprecated without changing their input or reception. Deprecated Cards are excluded from lists by default.
 `;

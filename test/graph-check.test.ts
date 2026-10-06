@@ -52,6 +52,34 @@ async function bytes(directory: string, prefix = ""): Promise<Record<string, str
   return result;
 }
 
+test("bare descriptive sources matching existing files warn with document-relative suggestions", async (t) => {
+  const { root, workspace, adapter, write, fileExists } = await fixture(t);
+  await fs.mkdir(path.join(workspace, "docs"));
+  await fs.writeFile(path.join(workspace, "docs/req file.md"), "Requirements.");
+  await adapter.writeFile("Author/local.md", "Local.");
+  await write("Author/Author.md", {
+    id: "node-author",
+    sources: [
+      { resource: "docs/req%20file.md?mode=review#part" },
+      { resource: "local.md" },
+      { resource: "customer discussion" },
+      { resource: "docs/missing.md" },
+    ],
+  });
+  const before = await bytes(root);
+  const result = await checkGraph(adapter, workspace, fileExists);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.issues.length, 2);
+  assert.ok(result.issues.every((issue) => issue.kind === "unanchored-material-file"));
+  const rootFile = result.issues.find((issue) => "index" in issue && issue.index === 0)!;
+  assert.ok("suggestion" in rootFile);
+  assert.equal(rootFile.suggestion, "../../docs/req%20file.md?mode=review#part");
+  const localFile = result.issues.find((issue) => "index" in issue && issue.index === 1)!;
+  assert.ok("suggestion" in localFile);
+  assert.equal(localFile.suggestion, "./local.md");
+  assert.deepEqual(await bytes(root), before);
+});
+
 test("whole graph inspection reports the three categories across Nodes, Roles and Cards", async (t) => {
   const { root, workspace, adapter, write, fileExists } = await fixture(t);
   await fs.writeFile(path.join(workspace, "source file.txt"), "material");

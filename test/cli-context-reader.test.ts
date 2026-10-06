@@ -70,11 +70,11 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
       "--input-json",
       JSON.stringify({
         baseEtag: (await node("get", ["node-readera", "--full"])).node.etag,
-        frontmatter: { resource: "../../src/reader.ts" },
+        frontmatter: { resource: "src/reader.ts" },
       }),
     ]);
     assert.equal(
-      (await node("search", ["--resource", "../src/reader.ts"])).items[0].nodeId,
+      (await node("search", ["--resource", "src/reader.ts"])).items[0].nodeId,
       "node-readera",
     );
     assert.equal((await node("backlinks", ["node-readerb"])).items[0].from.nodeId, "node-readera");
