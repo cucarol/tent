@@ -13,6 +13,7 @@ import {
   Handle,
   Position,
   ReactFlow,
+  ReactFlowProvider,
   useReactFlow,
   useStore,
   type Edge,
@@ -379,7 +380,15 @@ type MapProps = {
   onExpand: () => void;
 };
 
-export function MapView({
+export function MapView(props: MapProps) {
+  return (
+    <ReactFlowProvider>
+      <MapContent {...props} />
+    </ReactFlowProvider>
+  );
+}
+
+function MapContent({
   graph,
   flags,
   selected,

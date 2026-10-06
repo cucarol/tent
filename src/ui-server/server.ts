@@ -27,6 +27,7 @@ import { readWorkspaceSettings } from "../core/workspace-settings.js";
 import { NodeFs } from "../fs/node-fs.js";
 import type { Snapshot } from "../ui/data/types.js";
 import { buildSnapshot } from "./snapshot.js";
+import { shareInFlightReads } from "./shared-reads.js";
 import { readWorkspaces, rememberWorkspace, workspaceKey } from "./workspaces.js";
 
 export type UiServerOptions = {
@@ -102,6 +103,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   const tentRoot = path.join(workspaceRoot, TENT_SYSTEM_DIR);
   const staticDir = path.resolve(options.staticDir);
   const fs = new NodeFs(tentRoot, "ui");
+  const queryFs = shareInFlightReads(fs);
   const { workspaceId } = await readWorkspaceSettings(fs);
   if (!workspaceId) throw new Error(`Workspace has no workspaceId: ${tentRoot}`);
   const workspace = { id: workspaceId, name: path.basename(workspaceRoot) };
@@ -123,10 +125,10 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
 
   /** One build per revision, shared by every request that arrives while it runs. */
   const snapshot = async () => {
-    const revision = await readWorkspaceRevision(fs);
+    const revision = await readWorkspaceRevision(queryFs);
     if (cached?.workspace.revision === revision) return cached;
     if (building?.revision !== revision) {
-      const pending = buildSnapshot({ fs, workspace, revision });
+      const pending = buildSnapshot({ fs: queryFs, workspace, revision });
       building = { revision, snapshot: pending };
       pending.then(
         (built) => {
@@ -162,10 +164,13 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     const cardRoute = /^\/api\/cards\/([^/]+)(?:\/(move))?$/.exec(url.pathname);
 
     if (route === "GET /api/revision")
-      return json(res, 200, { revision: await readWorkspaceRevision(fs) });
+      return json(res, 200, { revision: await readWorkspaceRevision(queryFs) });
     if (route === "GET /api/sync") {
-      const sync = await inspectWorkspaceSync(fs);
+      // The initial UI read runs beside the snapshot; keep its starting document revision.
+      const revision = await readWorkspaceRevision(queryFs);
+      const sync = await inspectWorkspaceSync(queryFs);
       return json(res, 200, {
+        revision,
         nodes: Object.fromEntries(
           sync.nodes
             .filter((n) => n.ahead || n.behind)

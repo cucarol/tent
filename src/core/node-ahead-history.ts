@@ -1,15 +1,11 @@
 import type { GitDocumentHistory } from "./git-history.js";
 import type { NodeBasisRecord } from "./node-basis-record.js";
-import { parseFrontmatter } from "./frontmatter.js";
 import { isNodeId } from "./id.js";
-import {
-  isOutputNode,
-  isRequirementNode,
-  nearestGoal,
-  nodeSemanticFingerprint,
-} from "./node-sync-record.js";
+import { isOutputNode, isRequirementNode, nodeSemanticFingerprint } from "./node-sync-record.js";
 import {
   historicalNodeCatalog,
+  historicalFrontmatterReader,
+  historicalFingerprintReader,
   retainedSemanticVersions,
   reinterpretNodeBasisRecords,
 } from "./node-semantic-history.js";
@@ -35,6 +31,8 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
     const documents = new Map<string, { path: string; raw: string }>();
     const records: Record<string, NodeBasisRecord> = {};
     const times: Record<string, string> = {};
+    const readFrontmatter = historicalFrontmatterReader();
+    const fingerprintOf = historicalFingerprintReader<string>(readFrontmatter);
     let previousAhead = new Set<string>();
     for (const event of events) {
       for (const change of event.changes) {
@@ -53,26 +51,41 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
         records,
         semanticIndex ? reinterpretNodeBasisRecords(nextRecords, semanticIndex) : nextRecords,
       );
-      const nodes = historicalNodeCatalog(documents);
-      const active = [...nodes.values()].filter(
-        (node) => !node.archived && parseFrontmatter(node.header).data.status !== "deprecated",
-      );
+      const nodes = historicalNodeCatalog(documents, readFrontmatter);
+      // The historical catalog already derives archived from each retained status.
+      const active = [...nodes.values()].filter((node) => !node.archived);
       const outputs = active.filter(isOutputNode);
+      const owned = new Map<string, typeof outputs>();
+      for (const output of outputs) {
+        let parent = output.parentNodeId ? nodes.get(output.parentNodeId) : undefined;
+        while (parent) {
+          if (!parent.archived && !parent.invalid && isRequirementNode({ type: parent.type })) {
+            const list = owned.get(parent.nodeId) ?? [];
+            list.push(output);
+            owned.set(parent.nodeId, list);
+            break;
+          }
+          parent = parent.parentNodeId ? nodes.get(parent.parentNodeId) : undefined;
+        }
+      }
       const ahead = new Set<string>();
       for (const goal of active.filter((node) => isRequirementNode({ type: node.type }))) {
-        const parsed = parseFrontmatter(documents.get(goal.nodeId)!.raw);
-        const fingerprint = nodeSemanticFingerprint(
-          parsed.data,
-          parsed.body,
+        const document = documents.get(goal.nodeId)!;
+        const fingerprint = fingerprintOf(
+          document.raw,
           `${goal.path}/${goal.name}.md`,
           nodes,
-        );
-        const owned = outputs.filter(
-          (output) => nearestGoal(output, nodes)?.nodeId === goal.nodeId,
+          (parsed) =>
+            nodeSemanticFingerprint(
+              parsed.data,
+              parsed.body,
+              `${goal.path}/${goal.name}.md`,
+              nodes,
+            ),
         );
         if (
           !outputs.some((output) => output.path.startsWith(goal.path + "/")) ||
-          owned.some((output) => {
+          (owned.get(goal.nodeId) ?? []).some((output) => {
             const basis = records[output.nodeId]?.goal;
             return (
               basis?.nodeId === goal.nodeId &&

@@ -161,7 +161,7 @@ export const api = {
     ),
   revision: () => call<{ revision: string }>("/api/revision"),
   /** Ahead and behind Nodes, computed fresh: material changes do not move the revision. */
-  sync: () => call<{ nodes: SyncFlags }>("/api/sync"),
+  sync: () => call<{ revision: string; nodes: SyncFlags }>("/api/sync"),
   node: (id: string, capture = false) =>
     call<NodeDocument>(`/api/nodes/${encodeURIComponent(id)}${capture ? "?capture=true" : ""}`),
   saveNode: (id: string, edit: NodeEdit) =>

@@ -29,7 +29,9 @@ test("sync reads changed materials without a revision change and agrees with bri
   const sync = async () => {
     const response = await fetch(new URL("/api/sync", url), { headers });
     assert.equal(response.status, 200);
-    return (await response.json()).nodes as Record<
+    const result = await response.json();
+    assert.equal(result.revision, await readWorkspaceRevision(tent));
+    return result.nodes as Record<
       string,
       {
         ahead?: { since?: string; reasons: string[] };

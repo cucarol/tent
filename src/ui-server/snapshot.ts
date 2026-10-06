@@ -29,13 +29,26 @@ export type SnapshotSource = {
 export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
   const fs = readOnlyFs(source.fs);
   // Current document scans are independent of the retained Git history read.
-  const [tent, roleDocs, cardDocs, retainedEvents, relations] = await Promise.all([
-    loadTent(fs),
-    readDocs(ROLES_DIR),
-    readDocs(CARDS_DIR),
-    listHistoryChanges(fs),
-    listWorkspaceRelations(fs),
-  ]);
+  const cardDocuments = readDocs(CARDS_DIR);
+  const [tent, roleDocs, cardDocs, retainedEvents, relations, outputActivity, progress] =
+    await Promise.all([
+      loadTent(fs),
+      readDocs(ROLES_DIR),
+      cardDocuments,
+      listHistoryChanges(fs),
+      listWorkspaceRelations(fs),
+      readOutputActivity(fs),
+      cardDocuments.then((docs) =>
+        readCardProgress(
+          fs,
+          docs.map((d) => ({
+            cardId: String(d.data.id),
+            state: d.data.state as SnapshotCard["state"],
+            sources: Array.isArray(d.data.sources) ? d.data.sources : [],
+          })),
+        ),
+      ),
+    ]);
   const byPath = new Map<string, SnapshotRef>();
 
   const nodes: SnapshotNode[] = [];
@@ -163,15 +176,6 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
     return role;
   });
 
-  const progress = await readCardProgress(
-    fs,
-    cardDocs.map((d) => ({
-      cardId: String(d.data.id),
-      state: d.data.state as SnapshotCard["state"],
-      sources: Array.isArray(d.data.sources) ? d.data.sources : [],
-    })),
-  );
-  const outputActivity = await readOutputActivity(fs);
   for (const node of nodes) {
     const outputAt = outputActivity.get(node.id);
     if (outputAt) node.outputAt = outputAt;

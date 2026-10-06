@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -7,12 +9,10 @@ import {
   useSyncExternalStore,
   type CSSProperties,
 } from "react";
-import { ReactFlowProvider } from "@xyflow/react";
 import { buildGraph, loadSnapshot, primaryOf, type Visits } from "./data/store.js";
 import { api, ApiError, changes, describe } from "./data/api.js";
 import type { Snapshot, SnapshotRef } from "./data/types.js";
 import { Icon, TypeGlyph } from "./components/Glyph.js";
-import { MapView } from "./map/MapView.js";
 import { Boundary } from "./components/Boundary.js";
 import { Sidebar, type ThemePref } from "./shell/Sidebar.js";
 import { StageBar, type StageView } from "./shell/StageBar.js";
@@ -28,6 +28,7 @@ import { readStored, writeStored } from "./util.js";
 import { currentLang, setLang, t, type Lang } from "./i18n.js";
 
 type Overlay = { kind: "palette" } | null;
+const MapView = lazy(() => import("./map/MapView.js").then((view) => ({ default: view.MapView })));
 
 const VISITS_KEY = "tent-visits-v1";
 /**
@@ -507,7 +508,13 @@ export function App() {
                 </Boundary>
               ) : (
                 <Boundary label={t.app.map}>
-                  <ReactFlowProvider>
+                  <Suspense
+                    fallback={
+                      <div className="boot">
+                        <p>{t.app.loading}</p>
+                      </div>
+                    }
+                  >
                     <MapView
                       graph={graph}
                       flags={flags}
@@ -524,7 +531,7 @@ export function App() {
                         setExpanded(true);
                       }}
                     />
-                  </ReactFlowProvider>
+                  </Suspense>
                 </Boundary>
               )}
             </div>
