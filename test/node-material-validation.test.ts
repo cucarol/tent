@@ -157,7 +157,7 @@ test("CLI writes retain legacy addresses and read-only node check reports their 
   const input = { baseEtag: live.etag, frontmatter: { sources: [{ resource: "/../new.md" }] } };
   const rejected = await cli("write", [id, "--input-json", JSON.stringify(input)]);
   assert.equal(rejected.exitCode, 1);
-  assert.match(rejected.stderr, /Invalid sources\[0\]\.resource.*\.\.\/\.\.\/\.\.\/new.md/);
+  assert.match(rejected.stderr, /Material outside the Workspace requires an absolute URI/);
   const checked = await cli("check", [id]);
   assert.equal(checked.exitCode, 0, checked.stderr);
   assert.equal(JSON.parse(checked.stdout).state, "unanchored");
@@ -178,7 +178,7 @@ test("CLI writes retain legacy addresses and read-only node check reports their 
     assert.equal(created.exitCode, 1);
     assert.match(
       created.stderr,
-      /Invalid (resource|sources\[0\]\.resource):.*\.\.\/\.\.\/\.\.\/\.\.\/spec\/x.md/,
+      /Material outside the Workspace requires an absolute URI/,
     );
     assert.equal(await adapter.exists("A/B/Rejected"), false);
   }
