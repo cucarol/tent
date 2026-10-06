@@ -39,11 +39,29 @@ export async function loadTent(fs: FsAdapter): Promise<LoadedTent> {
     fs,
     top.filter((entry) => entry.isDir).map((entry) => entry.name),
   );
-  for (const entry of top) {
-    if (!entry.isDir) continue;
-    if (isOperationalPath(entry.name)) continue;
-    if (isSystemNoteName(entry.name)) continue;
-    await loadNodeInto(fs, entry.name, null, roots);
+  const pending: Array<{ path: string; parent: Node | null; target: Node[] }> = top
+    .filter(
+      (entry) => entry.isDir && !isOperationalPath(entry.name) && !isSystemNoteName(entry.name),
+    )
+    .map((entry) => ({ path: entry.name, parent: null, target: roots }));
+  // Bound filesystem work across the whole tree, including ordinary grouping
+  // directories. Final sorting below makes completion order irrelevant.
+  while (pending.length) {
+    await Promise.all(
+      pending.splice(0, 4).map(async ({ path, parent, target }) => {
+        if (isOperationalPath(path)) return;
+        const node = await loadNode(fs, path, parent);
+        if (node) target.push(node);
+        for (const entry of await fs.listDir(path)) {
+          if (!entry.isDir || OPERATIONAL_TOP_LEVEL.has(entry.name)) continue;
+          pending.push({
+            path: join(path, entry.name),
+            parent: node ?? parent,
+            target: node?.children ?? target,
+          });
+        }
+      }),
+    );
   }
 
   // 排序:隐藏 order 表优先;缺省时根与子框均按稳定名称排序
@@ -172,12 +190,6 @@ async function loadNode(fs: FsAdapter, path: string, parent: Node | null): Promi
     node.invalidReason = parseError ? `Invalid frontmatter: ${parseError}` : schemaError;
   }
 
-  const sub = await fs.listDir(path);
-  for (const entry of sub) {
-    if (!entry.isDir) continue;
-    if (OPERATIONAL_TOP_LEVEL.has(entry.name)) continue;
-    await loadNodeInto(fs, join(path, entry.name), node, node.children);
-  }
   return node;
 }
 
@@ -233,27 +245,6 @@ function normalizeTags(value: unknown): string[] {
     if (tag && !out.includes(tag)) out.push(tag);
   }
   return out;
-}
-
-// 普通分组文件夹:自己不是框,但把其下的框作为"虚拟同级"上浮给 parent。
-async function loadNodeInto(
-  fs: FsAdapter,
-  path: string,
-  parent: Node | null,
-  target: Node[],
-): Promise<void> {
-  if (isOperationalPath(path)) return;
-  const node = await loadNode(fs, path, parent);
-  if (node) {
-    target.push(node);
-    return;
-  }
-  const sub = await fs.listDir(path);
-  for (const entry of sub) {
-    if (!entry.isDir) continue;
-    if (OPERATIONAL_TOP_LEVEL.has(entry.name)) continue;
-    await loadNodeInto(fs, join(path, entry.name), parent, target);
-  }
 }
 
 function resolveSubtree(node: Node, inheritedInvalid?: { rootId: string; reason: string }): void {

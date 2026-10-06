@@ -33,7 +33,8 @@ Update only the Nodes your work affected
   the Workspace checkout (after merging a worktree or branch).
 - A behind Node whose judgment still holds after you read the changed
   material: `tent node confirm`. If the judgment changed, save the correction
-  with `node write --confirm`. A plain save does not clear behind.
+  with `node write --confirm`. A full-body output rewrite also refreshes its
+  dependencies; metadata edits, appends and section edits do not.
 - A decision: make it within your Role, or send a Card to the Role that owns
   it; do not stop to wait for the user. Record it in a Node; the user may
   still change it.

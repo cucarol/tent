@@ -5,17 +5,20 @@ import { isNodeId } from "./id.js";
 import { documentVersionSchema, type DocumentVersion } from "./git-history.js";
 import { materialLocator, type MaterialSource } from "./material.js";
 import { loadNodeCatalog } from "./node-catalog.js";
-import { isRequirementNode, isOutputNode } from "./node-sync-record.js";
+import { isRequirementNode, isImplementationOutputNode } from "./node-sync-record.js";
+import { inspectNodesSync } from "./node-sync.js";
 import { documentLifecycle } from "./document-status.js";
 import { nodeVerifications, okfTimestampSchema } from "./node-provenance.js";
 import { cardRecordPath, nodeNotePath } from "./paths.js";
 
-export type CardProgress = "pending" | "received-no-output" | "has-output";
+export type CardProgress = "pending" | "received-no-output" | "needs-review" | "has-output";
 export type CardProgressItem = {
   progress: CardProgress | null;
   goalCount: number;
   totalGoalCount: number;
   outputNodeIds: string[];
+  reviewGoalCount?: number;
+  reviewOutputNodeIds?: string[];
   diagnostic?: string;
 };
 export type CardProgressInput = {
@@ -29,6 +32,8 @@ export function deriveCardProgress(
   totalGoalCount: number,
   goalCount = 0,
   outputNodeIds: readonly string[] = [],
+  reviewGoalCount = 0,
+  reviewOutputNodeIds: readonly string[] = [],
 ): CardProgressItem {
   return {
     progress: !totalGoalCount
@@ -37,10 +42,15 @@ export function deriveCardProgress(
         ? "pending"
         : goalCount === totalGoalCount
           ? "has-output"
-          : "received-no-output",
+          : reviewGoalCount
+            ? "needs-review"
+            : "received-no-output",
     goalCount,
     totalGoalCount,
     outputNodeIds: [...new Set(outputNodeIds)].sort(),
+    ...(reviewGoalCount
+      ? { reviewGoalCount, reviewOutputNodeIds: [...new Set(reviewOutputNodeIds)].sort() }
+      : {}),
   };
 }
 
@@ -101,8 +111,21 @@ function active(node: { archived: boolean; header: string }) {
 export async function readOutputActivity(fs: FsAdapter): Promise<Map<string, string>> {
   const result = new Map<string, string>();
   const catalog = await loadNodeCatalog(readOnlyFs(fs));
-  for (const node of catalog.byId.values()) {
-    if (!isOutputNode({ type: node.type }) || !active(node)) continue;
+  const outputs = [...catalog.byId.values()].filter(
+    (node) => isImplementationOutputNode(node) && active(node),
+  );
+  if (!outputs.length) return result;
+  const inspections = new Map(
+    (
+      await inspectNodesSync(
+        readOnlyFs(fs),
+        outputs.map((node) => node.nodeId),
+      )
+    ).map((node) => [node.nodeId, node]),
+  );
+  for (const node of outputs) {
+    const inspection = inspections.get(node.nodeId);
+    if (!inspection || inspection.behind || inspection.uncertain) continue;
     const data = parseFrontmatter(node.header).data;
     const times: string[] = [];
     const generated = data.generated as { at?: unknown } | undefined;
@@ -127,9 +150,20 @@ export async function readCardProgress(
   const result = new Map(cards.map((card) => [card.cardId, deriveCardProgress(card.state, 0)]));
   if (!cards.length) return result;
   const pinned = await readCardGoalIds(fs, cards);
+  if (![...pinned.values()].some((entry) => entry.goalIds.size)) {
+    for (const card of cards) {
+      const { diagnostics } = pinned.get(card.cardId)!;
+      if (diagnostics.length)
+        result.set(card.cardId, {
+          ...result.get(card.cardId)!,
+          diagnostic: [...new Set(diagnostics)].join("; "),
+        });
+    }
+    return result;
+  }
   const catalog = await loadNodeCatalog(readOnlyFs(fs));
   const outputs = [...catalog.byId.values()].filter(
-    (node) => isOutputNode({ type: node.type }) && active(node),
+    (node) => isImplementationOutputNode(node) && active(node),
   );
   const responses = new Map(
     outputs.map((node) => {
@@ -147,24 +181,66 @@ export async function readCardProgress(
       return [node.nodeId, targets];
     }),
   );
+  const relatedOutputs = outputs.filter((output) =>
+    cards.some((card) => {
+      if (!responses.get(output.nodeId)!.has(cardRecordPath(card.cardId))) return false;
+      return [...pinned.get(card.cardId)!.goalIds].some((goalId) => {
+        const goal = catalog.byId.get(goalId);
+        return (
+          goal &&
+          active(goal) &&
+          isRequirementNode({ type: goal.type }) &&
+          output.path.startsWith(goal.path + "/")
+        );
+      });
+    }),
+  );
+  const inspections = new Map(
+    (relatedOutputs.length
+      ? await inspectNodesSync(
+          readOnlyFs(fs),
+          relatedOutputs.map((node) => node.nodeId),
+        )
+      : []
+    ).map((node) => [node.nodeId, node]),
+  );
   for (const card of cards) {
     const { goalIds, diagnostics } = pinned.get(card.cardId)!;
     const completed = new Set<string>(),
-      outputIds = new Set<string>();
+      outputIds = new Set<string>(),
+      reviewGoals = new Set<string>(),
+      reviewOutputIds = new Set<string>();
     for (const goalId of goalIds) {
       const goal = catalog.byId.get(goalId);
       if (!goal || !isRequirementNode({ type: goal.type }) || !active(goal)) continue;
-      for (const output of outputs)
+      const awaitingReview = new Set<string>();
+      for (const output of relatedOutputs)
         if (
           output.path.startsWith(goal.path + "/") &&
           responses.get(output.nodeId)!.has(cardRecordPath(card.cardId))
         ) {
-          completed.add(goalId);
-          outputIds.add(output.nodeId);
+          const inspection = inspections.get(output.nodeId);
+          if (!inspection || inspection.behind || inspection.uncertain)
+            awaitingReview.add(output.nodeId);
+          else {
+            completed.add(goalId);
+            outputIds.add(output.nodeId);
+          }
         }
+      if (!completed.has(goalId) && awaitingReview.size) {
+        reviewGoals.add(goalId);
+        for (const outputId of awaitingReview) reviewOutputIds.add(outputId);
+      }
     }
     result.set(card.cardId, {
-      ...deriveCardProgress(card.state, goalIds.size, completed.size, [...outputIds]),
+      ...deriveCardProgress(
+        card.state,
+        goalIds.size,
+        completed.size,
+        [...outputIds],
+        reviewGoals.size,
+        [...reviewOutputIds],
+      ),
       ...(diagnostics.length
         ? { progress: null, diagnostic: [...new Set(diagnostics)].join("; ") }
         : {}),

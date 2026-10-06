@@ -32,10 +32,16 @@ Card needs its Role to take it; a public Card can be taken with or without
 one, and `--include-open` adds public Cards to a Role's list.
 
 Progress follows the goals among a Card's sources: `pending`,
-`received-no-output`, or `has-output` once each goal's subtree has an active
-output whose sources name this Card. `goalCount` and `totalGoalCount` count
-them. Use `node link-output --card <id>`; Tent can infer the Card only when
-exactly one incomplete received Card points to that goal. A Card without
+`received-no-output`, `needs-review`, or `has-output` once each goal's subtree
+has a current `output-asset` or `output-evidence` whose sources name this
+Card. Behind responses count as awaiting review, not completed work.
+`goalCount` and `totalGoalCount` count completed and requested goals.
+Use `node link-output --card <id>`; automatic inference requires `--role`
+matching the receiver of exactly one incomplete Card for the goal. Missing
+or mismatched Roles require an explicit Card when relevant Cards exist.
+An explicit Card may cross Roles, but must be received, not deprecated, and
+have a goal source on the new output's goal chain.
+The receipt includes the selected `cardId`. A Card without
 goal sources shows reception only. Confirming an unrelated output never
 completes a Card. Completion times come from output generated/verified times.
 

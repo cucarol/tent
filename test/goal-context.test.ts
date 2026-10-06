@@ -72,7 +72,8 @@ test("goal get exposes bounded live context without changing document bytes or c
   assert.ok(Buffer.byteLength(JSON.stringify(first)) <= 16 * 1024);
   for (const id of ["node-scope", "node-decision", "node-rule", "node-result", created.cardId])
     assert.ok(first.context.includes(id), first.context);
-  assert.match(first.context, /stable\/unanchored/);
+  // Imported outputs have no retained goal basis, so context must expose review debt.
+  assert.match(first.context, /stable\/behind/);
   assert.match(first.context, /received-no-output/);
   const continuation = await node(
     "node-goal",

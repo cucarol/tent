@@ -527,6 +527,8 @@ type PageOptions = {
   range?: ReaderRange;
   expectedEtag?: string;
   capture?: boolean;
+  /** Internal callers already holding batch progress can skip a second derivation. */
+  includeProgress?: boolean;
 };
 function cardPage(
   id: string,
@@ -597,11 +599,13 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
       target: current.data.target,
       state: current.data.state,
       receivedBy: current.data.receivedBy,
-      ...(
-        await readCardProgress(fs, [
-          { cardId: id, state: current.data.state, sources: current.data.sources },
-        ])
-      ).get(id)!,
+      ...(options.includeProgress === false
+        ? {}
+        : (
+            await readCardProgress(fs, [
+              { cardId: id, state: current.data.state, sources: current.data.sources },
+            ])
+          ).get(id)!),
       ...documentLifecycle(current.data),
       ...(await deprecatedCardNotice(fs, current)),
     };
@@ -849,9 +853,10 @@ export async function inspectReceivedCardSourceChanges(
   const readonly = readOnlyFs(fs);
   try {
     if (!(await readonly.exists(CARDS_DIR))) return { items, diagnostics };
-    const listed = listedCards ?? (await listCardDocuments(readonly, options));
+    const listed =
+      listedCards ?? (await listCardDocuments(readonly, { ...options, state: "consumed" }));
     for (const item of listed.items) {
-      if (item.diagnostic)
+      if (item.diagnostic && item.state !== "pending")
         diagnostics.push({ cardId: String(item.cardId), message: String(item.diagnostic) });
     }
     const candidates = listed.items.filter((item) => !item.diagnostic && item.state === "consumed");

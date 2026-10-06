@@ -11,7 +11,8 @@ import { canonicalDocumentReferences } from "./document-links.js";
 import {
   isRequirementNode,
   isOutputNode,
-  nearestGoal,
+  isImplementationOutputNode,
+  goalAncestors,
   nodeSemanticFingerprint,
   observeNodeMaterials,
   retainedNodeRecords,
@@ -36,6 +37,7 @@ export type NodeSyncInspection = {
   type?: string;
   resource?: string;
   goalId?: string;
+  goalIds?: string[];
   /** Detail summary; the independent attention flags below drive counts and lists. */
   state: NodeSyncState;
   ahead?: { since?: string; reasons: string[] };
@@ -46,6 +48,7 @@ export type NodeSyncInspection = {
   aheadSince?: string;
   materials: {
     resource: string;
+    goalId?: string;
     recordedVersion?: string;
     currentVersion?: string;
     state: "current" | "changed" | "unavailable" | "unanchored";
@@ -74,7 +77,42 @@ async function inspectCatalogNodes(
   explicitNodeId?: string,
 ) {
   const records = await retainedNodeRecords(fs);
-  const goalMismatch = new Set<string>();
+  const hasRetainedHistory = !!fs.history && (await fs.exists(".git"));
+  const goalMismatch = new Map<string, Set<string>>();
+  const comparedMaterials = (
+    observations: Awaited<ReturnType<typeof observeNodeMaterials>>,
+    bases: import("./node-basis-record.js").NodeBasisRecord["materials"],
+    goalId?: string,
+    unknownBasis = false,
+  ): NodeSyncInspection["materials"] =>
+    observations.map((observation) => {
+      const basis = bases.find((m) => m.identity === observation.identity);
+      const recordedVersion = basis?.version;
+      const equivalentLegacy =
+        basis?.fingerprintVersion !== 2 &&
+        !!recordedVersion &&
+        observation.legacyVersions?.includes(recordedVersion);
+      return {
+        resource: observation.resource,
+        ...(goalId ? { goalId } : {}),
+        ...(recordedVersion ? { recordedVersion } : {}),
+        ...(observation.version ? { currentVersion: observation.version } : {}),
+        state: recordedVersion
+          ? !observation.version
+            ? "unavailable"
+            : observation.version === recordedVersion || equivalentLegacy
+              ? "current"
+              : "changed"
+          : unknownBasis
+            ? "unavailable"
+            : "unanchored",
+        ...(observation.reason
+          ? { reason: observation.reason }
+          : unknownBasis && !recordedVersion
+            ? { reason: "Output has no retained baseline for this goal material" }
+            : {}),
+      };
+    });
   const inspect = async (current: CatalogNode) => {
     let nodeCatalog = catalog;
     let result: NodeSyncInspection | undefined;
@@ -92,30 +130,9 @@ async function inspectCatalogNodes(
           nodeCatalog.byId,
           record,
         );
-        const materials: NodeSyncInspection["materials"] = observations.map((observation) => {
-          const basis = record?.materials.find((m) => m.identity === observation.identity);
-          const recordedVersion = basis?.version;
-          const equivalentLegacy =
-            basis?.fingerprintVersion !== 2 &&
-            !!recordedVersion &&
-            observation.legacyVersions?.includes(recordedVersion);
-          const state = recordedVersion
-            ? !observation.version
-              ? "unavailable"
-              : observation.version === recordedVersion || equivalentLegacy
-                ? "current"
-                : "changed"
-            : "unanchored";
-          return {
-            resource: observation.resource,
-            ...(recordedVersion ? { recordedVersion } : {}),
-            ...(observation.version ? { currentVersion: observation.version } : {}),
-            state,
-            ...(observation.reason ? { reason: observation.reason } : {}),
-          };
-        });
-        const goal = isOutputNode(data) ? nearestGoal(current, nodeCatalog.byId) : undefined;
-        if (goal) {
+        const materials = comparedMaterials(observations, record?.materials ?? []);
+        const goals = isOutputNode(data) ? goalAncestors(current, nodeCatalog.byId) : [];
+        for (const goal of goals) {
           const { raw: goalRaw } = await readCatalogDocument(fs, goal);
           const parsed = parseFrontmatter(goalRaw);
           const currentVersion = nodeSemanticFingerprint(
@@ -124,29 +141,47 @@ async function inspectCatalogNodes(
             nodeNotePath(goal.path),
             nodeCatalog.byId,
           );
-          const recordedVersion =
-            record?.goal?.nodeId === goal.nodeId ? record.goal.version : undefined;
-          const materialsChanged =
-            !!recordedVersion &&
-            record?.goal?.materialsRevision !== records[goal.nodeId]?.materialsRevision;
-          const legacyBasisUnknown = !!recordedVersion && record?.goal?.fingerprintVersion !== 2;
+          const basis = record?.goals?.find((entry) => entry.nodeId === goal.nodeId);
+          const legacy = record?.goal?.nodeId === goal.nodeId ? record.goal : undefined;
+          const recordedVersion = basis?.version ?? legacy?.version;
+          const legacyBasisUnknown =
+            !!recordedVersion && !basis && legacy?.fingerprintVersion !== 2;
           materials.push({
             resource: `/${nodeNotePath(goal.path)}`,
+            goalId: goal.nodeId,
             currentVersion,
             ...(recordedVersion ? { recordedVersion } : {}),
             state: recordedVersion
               ? legacyBasisUnknown
                 ? "unavailable"
-                : currentVersion === recordedVersion && !materialsChanged
+                : currentVersion === recordedVersion
                   ? "current"
                   : "changed"
-              : "unanchored",
+              : hasRetainedHistory
+                ? "unavailable"
+                : "unanchored",
             ...(legacyBasisUnknown
               ? { reason: "Legacy goal baseline cannot be reconstructed from retained history" }
-              : materialsChanged
-                ? { reason: "Goal materials changed" }
+              : !recordedVersion && hasRetainedHistory
+                ? { reason: "Output has no retained baseline for this ancestor goal" }
                 : {}),
           });
+          const goalMaterials = await observeNodeMaterials(
+            fs,
+            parsed.data,
+            nodeNotePath(goal.path),
+            undefined,
+            nodeCatalog.byId,
+            { materials: basis?.materials ?? [] },
+          );
+          materials.push(
+            ...comparedMaterials(
+              goalMaterials,
+              basis?.materials ?? [],
+              goal.nodeId,
+              hasRetainedHistory && !basis,
+            ),
+          );
           if ((await fs.readFile(nodeNotePath(goal.path))) !== goalRaw)
             throw new NodeWriteError("ETAG_CONFLICT", "Goal changed during sync inspection");
         }
@@ -154,8 +189,15 @@ async function inspectCatalogNodes(
           throw new NodeWriteError("ETAG_CONFLICT", "Node changed during sync inspection");
         const stale = nodeIsStale(data, now);
         const reasons = materials
-          .filter((m) => m.recordedVersion && m.state !== "current")
-          .map((m) => m.reason ?? `Material changed: ${m.resource}`);
+          .filter(
+            (m) =>
+              m.state === "changed" ||
+              (m.state === "unavailable" && (m.recordedVersion || m.reason)),
+          )
+          .map(
+            (m) =>
+              `${m.goalId ? `Goal ${m.goalId}: ` : ""}${m.reason ?? `Material changed`}: ${m.resource}`,
+          );
         if (stale) reasons.push(`Content is stale on or after ${data.stale_after}`);
         const anchored =
           materials.some((m) => m.recordedVersion) || nodeVerifications(data).length > 0;
@@ -164,7 +206,9 @@ async function inspectCatalogNodes(
           path: current.path,
           type: current.type,
           ...(typeof data.resource === "string" ? { resource: data.resource } : {}),
-          ...(goal ? { goalId: goal.nodeId } : {}),
+          ...(goals.length
+            ? { goalId: goals[0]!.nodeId, goalIds: goals.map((goal) => goal.nodeId) }
+            : {}),
           state: reasons.length ? "behind" : anchored ? "synced" : "unanchored",
           ...(reasons.length ? { behind: { reasons: [...reasons] } } : {}),
           trustTier: nodeTrustTier(data),
@@ -172,7 +216,12 @@ async function inspectCatalogNodes(
           materials,
           reasons,
         };
-        if (goal && materials.at(-1)?.state === "changed") goalMismatch.add(current.nodeId);
+        for (const material of materials)
+          if (material.goalId && material.state === "changed") {
+            const mismatches = goalMismatch.get(material.goalId) ?? new Set<string>();
+            mismatches.add(current.nodeId);
+            goalMismatch.set(material.goalId, mismatches);
+          }
         break;
       } catch (error) {
         if (
@@ -234,25 +283,37 @@ async function inspectCatalogNodes(
   const requirementsWithoutOutputs: string[] = [];
   for (const goal of nodes.filter((n) => isRequirementNode({ type: n.type }))) {
     if (goal.uncertain) continue;
-    const subtreeOutputs = outputNodes.filter((n) => n.path.startsWith(goal.path + "/"));
-    const owned = nodes.filter((n) => n.goalId === goal.nodeId);
+    const subtreeOutputs = nodes.filter(
+      (n) => isImplementationOutputNode(n) && n.path.startsWith(goal.path + "/"),
+    );
+    const owned = subtreeOutputs;
     const uncertainSubtree = nodes.some((n) => n.uncertain && n.path.startsWith(goal.path + "/"));
     if (!subtreeOutputs.length && !uncertainSubtree) requirementsWithoutOutputs.push(goal.nodeId);
     if (
       (!subtreeOutputs.length && !uncertainSubtree) ||
-      owned.some((n) => goalMismatch.has(n.nodeId))
+      owned.some((n) => goalMismatch.get(goal.nodeId)?.has(n.nodeId))
     ) {
       if (!goal.behind) goal.state = "ahead";
       const reasons = [
         subtreeOutputs.length
-          ? "Owned output is behind the current goal version"
-          : "Goal subtree has no current output Node",
+          ? "Implementation output is behind this goal's content or materials"
+          : "Goal subtree has no current implementation output Node",
       ];
       goal.reasons.push(...reasons);
       if (fs.history && (await fs.exists(".git")))
         goal.aheadSince = (await latestGoalAheadTimes(fs.history))[goal.nodeId];
       goal.ahead = { ...(goal.aheadSince ? { since: goal.aheadSince } : {}), reasons };
-    } else if (!goal.behind && owned.length && owned.every((n) => n.state === "synced"))
+    } else if (
+      !goal.behind &&
+      owned.some((node) => {
+        const dependencies = node.materials.filter((material) => material.goalId === goal.nodeId);
+        return (
+          !node.uncertain &&
+          dependencies.length > 0 &&
+          dependencies.every((material) => material.state === "current")
+        );
+      })
+    )
       goal.state = "synced";
   }
   const counts: Record<NodeSyncState, number> = { synced: 0, ahead: 0, behind: 0, unanchored: 0 };
@@ -286,6 +347,24 @@ export async function inspectNodeSync(
   );
   if (!node) throw new NodeWriteError("NOT_FOUND", `Node not found: ${nodeId}`);
   return node;
+}
+
+/** Inspect selected outputs together without replaying unrelated goal progress. */
+export async function inspectNodesSync(
+  fs: FsAdapter,
+  nodeIds: readonly string[],
+  now = new Date().toISOString(),
+) {
+  const catalog = await loadNodeCatalog(fs);
+  const ids = new Set(nodeIds);
+  return (
+    await inspectCatalogNodes(
+      fs,
+      catalog,
+      currentNodes(catalog).filter((node) => ids.has(node.nodeId)),
+      now,
+    )
+  ).nodes;
 }
 
 export function confirmNodeSync(
@@ -325,7 +404,7 @@ export function confirmNodeSync(
 export function linkNodeOutput(
   fs: FsAdapter,
   goalId: string,
-  input: { resource: string; name?: string; by?: string; cardId?: string },
+  input: { resource: string; name?: string; by?: string; cardId?: string; roleId?: string },
 ) {
   return withTentMutation(
     fs,
@@ -389,37 +468,66 @@ export function linkNodeOutput(
       }
       let cardId = input.cardId;
       if (cardId) {
-        const card = (await readCardDocument(fs, cardId)) as Record<string, unknown>;
-        if (card.diagnostic || card.status === "deprecated")
-          throw new NodeWriteError("INVALID_INPUT", "Output response requires a current Card");
+        const card = (await readCardDocument(fs, cardId, { includeProgress: false })) as Record<
+          string,
+          unknown
+        >;
+        if (card.diagnostic || card.status === "deprecated" || card.state !== "consumed")
+          throw new NodeWriteError(
+            "INVALID_INPUT",
+            "Output response requires a current received Card",
+          );
+        const pinned = (
+          await readCardGoalIds(fs, [
+            { cardId, state: "consumed", sources: card.sources } as CardProgressInput,
+          ])
+        ).get(cardId)!;
+        if (
+          pinned.diagnostics.length ||
+          ![goal, ...goalAncestors(goal, catalog.byId)].some((ancestor) =>
+            pinned.goalIds.has(ancestor.nodeId),
+          )
+        )
+          throw new NodeWriteError(
+            "INVALID_INPUT",
+            "Output response requires a Card source goal in the output's goal chain",
+          );
       } else {
         const listed = await listCardDocuments(fs, { state: "consumed" });
         const candidates = listed.items.filter(
-          (card) => !card.diagnostic && card.progress === "received-no-output",
+          (card) =>
+            !card.diagnostic &&
+            (card.progress === "received-no-output" || card.progress === "needs-review"),
         );
         const reads = await Promise.all(
           candidates.map(async (card) => {
-            const read = (await readCardDocument(fs, String(card.cardId))) as Record<
-              string,
-              unknown
-            >;
+            const read = (await readCardDocument(fs, String(card.cardId), {
+              includeProgress: false,
+            })) as Record<string, unknown>;
             if (read.diagnostic || !Array.isArray(read.sources)) return undefined;
             return {
               cardId: String(card.cardId),
               state: "consumed",
               sources: read.sources,
-            } as CardProgressInput;
+              receivedBy: read.receivedBy,
+            } as CardProgressInput & { receivedBy?: string };
           }),
         );
-        const cards = reads.filter((card): card is CardProgressInput => card !== undefined);
+        const cards = reads.filter((card) => card !== undefined);
         const goals = await readCardGoalIds(fs, cards);
-        const matching = cards.filter((card) => goals.get(card.cardId)!.goalIds.has(goalId));
+        const related = cards.filter((card) => goals.get(card.cardId)!.goalIds.has(goalId));
+        const matching = related.filter((card) => input.roleId && card.receivedBy === input.roleId);
         if (matching.length > 1)
           throw new NodeWriteError(
             "INVALID_INPUT",
             `Multiple incomplete Cards point to this goal: ${matching.map((card) => card.cardId).join(", ")}. Choose one with --card <id>.`,
           );
         if (matching.length === 1) cardId = matching[0]!.cardId;
+        else if (related.length)
+          throw new NodeWriteError(
+            "INVALID_INPUT",
+            "Incomplete received Cards point to this goal, but no explicit Role matches their receiver. Choose one with --card <id>.",
+          );
       }
       const nodeId = await createNodeUnlocked(
         { fs, clock: { now: () => new Date().toISOString() }, tentName: "" },
@@ -438,7 +546,7 @@ export function linkNodeOutput(
         fs.history && (await fs.exists(".git"))
           ? { commit: (await fs.history.currentCommit())!, path: nodeNotePath(path) }
           : undefined;
-      return { nodeId, path, etag: contentEtag(raw), version };
+      return { nodeId, path, etag: contentEtag(raw), version, ...(cardId ? { cardId } : {}) };
     },
     { operation: "node.output-link" },
   );

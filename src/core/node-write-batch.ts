@@ -310,7 +310,13 @@ async function writeNodesBatchUnlocked(
   )) {
     const prepared = await prepareNodeSyncSave(fs, nodeNotePath(node.path), node.raw, {
       now,
+      created: node.before === null,
       confirm: node.confirm,
+      acknowledge:
+        node.before !== null &&
+        isOutputNode(parseFrontmatter(node.raw).data) &&
+        parseFrontmatter(node.raw).body.replace(/\r\n?/g, "\n") !==
+          parseFrontmatter(node.before).body.replace(/\r\n?/g, "\n"),
       by: node.by,
       nodes,
       finalDocuments,

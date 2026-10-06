@@ -14,7 +14,7 @@ import { assertStatusEdit } from "./document-status.js";
 import { ReaderError } from "./context-reader.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "./node-read-basis.js";
-import { assertNodeRecordFields, prepareNodeSyncSave } from "./node-sync-record.js";
+import { assertNodeRecordFields, isOutputNode, prepareNodeSyncSave } from "./node-sync-record.js";
 import { prepareNodeProvenanceSave, assertNodeProvenanceEdit } from "./node-provenance.js";
 
 export class NodeWriteError extends Error {
@@ -107,7 +107,16 @@ export async function savePreparedNodeDocumentUnlocked(
     fs,
     nodeNotePath(node.path),
     prepareNodeProvenanceSave(preparedRaw, diskRaw, input.by, now),
-    { now, confirm: input.confirm, by: input.by },
+    {
+      now,
+      confirm: input.confirm,
+      by: input.by,
+      acknowledge:
+        operation === "node.write" &&
+        isOutputNode(parseFrontmatter(preparedRaw).data) &&
+        parseFrontmatter(preparedRaw).body.replace(/\r\n?/g, "\n") !==
+          parseFrontmatter(diskRaw).body.replace(/\r\n?/g, "\n"),
+    },
   );
   const changed = raw !== diskRaw;
   const path = nodeNotePath(node.path);

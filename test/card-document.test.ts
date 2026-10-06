@@ -24,6 +24,7 @@ import { runCardCommand } from "../src/cli/card-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
 import { linkNodeOutput, confirmNodeSync } from "../src/core/node-sync.js";
+import { readOutputActivity } from "../src/core/card-progress.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
@@ -160,7 +161,11 @@ test("Card progress counts only outputs explicitly responding to this Card", asy
     ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
     0,
   );
-  const output = await linkNodeOutput(adapter, "node-main", { resource: "result.txt" });
+  const output = await linkNodeOutput(adapter, "node-main", {
+    resource: "result.txt",
+    cardId: card.cardId,
+  });
+  assert.equal(output.cardId, card.cardId);
   const outputRaw = await adapter.readFile(`${output.path}/${output.path.split("/").at(-1)}.md`);
   assert.deepEqual(parseFrontmatter(outputRaw).data.sources, [
     { resource: "/cards/card-progress.md" },
@@ -233,7 +238,7 @@ test("Card progress counts only outputs explicitly responding to this Card", asy
   );
   await assert.rejects(
     linkNodeOutput(adapter, "node-other", { resource: "result.txt" }),
-    /Multiple incomplete Cards.*--card/,
+    /Incomplete received Cards.*--card/,
   );
   const linked = await runNodeCommand(
     "link-output",
@@ -274,6 +279,115 @@ test("Card progress counts only outputs explicitly responding to this Card", asy
     ((await takeCardDocument(adapter, plain.cardId)) as Record<string, unknown>).progress,
     null,
   );
+});
+
+test("automatic output attribution requires the receiving Role and returns the selected Card", async (t) => {
+  const { adapter, root } = await fixture(t);
+  await adapter.writeFile(
+    "Main/Main.md",
+    serializeFrontmatter({ id: "node-main", type: "goal" }, "Goal"),
+  );
+  const card = await createCardDocument(adapter, {
+    cardId: "card-roleoutput",
+    prompt: "Implement the goal",
+    sources: [{ resource: "/Main/Main.md" }],
+    target: "role-a",
+  });
+  await takeCardDocument(adapter, card.cardId, "role-a");
+  const input = { resource: "https://example.org/result" };
+  for (const options of [{}, { roleId: "role-b" }, { by: "role-a" }])
+    await assert.rejects(linkNodeOutput(adapter, "node-main", { ...input, ...options }), /--card/);
+  assert.equal((await adapter.listDir("Main")).filter((entry) => entry.isDir).length, 0);
+  const linked = await linkNodeOutput(adapter, "node-main", { ...input, roleId: "role-a" });
+  assert.equal(linked.cardId, card.cardId);
+  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).progress, "has-output");
+  const next = await createCardDocument(adapter, {
+    cardId: "card-roleoutputnext",
+    prompt: "Implement the next response",
+    sources: [{ resource: "/Main/Main.md" }],
+    target: "role-a",
+  });
+  await takeCardDocument(adapter, next.cardId, "role-a");
+  const last = await createCardDocument(adapter, {
+    cardId: "card-roleoutputlast",
+    prompt: "Implement another response",
+    sources: [{ resource: "/Main/Main.md" }],
+    target: "role-a",
+  });
+  await takeCardDocument(adapter, last.cardId, "role-a");
+  await assert.rejects(
+    linkNodeOutput(adapter, "node-main", { ...input, roleId: "role-a" }),
+    /Multiple incomplete Cards.*--card/,
+  );
+  const explicit = await linkNodeOutput(adapter, "node-main", {
+    ...input,
+    roleId: "role-b",
+    cardId: next.cardId,
+  });
+  assert.equal(explicit.cardId, next.cardId, "explicit Card choice can cross Role boundaries");
+  const head = await adapter.history.currentCommit();
+  assert.ok(head);
+  assert.equal((await git(root, "diff", "--cached", "--name-only")).trim(), "");
+});
+
+test("behind responses retract Card completion and output activity without changing Card bytes", async (t) => {
+  const scratch = path.resolve(".scratch");
+  await fs.mkdir(scratch, { recursive: true });
+  const root = await fs.mkdtemp(path.join(scratch, "card-review-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  await initializeTentWorkspace(workspace);
+  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  await adapter.writeFile(
+    "Goal/Goal.md",
+    serializeFrontmatter({ id: "node-goal", type: "goal" }, "Goal"),
+  );
+  await createRoleContext(adapter, { roleId: "role-a", title: "A", body: "direction" });
+  const card = await createCardDocument(adapter, {
+    cardId: "card-review",
+    prompt: "Implement and review the goal",
+    sources: [{ resource: "/Goal/Goal.md" }],
+    target: "role-a",
+  });
+  await takeCardDocument(adapter, card.cardId, "role-a");
+  await fs.writeFile(path.join(workspace, "result.txt"), "first");
+  const cli = await runNodeCommand(
+    "link-output",
+    ["node-goal", "--resource", "result.txt", "--role", "role-a"],
+    { workspace, json: true },
+  );
+  assert.equal(cli.exitCode, 0, cli.stderr);
+  const output = JSON.parse(cli.stdout);
+  assert.equal(output.cardId, card.cardId);
+  const outputPath = `${output.path}/${output.path.split("/").at(-1)}.md`;
+  await confirmNodeSync(adapter, output.nodeId, {
+    baseEtag: contentEtag(await adapter.readFile(outputPath)),
+    by: "human:cuca",
+  });
+  const cardRaw = await adapter.readFile(card.path);
+  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).progress, "has-output");
+  assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
+  await fs.writeFile(path.join(workspace, "result.txt"), "changed");
+  const head = await adapter.history.currentCommit();
+  const behind = (await readCardDocument(adapter, card.cardId)) as any;
+  assert.equal(behind.progress, "needs-review");
+  assert.equal(behind.goalCount, 0);
+  assert.deepEqual(behind.outputNodeIds, []);
+  assert.equal(behind.reviewGoalCount, 1);
+  assert.deepEqual(behind.reviewOutputNodeIds, [output.nodeId]);
+  assert.ok(!(await readOutputActivity(adapter)).has(output.nodeId));
+  assert.equal(await adapter.history.currentCommit(), head);
+  assert.equal(await adapter.readFile(card.path), cardRaw);
+  await assert.rejects(
+    linkNodeOutput(adapter, "node-goal", { resource: "result.txt", roleId: "role-b" }),
+    /--card/,
+  );
+  await confirmNodeSync(adapter, output.nodeId, {
+    baseEtag: contentEtag(await adapter.readFile(outputPath)),
+    by: "human:cuca",
+  });
+  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).progress, "has-output");
+  assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
 });
 
 test("Card source inspection needs no Git when no published Card was received", async (t) => {
@@ -525,6 +639,12 @@ test("Received Card source inspection compares live content, follows Node identi
     failedAll.diagnostics.map((item) => item.cardId),
     [otherRole.cardId, received.cardId],
   );
+  const failedListed = await inspectReceivedCardSourceChanges(
+    adapter,
+    {},
+    await listCardDocuments(adapter),
+  );
+  assert.deepEqual(failedListed.diagnostics, failedAll.diagnostics);
 });
 
 test("filtered Card lists skip history and keep malformed-header diagnostics", async (t) => {

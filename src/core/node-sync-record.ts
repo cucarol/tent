@@ -50,10 +50,17 @@ export function isRequirementNode(data: Record<string, unknown>): boolean {
 export function isOutputNode(data: { type?: unknown }): boolean {
   return typeof data.type === "string" && nodeTypePrimary(data.type) === "output";
 }
+export function isImplementationOutputNode(data: { type?: unknown }): boolean {
+  return data.type === "output-asset" || data.type === "output-evidence";
+}
 export function nearestGoal(
   node: CatalogNode,
   byId: Map<string, CatalogNode>,
 ): CatalogNode | undefined {
+  return goalAncestors(node, byId)[0];
+}
+export function goalAncestors(node: CatalogNode, byId: Map<string, CatalogNode>): CatalogNode[] {
+  const goals: CatalogNode[] = [];
   let parent = node.parentNodeId ? byId.get(node.parentNodeId) : undefined;
   while (parent) {
     if (
@@ -62,9 +69,10 @@ export function nearestGoal(
       parseFrontmatter(parent.header).data.status !== "deprecated" &&
       isRequirementNode({ type: parent.type })
     )
-      return parent;
+      goals.push(parent);
     parent = parent.parentNodeId ? byId.get(parent.parentNodeId) : undefined;
   }
+  return goals;
 }
 export function syncMaterialIdentity(
   resource: string,
@@ -326,12 +334,15 @@ export async function prepareNodeSyncSave(
   raw: string,
   options: {
     confirm?: boolean;
+    acknowledge?: boolean;
+    created?: boolean;
     by?: string;
     now?: string;
     nodes?: Map<string, CatalogNode>;
     previous?: NodeBasisRecord;
     records?: Record<string, NodeBasisRecord>;
     finalDocuments?: Map<string, string>;
+    previousLocation?: { documentPath: string; nodes: Map<string, CatalogNode> };
   } = {},
 ): Promise<{ raw: string; record: NodeBasisRecord }> {
   const parsed = parseFrontmatter(raw);
@@ -344,11 +355,12 @@ export async function prepareNodeSyncSave(
   const records = options.records ?? (await retainedNodeRecords(fs));
   const previous = options.previous ?? records[id];
   const nodes = options.nodes ?? (await loadNodeCatalog(fs)).byId;
+  const finalDocuments = new Map([...(options.finalDocuments ?? []), [documentPath, raw]]);
   const observations = await observeNodeMaterials(
     fs,
     parsed.data,
     documentPath,
-    new Map([...(options.finalDocuments ?? []), [documentPath, raw]]),
+    finalDocuments,
     nodes,
     previous,
   );
@@ -358,7 +370,8 @@ export async function prepareNodeSyncSave(
       old?.fingerprintVersion !== 2 &&
       !!old?.version &&
       (old.version === version || legacyVersions?.includes(old.version));
-    const useCurrent = (options.confirm && !!version) || !old || equivalentLegacy;
+    const useCurrent =
+      ((options.confirm || options.acknowledge) && !!version) || !old || equivalentLegacy;
     const known = useCurrent ? (version ?? old?.version) : old?.version;
     const currentAlgorithm = (useCurrent && !!version) || old?.fingerprintVersion === 2;
     const materialRepository = useCurrent
@@ -375,7 +388,7 @@ export async function prepareNodeSyncSave(
   });
   const node =
     nodes.get(id) ?? [...nodes.values()].find((n) => nodeNotePath(n.path) === documentPath);
-  const goal = isOutputNode(parsed.data) && node ? nearestGoal(node, nodes) : undefined;
+  const goals = isOutputNode(parsed.data) && node ? goalAncestors(node, nodes) : [];
   const record: NodeBasisRecord = { materials };
   if (previous?.materialsRevision) record.materialsRevision = previous.materialsRevision;
   if (
@@ -394,27 +407,64 @@ export async function prepareNodeSyncSave(
     })
   )
     record.materialsRevision = canonicalSha256({ previous: previous.materialsRevision, materials });
-  if (goal) {
-    const goalRaw =
-      options.finalDocuments?.get(nodeNotePath(goal.path)) ??
-      (await fs.readFile(nodeNotePath(goal.path)));
-    const goalParsed = parseFrontmatter(goalRaw);
-    record.goal =
-      !options.confirm && previous?.goal?.nodeId === goal.nodeId
-        ? previous.goal
-        : {
-            nodeId: goal.nodeId,
-            fingerprintVersion: 2,
-            version: nodeSemanticFingerprint(
-              goalParsed.data,
-              goalParsed.body,
-              nodeNotePath(goal.path),
-              nodes,
-            ),
-            ...(records[goal.nodeId]?.materialsRevision
-              ? { materialsRevision: records[goal.nodeId]!.materialsRevision }
-              : {}),
-          };
+  if (previous?.goal && !options.confirm && !options.acknowledge) record.goal = previous.goal;
+  if (previous?.goals) record.goals = previous.goals;
+  const firstGoalPlacement =
+    options.previousLocation &&
+    !previous?.goal &&
+    !previous?.goals &&
+    ![...options.previousLocation.nodes.values()].some(
+      (ancestor) =>
+        options.previousLocation!.documentPath.startsWith(ancestor.path + "/") &&
+        !ancestor.archived &&
+        !ancestor.invalid &&
+        parseFrontmatter(ancestor.header).data.status !== "deprecated" &&
+        isRequirementNode({ type: ancestor.type }),
+    );
+  if (
+    goals.length &&
+    (options.created || options.confirm || options.acknowledge || firstGoalPlacement)
+  ) {
+    record.goals = [];
+    for (const goal of goals) {
+      const goalRaw =
+        options.finalDocuments?.get(nodeNotePath(goal.path)) ??
+        (await fs.readFile(nodeNotePath(goal.path)));
+      const goalParsed = parseFrontmatter(goalRaw);
+      const observations = await observeNodeMaterials(
+        fs,
+        goalParsed.data,
+        nodeNotePath(goal.path),
+        finalDocuments,
+        nodes,
+        {
+          materials:
+            previous?.goals?.find((entry) => entry.nodeId === goal.nodeId)?.materials ?? [],
+        },
+      );
+      const previousMaterials =
+        previous?.goals?.find((entry) => entry.nodeId === goal.nodeId)?.materials ?? [];
+      record.goals.push({
+        nodeId: goal.nodeId,
+        fingerprintVersion: 2,
+        version: nodeSemanticFingerprint(
+          goalParsed.data,
+          goalParsed.body,
+          nodeNotePath(goal.path),
+          nodes,
+        ),
+        materials: observations.map(({ identity, version, repository }) =>
+          version
+            ? {
+                identity,
+                version,
+                fingerprintVersion: 2 as const,
+                ...(repository ? { repository } : {}),
+              }
+            : (previousMaterials.find((entry) => entry.identity === identity) ?? { identity }),
+        ),
+      });
+    }
   }
   return { raw, record };
 }

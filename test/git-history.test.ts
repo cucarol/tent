@@ -672,4 +672,63 @@ test("batched source reads match single-path history through merges, ABA and inv
   ]);
   assert.ok(invalid.slice(0, 4).every((item) => item instanceof Error));
   assert.ok(!(invalid[4] instanceof Error));
+  git("checkout", "-qb", "discarded");
+  const discarded = await commit({ [files[0]!]: "discard this branch change" });
+  git("checkout", "-q", branch);
+  git("merge", "-s", "ours", "--no-ff", "-qm", "Keep first-parent tree", "discarded");
+  const ours = git("rev-parse", "HEAD");
+  const oursVersions = [discarded, ours].flatMap((commit) =>
+    files.map((path) => ({ commit, path })),
+  );
+  const oursReads = await history.readVersions(oursVersions);
+  for (const [index, version] of oursVersions.entries()) {
+    const result = oursReads[index]!;
+    assert.ok(!(result instanceof Error), String(result));
+    assert.equal(result.raw, await history.read(version));
+    assert.equal(result.changedSince, await history.changedSince(version));
+  }
+});
+
+test("selected historical reads retain deletion, recreation and ancestry despite clock skew", async (t) => {
+  const { root, git, history } = await fixture(t);
+  const file = "A/A.md";
+  const commit = async (raw: string | null, date: string) => {
+    await fs.mkdir(path.join(root, "A"), { recursive: true });
+    if (raw === null) await fs.unlink(path.join(root, file));
+    else await fs.writeFile(path.join(root, file), raw);
+    git("add", "--all");
+    execFileSync(
+      "git",
+      [
+        "-C",
+        root,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@invalid",
+        "commit",
+        "-qm",
+        "selected version",
+      ],
+      {
+        env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+        windowsHide: true,
+      },
+    );
+    return git("rev-parse", "HEAD");
+  };
+  const first = await commit("first", "2026-03-01T00:00:00Z");
+  const deleted = await commit(null, "2026-02-01T00:00:00Z");
+  const recreated = await commit("replacement", "2026-01-01T00:00:00Z");
+  const [old, absent, current] = await history.readVersions(
+    [first, deleted, recreated].map((commit) => ({ commit, path: file })),
+  );
+  assert.ok(old && !(old instanceof Error));
+  assert.deepEqual({ raw: old.raw, changed: old.changedSince }, { raw: "first", changed: true });
+  assert.ok(absent instanceof Error);
+  assert.ok(current && !(current instanceof Error));
+  assert.deepEqual(
+    { raw: current.raw, changed: current.changedSince },
+    { raw: "replacement", changed: false },
+  );
 });

@@ -63,7 +63,13 @@ test("cold-start material declarations share the Workspace root and detect subse
   assert.equal(card.workspaceRoot, root);
   const taken = parse(await runCardCommand("take", [card.cardId], globals));
   assert.equal(taken.workspaceRoot, root);
-  const linked = await cli("link-output", [goal.nodeId, "--resource", "/docs/proof.txt"]);
+  const linked = await cli("link-output", [
+    goal.nodeId,
+    "--resource",
+    "/docs/proof.txt",
+    "--card",
+    card.cardId,
+  ]);
   assert.equal(linked.workspaceRoot, root);
   assert.equal((await get(linked.nodeId)).resource, "../../../../docs/proof.txt");
   const explicit = (

@@ -172,6 +172,13 @@ type RawHistoryCommit = {
   files: Array<{ path: string; status: string; beforeBlob?: string; afterBlob?: string }>;
 };
 
+type VersionReadCommit = {
+  parent?: string;
+  parents: string[];
+  order: number;
+  files: Record<string, string | null>;
+};
+
 /** NUL framing keeps multiline messages and non-ASCII paths out of the raw-diff grammar. */
 function parseHistoryLog(bytes: Buffer): RawHistoryCommit[] {
   const fields = bytes.toString("utf8").split("\0");
@@ -1002,7 +1009,7 @@ export class GitDocumentHistory {
       try {
         oid(version.commit);
         documentPath(version.path);
-        if (!(version.commit in index.trees))
+        if (!(version.commit in index.graph))
           throw new Error(`Git version is not reachable: ${version.commit}`);
         return version;
       } catch (error) {
@@ -1012,16 +1019,59 @@ export class GitDocumentHistory {
     const rawByVersion = new Map<string, string | Error>();
     const dataByVersion = new Map<string, Record<string, unknown>>();
     const missing = new Set<string>();
+    const changedByVersion = new Map<string, boolean>();
+    const requests = new Map<string, DocumentVersion[]>();
     for (const version of checked) {
       if (version instanceof Error) continue;
       const key = `${version.commit}:${version.path}`;
-      const blob = index.trees[version.commit]![version.path];
+      // Resolve only requested paths along the same first-parent tree lineage.
+      // History replays normally request the commit that changed the path itself.
+      let blob: string | undefined;
+      for (let commit: string | undefined = version.commit; commit;) {
+        const entry: VersionReadCommit = index.graph[commit]!;
+        if (Object.prototype.hasOwnProperty.call(entry.files, version.path)) {
+          blob = entry.files[version.path] ?? undefined;
+          break;
+        }
+        commit = entry.parent;
+      }
       if (!blob) rawByVersion.set(key, new Error(`Git document is unavailable: ${key}`));
       else if (blob in snapshot.blobs) {
         rawByVersion.set(key, snapshot.blobs[blob]!);
         const data = snapshot.frontmatters[blob];
         if (data) dataByVersion.set(key, data);
       } else missing.add(key);
+      const group = requests.get(version.commit) ?? [];
+      group.push(version);
+      requests.set(version.commit, group);
+    }
+    for (const [commit, group] of requests) {
+      let ancestors: Set<string> | undefined;
+      for (const version of group) {
+        const changes = Object.prototype.hasOwnProperty.call(index.changes, version.path)
+          ? index.changes[version.path]!
+          : [];
+        let changedSince: boolean;
+        if (index.linear) {
+          const latest = changes.at(-1);
+          changedSince = !!latest && index.graph[latest]!.order > index.graph[commit]!.order;
+        } else {
+          // A merge includes every reachable parent, not just its tree parent.
+          // Keep one ancestry set per request group, never one for every commit.
+          if (!ancestors) {
+            ancestors = new Set<string>();
+            const pending = [commit];
+            while (pending.length) {
+              const next = pending.pop()!;
+              if (ancestors.has(next)) continue;
+              ancestors.add(next);
+              pending.push(...index.graph[next]!.parents);
+            }
+          }
+          changedSince = changes.some((change) => !ancestors!.has(change));
+        }
+        changedByVersion.set(`${commit}:${version.path}`, changedSince);
+      }
     }
     for (const [key, raw] of await readBlobs(this.root, missing, (raw) => raw))
       rawByVersion.set(key, raw);
@@ -1029,7 +1079,7 @@ export class GitDocumentHistory {
       if (version instanceof Error) return version;
       const raw = rawByVersion.get(`${version.commit}:${version.path}`)!;
       if (raw instanceof Error) return raw;
-      const changedSince = index.changed[version.commit]!.includes(version.path);
+      const changedSince = changedByVersion.get(`${version.commit}:${version.path}`)!;
       const data = dataByVersion.get(`${version.commit}:${version.path}`);
       return {
         version,
@@ -1041,47 +1091,31 @@ export class GitDocumentHistory {
   }
 
   private async versionReadIndex(head: string) {
-    return this.derivedAtHead("version-reads", 1, head, async () => {
+    return this.derivedAtHead("version-reads", 2, head, async () => {
       const snapshot = await this.snapshot(head);
-      const graph = new Map<string, { record: RawHistoryCommit; paths: Set<string> }>();
-      for (const record of snapshot.records) {
-        const entry = graph.get(record.commit) ?? { record, paths: new Set<string>() };
-        for (const file of record.files) entry.paths.add(file.path);
-        graph.set(record.commit, entry);
-      }
-      const trees: Record<string, Record<string, string>> = {};
-      for (const commit of graph.keys()) {
-        const pending: RawHistoryCommit[] = [];
-        for (let next: string | undefined = commit; next && !trees[next];) {
-          const record: RawHistoryCommit = graph.get(next)!.record;
-          pending.push(record);
-          next = record.parent;
+      const graph: Record<string, VersionReadCommit> = {};
+      const changes = new Map<string, string[]>();
+      const linear = snapshot.records.every((record) => record.parents.length <= 1);
+      const ordered = linear ? this.firstParentRecords(snapshot, head) : snapshot.records;
+      for (const [order, record] of ordered.entries()) {
+        // --diff-merges=separate emits the commit once per parent. The first
+        // occurrence supplies its first-parent tree; all occurrences count as changes.
+        if (!(record.commit in graph))
+          graph[record.commit] = {
+            parent: record.parent,
+            parents: record.parents,
+            order,
+            files: Object.fromEntries(
+              record.files.map((file) => [file.path, file.afterBlob ?? null]),
+            ),
+          };
+        for (const file of record.files) {
+          const commits = changes.get(file.path) ?? [];
+          commits.push(record.commit);
+          changes.set(file.path, commits);
         }
-        for (const record of pending.reverse()) {
-          const tree = { ...(record.parent ? trees[record.parent] : {}) };
-          for (const file of record.files) {
-            if (file.afterBlob) tree[file.path] = file.afterBlob;
-            else delete tree[file.path];
-          }
-          trees[record.commit] = tree;
-        }
       }
-      const changed: Record<string, string[]> = {};
-      for (const commit of graph.keys()) {
-        const ancestors = new Set<string>(),
-          pending = [commit];
-        while (pending.length) {
-          const next = pending.pop()!;
-          if (ancestors.has(next)) continue;
-          ancestors.add(next);
-          pending.push(...graph.get(next)!.record.parents);
-        }
-        const paths = new Set<string>();
-        for (const [next, entry] of graph)
-          if (!ancestors.has(next)) for (const file of entry.paths) paths.add(file);
-        changed[commit] = [...paths];
-      }
-      return { trees, changed };
+      return { graph, changes: Object.fromEntries(changes), linear };
     });
   }
 

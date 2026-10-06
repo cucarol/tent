@@ -431,7 +431,10 @@ test("direct Card publication supports immutable reads, pending moves and recept
     "role-review",
   );
   const cardBytes = await tent.readFile(`cards/${cardId}.md`);
-  const output = await linkNodeOutput(tent, "node-other", { resource: "docs/notes.txt" });
+  const output = await linkNodeOutput(tent, "node-other", {
+    resource: "docs/notes.txt",
+    roleId: "role-review",
+  });
   const completed = json<Snapshot>(await call("GET", "/api/snapshot"));
   const after = completed.cards.find((c) => c.id === cardId)!;
   assert.equal(after.progress, "has-output");

@@ -89,7 +89,7 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
     const siblings = order[parentKey] ?? [];
     order[parentKey] = siblings.includes(id) ? siblings : [...siblings, id];
     await saveOrder(env.fs, order);
-    const prepared = await prepareNodeSyncSave(env.fs, notePath, content);
+    const prepared = await prepareNodeSyncSave(env.fs, notePath, content, { created: true });
     await captureDocumentUnlocked(env.fs, notePath, prepared.raw, {
       operation: "node.create",
       nodeRecords: { [id]: prepared.record },

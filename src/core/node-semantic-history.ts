@@ -199,16 +199,6 @@ export function retainedSemanticVersions(history: GitDocumentHistory): Promise<S
   return history.derived("semantic-basis-versions", 2, async () => {
     const events = await history.changesInRange();
     const recordEvents = await history.nodeRecordEvents();
-    const reads = await history.readVersions(
-      events.flatMap((event) =>
-        event.changes.flatMap((change) => (change.after ? [change.after] : [])),
-      ),
-    );
-    const rawByVersion = new Map<string, string>();
-    for (const read of reads) {
-      if (read instanceof Error) throw read;
-      rawByVersion.set(`${read.version.commit}:${read.version.path}`, read.raw);
-    }
     const goalHashes = new Map<string, Set<string>>();
     const materialHashes = new Map<string, Set<string>>();
     const acquired = new Map<string, number>();
@@ -275,6 +265,25 @@ export function retainedSemanticVersions(history: GitDocumentHistory): Promise<S
       if (!nodeId && (!target || !retainedPaths.has(target))) return [];
       return [{ identity, hashes, nodeId, target, suffix }];
     });
+    // Bytes acquired after every relevant legacy receipt cannot supply its basis.
+    let lastAcquisition = -1;
+    for (const [nodeId, hashes] of goalHashes)
+      for (const hash of hashes)
+        lastAcquisition = Math.max(lastAcquisition, acquired.get(`goal:${nodeId}:${hash}`)!);
+    for (const { identity, hashes } of materialReceipts)
+      for (const hash of hashes)
+        lastAcquisition = Math.max(lastAcquisition, acquired.get(`material:${identity}:${hash}`)!);
+    const relevantEvents = events.slice(0, lastAcquisition + 1);
+    const reads = await history.readVersions(
+      relevantEvents.flatMap((event) =>
+        event.changes.flatMap((change) => (change.after ? [change.after] : [])),
+      ),
+    );
+    const rawByVersion = new Map<string, string>();
+    for (const read of reads) {
+      if (read instanceof Error) throw read;
+      rawByVersion.set(`${read.version.commit}:${read.version.path}`, read.raw);
+    }
     const documents: Documents = new Map();
     const readFrontmatter = historicalFrontmatterReader();
     const legacyGoals = new Map<string, ParsedFrontmatter>();
@@ -284,7 +293,7 @@ export function retainedSemanticVersions(history: GitDocumentHistory): Promise<S
     );
     const materialVersion = historicalFingerprintReader<string>(readFrontmatter);
     const materialHashesByRaw = new Map<string, Map<string, string[]>>();
-    for (const [eventIndex, event] of events.entries()) {
+    for (const [eventIndex, event] of relevantEvents.entries()) {
       for (const change of event.changes) {
         if (!change.objectId || !isNodeId(change.objectId)) continue;
         if (change.after) {

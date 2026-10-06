@@ -150,11 +150,11 @@ test("legacy replay never borrows bytes acquired later, including unavailable se
   assert.equal(index.materials["node:node-p#Absent"], undefined);
 });
 
-test("ahead replay keeps nearest goal ownership, metadata-stable times, and the latest transition", async (t) => {
+test("ahead replay keeps metadata-stable times and the latest implementation transition", async (t) => {
   const rows: [string, string, string][] = [
     ["node-g", "G", note("node-g", "goal", "outer\n")],
     ["node-n", "G/N", note("node-n", "goal", "inner\n")],
-    ["node-o", "G/N/O", note("node-o", "output", "output\n")],
+    ["node-o", "G/N/O", note("node-o", "output-evidence", "output\n")],
   ];
   const nodes = catalog(rows);
   const initialParsed = parseFrontmatter(rows[1]![2]);

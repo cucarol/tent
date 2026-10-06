@@ -1,4 +1,5 @@
 // Read model the Web UI renders; `tent ui` serves it (src/ui-server/snapshot.ts builds it from Core).
+import type { CardProgress } from "../../core/card-progress.js";
 
 export type RefKind = "node" | "role" | "card";
 export type SnapshotRef = { kind: RefKind; id: string };
@@ -79,10 +80,12 @@ export type SnapshotCard = {
   id: string;
   title: string;
   state: "pending" | "consumed";
-  progress: "pending" | "received-no-output" | "has-output" | null;
+  progress: CardProgress | null;
   goalCount: number;
   totalGoalCount: number;
   outputNodeIds: string[];
+  reviewGoalCount?: number;
+  reviewOutputNodeIds?: string[];
   target: string | null;
   receivedBy: string | null;
   status: string;

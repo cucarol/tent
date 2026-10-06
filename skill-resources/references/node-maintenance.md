@@ -92,15 +92,17 @@ Tent records material versions in Git when you save; never enter hashes.
 `tent node check <id>` and `tent workspace drift` report:
 
 - **behind**: recorded material changed or is missing, `stale_after` passed,
-  or an output's goal changed;
-- **ahead**: a goal with no output in its subtree, or whose own outputs lag
-  behind its latest change.
+  or any ancestor goal's content or material changed relative to the output;
+- **ahead**: a goal with no active asset/evidence output in its subtree, or
+  whose implementation outputs lag behind that goal's content or materials.
 
-A goal can be both. Only confirmation clears behind. After reading the
+A goal can be both. After reading the
 complete Node and the changed material, run
 `tent node confirm <id> --base-etag <etag>` if it still holds, or save the
-correction with `node write --confirm`. Matching versions do not prove the
-content right.
+correction with `node write --confirm`. Rewriting an output's complete body
+also refreshes its dependencies; appending, section edits and metadata
+changes retain them. Confirming a goal never confirms its outputs.
+Matching versions do not prove the content right.
 
 ## Authorship
 
@@ -111,16 +113,19 @@ identity.
 
 ## Outputs
 
-`tent node link-output <goal-id> --resource <path-or-node-id> [--name <name>] [--card <id>]`
+`tent node link-output <goal-id> --resource <path-or-node-id> [--name <name>] [--role <id>] [--card <id>]`
 creates an `output-asset` child named after the file. Paths resolve from the
 Workspace root and the file must exist. Link a result only once it is in
 that checkout. Tracked materials retain a repository-relative location and
-can still be observed from a surviving checkout after worktree removal. An output belongs to its nearest goal
-ancestor. For Card progress, its sources must name the Card it answers; pass
-`--card <id>` or let Tent infer a unique incomplete received Card. When a
+can still be observed from a surviving checkout after worktree removal.
+An output depends on every goal ancestor. For Card progress, its sources
+must name the Card it answers; pass `--card <id>`, or `--role <id>` to infer
+a unique incomplete Card received by that Role. An explicit Card may cross
+Roles, but must be received, not deprecated, and reference a goal on this
+output's ancestor chain. When a
 goal changes, review its outputs and confirm them. Questions, research and
-pending decisions are `prompt` Nodes: an `output` under a goal reads as
-implemented.
+pending decisions are `prompt` Nodes. Only current `output-asset` and
+`output-evidence` count as implementation; issues and analyses do not.
 
 ## Structure and lifecycle
 

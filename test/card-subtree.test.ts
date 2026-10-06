@@ -8,6 +8,8 @@ import { readCardProgress, type CardProgressInput } from "../src/core/card-progr
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import type { DocumentVersion, GitDocumentHistory } from "../src/core/git-history.js";
 import { nodeNotePath } from "../src/core/paths.js";
+import { prepareNodeSyncSave } from "../src/core/node-sync-record.js";
+import type { NodeBasisRecord } from "../src/core/node-basis-record.js";
 
 // Real current files/catalog, with a deterministic retained Git lineage for transition cases.
 async function fixture(t: TestContext) {
@@ -19,9 +21,11 @@ async function fixture(t: TestContext) {
   await disk.mkdir(".git");
   const live = new Map<string, string>(),
     blobs = new Map<string, string>();
+  const records: Record<string, NodeBasisRecord> = {};
   let revision = 0,
     head = "";
   const history = {
+    nodeRecords: async () => records,
     changesInRange: async () => {
       throw new Error("Card progress must not replay history");
     },
@@ -63,6 +67,12 @@ async function fixture(t: TestContext) {
   const node = async (nodePath: string, id: string, type: string, body = "result", fields = {}) => {
     const raw = serializeFrontmatter({ id, type, ...fields }, body);
     await capture([{ path: nodeNotePath(nodePath), raw }]);
+    // This helper publishes an authored Node, including its retained basis.
+    records[id] = (
+      await prepareNodeSyncSave(adapter, nodeNotePath(nodePath), raw, {
+        acknowledge: true,
+      })
+    ).record;
     return raw;
   };
   async function card(
@@ -144,7 +154,7 @@ test("Card subtree counts nested resource-less outputs for every referenced ance
 test("Card responses ignore unrelated saves and use current active/invalid state without replay", async (t) => {
   const f = await fixture(t);
   await f.node("Root", "node-root", "goal");
-  const old = await f.node("Root/Out", "node-out", "output");
+  const old = await f.node("Root/Out", "node-out", "output-asset");
   const card = await f.card("card-before", ["Root/Root.md"]);
   assert.equal((await f.query(card)).goalCount, 0);
   await f.query(card);
@@ -153,7 +163,7 @@ test("Card responses ignore unrelated saves and use current active/invalid state
   const confirmed = serializeFrontmatter(
     {
       id: "node-out",
-      type: "output",
+      type: "output-asset",
       verified: [{ by: "human:cuca", at: "2026-10-05T00:00:01.000Z" }],
       sources: [{ resource: "/cards/card-before.md" }],
     },
@@ -167,7 +177,7 @@ test("Card responses ignore unrelated saves and use current active/invalid state
       serializeFrontmatter(
         {
           id: "node-out",
-          type: "output",
+          type: "output-asset",
           status,
           sources: [{ resource: "/cards/card-before.md" }],
         },
@@ -195,11 +205,11 @@ test("Card responses follow the current hierarchy while unrelated moves remain u
   await f.node("A", "node-a", "goal");
   await f.node("B", "node-b", "goal");
   await f.node("A/Child", "node-child", "goal");
-  await f.node("A/Child/Out", "node-out", "output");
+  await f.node("A/Child/Out", "node-out", "output-asset");
   const card = await f.card("card-moves", ["A/A.md", "B/B.md", "A/Child/Child.md"]);
   await f.move("A/Child", "B/Child");
   assert.equal((await f.query(card)).goalCount, 0, "movement alone is not a Card response");
-  await f.node("B/Child/Out", "node-out", "output", "result", {
+  await f.node("B/Child/Out", "node-out", "output-asset", "result", {
     sources: [{ resource: "/cards/card-moves.md" }],
   });
   assert.deepEqual(await f.query(card), {
@@ -223,16 +233,18 @@ test("Card responses follow the current hierarchy while unrelated moves remain u
   );
   await f.move("Renamed/Child/Out", "A/Out");
   assert.deepEqual(await f.query(card), {
-    progress: "received-no-output",
-    goalCount: 1,
+    progress: "needs-review",
+    goalCount: 0,
     totalGoalCount: 3,
-    outputNodeIds: ["node-out"],
+    outputNodeIds: [],
+    reviewGoalCount: 1,
+    reviewOutputNodeIds: ["node-out"],
   });
   await f.move("A/Out", "Renamed/Child/Out");
   assert.equal((await f.query(card)).goalCount, 2);
   // Current hierarchy determines goal membership even before its next capture.
   await f.disk.move("Renamed/Child/Out", "A/Out");
-  assert.equal((await f.query(card)).goalCount, 1);
+  assert.equal((await f.query(card)).reviewGoalCount, 1);
 });
 
 test("Card subtree retains reception-only spec Cards and requires current goals and active outputs", async (t) => {
@@ -247,12 +259,12 @@ test("Card subtree retains reception-only spec Cards and requires current goals 
     outputNodeIds: [],
   });
   const card = await f.card("card-current", ["Root/Root.md"]);
-  await f.node("Root/Archived", "node-archived", "output", "old", {
+  await f.node("Root/Archived", "node-archived", "output-asset", "old", {
     status: "deprecated",
     sources: [{ resource: "/cards/card-current.md" }],
   });
   assert.equal((await f.query(card)).goalCount, 0);
-  await f.node("Root/Current", "node-current", "output", "result", {
+  await f.node("Root/Current", "node-current", "output-asset", "result", {
     sources: [{ resource: "/cards/card-current.md" }],
   });
   assert.equal((await f.query(card)).goalCount, 1);
@@ -296,7 +308,7 @@ test("an unavailable historical pin diagnoses only its Card and cannot break unr
     ],
     "card.create",
   );
-  await f.node("Root/Out", "node-out", "output", "result", {
+  await f.node("Root/Out", "node-out", "output-asset", "result", {
     sources: [{ resource: "/cards/card-good.md" }],
   });
   assert.equal((await f.query(good)).progress, "has-output");
@@ -304,4 +316,22 @@ test("an unavailable historical pin diagnoses only its Card and cannot break unr
   assert.equal(unavailable.progress, null);
   assert.match(unavailable.diagnostic!, /Cannot derive Card progress.*Missing test version/);
   assert.equal((await f.query(good)).progress, "has-output");
+});
+
+test("only assets and evidence count as Card implementation responses", async (t) => {
+  const f = await fixture(t);
+  await f.node("Root", "node-root", "goal");
+  const card = await f.card("card-implementation", ["Root/Root.md"]);
+  for (const type of ["output-issue", "output-analysis", "output", "output-custom"]) {
+    await f.node("Root/Out", "node-out", type, "response", {
+      sources: [{ resource: "/cards/card-implementation.md" }],
+    });
+    assert.equal((await f.query(card)).progress, "received-no-output", type);
+  }
+  for (const type of ["output-asset", "output-evidence"]) {
+    await f.node("Root/Out", "node-out", type, "response", {
+      sources: [{ resource: "/cards/card-implementation.md" }],
+    });
+    assert.equal((await f.query(card)).progress, "has-output", type);
+  }
 });

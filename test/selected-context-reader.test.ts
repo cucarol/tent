@@ -69,6 +69,36 @@ test("fresh headers preserve group hierarchy, local lifecycle and duplicate quar
   await assert.rejects(selectedContextReader(adapter, source, ["node-child"]), error("NOT_FOUND"));
 });
 
+test("staggered catalog reads preserve explicit order, grouping and duplicate isolation", async (t) => {
+  const { adapter } = await fixture(t);
+  for (const [file, id] of [
+    ["A/A.md", "node-a"],
+    ["B/B.md", "node-b"],
+    ["Group/P/P.md", "node-parent"],
+    ["Group/P/Plain/X/X.md", "node-child"],
+    ["D1/D1.md", "node-duplicate"],
+    ["D1/Child/Child.md", "node-quarantined"],
+    ["D2/D2.md", "node-duplicate"],
+  ])
+    await adapter.writeFile(file!, raw(id!));
+  await adapter.writeFile("order.json", JSON.stringify({ __root__: ["node-b", "node-a"] }));
+  const read = adapter.readFrontmatter.bind(adapter);
+  adapter.readFrontmatter = async (file) => {
+    if (file.startsWith("A/") || file.startsWith("D1/"))
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    return read(file);
+  };
+  const catalog = await loadNodeCatalog(adapter);
+  assert.deepEqual(
+    catalog.tree.roots.map((node) => node.path),
+    ["B", "A", "D1", "D2", "Group/P"],
+  );
+  assert.equal(catalog.byId.get("node-child")!.parentNodeId, "node-parent");
+  assert.deepEqual(catalog.byId.get("node-parent")!.childNodeIds, ["node-child"]);
+  assert.equal(catalog.byId.has("node-duplicate"), false);
+  assert.equal(catalog.byId.has("node-quarantined"), false);
+});
+
 test("selected exact reads see edits and moves; changed lookup metadata fails", async (t) => {
   const { adapter } = await fixture(t);
   const original = raw("node-selected", "😀正文\r\n".repeat(6000));

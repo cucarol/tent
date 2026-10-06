@@ -135,6 +135,8 @@ export async function runNodeCommand(
       return usage("--confirm is only valid for node write");
     if (flags.card !== undefined && sub !== "link-output")
       return usage("--card is only valid for node link-output");
+    if (flags.role !== undefined && sub !== "link-output")
+      return usage("--role is only valid for node link-output");
     if (flags.name !== undefined && sub !== "link-output")
       return usage("--name is only valid for node link-output");
     if (flags.body === "-" && flags["sources-json"] === "-")
@@ -183,7 +185,7 @@ export async function runNodeCommand(
       case "link-output": {
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
-        const allowed = ["json", "workspace", "resource", "name", "by", "card"];
+        const allowed = ["json", "workspace", "resource", "name", "by", "card", "role"];
         if (Object.keys(flags).some((key) => !allowed.includes(key)) || !flags.resource)
           return usage(nodeHelpText(sub));
         const material = await workspaceMaterialFields(
@@ -197,11 +199,13 @@ export async function runNodeCommand(
           name: flags.name,
           by: flags.by,
           cardId: flags.card,
+          roleId: flags.role,
         });
         return mutationPrint(
           result,
           json,
-          () => `Created ${result.nodeId}  ${result.path}  ${result.etag}`,
+          () =>
+            `Created ${result.nodeId}  ${result.path}  ${result.etag}${result.cardId ? `\nCard: ${result.cardId}` : ""}`,
         );
       }
       case "confirm": {
@@ -870,7 +874,7 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
   check: ["tent node check <nodeId> [--json]"],
   confirm: ["tent node confirm <nodeId> --base-etag <complete-live-etag> [--by <actor>] [--json]"],
   "link-output": [
-    "tent node link-output <goalId> --resource <address> [--name <name>] [--by <actor>] [--card <id>] [--json]",
+    "tent node link-output <goalId> --resource <address> [--name <name>] [--by <actor>] [--role <roleId>] [--card <id>] [--json]",
   ],
   search: [
     "tent node search [query | --resource <address>] [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
@@ -914,14 +918,14 @@ export function nodeHelpText(sub?: string): string {
     check:
       "Inspect the computed synchronization state and output drift against current local material versions; no Hook or manual hash is needed.",
     confirm:
-      "After reviewing the complete live Node and its evidence, confirm that it remains valid. Tent records current material versions and, for an output, its nearest goal's current version. This does not prove semantic correctness.",
+      "After reviewing the complete live Node and its evidence, confirm that it remains valid. Tent records current material versions and, for an output, the current versions and materials of every goal ancestor. This does not prove semantic correctness.",
     "link-output":
-      "Create an output-asset child of the selected goal. Local file paths, including / addresses, resolve from the Workspace root and are saved relative to the output document. Node IDs and absolute URIs are supported. Local files must exist and be readable. The default name is the file name. Remote addresses are never fetched. The returned nodeId identifies the new output. --card records the Card this output responds to; when exactly one incomplete received Card points to this goal, Tent supplies it automatically.",
+      "Create an output-asset child of the selected goal. Local file paths, including / addresses, resolve from the Workspace root and are saved relative to the output document. Node IDs and absolute URIs are supported. Local files must exist and be readable. The default name is the file name. Remote addresses are never fetched. The returned nodeId identifies the new output. --card explicitly selects its response Card. Automatic selection requires --role matching the receiver of exactly one incomplete Card for this goal; otherwise choose --card. The receipt names the selected Card.",
     search:
       "resource is a file path from the Workspace root (for example .tent/Node/Node.md or src/file.ts) or an absolute URI. Exact resource matching preserves query/fragment identity and does not infer bare source text.",
-    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output inherits its nearest goal ancestor as an implicit source. Suggested types: ${NODE_TYPE_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; local paths resolve from the Workspace root, including / addresses, and are saved relative to the new Node document. Bare sources are descriptive unless they match an existing Workspace file; use ./ for a file that does not exist yet. Node IDs and absolute URIs are supported. Inspect an uncertain result before retrying.`,
+    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output depends on every goal ancestor. Suggested types: ${NODE_TYPE_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; local paths resolve from the Workspace root, including / addresses, and are saved relative to the new Node document. Bare sources are descriptive unless they match an existing Workspace file; use ./ for a file that does not exist yet. Node IDs and absolute URIs are supported. Inspect an uncertain result before retrying.`,
     write:
-      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"src/file.ts","sources":[{"resource":".tent/Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields and unchanged material declarations are preserved. New local material declarations in frontmatter use Workspace-root paths, as in create. Ordinary saves retain recorded material and goal baselines and observe new declarations. --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
+      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"src/file.ts","sources":[{"resource":".tent/Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields and unchanged material declarations are preserved. New local material declarations in frontmatter use Workspace-root paths, as in create. A full-body output rewrite that changes its body after normalizing line endings refreshes its materials and every goal dependency. Goal/prompt saves, metadata edits, no-ops, append and write-section retain existing baselines. --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
     append:
       "Append under the Workspace lock without a prior read or ETag. --heading adds a level-two Markdown heading. Existing and new content are separated by one blank line; the saved body ends with one newline. Ordinary saves retain material baselines.",
     "get-section":
@@ -1016,6 +1020,7 @@ function parseFlags(args: string[]): { positionals: string[]; flags: Record<stri
           "resource",
           "name",
           "card",
+          "role",
           "by",
           "direction",
           "type",

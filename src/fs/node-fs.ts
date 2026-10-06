@@ -316,6 +316,9 @@ export class NodeFs implements FsAdapter {
                 const prepared = await prepareNodeSyncSave(this, change.path, change.raw, {
                   nodes,
                   previous: relocated,
+                  ...(original
+                    ? { previousLocation: { documentPath: original.path, nodes: beforeNodes } }
+                    : {}),
                 });
                 if (typeof id === "string") nodeRecords[id] = prepared.record;
               }

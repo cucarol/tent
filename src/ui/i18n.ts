@@ -66,6 +66,7 @@ const zh = {
   cardProgress: {
     pending: "待接收",
     "received-no-output": "已接收，还没有产出",
+    "needs-review": "待复核",
     "has-output": "已有产出",
     partial: "产出还不全",
   },
@@ -495,6 +496,7 @@ const en: Messages = {
   cardProgress: {
     pending: "Pending",
     "received-no-output": "Received, no output yet",
+    "needs-review": "Needs review",
     "has-output": "Has output",
     partial: "Some outputs still missing",
   },

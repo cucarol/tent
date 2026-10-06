@@ -17,7 +17,7 @@ async function fixture(t: TestContext) {
     write: (fields: Record<string, unknown>) =>
       adapter.writeFile(
         "Out/Out.md",
-        serializeFrontmatter({ id: "node-out", type: "output", ...fields }, "result"),
+        serializeFrontmatter({ id: "node-out", type: "output-asset", ...fields }, "result"),
       ),
   };
 }
@@ -57,4 +57,8 @@ test("activity excludes deprecated outputs and non-output Nodes", async (t) => {
   assert.deepEqual(await readOutputActivity(adapter), new Map());
   await write({ generated, type: "prompt" });
   assert.deepEqual(await readOutputActivity(adapter), new Map());
+  for (const type of ["output", "output-analysis", "output-issue", "output-custom"]) {
+    await write({ generated, type });
+    assert.deepEqual(await readOutputActivity(adapter), new Map(), type);
+  }
 });
