@@ -170,9 +170,8 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
       state: d.data.state as SnapshotCard["state"],
       sources: Array.isArray(d.data.sources) ? d.data.sources : [],
     })),
-    retainedEvents,
   );
-  const outputActivity = await readOutputActivity(fs, retainedEvents);
+  const outputActivity = await readOutputActivity(fs);
   for (const node of nodes) {
     const outputAt = outputActivity.get(node.id);
     if (outputAt) node.outputAt = outputAt;

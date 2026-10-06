@@ -21,6 +21,7 @@ import { contentEtag } from "../src/core/etag.js";
 import type { DocumentVersion } from "../src/core/git-history.js";
 import { git } from "./helpers.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
+import { runNodeCommand } from "../src/cli/node-commands.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
 import { linkNodeOutput, confirmNodeSync } from "../src/core/node-sync.js";
 
@@ -115,7 +116,7 @@ test("interrupted reception recovery rejects simultaneous status, target and inp
   assert.equal((await adapter.history.pathVersions(card.path)).latest!.commit, card.version.commit);
 });
 
-test("Card progress derives from post-publication goal outputs and confirmations", async (t) => {
+test("Card progress counts only outputs explicitly responding to this Card", async (t) => {
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "card-progress-"));
@@ -161,7 +162,9 @@ test("Card progress derives from post-publication goal outputs and confirmations
   );
   const output = await linkNodeOutput(adapter, "node-main", { resource: "result.txt" });
   const outputRaw = await adapter.readFile(`${output.path}/${output.path.split("/").at(-1)}.md`);
-  assert.deepEqual(parseFrontmatter(outputRaw).data.sources ?? [], []);
+  assert.deepEqual(parseFrontmatter(outputRaw).data.sources, [
+    { resource: "/cards/card-progress.md" },
+  ]);
   const partial = (await readCardDocument(adapter, card.cardId)) as Record<string, unknown>;
   assert.equal(partial.progress, "received-no-output");
   assert.equal(partial.goalCount, 1);
@@ -185,6 +188,15 @@ test("Card progress derives from post-publication goal outputs and confirmations
   );
   await confirmNodeSync(adapter, oldOutput.nodeId, {
     baseEtag: contentEtag(await adapter.readFile(oldPath)),
+  });
+  assert.equal(
+    ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
+    1,
+    "confirming an old unrelated output does not complete this Card",
+  );
+  await writeNodeDocument(adapter, oldOutput.nodeId, {
+    baseEtag: contentEtag(await adapter.readFile(oldPath)),
+    frontmatter: { sources: [{ resource: "/cards/card-progress.md" }] },
   });
   const completed = (await readCardDocument(adapter, card.cardId)) as Record<string, unknown>;
   assert.equal(completed.progress, "has-output");
@@ -217,7 +229,31 @@ test("Card progress derives from post-publication goal outputs and confirmations
   });
   assert.equal(
     ((await readCardDocument(adapter, confirmedCard.cardId)) as Record<string, unknown>).progress,
-    "has-output",
+    "received-no-output",
+  );
+  const unassigned = await linkNodeOutput(adapter, "node-other", { resource: "result.txt" });
+  assert.deepEqual(
+    parseFrontmatter(
+      await adapter.readFile(`${unassigned.path}/${unassigned.path.split("/").at(-1)}.md`),
+    ).data.sources ?? [],
+    [],
+    "multiple incomplete Cards require an explicit response target",
+  );
+  const linked = await runNodeCommand(
+    "link-output",
+    ["node-other", "--resource", "result.txt", "--card", confirmedCard.cardId],
+    { workspace, json: true },
+  );
+  assert.equal(linked.exitCode, 0, linked.stderr);
+  const second = JSON.parse(linked.stdout);
+  assert.deepEqual(
+    ((await readCardDocument(adapter, confirmedCard.cardId)) as Record<string, unknown>)
+      .outputNodeIds,
+    [second.nodeId],
+  );
+  assert.equal(
+    ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
+    1,
   );
   await adapter.writeFile(
     "Notes/Notes.md",

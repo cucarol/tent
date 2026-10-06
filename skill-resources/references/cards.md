@@ -32,9 +32,12 @@ Card needs its Role to take it; a public Card can be taken with or without
 one, and `--include-open` adds public Cards to a Role's list.
 
 Progress follows the goals among a Card's sources: `pending`,
-`received-no-output`, or `has-output` once each goal's subtree has an output
-attached or confirmed after publication. `goalCount` and `totalGoalCount`
-count them. A Card without goal sources shows reception only.
+`received-no-output`, or `has-output` once each goal's subtree has an active
+output whose sources name this Card. `goalCount` and `totalGoalCount` count
+them. Use `node link-output --card <id>`; Tent can infer the Card only when
+exactly one incomplete received Card points to that goal. A Card without
+goal sources shows reception only. Confirming an unrelated output never
+completes a Card. Completion times come from output generated/verified times.
 
 ## Move and cancel
 

@@ -26,8 +26,8 @@ requirements, optionally addressed to a Role. Commands:
    means received, not done; `replayed: true` means continue existing work.
 3. Read its sources, and read the current Node when the brief says a source
    changed.
-4. Record each result under its goal with `tent node link-output`. The Card's
-   progress follows those goals, so no reply Card is needed.
+4. Record each result under its goal with `tent node link-output --card <id>`.
+   The output records which Card it answers; no reply Card is needed.
 
 ## Wait for Cards
 

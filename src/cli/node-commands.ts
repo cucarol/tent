@@ -128,6 +128,8 @@ export async function runNodeCommand(
       return usage("--resource is only valid for node create, search or link-output");
     if (flags.confirm !== undefined && sub !== "write")
       return usage("--confirm is only valid for node write");
+    if (flags.card !== undefined && sub !== "link-output")
+      return usage("--card is only valid for node link-output");
     if (flags.name !== undefined && sub !== "link-output")
       return usage("--name is only valid for node link-output");
     if (flags.body === "-" && flags["sources-json"] === "-")
@@ -169,13 +171,14 @@ export async function runNodeCommand(
       case "link-output": {
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
-        const allowed = ["json", "workspace", "resource", "name", "by"];
+        const allowed = ["json", "workspace", "resource", "name", "by", "card"];
         if (Object.keys(flags).some((key) => !allowed.includes(key)) || !flags.resource)
           return usage(nodeHelpText(sub));
         const result = await linkNodeOutput(fs, nodeRef(target), {
           resource: flags.resource,
           name: flags.name,
           by: flags.by,
+          cardId: flags.card,
         });
         return print(
           result,
@@ -758,7 +761,7 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
   check: ["tent node check <nodeId> [--json]"],
   confirm: ["tent node confirm <nodeId> --base-etag <complete-live-etag> [--by <actor>] [--json]"],
   "link-output": [
-    "tent node link-output <goalId> --resource <address> [--name <name>] [--by <actor>] [--json]",
+    "tent node link-output <goalId> --resource <address> [--name <name>] [--by <actor>] [--card <id>] [--json]",
   ],
   search: [
     "tent node search [query | --resource <address>] [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
@@ -804,7 +807,7 @@ export function nodeHelpText(sub?: string): string {
     confirm:
       "After reviewing the complete live Node and its evidence, confirm that it remains valid. Tent records current material versions and, for an output, its nearest goal's current version. This does not prove semantic correctness.",
     "link-output":
-      "Create an output child of the selected goal. Relative file paths resolve from the Workspace root; / addresses resolve from .tent, and Node IDs and absolute URIs are supported. Local files must exist and be readable. The default name is the file name. Remote addresses are never fetched. The returned nodeId identifies the new output.",
+      "Create an output child of the selected goal. Relative file paths resolve from the Workspace root; / addresses resolve from .tent, and Node IDs and absolute URIs are supported. Local files must exist and be readable. The default name is the file name. Remote addresses are never fetched. The returned nodeId identifies the new output. --card records the Card this output responds to; when exactly one incomplete received Card points to this goal, Tent supplies it automatically.",
     search:
       "resource is an explicit path from .tent (for example /Node/Node.md or ../src/file.ts) or an absolute URI. Exact resource matching preserves query/fragment identity and does not infer bare source text.",
     create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output inherits its nearest goal ancestor as an implicit source. Suggested types: ${NODE_TYPE_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; explicit relative paths resolve from the new Node document, / from .tent. Inspect an uncertain result before retrying.`,
@@ -898,6 +901,7 @@ function parseFlags(args: string[]): { positionals: string[]; flags: Record<stri
           "to-json",
           "resource",
           "name",
+          "card",
           "by",
           "direction",
           "type",

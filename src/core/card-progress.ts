@@ -1,18 +1,14 @@
 import { readOnlyFs, type FsAdapter } from "./adapter.js";
 import type { CardDocumentState } from "./card-document.js";
 import { parseFrontmatter } from "./frontmatter.js";
-import { isCardId, isNodeId } from "./id.js";
-import {
-  documentVersionSchema,
-  type DocumentVersion,
-  type HistoryCommit,
-  type GitDocumentHistory,
-} from "./git-history.js";
-import type { MaterialSource } from "./material.js";
+import { isNodeId } from "./id.js";
+import { documentVersionSchema, type DocumentVersion } from "./git-history.js";
+import { materialLocator, type MaterialSource } from "./material.js";
 import { loadNodeCatalog } from "./node-catalog.js";
 import { isRequirementNode, isOutputNode } from "./node-sync-record.js";
 import { documentLifecycle } from "./document-status.js";
-import { nodeVerifications } from "./node-provenance.js";
+import { nodeVerifications, okfTimestampSchema } from "./node-provenance.js";
+import { cardRecordPath, nodeNotePath } from "./paths.js";
 
 export type CardProgress = "pending" | "received-no-output" | "has-output";
 export type CardProgressItem = {
@@ -48,205 +44,125 @@ export function deriveCardProgress(
   };
 }
 
-type ProgressHistory = {
-  publications: Record<string, number>;
-  sourceGoals: Record<string, string>;
-  pinErrors: Record<string, string>;
-  attachments: Record<string, Record<string, number>>;
-  outputActivity: Record<string, string>;
-};
-const versionKey = (version: DocumentVersion) => `${version.commit}:${version.path}`;
-const nodePath = (version: DocumentVersion) => version.path.slice(0, version.path.lastIndexOf("/"));
-
-/** Persist only retained history facts. Live Node state and hierarchy are checked on every read. */
-async function buildProgressHistory(
-  history: GitDocumentHistory,
-  retainedEvents: readonly HistoryCommit[] | undefined,
-  head: string | null | undefined,
-): Promise<ProgressHistory> {
-  const events =
-    retainedEvents && retainedEvents.at(-1)?.commit === head
-      ? retainedEvents!
-      : await history.changesInRange();
-  const versions = new Map<string, DocumentVersion>();
-  for (const event of events)
-    for (const change of event.changes)
-      if (
-        change.after &&
-        change.objectId &&
-        (isNodeId(change.objectId) || isCardId(change.objectId))
-      )
-        versions.set(versionKey(change.after), change.after);
-  const dataByVersion = new Map<string, Record<string, unknown>>();
-  const pinErrors: Record<string, string> = {};
-  async function readVersions(selected: readonly DocumentVersion[], toleratePinErrors = false) {
-    for (const [index, read] of (await history.readVersions(selected)).entries()) {
-      if (read instanceof Error) {
-        if (!toleratePinErrors) throw read;
-        pinErrors[versionKey(selected[index]!)] = read.message;
-        continue;
+/** Read only the versions pinned by these Cards, never replay document history. */
+export async function readCardGoalIds(fs: FsAdapter, cards: readonly CardProgressInput[]) {
+  const result = new Map(
+    cards.map((card) => [card.cardId, { goalIds: new Set<string>(), diagnostics: [] as string[] }]),
+  );
+  const selected = cards.flatMap((card) =>
+    card.sources.flatMap((source) => {
+      if (!source.version) return [];
+      const version = documentVersionSchema.safeParse(source.version);
+      if (!version.success) {
+        result.get(card.cardId)!.diagnostics.push(`Invalid source version: ${source.resource}`);
+        return [];
       }
-      dataByVersion.set(
-        versionKey(selected[index]!),
-        read.frontmatter ?? parseFrontmatter(read.raw).data,
+      return [{ cardId: card.cardId, source, version: version.data }];
+    }),
+  );
+  if (!selected.length) return result;
+  if (!fs.history || !(await fs.exists(".git"))) {
+    for (const entry of selected)
+      result.get(entry.cardId)!.diagnostics.push("Card source history unavailable");
+    return result;
+  }
+  const key = (v: DocumentVersion) => `${v.commit}:${v.path}`;
+  const versions = [
+    ...new Map(selected.map((entry) => [key(entry.version), entry.version])).values(),
+  ];
+  const reads = await fs.history.readVersions(versions);
+  const byVersion = new Map(versions.map((version, index) => [key(version), reads[index]!]));
+  for (const entry of selected) {
+    const target = result.get(entry.cardId)!;
+    try {
+      const locator = materialLocator(entry.source.resource, cardRecordPath(entry.cardId), true);
+      if (locator.kind !== "path" || locator.target !== entry.version.path)
+        throw new Error("Source address disagrees with its pinned version");
+      const read = byVersion.get(key(entry.version))!;
+      if (read instanceof Error) throw read;
+      const data = read.frontmatter ?? parseFrontmatter(read.raw).data;
+      if (typeof data.id === "string" && isNodeId(data.id) && isRequirementNode(data))
+        target.goalIds.add(data.id);
+    } catch (error) {
+      target.diagnostics.push(
+        `Cannot derive Card progress from ${entry.source.resource}: ${String(error)}`,
       );
     }
   }
-  await readVersions([...versions.values()]);
-  // A Card may pin a Node at a commit that did not change that Node's own bytes.
-  const pinned = new Map<string, DocumentVersion>();
-  for (const data of dataByVersion.values())
-    if (data.type === "card" && Array.isArray(data.sources))
-      for (const source of data.sources) {
-        const version = documentVersionSchema.safeParse(source.version);
-        if (version.success && !dataByVersion.has(versionKey(version.data)))
-          pinned.set(versionKey(version.data), version.data);
-      }
-  await readVersions([...pinned.values()], true);
-  const sourceGoals: Record<string, string> = {};
-  for (const [key, data] of dataByVersion)
-    if (typeof data.id === "string" && isNodeId(data.id) && isRequirementNode(data))
-      sourceGoals[key] = data.id;
-  const publications: Record<string, number> = {};
-  const historical = new Map<string, { path: string; data: Record<string, unknown> }>();
-  const byPath = new Map<string, string>();
-  const outputs = new Set<string>();
-  const attachments: Record<string, Record<string, number>> = {};
-  const outputActivity: Record<string, string> = {};
-  const ancestors = (outputId: string) => {
-    const goals = new Set<string>();
-    let path = historical.get(outputId)!.path;
-    while (path.includes("/")) {
-      path = path.slice(0, path.lastIndexOf("/"));
-      const id = byPath.get(path),
-        node = id && historical.get(id);
-      if (node && isRequirementNode(node.data)) goals.add(id!);
+  return result;
+}
+
+function active(node: { archived: boolean; header: string }) {
+  const status = documentLifecycle(parseFrontmatter(node.header).data).status;
+  return !node.archived && (status === "draft" || status === "stable");
+}
+
+/** Activity is declared by the current output's own generated/verified timestamps. */
+export async function readOutputActivity(fs: FsAdapter): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  const catalog = await loadNodeCatalog(readOnlyFs(fs));
+  for (const node of catalog.byId.values()) {
+    if (!isOutputNode({ type: node.type }) || !active(node)) continue;
+    const data = parseFrontmatter(node.header).data;
+    const times: string[] = [];
+    const generated = data.generated as { at?: unknown } | undefined;
+    const at = okfTimestampSchema.safeParse(generated?.at);
+    if (at.success) times.push(at.data);
+    try {
+      times.push(...nodeVerifications(data).map((entry) => entry.at));
+    } catch {
+      /* Invalid provenance supplies no verification evidence. */
     }
-    return goals;
-  };
-  const verificationKeys = (data: Record<string, unknown>) =>
-    new Set(nodeVerifications(data).map((entry) => `${entry.by}:${entry.at}`));
-  for (const [index, event] of events.entries()) {
-    const previousOutputs = new Set(outputs);
-    const previousAncestors = new Map([...outputs].map((id) => [id, ancestors(id)]));
-    const confirmed = new Set<string>();
-    for (const change of event.changes) {
-      const id = change.objectId;
-      if (!id) continue;
-      if (isCardId(id) && publications[id] === undefined) publications[id] = index;
-      if (!isNodeId(id)) continue;
-      const previous = historical.get(id);
-      if (previous && byPath.get(previous.path) === id) byPath.delete(previous.path);
-      if (!change.after) {
-        historical.delete(id);
-        outputs.delete(id);
-        delete attachments[id];
-        delete outputActivity[id];
-      } else {
-        const data = dataByVersion.get(versionKey(change.after))!;
-        historical.set(id, { path: nodePath(change.after), data });
-        byPath.set(nodePath(change.after), id);
-        if (isOutputNode(data)) {
-          outputs.add(id);
-          const before = verificationKeys(previous?.data ?? {});
-          if ([...verificationKeys(data)].some((value) => !before.has(value))) confirmed.add(id);
-        } else {
-          outputs.delete(id);
-          delete attachments[id];
-          delete outputActivity[id];
-        }
-      }
-    }
-    for (const id of outputs) {
-      const goals = ancestors(id),
-        evidence = attachments[id] ?? {};
-      const confirmation =
-        confirmed.has(id) ||
-        (event.operation === "node.sync-confirm" && event.objectIds.includes(id));
-      let newAttachment = false;
-      for (const goalId of Object.keys(evidence)) if (!goals.has(goalId)) delete evidence[goalId];
-      for (const goalId of goals) {
-        const attached = !previousAncestors.get(id)?.has(goalId);
-        if (attached || confirmation) evidence[goalId] = index;
-        newAttachment ||= attached;
-      }
-      attachments[id] = evidence;
-      if (!previousOutputs.has(id) || newAttachment || confirmation)
-        outputActivity[id] = new Date(event.time).toISOString();
-    }
+    times.sort((a, b) => Date.parse(b) - Date.parse(a));
+    if (times[0]) result.set(node.nodeId, times[0]);
   }
-  return { publications, sourceGoals, pinErrors, attachments, outputActivity };
+  return result;
 }
 
-function readProgressHistory(fs: FsAdapter, retainedEvents?: readonly HistoryCommit[]) {
-  return fs.history!.derived("card-subtree-progress", 3, (head) =>
-    buildProgressHistory(fs.history!, retainedEvents, head),
-  );
-}
-
-/**
- * Latest retained creation, goal attachment, or confirmation event for each output.
- * Uncaptured live edits provide no new completion evidence; callers filter current validity/lifecycle.
- */
-export async function readOutputActivity(
-  fs: FsAdapter,
-  retainedEvents?: readonly HistoryCommit[],
-): Promise<Map<string, string>> {
-  if (!fs.history || !(await fs.exists(".git"))) return new Map();
-  return new Map(Object.entries((await readProgressHistory(fs, retainedEvents)).outputActivity));
-}
-
-/** Each referenced goal observes every active output in its subtree, including nested goals. */
+/** An active output counts only for Cards it explicitly names in sources. */
 export async function readCardProgress(
   fs: FsAdapter,
   cards: readonly CardProgressInput[],
-  retainedEvents?: readonly HistoryCommit[],
 ): Promise<Map<string, CardProgressItem>> {
   const result = new Map(cards.map((card) => [card.cardId, deriveCardProgress(card.state, 0)]));
-  if (
-    !cards.length ||
-    !cards.some((card) => card.sources.some((source) => source.version)) ||
-    !fs.history ||
-    !(await fs.exists(".git"))
-  )
-    return result;
-  const history = await readProgressHistory(fs, retainedEvents);
+  if (!cards.length) return result;
+  const pinned = await readCardGoalIds(fs, cards);
   const catalog = await loadNodeCatalog(readOnlyFs(fs));
-  const active = (node: { archived: boolean; header: string }) => {
-    const status = documentLifecycle(parseFrontmatter(node.header).data).status;
-    return !node.archived && (status === "draft" || status === "stable");
-  };
   const outputs = [...catalog.byId.values()].filter(
     (node) => isOutputNode({ type: node.type }) && active(node),
   );
+  const responses = new Map(
+    outputs.map((node) => {
+      const sources = parseFrontmatter(node.header).data.sources;
+      const targets = new Set<string>();
+      if (Array.isArray(sources))
+        for (const source of sources) {
+          try {
+            const locator = materialLocator(source.resource, nodeNotePath(node.path), true);
+            if (locator.kind === "path" && !locator.suffix) targets.add(locator.target);
+          } catch {
+            /* Invalid source addresses are not response evidence. */
+          }
+        }
+      return [node.nodeId, targets];
+    }),
+  );
   for (const card of cards) {
-    const goalIds = new Set<string>();
-    const diagnostics: string[] = [];
-    for (const source of card.sources) {
-      const version = documentVersionSchema.safeParse(source.version);
-      if (!version.success) continue;
-      const pinError = history.pinErrors[versionKey(version.data)];
-      if (pinError)
-        diagnostics.push(`Cannot derive Card progress from ${source.resource}: ${pinError}`);
-      const id = history.sourceGoals[versionKey(version.data)];
-      if (id) goalIds.add(id);
-    }
-    const publication = history.publications[card.cardId];
+    const { goalIds, diagnostics } = pinned.get(card.cardId)!;
     const completed = new Set<string>(),
       outputIds = new Set<string>();
-    if (publication !== undefined)
-      for (const goalId of goalIds) {
-        const goal = catalog.byId.get(goalId);
-        if (!goal || !isRequirementNode({ type: goal.type }) || !active(goal)) continue;
-        for (const output of outputs)
-          if (
-            output.path.startsWith(goal.path + "/") &&
-            (history.attachments[output.nodeId]?.[goalId] ?? -1) > publication
-          ) {
-            completed.add(goalId);
-            outputIds.add(output.nodeId);
-          }
-      }
+    for (const goalId of goalIds) {
+      const goal = catalog.byId.get(goalId);
+      if (!goal || !isRequirementNode({ type: goal.type }) || !active(goal)) continue;
+      for (const output of outputs)
+        if (
+          output.path.startsWith(goal.path + "/") &&
+          responses.get(output.nodeId)!.has(cardRecordPath(card.cardId))
+        ) {
+          completed.add(goalId);
+          outputIds.add(output.nodeId);
+        }
+    }
     result.set(card.cardId, {
       ...deriveCardProgress(card.state, goalIds.size, completed.size, [...outputIds]),
       ...(diagnostics.length

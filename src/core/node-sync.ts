@@ -6,7 +6,7 @@ import nodePath from "node:path";
 import { loadNodeCatalog, readCatalogDocument, type CatalogNode } from "./node-catalog.js";
 import { NodeWriteError, savePreparedNodeDocumentUnlocked } from "./node-document-write.js";
 import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "./node-read-basis.js";
-import { nodeNotePath } from "./paths.js";
+import { cardRecordPath, nodeNotePath } from "./paths.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import {
   isRequirementNode,
@@ -25,6 +25,8 @@ import {
 import { createNodeUnlocked } from "./ops.js";
 import { ReaderError } from "./context-reader.js";
 import { validateNodeName } from "./scaffold.js";
+import { listCardDocuments, readCardDocument } from "./card-document.js";
+import { readCardGoalIds, type CardProgressInput } from "./card-progress.js";
 
 export type NodeSyncState = "synced" | "ahead" | "behind" | "unanchored";
 export type NodeSyncInspection = {
@@ -307,7 +309,7 @@ export function confirmNodeSync(
 export function linkNodeOutput(
   fs: FsAdapter,
   goalId: string,
-  input: { resource: string; name?: string; by?: string },
+  input: { resource: string; name?: string; by?: string; cardId?: string },
 ) {
   return withTentMutation(
     fs,
@@ -369,6 +371,33 @@ export function linkNodeOutput(
         descriptor.resource =
           (encoded.startsWith("../") ? encoded : `./${encoded}`) + locator.suffix;
       }
+      let cardId = input.cardId;
+      if (cardId) {
+        const card = (await readCardDocument(fs, cardId)) as Record<string, unknown>;
+        if (card.diagnostic || card.status === "deprecated")
+          throw new NodeWriteError("INVALID_INPUT", "Output response requires a current Card");
+      } else {
+        const listed = await listCardDocuments(fs, { state: "consumed" });
+        const candidates = listed.items.filter(
+          (card) => !card.diagnostic && card.progress === "received-no-output",
+        );
+        const cards = await Promise.all(
+          candidates.map(async (card) => {
+            const read = (await readCardDocument(fs, String(card.cardId))) as Record<
+              string,
+              unknown
+            >;
+            return {
+              cardId: String(card.cardId),
+              state: "consumed",
+              sources: read.sources,
+            } as CardProgressInput;
+          }),
+        );
+        const goals = await readCardGoalIds(fs, cards);
+        const matching = cards.filter((card) => goals.get(card.cardId)!.goalIds.has(goalId));
+        if (matching.length === 1) cardId = matching[0]!.cardId;
+      }
       const nodeId = await createNodeUnlocked(
         { fs, clock: { now: () => new Date().toISOString() }, tentName: "" },
         {
@@ -376,6 +405,7 @@ export function linkNodeOutput(
           name,
           type: "output",
           resource: descriptor.resource,
+          ...(cardId ? { sources: [{ resource: `/${cardRecordPath(cardId)}` }] } : {}),
           by: input.by,
         },
       );
