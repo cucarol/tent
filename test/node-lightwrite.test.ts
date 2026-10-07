@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
@@ -72,7 +73,7 @@ test("append preserves CRLF and handles an empty body without a leading blank li
   assert.equal(parseFrontmatter(second.raw).body, "first\r\nsecond\r\n\r\nthird\r\n");
 });
 
-test("overlapping independent writers reject the lock and retry append without losing either payload", async (t) => {
+test("overlapping independent writers wait and append without losing either payload", async (t) => {
   const { adapter, peer } = await fixture(t, "base");
   const read = adapter.readFile.bind(adapter);
   let reached!: () => void,
@@ -90,18 +91,21 @@ test("overlapping independent writers reject the lock and retry append without l
     return raw;
   };
   const first = appendNodeBody(adapter, "node-note", { body: "author one" });
+  let settled = false;
+  let second: Promise<unknown> | undefined;
   try {
     await reading;
-    await assert.rejects(
-      appendNodeBody(peer, "node-note", { body: "author two" }),
-      /another write operation/,
-    );
+    second = appendNodeBody(peer, "node-note", { body: "author two" }).finally(() => {
+      settled = true;
+    });
+    await delay(100);
+    assert.equal(settled, false, "the second append cannot pass the held mutation lock");
   } finally {
     release();
     await first;
     adapter.readFile = read;
   }
-  await appendNodeBody(peer, "node-note", { body: "author two" });
+  await second;
   assert.equal(
     (await readNodeForEdit(peer, "node-note")).body,
     "base\n\nauthor one\n\nauthor two\n",

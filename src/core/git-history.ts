@@ -400,6 +400,12 @@ const historySnapshotSchema = z.object({
   frontmatters: z.record(z.string(), z.record(z.string(), z.unknown())),
 });
 type HistorySnapshot = z.infer<typeof historySnapshotSchema>;
+type CaptureScope = {
+  head?: string | null;
+  headRead?: Promise<string | null>;
+  deferMirror?: boolean;
+  pendingMirror?: boolean;
+};
 
 /** Git plumbing for selected Markdown documents. Caller holds the Tent mutation lock for captureUnlocked. */
 export class GitDocumentHistory {
@@ -417,10 +423,80 @@ export class GitDocumentHistory {
   private derivedPromises = new Map<string, Promise<unknown>>();
   private derivedHead: string | null | undefined;
   private derivedScope = new AsyncLocalStorage<{ head: string | null }>();
+  private captureScope = new AsyncLocalStorage<CaptureScope>();
+  private mirroredIndex?: { head: string; signature: string };
+
+  /** The lock owns one baseline; publication advances it without rediscovering HEAD. */
+  async withCaptureScope<T>(action: () => Promise<T>): Promise<T> {
+    if (this.captureScope.getStore()) return action();
+    return this.captureScope.run({}, action);
+  }
+
+  private async captureHead(scope: CaptureScope): Promise<string | null> {
+    if (scope.head !== undefined) return scope.head;
+    return (scope.headRead ??= this.currentCommit().then((head) => (scope.head = head)));
+  }
+
+  async withDeferredIndexMirror<T>(action: () => Promise<T>): Promise<T> {
+    return this.withCaptureScope(async () => {
+      const scope = this.captureScope.getStore()!;
+      scope.deferMirror = true;
+      try {
+        return await action();
+      } finally {
+        scope.deferMirror = false;
+        if (scope.pendingMirror && scope.head) await this.mirrorIndex(scope.head);
+        scope.pendingMirror = false;
+      }
+    });
+  }
+
+  private async mirrorUnchanged(head: string) {
+    const scope = this.captureScope.getStore();
+    if (scope?.deferMirror) scope.pendingMirror = true;
+    else await this.mirrorIndex(head);
+  }
+
+  private async mirrorIndex(head: string) {
+    const file = path.join(this.root, ".git", "index");
+    const signature = async () => {
+      const stat = await fs.stat(file).catch(() => null);
+      return JSON.stringify(stat && [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs]);
+    };
+    if (this.mirroredIndex?.head === head && this.mirroredIndex.signature === (await signature()))
+      return;
+    try {
+      await runGit(this.root, ["read-tree", head]);
+      this.mirroredIndex = { head, signature: await signature() };
+    } catch {
+      // A busy disposable index cannot roll back a published capture. Retry next time.
+      this.mirroredIndex = undefined;
+    }
+  }
+
+  private async cachedSnapshot(head: string): Promise<HistorySnapshot | undefined> {
+    try {
+      const saved = historySnapshotSchema.parse(
+        JSON.parse(
+          await fs.readFile(path.join(this.root, ".git", "tent-history-index.json"), "utf8"),
+        ),
+      );
+      if (
+        saved.head === head &&
+        saved.digest === this.snapshotDigest(saved) &&
+        this.completeSnapshot(saved)
+      )
+        return saved;
+    } catch {
+      /* Disposable state never substitutes for Git when unavailable. */
+    }
+    return undefined;
+  }
 
   private async retainedHead() {
     const scope = this.derivedScope.getStore();
-    return scope ? scope.head : this.currentCommit();
+    const capture = this.captureScope.getStore();
+    return scope ? scope.head : capture ? this.captureHead(capture) : this.currentCommit();
   }
 
   /** Disposable, exact-HEAD indexes. A hit never invokes the history replay builder. */
@@ -802,28 +878,6 @@ export class GitDocumentHistory {
     return gitDir;
   }
 
-  private async head(): Promise<string | null> {
-    try {
-      return oid(
-        (await runGit(this.root, ["rev-parse", "--verify", "HEAD"])).toString("ascii").trim(),
-      );
-    } catch (error) {
-      let ref: string;
-      try {
-        ref = (await runGit(this.root, ["symbolic-ref", "--quiet", "HEAD"]))
-          .toString("utf8")
-          .trim();
-      } catch {
-        throw error;
-      }
-      const existing = (await runGit(this.root, ["for-each-ref", "--format=%(objectname)", ref]))
-        .toString("ascii")
-        .trim();
-      if (!existing) return null;
-      throw error;
-    }
-  }
-
   /** Current independent Tent HEAD, including an unborn repository. */
   async currentCommit(): Promise<string | null> {
     const gitDir = await this.ensureRepository();
@@ -892,7 +946,8 @@ export class GitDocumentHistory {
         `${exclude}${exclude && !exclude.endsWith("\n") ? "\n" : ""}${rules.join("\n")}\n`,
       );
     }
-    const before = await this.head();
+    const capture = this.captureScope.getStore();
+    const before = capture ? await this.captureHead(capture) : await this.currentCommit();
     const records = Object.keys(metadata.nodeRecords ?? {}).length ? await this.nodeRecords() : {};
     const recordChanges = Object.fromEntries(
       Object.entries(metadata.nodeRecords ?? {}).filter(
@@ -907,6 +962,38 @@ export class GitDocumentHistory {
     )
       return { commit: before, created: false, versions: [] };
 
+    commitMessage(metadata, metadata.objectIds ?? []);
+
+    const cached = before ? await this.cachedSnapshot(before) : undefined;
+    const retainedBlobs = new Map<string, string>();
+    if (cached)
+      for (const record of this.firstParentRecords(cached))
+        for (const file of record.files) {
+          if (file.afterBlob) retainedBlobs.set(file.path, file.afterBlob);
+          else retainedBlobs.delete(file.path);
+        }
+    if (
+      cached &&
+      !Object.keys(recordChanges).length &&
+      !metadata.acknowledgedOutputIds?.length &&
+      changes.every((change) =>
+        change.raw === null
+          ? !retainedBlobs.has(change.path)
+          : cached.blobs[retainedBlobs.get(change.path) ?? ""] === change.raw,
+      )
+    ) {
+      if ((await this.currentCommit()) !== before)
+        throw new Error("Tent Git history HEAD changed during capture");
+      await this.mirrorUnchanged(before!);
+      return {
+        commit: before,
+        created: false,
+        versions: changes
+          .filter((c) => c.raw !== null)
+          .map((c) => ({ commit: before!, path: c.path })),
+      };
+    }
+
     // HEAD is the cache key, never mtime or a process-local "already saved" flag.
     // Cache object identities only; comparison uses Git's exact blob digest.
     if (this.knownHead !== before) {
@@ -920,7 +1007,6 @@ export class GitDocumentHistory {
         }
       this.knownHead = before;
     }
-    commitMessage(metadata, metadata.objectIds ?? []);
     const objectFormat =
       before?.length === 64
         ? "sha256"
@@ -943,11 +1029,11 @@ export class GitDocumentHistory {
       !metadata.acknowledgedOutputIds?.length &&
       changes.every((change) => this.knownEntries.get(change.path) === expected.get(change.path))
     ) {
-      if ((await this.head()) !== before)
+      if ((await this.currentCommit()) !== before)
         throw new Error("Tent Git history HEAD changed during capture");
       // These bytes already belong to HEAD. A busy disposable index cannot
       // turn a published save into a rollback; a later capture retries the mirror.
-      if (before) await runGit(this.root, ["read-tree", before]).catch(() => {});
+      if (before) await this.mirrorUnchanged(before);
       return {
         commit: before,
         created: false,
@@ -968,7 +1054,10 @@ export class GitDocumentHistory {
         if (id) objectIds.add(id);
       }
       if (before && this.knownEntries.has(change.path)) {
-        const id = identity(await this.readSnapshot({ commit: before, path: change.path }));
+        const id = identity(
+          cached?.blobs[retainedBlobs.get(change.path) ?? ""] ??
+            (await this.readSnapshot({ commit: before, path: change.path })),
+        );
         if (id) objectIds.add(id);
       }
     }
@@ -981,26 +1070,50 @@ export class GitDocumentHistory {
     let committed = false;
     try {
       await runGit(this.root, before ? ["read-tree", before] : ["read-tree", "--empty"], { index });
-      for (const change of changes) {
-        if (change.raw === null) {
-          await runGit(this.root, ["update-index", "--force-remove", "--", change.path], { index });
-        } else {
-          const blob = oid(
+      const written = changes.filter((change) => change.raw !== null);
+      let blobs: string[] = [];
+      if (written.length === 1) {
+        blobs = [
+          oid(
             (
               await runGit(this.root, ["hash-object", "-w", "--no-filters", "--stdin"], {
-                input: Buffer.from(change.raw, "utf8"),
+                input: Buffer.from(written[0]!.raw!, "utf8"),
               })
             )
               .toString("ascii")
               .trim(),
-          );
-          await runGit(
-            this.root,
-            ["update-index", "--add", "--cacheinfo", "100644", blob, change.path],
-            { index },
-          );
-        }
+          ),
+        ];
+      } else if (written.length) {
+        const files = await Promise.all(
+          written.map(async (change, i) => {
+            const file = path.join(temporary, `blob-${i}`);
+            await fs.writeFile(file, change.raw!, "utf8");
+            return file;
+          }),
+        );
+        blobs = (
+          await runGit(this.root, ["hash-object", "-w", "--no-filters", "--stdin-paths"], {
+            input: Buffer.from(
+              files.map((file) => JSON.stringify(file.replaceAll("\\", "/"))).join("\n") + "\n",
+            ),
+          })
+        )
+          .toString("ascii")
+          .trim()
+          .split(/\r?\n/)
+          .map(oid);
+        if (blobs.length !== written.length) throw new Error("Incomplete Git blob batch");
       }
+      const entries = changes
+        .filter((change) => change.raw === null)
+        .map((change) => `0 ${"0".repeat(objectFormat === "sha256" ? 64 : 40)}\t${change.path}\0`);
+      written.forEach((change, i) => entries.push(`100644 ${blobs[i]}\t${change.path}\0`));
+      if (entries.length)
+        await runGit(this.root, ["update-index", "-z", "--index-info"], {
+          index,
+          input: Buffer.from(entries.join("")),
+        });
       const tree = oid(
         (await runGit(this.root, ["write-tree"], { index })).toString("ascii").trim(),
       );
@@ -1026,7 +1139,12 @@ export class GitDocumentHistory {
       committed = true;
       // The independent repository's ordinary index mirrors retained HEAD.
       // read-tree updates only the index; external worktree edits remain visible.
-      await runGit(this.root, ["read-tree", commit]).catch(() => {});
+      await this.mirrorIndex(commit);
+      const scope = this.captureScope.getStore();
+      if (scope) {
+        scope.head = commit;
+        scope.pendingMirror = false;
+      }
       this.knownHead = commit;
       for (const [path, entry] of expected) {
         if (entry === undefined) this.knownEntries.delete(path);
@@ -1547,7 +1665,7 @@ export class GitDocumentHistory {
   async pathsUnder(prefix: string): Promise<string[]> {
     documentPath(prefix);
     await this.ensureRepository();
-    const head = await this.head();
+    const head = await this.retainedHead();
     if (!head) return [];
     return (await runGit(this.root, ["ls-tree", "-r", "--name-only", "-z", head]))
       .toString("utf8")

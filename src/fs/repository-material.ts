@@ -63,12 +63,19 @@ async function git(args: string[]) {
   return stdout.trim();
 }
 async function discoverRepository(root: string): Promise<Repository> {
-  const top = await git(["-C", root, "rev-parse", "--show-toplevel"]);
-  const [common, gitDir, format] = await Promise.all([
-    git(["-C", top, "rev-parse", "--path-format=absolute", "--git-common-dir"]),
-    git(["-C", top, "rev-parse", "--absolute-git-dir"]),
-    git(["-C", top, "rev-parse", "--show-object-format"]),
-  ]);
+  const [top, common, gitDir, format] = (
+    await git([
+      "-C",
+      root,
+      "rev-parse",
+      "--path-format=absolute",
+      "--show-toplevel",
+      "--git-common-dir",
+      "--absolute-git-dir",
+      "--show-object-format",
+    ])
+  ).split(/\r?\n/);
+  if (!top || !common || !gitDir || !format) throw new Error("Incomplete Git repository discovery");
   return {
     root: await realpath(top),
     commonDir: await realpath(common),

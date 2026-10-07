@@ -739,6 +739,101 @@ test("current HEAD reads loose, packed, detached and unborn refs without caching
   await assert.rejects(history.currentCommit(), /Cyclic/);
 });
 
+test("capture scope discovers one baseline, advances after publication and checks unchanged refs", async (t) => {
+  const { history, git } = await fixture(t);
+  const file = "A/A.md",
+    first = "---\nid: node-a\ntype: prompt\n---\nfirst\n";
+  await history.captureUnlocked([{ path: file, raw: first }]);
+  const original = history.currentCommit.bind(history);
+  let baselineReads = 0;
+  t.mock.method(history, "currentCommit", async () => {
+    baselineReads++;
+    return original();
+  });
+  await history.withCaptureScope(async () => {
+    assert.equal(baselineReads, 0, "a lock-only scope does not require initialized Git history");
+    await history.nodeRecords();
+    await history.pathVersions(file);
+    const saved = await history.captureUnlocked([{ path: file, raw: first + "second\n" }]);
+    assert.equal(git("rev-parse", "HEAD"), saved.commit);
+    const recordHead = await history.derived("scope-test", 1, async (head) => head);
+    assert.equal(recordHead, saved.commit);
+    assert.equal(baselineReads, 1, "retained consumers and publication reuse the lock baseline");
+    git("update-ref", "HEAD", saved.commit!, saved.commit!);
+    const unchanged = await history.captureUnlocked([{ path: file, raw: first + "second\n" }]);
+    assert.equal(unchanged.created, false);
+    assert.equal(baselineReads, 2, "unchanged capture independently validates the live ref");
+  });
+});
+
+test("capture scope rejects external HEAD replacement for unchanged capture and update-ref CAS", async (t) => {
+  const { history, git, root } = await fixture(t);
+  const file = "A/A.md",
+    raw = "---\nid: node-a\ntype: prompt\n---\nfirst\n";
+  const initial = await history.captureUnlocked([{ path: file, raw }]);
+  git("config", "user.name", "Test");
+  git("config", "user.email", "test@invalid");
+  const external = git(
+    "commit-tree",
+    git("rev-parse", "HEAD^{tree}"),
+    "-p",
+    initial.commit!,
+    "-m",
+    "external",
+  );
+  await history.withCaptureScope(async () => {
+    await history.nodeRecords(); // Establish the history baseline before the external write.
+    git("update-ref", "HEAD", external, initial.commit!);
+    await assert.rejects(
+      history.captureUnlocked([{ path: file, raw }]),
+      /HEAD changed during capture/,
+    );
+  });
+  git("update-ref", "HEAD", initial.commit!, external);
+  const spawn = childProcess.spawn;
+  let replaced = false;
+  const mock = t.mock.method(childProcess, "spawn", (...args: Parameters<typeof spawn>) => {
+    if (!replaced && (args[1] as string[]).includes("hash-object")) {
+      replaced = true;
+      git("update-ref", "HEAD", external, initial.commit!);
+    }
+    return spawn(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      history.withCaptureScope(() =>
+        history.captureUnlocked([{ path: file, raw: raw + "saved\n" }]),
+      ),
+      /HEAD changed during capture/,
+    );
+    assert.equal(replaced, true);
+    assert.equal(git("rev-parse", "HEAD"), external);
+    assert.equal(git("show", `HEAD:${file}`), raw.trim());
+    assert.equal(
+      (await fs.readdir(path.join(root, ".git"))).some((name) => name.startsWith("tent-index-")),
+      false,
+    );
+  } finally {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+test("a reused index mirror notices external index writes and preserves live editor bytes", async (t) => {
+  const { history, root, git } = await fixture(t);
+  const file = "A/A.md",
+    raw = "---\nid: node-a\ntype: prompt\n---\nretained\n";
+  await history.captureUnlocked([{ path: file, raw }]);
+  await fs.mkdir(path.join(root, "A"));
+  await fs.writeFile(path.join(root, file), raw + "editor\n");
+  git("read-tree", "--empty");
+  const unchanged = await history.captureUnlocked([{ path: file, raw }]);
+  assert.equal(unchanged.created, false);
+  assert.equal(git("diff", "--cached", "--name-only"), "");
+  assert.equal(await fs.readFile(path.join(root, file), "utf8"), raw + "editor\n");
+});
+
 test("batched source reads match single-path history through merges, ABA and invalid versions", async (t) => {
   const { root, git, history } = await fixture(t);
   git("config", "user.name", "Test");

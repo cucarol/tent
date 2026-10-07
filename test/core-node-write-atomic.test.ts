@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { createNode, renameNode, moveNode } from "../src/core/ops.js";
@@ -225,14 +226,21 @@ test("independent adapters enforce the Workspace lock and stale CAS for every No
     const send = (fs: NodeFs, author: "a" | "b") =>
       writeNodeDocument(fs, id, { baseEtag: live.etag, ...payload(author) });
     const first = send(adapter, "a");
+    let settled = false;
+    let second: Promise<void> | undefined;
     try {
       await reading;
-      await assert.rejects(send(peer, "b"), /another write operation/);
+      second = assert.rejects(send(peer, "b"), /etag conflict/).finally(() => {
+        settled = true;
+      });
+      await delay(100);
+      assert.equal(settled, false, "the second writer waits before checking its stale CAS basis");
     } finally {
       release();
       await first;
       adapter.readFile = originalRead;
     }
+    await second;
     await assert.rejects(send(peer, "b"), /etag conflict/);
     const after = await readNodeForEdit(adapter, id);
     if (mode === "type") assert.equal(after.type, "output");

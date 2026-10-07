@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import {
@@ -1049,15 +1050,23 @@ test("move and take share a lock, and take checks the destination that won", asy
     expectedEtag: card.etag,
   });
   await inside;
-  try {
-    await assert.rejects(
+  let settled = false;
+  const taking = assert
+    .rejects(
       () => takeCardDocument(new NodeFs(root), card.cardId, "role-a"),
-      /already running another write operation/,
-    );
+      code("RECEPTION_CONFLICT"),
+    )
+    .finally(() => {
+      settled = true;
+    });
+  try {
+    await delay(100);
+    assert.equal(settled, false, "take waits while move owns the mutation lock");
   } finally {
     release();
   }
   await moving;
+  await taking;
   await assert.rejects(
     () => takeCardDocument(adapter, card.cardId, "role-a"),
     code("RECEPTION_CONFLICT"),

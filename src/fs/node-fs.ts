@@ -297,6 +297,13 @@ export class NodeFs implements FsAdapter {
 
   async withDocumentHistory<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T> {
     if (!(await this.exists(".git"))) return action();
+    return this.history.withDeferredIndexMirror(() => this.recordDocumentChanges(action, metadata));
+  }
+
+  private async recordDocumentChanges<T>(
+    action: () => Promise<T>,
+    metadata?: CaptureMetadata,
+  ): Promise<T> {
     return this.historyPreimages.run(new Map(), () =>
       this.historyWrites.run(new Map(), async () => {
         const result = await action();
@@ -425,11 +432,16 @@ export class NodeFs implements FsAdapter {
   }
 
   async withLock<T>(path: string, action: () => Promise<T>): Promise<T> {
-    return withFileMutationLock(this.abs(path), action, {
-      waitMs: this.entry === "cli" ? 8_000 : 0,
-      busyMessage: "Tent is already running another write operation; try again later.",
-      acquireFailedMessage: "Cannot acquire the Tent mutation lock.",
-    });
+    return withFileMutationLock(
+      this.abs(path),
+      async () => ((await this.exists(".git")) ? this.history.withCaptureScope(action) : action()),
+      {
+        waitMs: 8_000,
+        busyMessage:
+          "Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying.",
+        acquireFailedMessage: "Cannot acquire the Tent mutation lock.",
+      },
+    );
   }
 }
 
