@@ -239,7 +239,13 @@ for (const failure of ["document", "order", "capture", "git-lock"] as const) {
     await assert.rejects(
       writeNodesBatch(env, {
         items: [
-          { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "next" },
+          {
+            op: "update",
+            nodeId: existing.nodeId,
+            baseEtag: existing.etag,
+            body: "next",
+            confirm: true,
+          },
           { op: "create", ref: "child", parent: "@new", name: "Child", type: "output" },
           { op: "create", ref: "new", parent: null, name: "New", type: "goal" },
         ],

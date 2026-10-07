@@ -32,6 +32,7 @@ import {
   prepareNodeSyncSave,
   retainedNodeRecords,
   isOutputNode,
+  nodeSemanticFingerprint,
   type NodeBasisRecord,
 } from "./node-sync-record.js";
 
@@ -94,6 +95,7 @@ type PlannedNode = {
   raw: string;
   parentId?: string;
   confirm?: boolean;
+  wholeBody?: boolean;
   by?: string;
 };
 
@@ -274,6 +276,7 @@ async function writeNodesBatchUnlocked(
         raw,
         by: item.by,
         confirm: item.confirm,
+        wholeBody: item.body !== undefined || item.raw !== undefined,
       });
     }
   }
@@ -303,20 +306,35 @@ async function writeNodesBatchUnlocked(
     });
   }
   const basisRecords = await retainedNodeRecords(fs);
+  const acknowledgedOutputIds: string[] = [];
   for (const node of [...planned].sort(
     (a, b) =>
       Number(isOutputNode(parseFrontmatter(a.raw).data)) -
       Number(isOutputNode(parseFrontmatter(b.raw).data)),
   )) {
+    const output = isOutputNode(parseFrontmatter(node.raw).data);
+    const acknowledge =
+      node.before !== null &&
+      output &&
+      node.wholeBody === true &&
+      nodeSemanticFingerprint(
+        {},
+        parseFrontmatter(node.raw).body,
+        nodeNotePath(node.path),
+        nodes,
+      ) !==
+        nodeSemanticFingerprint(
+          {},
+          references(node.path, {}, parseFrontmatter(node.before).body),
+          nodeNotePath(node.path),
+          nodes,
+        );
+    if (output && (node.confirm || acknowledge)) acknowledgedOutputIds.push(node.nodeId);
     const prepared = await prepareNodeSyncSave(fs, nodeNotePath(node.path), node.raw, {
       now,
       created: node.before === null,
       confirm: node.confirm,
-      acknowledge:
-        node.before !== null &&
-        isOutputNode(parseFrontmatter(node.raw).data) &&
-        parseFrontmatter(node.raw).body.replace(/\r\n?/g, "\n") !==
-          parseFrontmatter(node.before).body.replace(/\r\n?/g, "\n"),
+      acknowledge,
       by: node.by,
       nodes,
       finalDocuments,
@@ -374,7 +392,7 @@ async function writeNodesBatchUnlocked(
       fs.history && (await fs.exists(".git"))
         ? await fs.history.captureUnlocked(
             planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
-            { operation: "node.write-many", nodeRecords },
+            { operation: "node.write-many", nodeRecords, acknowledgedOutputIds },
           )
         : undefined;
     return {

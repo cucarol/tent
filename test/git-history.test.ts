@@ -20,6 +20,33 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, init = true)
   return { workspace, root, git, history: new GitDocumentHistory(root) };
 }
 
+test("output acknowledgment facts survive unchanged documents and records in a fresh history reader", async (t) => {
+  const { root, history } = await fixture(t);
+  const raw = "---\nid: node-output\ntype: output-evidence\n---\nunchanged\n";
+  const record = { materials: [] };
+  const first = await history.captureUnlocked([{ path: "Output/Output.md", raw }], {
+    operation: "node.create",
+    nodeRecords: { "node-output": record },
+  });
+  assert.deepEqual(
+    (await new GitDocumentHistory(root).changesInRange()).at(-1)!.acknowledgedOutputIds,
+    [],
+  );
+  const ack = await history.captureUnlocked([], {
+    operation: "node.sync-confirm",
+    nodeRecords: { "node-output": record },
+    acknowledgedOutputIds: ["node-output"],
+  });
+  assert.ok(ack.created);
+  assert.notEqual(ack.commit, first.commit);
+  const latest = (await new GitDocumentHistory(root).changesInRange()).at(-1)!;
+  assert.deepEqual(latest.acknowledgedOutputIds, ["node-output"]);
+  assert.deepEqual(latest.objectIds, ["node-output"]);
+  assert.deepEqual(latest.changes, []);
+  assert.deepEqual((await history.nodeRecords())["node-output"], record);
+  assert.equal((await history.captureUnlocked([], { operation: "node.write" })).created, false);
+});
+
 test("batched first timestamps retain publication across edits, removal and re-addition", async (t) => {
   const { root, git, history } = await fixture(t);
   const a = "cards/card-a.md",

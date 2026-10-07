@@ -44,7 +44,8 @@ export class PropagationMemoryFs implements FsAdapter {
       const recordChanged = Object.entries(metadata?.nodeRecords ?? {}).some(
         ([id, record]) => !isDeepStrictEqual(records[id], record),
       );
-      if (changed.length || recordChanged) {
+      const acknowledgedOutputIds = [...new Set(metadata?.acknowledgedOutputIds ?? [])];
+      if (changed.length || recordChanged || acknowledgedOutputIds.length) {
         const commit = createHash("sha1")
           .update(String(events.length + 1))
           .digest("hex");
@@ -76,6 +77,7 @@ export class PropagationMemoryFs implements FsAdapter {
               ...(raw !== null ? { after: { commit, path } } : {}),
             };
           }),
+          acknowledgedOutputIds,
         };
         event.objectIds = [
           ...new Set(event.changes.flatMap((x) => (x.objectId ? [x.objectId] : []))),
@@ -89,7 +91,7 @@ export class PropagationMemoryFs implements FsAdapter {
       }
       return {
         commit: head(),
-        created: !!(changed.length || recordChanged),
+        created: !!(changed.length || recordChanged || acknowledgedOutputIds.length),
         versions: changes
           .filter((x) => x.raw !== null)
           .map(({ path }) => ({ commit: head()!, path })),

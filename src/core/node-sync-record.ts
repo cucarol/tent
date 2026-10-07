@@ -63,13 +63,7 @@ export function goalAncestors(node: CatalogNode, byId: Map<string, CatalogNode>)
   const goals: CatalogNode[] = [];
   let parent = node.parentNodeId ? byId.get(node.parentNodeId) : undefined;
   while (parent) {
-    if (
-      !parent.archived &&
-      !parent.invalid &&
-      parseFrontmatter(parent.header).data.status !== "deprecated" &&
-      isRequirementNode({ type: parent.type })
-    )
-      goals.push(parent);
+    if (!parent.invalid && isRequirementNode({ type: parent.type })) goals.push(parent);
     parent = parent.parentNodeId ? byId.get(parent.parentNodeId) : undefined;
   }
   return goals;
@@ -417,9 +411,7 @@ export async function prepareNodeSyncSave(
     ![...options.previousLocation.nodes.values()].some(
       (ancestor) =>
         options.previousLocation!.documentPath.startsWith(ancestor.path + "/") &&
-        !ancestor.archived &&
         !ancestor.invalid &&
-        parseFrontmatter(ancestor.header).data.status !== "deprecated" &&
         isRequirementNode({ type: ancestor.type }),
     );
   if (

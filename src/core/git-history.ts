@@ -24,6 +24,7 @@ export type CaptureMetadata = {
   objectIds?: readonly string[];
   entry?: "cli" | "ui" | "core";
   nodeRecords?: Record<string, NodeBasisRecord>;
+  acknowledgedOutputIds?: readonly string[];
 };
 export type HistoryChange = {
   objectId?: string;
@@ -38,6 +39,7 @@ export type HistoryCommit = {
   objectIds: string[];
   entry?: "cli" | "ui" | "core";
   changes: HistoryChange[];
+  acknowledgedOutputIds?: string[];
 };
 
 const oidPattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
@@ -90,10 +92,14 @@ function commitMessage(metadata: CaptureMetadata, objectIds: readonly string[]):
   if (metadata.entry !== undefined && !["cli", "ui", "core"].includes(metadata.entry)) {
     throw new Error(`Invalid Tent history entry: ${metadata.entry}`);
   }
+  const acknowledgedOutputIds = [...new Set(metadata.acknowledgedOutputIds ?? [])].sort();
+  for (const id of acknowledgedOutputIds)
+    if (!isNodeId(id)) throw new Error(`Invalid acknowledged output id: ${id}`);
   return (
     `Tent: ${metadata.operation}\n\nTent-Operation: ${metadata.operation}` +
     objectIds.map((id) => `\nTent-Object: ${id}`).join("") +
     (metadata.entry ? `\nTent-Entry: ${metadata.entry}` : "") +
+    `\nTent-Output-Acknowledged: ${JSON.stringify(acknowledgedOutputIds)}` +
     Object.entries(metadata.nodeRecords ?? {})
       .map(([id, record]) => {
         if (!isNodeId(id)) throw new Error(`Invalid Node record id: ${id}`);
@@ -796,7 +802,11 @@ export class GitDocumentHistory {
       ),
     );
     metadata = { ...metadata, nodeRecords: recordChanges };
-    if (changes.length === 0 && !Object.keys(recordChanges).length)
+    if (
+      changes.length === 0 &&
+      !Object.keys(recordChanges).length &&
+      !metadata.acknowledgedOutputIds?.length
+    )
       return { commit: before, created: false, versions: [] };
 
     // HEAD is the cache key, never mtime or a process-local "already saved" flag.
@@ -832,11 +842,14 @@ export class GitDocumentHistory {
     );
     if (
       !Object.keys(recordChanges).length &&
+      !metadata.acknowledgedOutputIds?.length &&
       changes.every((change) => this.knownEntries.get(change.path) === expected.get(change.path))
     ) {
       if ((await this.head()) !== before)
         throw new Error("Tent Git history HEAD changed during capture");
-      if (before) await runGit(this.root, ["read-tree", before]);
+      // These bytes already belong to HEAD. A busy disposable index cannot
+      // turn a published save into a rollback; a later capture retries the mirror.
+      if (before) await runGit(this.root, ["read-tree", before]).catch(() => {});
       return {
         commit: before,
         created: false,
@@ -846,7 +859,10 @@ export class GitDocumentHistory {
       };
     }
 
-    const objectIds = new Set(metadata.objectIds ?? []);
+    const objectIds = new Set([
+      ...(metadata.objectIds ?? []),
+      ...(metadata.acknowledgedOutputIds ?? []),
+    ]);
     for (const change of changes) {
       if (this.knownEntries.get(change.path) === expected.get(change.path)) continue;
       if (change.raw !== null) {
@@ -912,7 +928,7 @@ export class GitDocumentHistory {
       committed = true;
       // The independent repository's ordinary index mirrors retained HEAD.
       // read-tree updates only the index; external worktree edits remain visible.
-      await runGit(this.root, ["read-tree", commit]);
+      await runGit(this.root, ["read-tree", commit]).catch(() => {});
       this.knownHead = commit;
       for (const [path, entry] of expected) {
         if (entry === undefined) this.knownEntries.delete(path);
@@ -1204,7 +1220,7 @@ export class GitDocumentHistory {
   /** Changes from an exclusive ancestor to an inclusive descendant, oldest first. */
   async changesInRange(range: { from?: string; to?: string } = {}): Promise<HistoryCommit[]> {
     if (!range.from && !range.to)
-      return this.derived("identity-events", 1, () => this.buildChangesInRange(range));
+      return this.derived("identity-events", 3, () => this.buildChangesInRange(range));
     return this.buildChangesInRange(range);
   }
 
@@ -1279,6 +1295,10 @@ export class GitDocumentHistory {
       )?.[1];
       const entryValue = /^Tent-Entry: (cli|ui|core)$/m.exec(message)?.[1];
       const entry = entryValue as HistoryCommit["entry"];
+      const acknowledgment = /^Tent-Output-Acknowledged: (.+)$/m.exec(message);
+      const acknowledgedOutputIds = acknowledgment
+        ? z.array(z.string().refine(isNodeId)).parse(JSON.parse(acknowledgment[1]!))
+        : undefined;
       const objectIds = new Set(
         [...message.matchAll(/^Tent-Object: (.+)$/gm)]
           .map((match) => match[1]!)
@@ -1309,6 +1329,7 @@ export class GitDocumentHistory {
         ...(operation ? { operation } : {}),
         objectIds: [...objectIds].sort(),
         ...(entry ? { entry } : {}),
+        ...(acknowledgedOutputIds ? { acknowledgedOutputIds } : {}),
         changes,
       });
 

@@ -570,7 +570,7 @@ export class SequenceRunner {
         ),
     );
     const eligible = relevant.filter((c) => op.role && c.receiver === op.role);
-    const reject = !explicit && relevant.length > 0 && eligible.length !== 1;
+    const reject = explicit ? !explicit.received : relevant.length > 0 && eligible.length !== 1;
     const resource: Material = {
       kind: "file",
       location: `../result-${this.tick}.txt`,
@@ -591,9 +591,14 @@ export class SequenceRunner {
         error = caught;
       }
       this.expect(
-        error instanceof Error && /--card/.test(error.message),
+        error instanceof Error &&
+          (explicit
+            ? /requires a current received Card/.test(error.message)
+            : /--card/.test(error.message)),
         "I4-attribution",
-        `automatic link role=${op.role ?? "missing"} must require --card for ${relevant.map((c) => `${c.id}:${c.receiver ?? "missing"}`).join(",")}`,
+        explicit
+          ? `explicit link must reject unreceived Card ${explicit.id}`
+          : `automatic link role=${op.role ?? "missing"} must require --card for ${relevant.map((c) => `${c.id}:${c.receiver ?? "missing"}`).join(",")}`,
       );
       this.executed.add(op.kind);
       return;

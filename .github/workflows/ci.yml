@@ -29,3 +29,6 @@ jobs:
       - run: npm ci
       - run: npm run security:audit
       - run: npm run check
+      - name: Scan bounded propagation sequences
+        if: runner.os == 'Linux'
+        run: TENT_PROPAGATION_SEED="$(seq -s, 100 129),$(seq -s, 200 299)" node --import tsx --test test/propagation-sequences.test.ts

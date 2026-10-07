@@ -24,6 +24,126 @@ const note = (id: string, type: string, body: string, metadata = {}) =>
 const catalog = (rows: [string, string, string][]) =>
   historicalNodeCatalog(new Map(rows.map(([id, path, raw]) => [id, { path, raw }])));
 
+for (const unreadable of ["missing-section", "deleted", "invalid", "older-readable"] as const) {
+  for (const changedReceipt of [false, true]) {
+    for (const independent of [false, true]) {
+      test(`newer receipt ${unreadable}/${changedReceipt ? "changed" : "unchanged"}/${independent ? "independent" : "single"} requires proof of false`, async (t) => {
+        const material = (body: string) => note("node-u", "prompt", `## Plan\n\n${body}\n`);
+        const goal = note("node-g", "goal", "requirement A\n", { resource: "/U/U.md#Plan" });
+        const rows: [string, string, string][] = [
+          ["node-u", "U", material("A")],
+          ["node-g", "G", goal],
+          ["node-o", "G/O", note("node-o", "output-evidence", "implementation\n")],
+        ];
+        if (independent)
+          rows.push(["node-s", "G/S", note("node-s", "output-evidence", "sibling\n")]);
+        const nodes = catalog(rows);
+        const goalVersion = (raw: string) => {
+          const parsed = parseFrontmatter(raw);
+          return nodeSemanticFingerprint(parsed.data, parsed.body, "G/G.md", nodes);
+        };
+        const record = (version: string, body = goal): NodeBasisRecord => ({
+          materials: [],
+          goals: [
+            {
+              nodeId: "node-g",
+              version: goalVersion(body),
+              fingerprintVersion: 2,
+              materials: [
+                {
+                  identity: "node:node-u#Plan",
+                  version: nodeMaterialFingerprint(
+                    material(version),
+                    { kind: "path", anchor: "bundle", target: "U/U.md", suffix: "#Plan" },
+                    nodes,
+                  ),
+                  fingerprintVersion: 2,
+                },
+              ],
+            },
+          ],
+        });
+        const initial = record("A");
+        const confirmed = changedReceipt ? "B" : "A";
+        const changedGoal = independent
+          ? note("node-g", "goal", "requirement B\n", { resource: "/U/U.md#Plan" })
+          : goal;
+        const events: HistoryCommit[] = Array.from({ length: 6 }, (_, i) => ({
+          commit: String(i).repeat(40),
+          time: `time-${i}`,
+          objectIds: [],
+          changes: [],
+          acknowledgedOutputIds: [],
+        }));
+        const versions = new Map<string, string>();
+        const add = (i: number, id: string, path: string, raw: string | null) => {
+          events[i]!.changes.push({
+            objectId: id,
+            ...(raw === null
+              ? { before: { commit: events[0]!.commit, path } }
+              : { after: { commit: events[i]!.commit, path } }),
+          });
+          if (raw !== null) versions.set(`${events[i]!.commit}:${path}`, raw);
+        };
+        for (const [id, path, raw] of rows) add(0, id, `${path}/${path.split("/").at(-1)}.md`, raw);
+        if (independent) add(1, "node-g", "G/G.md", changedGoal);
+        if (unreadable !== "older-readable")
+          add(
+            1,
+            "node-u",
+            "U/U.md",
+            unreadable === "deleted"
+              ? null
+              : unreadable === "invalid"
+                ? "---\nid: [\n---\ninvalid\n"
+                : material("A").replace("## Plan", "## Missing"),
+          );
+        events[2]!.acknowledgedOutputIds = ["node-o"];
+        add(3, "node-u", "U/U.md", material("C"));
+        add(4, "node-u", "U/U.md", material(confirmed));
+        add(4, "node-g", "G/G.md", changedGoal);
+        if (independent) events[4]!.acknowledgedOutputIds = ["node-s"];
+        add(5, "node-u", "U/U.md", material("D"));
+        const records = {
+          [events[0]!.commit]: { "node-o": initial, ...(independent ? { "node-s": initial } : {}) },
+          [events[2]!.commit]: { "node-o": record(confirmed, changedGoal) },
+          ...(independent
+            ? { [events[4]!.commit]: { "node-s": record(confirmed, changedGoal) } }
+            : {}),
+        };
+        const history = new GitDocumentHistory("unused");
+        t.mock.method(
+          history,
+          "derived",
+          async <T>(_n: string, _v: number, compute: (head: string | null) => Promise<T>) =>
+            compute(events.at(-1)!.commit),
+        );
+        t.mock.method(history, "changesInRange", async () => events);
+        t.mock.method(history, "nodeRecordEvents", async () => records);
+        t.mock.method(history, "readVersions", async (requested: readonly DocumentVersion[]) =>
+          requested.map((version) => ({
+            version,
+            raw: versions.get(`${version.commit}:${version.path}`)!,
+            changedSince: false,
+          })),
+        );
+        const tail = events.splice(4);
+        const times = await latestGoalAheadTimes(history);
+        assert.equal(
+          times["node-g"],
+          independent ? "time-1" : changedReceipt ? "time-3" : undefined,
+        );
+        events.push(...tail);
+        assert.equal(
+          (await latestGoalAheadTimes(history))["node-g"],
+          "time-5",
+          "new retained matching bytes prove false, then changed bytes prove a new start",
+        );
+      });
+    }
+  }
+}
+
 test("history memo preserves the document directory for slash headings and follows referenced identity changes", () => {
   const raw = note("node-p", "prompt", "## A/B\n[ref](./Ref/Ref.md)\n");
   const ref = note("node-r", "prompt", "ref\n");
