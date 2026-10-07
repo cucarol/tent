@@ -14,7 +14,7 @@ async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "node-batch-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspace = path.join(root, "workspace");
   await initializeTentWorkspace(workspace);
   const adapter = new NodeFs(path.join(workspace, ".tent"));

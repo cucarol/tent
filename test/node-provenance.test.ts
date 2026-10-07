@@ -36,7 +36,7 @@ const createdAt = "2026-10-04T00:00:00.000Z";
 async function fixture(t: TestContext) {
   await fs.mkdir(path.resolve(".scratch"), { recursive: true });
   const root = await fs.mkdtemp(path.resolve(".scratch/native-provenance-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await scaffoldInWorkspace(new NodeFs(root), {
     name: "Native",
     nodes: [{ id: "node-legacy", name: "Legacy", type: "prompt", body: "## Fact\noriginal\n" }],

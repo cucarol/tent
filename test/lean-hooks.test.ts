@@ -32,7 +32,7 @@ async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "lean-hooks-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await scaffoldInWorkspace(new NodeFs(root), { name: "hooks" });
   await git(path.join(root, ".tent"), "init");
   const adapter = new NodeFs(path.join(root, ".tent"));

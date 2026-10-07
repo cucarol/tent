@@ -12,7 +12,7 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "cli-reader-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspace = path.join(root, "workspace");
   const body = "😀reader fidelity\n" + "正文".repeat(12000) + "\n[B](../B/B.md)\n";
   await scaffoldInWorkspace(new NodeFs(workspace), {
@@ -80,11 +80,12 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
     assert.equal((await node("backlinks", ["node-readerb"])).items[0].from.nodeId, "node-readera");
     await git(path.join(workspace, ".tent"), "init");
     const created = parse(
-      await runCardCommand("create", ["--prompt", "reader", "--source", "/A/A.md"], globals),
+      await runCardCommand("create", ["--prompt", "reader", "--source", ".tent/A/A.md"], globals),
     );
     const cardId = created.cardId;
     const savedInput = parse(await runCardCommand("get", [cardId], globals));
     const version = savedInput.sources[0].version;
+    assert.equal(version.path, "A/A.md");
     const largeCard = parse(
       await runCardCommand(
         "create",

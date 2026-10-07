@@ -14,7 +14,7 @@ import { testScratchRoot } from "./scratch.js";
 
 test("sync reads changed materials without a revision change and agrees with brief on both flags", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "ui-sync-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await initializeTentWorkspace(root);
   const tent = new NodeFs(path.join(root, ".tent"));
   await fs.writeFile(path.join(root, "requirements.txt"), "before");

@@ -23,7 +23,7 @@ import { writeNodeDocument } from "../src/core/node-document-write.js";
 
 async function fixture(t: TestContext, nestedWorktree = false) {
   const base = await fs.mkdtemp(path.join(testScratchRoot(), "repository-material-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  t.after(() => fs.rm(base, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const main = path.join(base, "main"),
     worktree = nestedWorktree ? path.join(main, ".worktrees/topic") : path.join(base, "topic");
   await fs.mkdir(main);

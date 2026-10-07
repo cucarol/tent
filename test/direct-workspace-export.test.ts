@@ -15,7 +15,7 @@ test("direct export preserves published Git sources after live rename/deletion a
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "direct-export-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await initializeTentWorkspace(workspace);
   const tentRoot = path.join(workspace, ".tent"),
     adapter = new NodeFs(tentRoot);
@@ -42,16 +42,22 @@ test("direct export preserves published Git sources after live rename/deletion a
         "--prompt",
         "Read originals",
         "--source",
-        "/Source/Source.md",
+        ".tent/Source/Source.md",
         "--source",
-        `/roles/${role.roleId}.md`,
+        `.tent/roles/${role.roleId}.md`,
         "--source",
-        "../../external.txt",
+        "./external.txt",
       ],
       globals,
     ),
   );
   const published = parse(await runCardCommand("show", [card.cardId], globals));
+  assert.deepEqual(
+    published.sources
+      .slice(0, 2)
+      .map((source: { version: { path: string } }) => source.version.path),
+    ["Source/Source.md", `roles/${role.roleId}.md`],
+  );
   await runNodeCommand("rename", [node.nodeId, "Moved"], globals).then(parse);
   await fs.unlink(path.join(tentRoot, "roles", `${role.roleId}.md`));
   await adapter.writeFile("temp/not-exported.json", "runtime only");

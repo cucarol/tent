@@ -29,7 +29,7 @@ import { syncMaterialIdentity } from "../src/core/node-sync-record.js";
 async function fixture(t: TestContext, history = true) {
   await mkdir(testScratchRoot(), { recursive: true });
   const workspace = await mkdtemp(path.join(testScratchRoot(), "node-sync-"));
-  t.after(() => rm(workspace, { recursive: true, force: true }));
+  t.after(() => rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await scaffoldInWorkspace(new NodeFs(workspace), { name: "Sync" });
   const root = path.join(workspace, ".tent"),
     fs = new NodeFs(root);

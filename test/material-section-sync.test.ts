@@ -31,7 +31,7 @@ async function nodeSectionDigest(fs: NodeFs, id: string, section: string) {
 
 async function fixture(t: TestContext) {
   const workspace = await mkdtemp(path.join(testScratchRoot(), "material-section-sync-"));
-  t.after(() => rm(workspace, { recursive: true, force: true }));
+  t.after(() => rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await scaffoldInWorkspace(new NodeFs(workspace), { name: "Sections" });
   const root = path.join(workspace, ".tent"),
     fs = new NodeFs(root);

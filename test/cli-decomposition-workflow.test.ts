@@ -12,7 +12,7 @@ async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "cli-decomposition-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await scaffoldInWorkspace(new NodeFs(workspace), { name: "CLI decomposition" });
   await git(path.join(workspace, ".tent"), "init");
   return {

@@ -36,7 +36,7 @@ test("goal versions retain link query and anchor semantics while Node paths relo
 async function fixture(t: TestContext) {
   await fs.mkdir(testScratchRoot(), { recursive: true });
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-records-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await scaffoldInWorkspace(new NodeFs(root), { name: "Records" });
   const system = path.join(root, ".tent"),
     adapter = new NodeFs(system);

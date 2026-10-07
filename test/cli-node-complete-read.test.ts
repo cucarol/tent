@@ -14,7 +14,7 @@ async function fixture(t: TestContext, metadata = "") {
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "node-complete-read-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await initializeTentWorkspace(workspace);
   const adapter = new NodeFs(path.join(workspace, ".tent"));
   const body = "正文😀\n".repeat(8000) + "[Peer](../B/B.md)\n";

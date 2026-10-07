@@ -24,7 +24,7 @@ async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(scratch, "role-context-"));
   t.after(async () => {
     assert.equal(path.dirname(root), scratch);
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
   await scaffoldInWorkspace(new NodeFs(root), { name: "roles" });
   const adapter = new NodeFs(path.join(root, ".tent"));

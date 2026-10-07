@@ -106,7 +106,7 @@ test("full CLI preserves text, stdin, repeated options and terminators through d
       "--prompt=discard",
       "--prompt=" + text,
       "--source",
-      "/--named-node/--named-node.md",
+      ".tent/--named-node/--named-node.md",
       "--source",
       "docs/SPEC.md",
     ]);
@@ -114,8 +114,9 @@ test("full CLI preserves text, stdin, repeated options and terminators through d
     assert.equal(readCard.text, text);
     assert.deepEqual(
       readCard.sources.map((source: { resource: string }) => source.resource),
-      ["/--named-node/--named-node.md", "docs/SPEC.md"],
+      ["../--named-node/--named-node.md", "docs/SPEC.md"],
     );
+    assert.equal(readCard.sources[0].version.path, "--named-node/--named-node.md");
     const stdinCard = await success("card", "create", ["--prompt", "-"], text);
     assert.equal((await success("card", "get", ["--", stdinCard.cardId])).text, text);
     for (const [command, sub, args] of [

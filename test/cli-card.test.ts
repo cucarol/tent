@@ -161,7 +161,7 @@ async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(scratch, "card-cli-"));
   t.after(async () => {
     assert.equal(path.dirname(root), scratch);
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
   await scaffoldInWorkspace(new NodeFs(root), { name: "Card CLI" });
   await git(path.join(root, ".tent"), "init");

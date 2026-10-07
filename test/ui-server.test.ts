@@ -33,7 +33,7 @@ type Call = (
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "ui-server-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspace = path.join(root, "ws");
   await initializeTentWorkspace(workspace);
   const tent = new NodeFs(path.join(workspace, ".tent"));

@@ -13,7 +13,7 @@ import { git } from "./helpers.js";
 test("goal get exposes bounded live context without changing document bytes or capturing neighbours", async (t) => {
   await fs.mkdir(path.resolve(".scratch"), { recursive: true });
   const workspace = await fs.mkdtemp(path.resolve(".scratch/goal-context-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await scaffoldInWorkspace(new NodeFs(workspace), { name: "Context" });
   const system = path.join(workspace, ".tent");
   const adapter = new NodeFs(system);
@@ -46,7 +46,7 @@ test("goal get exposes bounded live context without changing document bytes or c
   const created = parse(
     await runCardCommand(
       "create",
-      ["--prompt", "Implement goal", "--title", "Request", "--source", "/Scope/Goal/Goal.md"],
+      ["--prompt", "Implement goal", "--title", "Request", "--source", "node-goal"],
       globals,
     ),
   );

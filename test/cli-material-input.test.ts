@@ -20,7 +20,7 @@ async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "cli-material-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await scaffoldInWorkspace(new NodeFs(root), {
     name: "CLI materials",
     nodes: [{ id: "node-goal", name: "Goal", type: "goal", body: "Deliver evidence." }],

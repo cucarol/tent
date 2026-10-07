@@ -23,7 +23,7 @@ async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch/now-history");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "incremental-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true }).trim();
   git("init", "-q");

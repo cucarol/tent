@@ -32,7 +32,7 @@ async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(scratch, "card-document-"));
   t.after(async () => {
     assert.equal(path.dirname(root), scratch);
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
   await git(root, "init");
   const adapter = new NodeFs(root);
@@ -121,7 +121,7 @@ test("Card progress counts only outputs explicitly responding to this Card", asy
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "card-progress-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspace = path.join(root, "workspace");
   await initializeTentWorkspace(workspace);
   const adapter = new NodeFs(path.join(workspace, ".tent"));
@@ -334,7 +334,7 @@ test("behind responses retract Card completion and output activity without chang
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "card-review-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspace = path.join(root, "workspace");
   await initializeTentWorkspace(workspace);
   const adapter = new NodeFs(path.join(workspace, ".tent"));

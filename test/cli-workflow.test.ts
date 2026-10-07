@@ -20,7 +20,7 @@ async function fixture(t: TestContext) {
     name: "context",
     nodes: [{ id: "node-rule", name: "Import", type: "prompt", body: "Confirmed rule" }],
   });
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const adapter = new NodeFs(path.join(workspace, ".tent"));
   await git(path.join(workspace, ".tent"), "init");
   const { workspaceId: savedId } = await readWorkspaceSettings(adapter),

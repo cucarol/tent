@@ -11,7 +11,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, init = true)
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "git-history-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const root = path.join(workspace, ".tent");
   await fs.mkdir(root);
   const git = (...args: string[]) =>

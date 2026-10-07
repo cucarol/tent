@@ -13,7 +13,7 @@ import { testScratchRoot } from "./scratch.js";
 
 test("public saves and observed edits retain distinct history operations across locations", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "history-operations-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await initializeTentWorkspace(workspace);
   const adapter = new NodeFs(path.join(workspace, ".tent"), "cli");
   const env = {

@@ -17,7 +17,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "core-ui-"));
   t.after(async () => {
     assert.equal(path.dirname(workspace), path.resolve(testScratchRoot()));
-    await fs.rm(workspace, { recursive: true, force: true });
+    await fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
   await initializeTentWorkspace(workspace);
   const root = path.join(workspace, ".tent");

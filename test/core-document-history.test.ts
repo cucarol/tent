@@ -31,7 +31,7 @@ async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(scratch, "history-service-"));
   const workspace = path.join(root, "workspace");
   await initializeTentWorkspace(workspace);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const systemRoot = path.join(workspace, ".tent"),
     adapter = new NodeFs(systemRoot);
   const { workspaceId: savedId } = await readWorkspaceSettings(adapter),

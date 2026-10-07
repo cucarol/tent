@@ -20,7 +20,7 @@ async function fixture(t: TestContext) {
   await fs.mkdir(systemRoot, { recursive: true });
   t.after(async () => {
     assert.equal(path.dirname(root), path.resolve(scratch));
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
   const adapter = new NodeFs(systemRoot);
   const write = (file: string, data: Record<string, unknown>, body = "") =>

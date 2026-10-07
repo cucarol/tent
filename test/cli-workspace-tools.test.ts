@@ -145,17 +145,18 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
       assert.deepEqual((await readFact()).tags, expected);
     }
     await git(path.join(workspace, ".tent"), "init");
-    const source = { resource: "../refs/example.pdf", title: "Reference document" };
+    const source = { resource: "./refs/example.pdf", title: "Reference document" };
     const input = result(
       await runCardCommand(
         "create",
-        ["--source", "/Fact/Fact.md", "--source", JSON.stringify(source)],
+        ["--source", ".tent/Fact/Fact.md", "--source", JSON.stringify(source)],
         globals,
       ),
     );
     const savedInput = result(await runCardCommand("get", [input.cardId], globals));
-    assert.equal(savedInput.sources[0].resource, "/Fact/Fact.md");
-    assert.deepEqual(savedInput.sources[1], source);
+    assert.equal(savedInput.sources[0].resource, "../Fact/Fact.md");
+    assert.equal(savedInput.sources[0].version.path, "Fact/Fact.md");
+    assert.deepEqual(savedInput.sources[1], { ...source, resource: "../../refs/example.pdf" });
     const invalid = await runCardCommand(
       "create",
       ["--source", JSON.stringify({ resource: "" })],
@@ -181,6 +182,6 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
     assert.equal(stale.exitCode, 1);
     assert.equal(result(await runRoleCommand("show", [roleId], globals)).etag, after.etag);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   }
 });

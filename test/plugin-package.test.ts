@@ -122,13 +122,14 @@ test(
       "card",
       "create",
       "--source",
-      "/context/context.md",
+      ".tent/context/context.md",
       "--target",
       role.roleId,
       "--prompt",
       "Review this context",
     ]);
     const input = await json(["card", "show", card.cardId]);
+    assert.equal(input.sources[0].version.path, "context/context.md");
     const before = (await json(["node", "get", node.nodeId, "--full"])).node;
     await json([
       "node",
