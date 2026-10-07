@@ -23,9 +23,6 @@ import { loadNodeCatalog } from "../src/core/node-catalog.js";
 import { incompleteNodeReadEtag } from "../src/core/node-read-basis.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
-import { createHash } from "node:crypto";
-import { canonicalSha256 } from "../src/core/canonical-digest.js";
-import { syncMaterialIdentity } from "../src/core/node-sync-record.js";
 
 async function fixture(t: TestContext, history = true) {
   await mkdir(testScratchRoot(), { recursive: true });
@@ -62,6 +59,7 @@ for (const method of ["single", "batch", "whole-body"] as const) {
     const output = await create("Evidence", "output-evidence", "Goal");
     const sync = () => inspectNodeSync(new NodeFs(root), goal);
     const record = (await fs.history.nodeRecords())[output];
+    assert.ok(record);
     await edit(upstream, { body: "## Missing\n\nmaterial A\n" });
     const current = await readNodeForEdit(fs, output);
     if (method === "single") await confirmNodeSync(fs, output, { baseEtag: current.etag });
@@ -74,7 +72,7 @@ for (const method of ["single", "batch", "whole-body"] as const) {
     assert.deepEqual((await acknowledged.history.changesInRange()).at(-1)!.acknowledgedOutputIds, [
       output,
     ]);
-    assert.deepEqual((await acknowledged.history.nodeRecords())[output].goals, record.goals);
+    assert.deepEqual((await acknowledged.history.nodeRecords())[output]?.goals, record.goals);
     const stillUnavailable = await inspectNodeSync(acknowledged, output);
     assert.ok(stillUnavailable.behind);
     assert.ok(
@@ -293,6 +291,7 @@ for (const method of ["single", "batch"] as const) {
     await edit(output, { body: `[target](${target})\n` });
     await edit(goal, { body: "requirement B\n" });
     const retained = (await fs.history.nodeRecords())[output];
+    assert.ok(retained);
     for (const mode of ["metadata", "body", "raw", "crlf"] as const) {
       const old = await readNodeForEdit(fs, output);
       const body = `[target](${target})\n`;
@@ -317,7 +316,7 @@ for (const method of ["single", "batch"] as const) {
         [],
         mode,
       );
-      assert.deepEqual((await fresh.history.nodeRecords())[output].goals, retained.goals, mode);
+      assert.deepEqual((await fresh.history.nodeRecords())[output]?.goals, retained.goals, mode);
       assert.ok(
         !(await readNodeForEdit(fresh, output)).body.includes(target),
         "canonical addresses are still saved",
@@ -474,6 +473,23 @@ test("retained file URI material cannot follow a relocated Node identity", async
   const sync = await inspectNodeSync(new NodeFs(root), goal);
   assert.ok(sync.ahead);
   assert.equal(sync.ahead.since, undefined, "the missing URI interval cannot supply false");
+});
+
+test("portable file URI receipts retain exact ahead transition times", async (t) => {
+  const { fs, root, env, create, edit } = await fixture(t);
+  const upstream = await create("Upstream");
+  const goal = await createNode(env, {
+    name: "Goal",
+    parentPath: "",
+    type: "goal",
+    resource: pathToFileURL(path.join(root, "Upstream/Upstream.md")).href,
+  });
+  await create("Evidence", "output-evidence", "Goal");
+  assert.equal((await inspectNodeSync(new NodeFs(root), goal)).ahead, undefined);
+  await edit(upstream, { body: "changed material\n" });
+  const event = (await new NodeFs(root).history.changesInRange()).at(-1)!;
+  assert.ok(event.changes.some((change) => change.objectId === upstream && change.after));
+  assert.equal((await inspectNodeSync(new NodeFs(root), goal)).ahead?.since, event.time);
 });
 
 test("external receipt mismatch stays continuous when another retained material changes", async (t) => {
@@ -1204,6 +1220,7 @@ test("metadata, append and section output writes explicitly acknowledge no outpu
   });
   const output = await create("Evidence", "output-evidence", "Goal");
   const initial = (await fs.history.nodeRecords())[output];
+  assert.ok(initial);
   // A changed receipt proves successful observation, unlike same-basis initialization.
   await edit(upstream, { body: "baseline material B\n" });
   const retainedBaseline = (await new NodeFs(root).history.changesInRange()).at(-1)!;
@@ -1213,6 +1230,7 @@ test("metadata, append and section output writes explicitly acknowledge no outpu
   await edit(output, { body: "## Plan\n\nfirst\n" });
   const acknowledged = new NodeFs(root);
   const baseline = (await acknowledged.history.nodeRecords())[output];
+  assert.ok(baseline);
   const receipt = (await acknowledged.history.changesInRange()).at(-1)!;
   assert.deepEqual(receipt.acknowledgedOutputIds, [output]);
   assert.notEqual(
@@ -1242,7 +1260,7 @@ test("metadata, append and section output writes explicitly acknowledge no outpu
     await action();
     const fresh = new NodeFs(root);
     assert.deepEqual((await fresh.history.changesInRange()).at(-1)!.acknowledgedOutputIds, []);
-    assert.deepEqual((await fresh.history.nodeRecords())[output].goals, baseline.goals);
+    assert.deepEqual((await fresh.history.nodeRecords())[output]?.goals, baseline.goals);
     assert.ok((await inspectNodeSync(fresh, output)).behind);
     assert.equal((await inspectNodeSync(fresh, goal)).ahead?.since, since);
   }
@@ -1463,13 +1481,13 @@ test("output review of uncaptured goal bytes cannot make its confirmation the ah
   }
 });
 
-test("an unknown legacy goal basis stays unknown after tags and rename", async (t) => {
+test("a missing output goal basis stays unavailable after tags and rename", async (t) => {
   const { fs, root, env, create, edit } = await fixture(t);
   await create("Goal", "goal");
   const output = await create("Evidence", "output-evidence", "Goal");
   await fs.history.captureUnlocked([], {
     operation: "test.old-record",
-    nodeRecords: { [output]: { materials: [] } },
+    nodeRecords: { [output]: { v: 1, materials: [] } },
   });
   assert.ok((await inspectNodeSync(new NodeFs(root), output)).behind);
   await edit(output, { frontmatter: { tags: ["metadata"] } });
@@ -1521,102 +1539,6 @@ test("review regression: ahead.since follows the latest transition, survives met
     await fs.history.commitTime((await fs.history.currentCommit())!),
   );
   assert.ok(first && head);
-});
-
-test("legacy baselines use acquisition history, preserve actual drift and do not reconfirm live content", async (t) => {
-  const { fs, env, workspace, resource, create, edit } = await fixture(t);
-  const upstream = await create("Upstream", "prompt");
-  const goal = await createNode(env, {
-    parentPath: "",
-    name: "Goal",
-    type: "goal-requirement",
-    tags: ["old"],
-    resource,
-    sources: [{ resource: "/Upstream/Upstream.md" }],
-    body: "old requirement\n",
-  });
-  const output = await create("Evidence", "output-evidence", "Goal");
-  const upstreamRead = await readNodeForEdit(fs, upstream);
-  const hash = (raw: string) => createHash("sha256").update(raw).digest("hex");
-  const catalog = (await loadNodeCatalog(fs)).byId;
-  const legacyGoalVersion = canonicalSha256({
-    data: {
-      type: "goal-requirement",
-      tags: ["old"],
-      resource: JSON.stringify(["uri", resource]),
-      sources: [{ resource: `node:${upstream}` }],
-    },
-    body: "old requirement\n",
-  });
-  const legacy = {
-    [goal]: {
-      materials: [
-        {
-          identity: syncMaterialIdentity(resource, "Goal/Goal.md", catalog),
-          version: hash("input v1\nnext\n"),
-        },
-        { identity: `node:${upstream}`, version: hash(upstreamRead.raw) },
-      ],
-    },
-    [output]: { materials: [], goal: { nodeId: goal, version: legacyGoalVersion } },
-  };
-  await fs.history.captureUnlocked([], { operation: "test.legacy-basis", nodeRecords: legacy });
-  const retainedHead = await fs.history.currentCommit();
-  await writeFile(path.join(workspace, "input.txt"), "input v1\r\nnext\r\n");
-  const legacyInspection = await inspectNodeSync(fs, output);
-  assert.equal(legacyInspection.state, "behind");
-  assert.equal(legacyInspection.materials[0]!.state, "current");
-  assert.ok(
-    legacyInspection.materials.slice(1).every((material) => material.state === "unavailable"),
-  );
-  assert.match(legacyInspection.reasons.join("; "), /no retained baseline/);
-  assert.equal((await inspectNodeSync(fs, goal)).state, "synced");
-  assert.equal(await fs.history.currentCommit(), retainedHead);
-  assert.deepEqual(
-    (await fs.history.nodeRecords())[output],
-    legacy[output],
-    "reads reinterpret without rewriting receipts or confirmations",
-  );
-  await edit(upstream, { confirm: true });
-  assert.equal(
-    (await inspectNodeSync(fs, goal)).state,
-    "synced",
-    "legacy Node byte basis is reconstructed before upstream verified changes",
-  );
-  await edit(goal, { frontmatter: { tags: ["new metadata"] } });
-  assert.equal(
-    (await inspectNodeSync(fs, output)).state,
-    "behind",
-    "metadata cannot invent historical output observations for goal materials",
-  );
-  assert.equal((await inspectNodeSync(fs, output)).materials[0]!.state, "current");
-  await writeFile(path.join(workspace, "input.txt"), "actual new requirement\n");
-  await edit(goal, { frontmatter: { tags: ["other metadata"] } });
-  assert.equal(
-    (await inspectNodeSync(fs, goal)).state,
-    "behind",
-    "ordinary save retains the reconstructed older material baseline",
-  );
-  await edit(goal, { body: "changed requirement\n" });
-  assert.equal(
-    (await inspectNodeSync(fs, output)).state,
-    "behind",
-    "historic output basis never uses latest live goal bytes",
-  );
-  await rm(path.join(workspace, "input.txt"));
-  assert.equal((await inspectNodeSync(fs, goal)).materials[0]!.state, "unavailable");
-  const unknown = (await fs.history.nodeRecords())[goal]!;
-  const oldUnknownVersion = hash("unreconstructable old material");
-  unknown.materials[0] = { identity: unknown.materials[0]!.identity, version: oldUnknownVersion };
-  await fs.history.captureUnlocked([], {
-    operation: "test.legacy-unknown",
-    nodeRecords: { [goal]: unknown },
-  });
-  await edit(goal, { frontmatter: { tags: ["unavailable material stays unknown"] } });
-  const preserved = (await fs.history.nodeRecords())[goal]!.materials[0]!;
-  assert.equal(preserved.version, oldUnknownVersion);
-  assert.equal(preserved.fingerprintVersion, undefined);
-  assert.equal((await inspectNodeSync(fs, goal)).materials[0]!.state, "unavailable");
 });
 
 test("single Node sync reads only its body and the required goal or subtree output bodies", async (t) => {

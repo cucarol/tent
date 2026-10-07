@@ -33,6 +33,8 @@ type FileEntry =
 const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const excluded = (relative: string) =>
   /^\.git\/tent-(?:history-index|derived-[a-z0-9-]+)\.json(?:\.[^/]+\.tmp)?$/.test(relative) ||
+  relative === ".git/tent-material-cache" ||
+  relative.startsWith(".git/tent-material-cache/") ||
   relative === MUTATION_LOCK_PATH ||
   relative.startsWith(`${MUTATION_LOCK_PATH}.`) ||
   relative === TEMP_DIR ||
@@ -191,6 +193,13 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const capture = async () => {
+    const unportableRecords = (await mount.env.fs.exists(".git/HEAD"))
+      ? await mount.env.fs.history?.unportableNodeRecordIds()
+      : [];
+    if (unportableRecords?.length)
+      throw new Error(
+        `Workspace export stopped: versioned Node records contain local machine paths (${unportableRecords.join(", ")})`,
+      );
     if (await mount.env.fs.exists(NODE_MOVE_PENDING_PATH))
       throw new Error("Finish the pending Node move before exporting");
     if (await mount.env.fs.exists(DELETE_PENDING_PATH))
@@ -230,7 +239,8 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
       throw error;
     });
     for (const name of gitEntries)
-      if (excluded(`.git/${name}`)) await fs.rm(path.join(copiedGit, name), { force: true });
+      if (excluded(`.git/${name}`))
+        await fs.rm(path.join(copiedGit, name), { recursive: true, force: true });
     const manifest = {
       schemaVersion: 1,
       workspaceId: mount.workspaceId,
@@ -240,6 +250,7 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
       excluded: [
         "machine state, credentials, launch settings, running sessions",
         "locks and temporary files",
+        "disposable .tent/.git/tent-material-cache",
         "disposable Git history indexes",
         "external project/URL bytes",
       ],

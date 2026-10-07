@@ -96,7 +96,7 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
     const prepared = await prepareNodeSyncSave(env.fs, notePath, content, { created: true });
     await captureDocumentUnlocked(env.fs, notePath, prepared.raw, {
       operation: "node.create",
-      nodeRecords: { [id]: prepared.record },
+      ...(prepared.record ? { nodeRecords: { [id]: prepared.record } } : {}),
     });
   } catch (error) {
     await env.fs.remove(path);

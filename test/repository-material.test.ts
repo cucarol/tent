@@ -48,8 +48,9 @@ test("repository metadata retains tracked raw bytes, and surviving main is used 
   const filename = path.join(worktree, "assets/result.txt");
   const raw = "completed\n";
   await fs.writeFile(filename, raw);
-  const basis = await observedRepositoryMaterial(filename, blobs(raw));
+  const basis = await observedRepositoryMaterial(main, filename, blobs(raw));
   assert.ok(basis);
+  assert.equal(basis.commonDir, ".git");
   assert.equal(basis.path, "assets/result.txt");
   assert.equal(basis.blob, (await git(worktree, "hash-object", "assets/result.txt")).trim());
   await git(worktree, "add", "assets/result.txt");
@@ -71,6 +72,7 @@ test("repository metadata retains tracked raw bytes, and surviving main is used 
 test("repository fallback prefers current checkout and rejects a symlink instead of using another checkout", async (t) => {
   const { main, worktree, base } = await fixture(t);
   const basis = await observedRepositoryMaterial(
+    worktree,
     path.join(main, "assets/result.txt"),
     blobs("initial\n"),
   );
@@ -87,7 +89,7 @@ test("repository fallback prefers current checkout and rejects a symlink instead
   await assert.rejects(relocatedRepositoryMaterial(worktree, basis), /Symbolic links/);
   const untracked = path.join(main, "untracked.txt");
   await fs.writeFile(untracked, "ordinary\n");
-  assert.equal(await observedRepositoryMaterial(untracked, blobs("ordinary\n")), undefined);
+  assert.equal(await observedRepositoryMaterial(main, untracked, blobs("ordinary\n")), undefined);
 });
 
 test("Node material survives merge and deleted worktree, while live edits and true absence remain drift", async (t) => {
@@ -366,12 +368,17 @@ test("deletion history matches the exact literal repository path", async (t) => 
   await git(main, "add", literal);
   await git(main, "commit", "--quiet", "-m", "test: literal filename");
   await git(worktree, "merge", "--quiet", "main");
-  const basis = await observedRepositoryMaterial(path.join(main, literal), blobs("literal\n"));
+  const basis = await observedRepositoryMaterial(
+    main,
+    path.join(main, literal),
+    blobs("literal\n"),
+  );
   assert.ok(basis);
   await git(main, "rm", literal);
   await git(main, "commit", "--quiet", "-m", "test: delete literal filename");
   await assert.rejects(relocatedRepositoryMaterial(main, basis), /deleted in the main checkout/);
   const other = await observedRepositoryMaterial(
+    main,
     path.join(main, "assets/result.txt"),
     blobs("initial\n"),
   );

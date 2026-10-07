@@ -341,8 +341,10 @@ async function writeNodesBatchUnlocked(
       records: basisRecords,
     });
     node.raw = prepared.raw;
-    nodeRecords[node.nodeId] = prepared.record;
-    basisRecords[node.nodeId] = prepared.record;
+    if (prepared.record) {
+      nodeRecords[node.nodeId] = prepared.record;
+      basisRecords[node.nodeId] = prepared.record;
+    }
   }
   const beforeOrder = (await fs.exists(ORDER_PATH)) ? await fs.readFile(ORDER_PATH) : null;
   const order = await loadOrder(readOnlyFs(fs));

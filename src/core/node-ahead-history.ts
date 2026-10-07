@@ -2,30 +2,26 @@ import type { GitDocumentHistory } from "./git-history.js";
 import type { NodeBasisRecord } from "./node-basis-record.js";
 import { isNodeId } from "./id.js";
 import { canonicalDocumentLinks } from "./document-links.js";
+import { materialLocator, materialOccurrences } from "./material.js";
 import {
   isImplementationOutputNode,
   isOutputNode,
   isRequirementNode,
   nodeMaterialFingerprint,
   nodeSemanticFingerprint,
+  syncMaterialIdentity,
 } from "./node-sync-record.js";
 import {
   historicalNodeCatalog,
   historicalFrontmatterReader,
   historicalFingerprintReader,
-  retainedSemanticVersions,
-  reinterpretNodeBasisRecords,
 } from "./node-semantic-history.js";
 
 /** Derive the last false → true transition from retained identity and material events. */
 export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Record<string, string>> {
-  return history.derived("goal-ahead-times", 15, async () => {
+  return history.derived("goal-ahead-times", 17, async () => {
     const events = await history.changesInRange();
     const recordEvents = await history.nodeRecordEvents();
-    const hasLegacyGoals = Object.values(recordEvents).some((records) =>
-      Object.values(records).some((record) => record.goal && record.goal.fingerprintVersion !== 2),
-    );
-    const semanticIndex = hasLegacyGoals ? await retainedSemanticVersions(history) : undefined;
     const versions = events.flatMap((event) =>
       event.changes.flatMap((change) => (change.after ? [change.after] : [])),
     );
@@ -37,7 +33,7 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
     });
     const documents = new Map<string, { path: string; raw: string }>();
     const documentPathsByNode = new Map<string, string>();
-    const records: Record<string, NodeBasisRecord> = {};
+    const records: Record<string, NodeBasisRecord | null> = {};
     const documentAt = new Map<string, number>();
     const materialBasisAt = new Map<string, number>();
     const observedMaterials = new Map<string, { version: string; at: number; known: boolean }>();
@@ -51,6 +47,22 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
       string,
       { nodeId?: string; path?: string; suffix: string } | null
     >();
+    const rememberFileTargets = (raw: string, documentPath: string) => {
+      try {
+        for (const { resource, field } of materialOccurrences(readFrontmatter(raw).data)) {
+          const locator = materialLocator(resource, documentPath, field === "sources");
+          if (locator.kind !== "uri" || !locator.uri.startsWith("file:")) continue;
+          const uri = new URL(locator.uri);
+          const path = history.localFileUriDocumentPath(locator.uri);
+          materialTargets.set(
+            syncMaterialIdentity(resource, documentPath),
+            path ? { path, suffix: uri.search + uri.hash } : null,
+          );
+        }
+      } catch {
+        /* Invalid declarations cannot locate retained material bytes. */
+      }
+    };
     const materialTarget = (identity: string) => {
       if (materialTargets.has(identity)) return materialTargets.get(identity);
       let target: { nodeId?: string; path?: string; suffix: string } | null = null;
@@ -154,6 +166,7 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
             )
               structureChanged = true;
             documents.set(change.objectId, { path, raw });
+            rememberFileTargets(raw, change.after.path);
             documentAt.set(change.objectId, eventIndex);
           }
         } else {
@@ -164,6 +177,7 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
       const nextRecords = recordEvents[event.commit] ?? {};
       const replacedRecords = new Map(Object.keys(nextRecords).map((id) => [id, records[id]]));
       for (const [id, record] of Object.entries(nextRecords)) {
+        if (!record) continue;
         for (const basis of record.goals ?? []) {
           const previous = records[id]?.goals?.find((entry) => entry.nodeId === basis.nodeId);
           // Initial acquisition or a changed goal version proves a successful goal read.
@@ -188,22 +202,13 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
           }
         }
       }
-      Object.assign(
-        records,
-        semanticIndex ? reinterpretNodeBasisRecords(nextRecords, semanticIndex) : nextRecords,
-      );
+      Object.assign(records, nextRecords);
       // Confirmation can resample a material back to the same version, with no record delta.
       // Only explicit confirmation and full output rewrites acknowledge unchanged receipts.
       if (event.acknowledgedOutputIds === undefined && event.operation === "node.sync-confirm")
         for (const id of event.objectIds) acknowledgedOutputs.add(id);
       for (const id of ambiguousOutputs)
-        uncertainReceipts.set(
-          id,
-          new Set(
-            records[id]?.goals?.map((basis) => basis.nodeId) ??
-              (records[id]?.goal ? [records[id]!.goal!.nodeId] : []),
-          ),
-        );
+        uncertainReceipts.set(id, new Set(records[id]?.goals?.map((basis) => basis.nodeId) ?? []));
       for (const id of acknowledgedOutputs) {
         uncertainReceipts.delete(id);
         const previous = replacedRecords.has(id) ? replacedRecords.get(id) : records[id];
@@ -279,8 +284,7 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
         outputs: for (const output of owned.get(goal.nodeId) ?? []) {
           if (retainedAhead) break;
           const outputRecord = records[output.nodeId];
-          const chainBasis = outputRecord?.goals?.find((entry) => entry.nodeId === goal.nodeId);
-          const basis = chainBasis ?? outputRecord?.goal;
+          const basis = outputRecord?.goals?.find((entry) => entry.nodeId === goal.nodeId);
           if (basis?.nodeId !== goal.nodeId || basis.fingerprintVersion !== 2) continue;
           if (basis.version !== fingerprint) {
             currentAhead = true;
@@ -289,7 +293,7 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
               break;
             }
           }
-          for (const material of chainBasis?.materials ?? []) {
+          for (const material of basis.materials) {
             if (!material.version || material.fingerprintVersion !== 2) continue;
             const target = materialTarget(material.identity);
             const nodeId =
@@ -360,8 +364,7 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
             !(owned.get(goal.nodeId) ?? []).some((output) => {
               if (uncertainReceipts.get(output.nodeId)?.has(goal.nodeId)) return false;
               const record = records[output.nodeId];
-              const basis =
-                record?.goals?.find((entry) => entry.nodeId === goal.nodeId) ?? record?.goal;
+              const basis = record?.goals?.find((entry) => entry.nodeId === goal.nodeId);
               return (
                 basis?.nodeId === goal.nodeId &&
                 basis.fingerprintVersion === 2 &&

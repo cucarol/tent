@@ -7,13 +7,11 @@ import {
   type DocumentVersion,
 } from "../src/core/git-history.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { materialContent } from "../src/core/material-section.js";
 import { nodeMaterialFingerprint, nodeSemanticFingerprint } from "../src/core/node-sync-record.js";
 import {
   historicalFingerprintReader,
   historicalFrontmatterReader,
   historicalNodeCatalog,
-  retainedSemanticVersions,
 } from "../src/core/node-semantic-history.js";
 import { latestGoalAheadTimes } from "../src/core/node-ahead-history.js";
 import type { NodeBasisRecord } from "../src/core/node-basis-record.js";
@@ -43,6 +41,7 @@ for (const unreadable of ["missing-section", "deleted", "invalid", "older-readab
           return nodeSemanticFingerprint(parsed.data, parsed.body, "G/G.md", nodes);
         };
         const record = (version: string, body = goal): NodeBasisRecord => ({
+          v: 1,
           materials: [],
           goals: [
             {
@@ -217,59 +216,6 @@ test("history memo respects first matching path and independent section variants
   );
 });
 
-test("legacy replay never borrows bytes acquired later, including unavailable sections", async (t) => {
-  const initial = note("node-p", "prompt", "## A/B\nold\n");
-  const later = note("node-p", "prompt", "## A/B\nlater\n");
-  const locator = {
-    kind: "path" as const,
-    anchor: "bundle" as const,
-    target: "P/P.md",
-    suffix: "#A/B",
-  };
-  const old = digest(materialContent(initial, locator));
-  const tooLate = digest(materialContent(later, locator));
-  const record: NodeBasisRecord = {
-    materials: [
-      { identity: "node:node-p#A/B", version: old },
-      { identity: JSON.stringify(["path", "P/P.md", "#A/B"]), version: tooLate },
-      { identity: "node:node-p#Absent", version: digest("missing") },
-    ],
-  };
-  const history = new GitDocumentHistory("unused");
-  const commits = ["a", "b"].map((x) => x.repeat(40));
-  t.mock.method(
-    history,
-    "derived",
-    async <T>(_n: string, _v: number, compute: (head: string | null) => Promise<T>) =>
-      compute(commits[1]!),
-  );
-  t.mock.method(history, "changesInRange", async () =>
-    commits.map((commit, i) => ({
-      commit,
-      time: String(i),
-      objectIds: ["node-p"],
-      changes: [{ objectId: "node-p", after: { commit, path: "P/P.md" } }],
-    })),
-  );
-  t.mock.method(history, "nodeRecordEvents", async () => ({
-    [commits[0]!]: { "node-consumer": record },
-  }));
-  t.mock.method(history, "readVersions", async (versions: readonly DocumentVersion[]) =>
-    versions.map((version) => ({
-      version,
-      raw: version.commit === commits[0] ? initial : later,
-      changedSince: false,
-    })),
-  );
-  const index = await retainedSemanticVersions(history);
-  assert.equal(
-    index.materials["node:node-p#A/B"]?.[old],
-    nodeMaterialFingerprint(initial, locator, catalog([["node-p", "P", initial]])),
-  );
-  assert.equal(index.materials[JSON.stringify(["path", "P/P.md", "#A/B"])], undefined);
-  assert.equal(index.materials["node:node-p#Absent"], undefined);
-});
-
 test("ahead replay keeps metadata-stable times and the latest implementation transition", async (t) => {
   const rows: [string, string, string][] = [
     ["node-g", "G", note("node-g", "goal", "outer\n")],
@@ -285,8 +231,9 @@ test("ahead replay keeps metadata-stable times and the latest implementation tra
     nodes,
   );
   const initial: NodeBasisRecord = {
+    v: 1,
     materials: [],
-    goal: { nodeId: "node-n", version: fingerprint, fingerprintVersion: 2 },
+    goals: [{ nodeId: "node-n", version: fingerprint, fingerprintVersion: 2, materials: [] }],
   };
   const changed = note("node-n", "goal", "changed\n");
   const metadata = note("node-n", "goal-direction", "changed\n", { tags: ["metadata"] });
@@ -328,7 +275,9 @@ test("ahead replay keeps metadata-stable times and the latest implementation tra
   t.mock.method(history, "changesInRange", async () => events);
   t.mock.method(history, "nodeRecordEvents", async () => ({
     [events[0]!.commit]: { "node-o": initial },
-    [confirmedCommit]: { "node-o": { ...initial, goal: { ...initial.goal!, version: current } } },
+    [confirmedCommit]: {
+      "node-o": { ...initial, goals: [{ ...initial.goals![0]!, version: current }] },
+    },
   }));
   t.mock.method(history, "readVersions", async (requested: readonly DocumentVersion[]) =>
     requested.map((version) => ({

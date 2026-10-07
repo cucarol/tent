@@ -1,6 +1,6 @@
 import * as z from "zod/v4";
 import type { FsAdapter } from "./adapter.js";
-import { canonicalSha256, canonicalJson } from "./canonical-digest.js";
+import { canonicalJson } from "./canonical-digest.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import {
   materialIdentity,
@@ -15,11 +15,6 @@ import { loadNodeCatalog, type CatalogNode } from "./node-catalog.js";
 import { nodeNotePath } from "./paths.js";
 import { rewriteMarkdownDestinations } from "../markdown/links.js";
 import { createHash } from "node:crypto";
-import {
-  legacyTextVersions,
-  retainedSemanticVersions,
-  reinterpretNodeBasisRecords,
-} from "./node-semantic-history.js";
 
 import type { NodeBasisRecord } from "./node-basis-record.js";
 import type { RepositoryMaterial } from "./repository-material.js";
@@ -37,7 +32,7 @@ export const retiredNodeFields = [
 export function assertNodeRecordFields(data: Record<string, unknown>): void {
   for (const field of retiredNodeFields)
     if (data[field] !== undefined)
-      throw new Error(`Node field ${field} is retired; migrate legacy Node records first`);
+      throw new Error(`Node field ${field} is retired; remove it from the document`);
   if (Array.isArray(data.sources))
     for (const source of data.sources)
       if (source.sha256 !== undefined || source.resource_sha256 !== undefined)
@@ -79,9 +74,11 @@ export function syncMaterialIdentity(
       const node = [...nodes.values()].find((n) => nodeNotePath(n.path) === locator.target);
       if (node) return `node:${node.nodeId}${locator.suffix}`;
     }
+    if (locator.kind === "uri" && locator.uri.startsWith("file:"))
+      return `file-sha256:${createHash("sha256").update(locator.uri).digest("hex")}`;
     return materialIdentity(locator) ?? resource;
   } catch {
-    return resource;
+    return `unresolved-sha256:${createHash("sha256").update(resource).digest("hex")}`;
   }
 }
 
@@ -128,18 +125,11 @@ export function nodeSemanticContent(
   });
 }
 
-export async function retainedNodeRecords(fs: FsAdapter): Promise<Record<string, NodeBasisRecord>> {
+export async function retainedNodeRecords(
+  fs: FsAdapter,
+): Promise<Record<string, NodeBasisRecord | null>> {
   if (!fs.history || !(await fs.exists(".git"))) return {};
-  const records = await fs.history.nodeRecords();
-  if (
-    !Object.values(records).some(
-      (record) =>
-        (record.goal?.fingerprintVersion !== 2 && !!record.goal) ||
-        record.materials.some((material) => material.version && material.fingerprintVersion !== 2),
-    )
-  )
-    return records;
-  return reinterpretNodeBasisRecords(records, await retainedSemanticVersions(fs.history));
+  return fs.history.nodeRecords();
 }
 
 /** A structure edit changes addresses, never acknowledges changed material content. */
@@ -182,7 +172,6 @@ export async function observeSyncMaterial(
 ): Promise<{
   version?: string;
   reason?: string;
-  legacyVersions?: string[];
   repository?: RepositoryMaterial;
 }> {
   try {
@@ -207,7 +196,6 @@ export async function observeSyncMaterial(
         };
         return {
           version: nodeMaterialFingerprint(finalRaw, nodeLocator, nodes),
-          legacyVersions: legacyTextVersions(materialContent(finalRaw, nodeLocator)),
         };
       }
     }
@@ -234,13 +222,11 @@ export async function observeSyncMaterial(
       };
       return {
         version: nodeMaterialFingerprint(raw, nodeLocator, nodes),
-        legacyVersions: legacyTextVersions(materialContent(raw, nodeLocator)),
       };
     }
     return {
       version: version.parse(observation.observedVersion),
       ...(observation.readFrom ? { reason: `从 ${observation.readFrom} 读取` } : {}),
-      ...(observation.legacyVersions ? { legacyVersions: observation.legacyVersions } : {}),
       ...(observation.repository ? { repository: observation.repository } : {}),
     };
   } catch (error) {
@@ -256,7 +242,7 @@ export async function observeNodeMaterials(
   documentPath: string,
   finalDocuments?: Map<string, string>,
   nodes?: Map<string, CatalogNode>,
-  previous?: NodeBasisRecord,
+  previous?: Pick<NodeBasisRecord, "materials">,
 ) {
   return Promise.all(
     materialOccurrences(data)
@@ -272,11 +258,13 @@ export async function observeNodeMaterials(
         let observed: {
           version?: string;
           reason?: string;
-          legacyVersions?: string[];
           repository?: RepositoryMaterial;
         };
+        let local = true;
         try {
           const locator = materialLocator(resource, documentPath, field === "sources");
+          local =
+            locator.kind === "path" || (locator.kind === "uri" && locator.uri.startsWith("file:"));
           const targetNode =
             locator.kind === "path" && nodes
               ? [...nodes.values()].find((node) => nodeNotePath(node.path) === locator.target)
@@ -291,7 +279,6 @@ export async function observeNodeMaterials(
             nodeRaw !== undefined
               ? {
                   version: nodeMaterialFingerprint(nodeRaw, locator, nodes),
-                  legacyVersions: legacyTextVersions(materialContent(nodeRaw, locator)),
                 }
               : finalRaw === undefined
                 ? await observeSyncMaterial(
@@ -304,7 +291,6 @@ export async function observeNodeMaterials(
                     repository,
                   )
                 : {
-                    legacyVersions: legacyTextVersions(materialContent(finalRaw, locator)),
                     version: createHash("sha256")
                       .update(materialContent(finalRaw, locator).replace(/\r\n?/g, "\n"))
                       .digest("hex"),
@@ -316,6 +302,7 @@ export async function observeNodeMaterials(
         return {
           resource,
           identity,
+          local,
           ...observed,
         };
       }),
@@ -335,11 +322,11 @@ export async function prepareNodeSyncSave(
     now?: string;
     nodes?: Map<string, CatalogNode>;
     previous?: NodeBasisRecord;
-    records?: Record<string, NodeBasisRecord>;
+    records?: Record<string, NodeBasisRecord | null>;
     finalDocuments?: Map<string, string>;
     previousLocation?: { documentPath: string; nodes: Map<string, CatalogNode> };
   } = {},
-): Promise<{ raw: string; record: NodeBasisRecord }> {
+): Promise<{ raw: string; record?: NodeBasisRecord }> {
   const parsed = parseFrontmatter(raw);
   assertNodeRecordFields(parsed.data);
   if (options.confirm) {
@@ -347,8 +334,11 @@ export async function prepareNodeSyncSave(
     raw = serializeFrontmatter(parsed.data, parsed.body, parsed.keyOrder);
   }
   const id = parsed.data.id as string;
+  const output = isOutputNode(parsed.data);
   const records = options.records ?? (await retainedNodeRecords(fs));
-  const previous = options.previous ?? records[id];
+  const previous = options.previous ?? records[id] ?? undefined;
+  if (output && !previous && !options.created && !options.confirm && !options.acknowledge)
+    return { raw };
   const nodes = options.nodes ?? (await loadNodeCatalog(fs)).byId;
   const finalDocuments = new Map([...(options.finalDocuments ?? []), [documentPath, raw]]);
   const observations = await observeNodeMaterials(
@@ -359,14 +349,12 @@ export async function prepareNodeSyncSave(
     nodes,
     previous,
   );
-  const materials = observations.map(({ identity, version, legacyVersions, repository }) => {
+  let unavailableLocalBasis = observations.some(
+    (observation) => observation.local && !observation.version,
+  );
+  const materials = observations.map(({ identity, version, repository }) => {
     const old = previous?.materials.find((m) => m.identity === identity);
-    const equivalentLegacy =
-      old?.fingerprintVersion !== 2 &&
-      !!old?.version &&
-      (old.version === version || legacyVersions?.includes(old.version));
-    const useCurrent =
-      ((options.confirm || options.acknowledge) && !!version) || !old || equivalentLegacy;
+    const useCurrent = ((options.confirm || options.acknowledge) && !!version) || !old;
     const known = useCurrent ? (version ?? old?.version) : old?.version;
     const currentAlgorithm = (useCurrent && !!version) || old?.fingerprintVersion === 2;
     const materialRepository = useCurrent
@@ -383,30 +371,11 @@ export async function prepareNodeSyncSave(
   });
   const node =
     nodes.get(id) ?? [...nodes.values()].find((n) => nodeNotePath(n.path) === documentPath);
-  const goals = isOutputNode(parsed.data) && node ? goalAncestors(node, nodes) : [];
-  const record: NodeBasisRecord = { materials };
-  if (previous?.materialsRevision) record.materialsRevision = previous.materialsRevision;
-  if (
-    options.confirm &&
-    isRequirementNode(parsed.data) &&
-    previous &&
-    materials.some((material) => {
-      const old = previous.materials.find((entry) => entry.identity === material.identity);
-      const observation = observations.find((entry) => entry.identity === material.identity);
-      return (
-        old?.version &&
-        material.version &&
-        old.version !== material.version &&
-        !(old.fingerprintVersion !== 2 && observation?.legacyVersions?.includes(old.version))
-      );
-    })
-  )
-    record.materialsRevision = canonicalSha256({ previous: previous.materialsRevision, materials });
-  if (previous?.goal && !options.confirm && !options.acknowledge) record.goal = previous.goal;
+  const goals = output && node ? goalAncestors(node, nodes) : [];
+  const record: NodeBasisRecord = { v: 1, materials };
   if (previous?.goals) record.goals = previous.goals;
   const firstGoalPlacement =
     options.previousLocation &&
-    !previous?.goal &&
     !previous?.goals &&
     ![...options.previousLocation.nodes.values()].some(
       (ancestor) =>
@@ -435,6 +404,9 @@ export async function prepareNodeSyncSave(
             previous?.goals?.find((entry) => entry.nodeId === goal.nodeId)?.materials ?? [],
         },
       );
+      unavailableLocalBasis ||= observations.some(
+        (observation) => observation.local && !observation.version,
+      );
       const previousMaterials =
         previous?.goals?.find((entry) => entry.nodeId === goal.nodeId)?.materials ?? [];
       record.goals.push({
@@ -459,7 +431,9 @@ export async function prepareNodeSyncSave(
       });
     }
   }
-  return { raw, record };
+  return output && !previous && !options.created && unavailableLocalBasis
+    ? { raw }
+    : { raw, record };
 }
 
 /** Node material addresses use the same semantic basis as implicit goal dependencies. */

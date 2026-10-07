@@ -2,8 +2,12 @@ import * as z from "zod/v4";
 import path from "node:path";
 
 /** Local repository location retained with a material's observed content basis. */
-export const repositoryMaterialSchema = z.strictObject({
-  commonDir: z.string().refine(path.isAbsolute),
+export const repositoryMaterialSchema = z.looseObject({
+  commonDir: z
+    .string()
+    .min(1)
+    .refine((value) => !path.isAbsolute(value) && !/^[a-z]:[\\/]/i.test(value))
+    .refine((value) => !value.startsWith("\\\\") && !value.startsWith("//")),
   path: z
     .string()
     .min(1)

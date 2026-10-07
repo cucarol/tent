@@ -68,11 +68,11 @@ async function fixture(t: TestContext) {
     const raw = serializeFrontmatter({ id, type, ...fields }, body);
     await capture([{ path: nodeNotePath(nodePath), raw }]);
     // This helper publishes an authored Node, including its retained basis.
-    records[id] = (
-      await prepareNodeSyncSave(adapter, nodeNotePath(nodePath), raw, {
-        acknowledge: true,
-      })
-    ).record;
+    const prepared = await prepareNodeSyncSave(adapter, nodeNotePath(nodePath), raw, {
+      acknowledge: true,
+    });
+    assert.ok(prepared.record);
+    records[id] = prepared.record;
     return raw;
   };
   async function card(

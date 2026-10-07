@@ -23,7 +23,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, init = true)
 test("output acknowledgment facts survive unchanged documents and records in a fresh history reader", async (t) => {
   const { root, history } = await fixture(t);
   const raw = "---\nid: node-output\ntype: output-evidence\n---\nunchanged\n";
-  const record = { materials: [] };
+  const record = { v: 1 as const, materials: [], futureField: { retained: true } };
   const first = await history.captureUnlocked([{ path: "Output/Output.md", raw }], {
     operation: "node.create",
     nodeRecords: { "node-output": record },
@@ -45,6 +45,89 @@ test("output acknowledgment facts survive unchanged documents and records in a f
   assert.deepEqual(latest.changes, []);
   assert.deepEqual((await history.nodeRecords())["node-output"], record);
   assert.equal((await history.captureUnlocked([], { operation: "node.write" })).created, false);
+});
+
+test("Node records use only the first-parent lineage and isolate unsupported records", async (t) => {
+  const { root, git, history } = await fixture(t);
+  const main = git("symbolic-ref", "--short", "HEAD");
+  const record = (branch: string) => ({ v: 1 as const, materials: [], branch });
+  await history.captureUnlocked([], {
+    operation: "test.node-record.main-base",
+    nodeRecords: { "node-a": record("main-base"), "node-invalid": record("valid") },
+  });
+  git("branch", "side");
+  git("checkout", "--quiet", "side");
+  await history.captureUnlocked([], {
+    operation: "test.node-record.side",
+    nodeRecords: { "node-a": record("side"), "node-sideonly": record("side") },
+  });
+  git("checkout", "--quiet", main);
+  await history.captureUnlocked([], {
+    operation: "test.node-record.main-latest",
+    nodeRecords: { "node-a": record("main-latest"), "node-mainonly": record("main") },
+  });
+  execFileSync(
+    "git",
+    [
+      "-C",
+      root,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@invalid",
+      "merge",
+      "--no-ff",
+      "--no-edit",
+      "side",
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  execFileSync(
+    "git",
+    [
+      "-C",
+      root,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@invalid",
+      "commit",
+      "--allow-empty",
+      "-m",
+      'test: invalid records\n\nTent-Node-Record: ["node-invalid",{"v":2,"materials":[]}]\nTent-Node-Record: ["node-mainonly",{"materials":[]}]',
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  const records = await new GitDocumentHistory(root).nodeRecords();
+  assert.equal(records["node-a"]?.branch, "main-latest");
+  assert.equal(records["node-sideonly"], undefined, "second-parent-only records are ignored");
+  assert.equal(
+    records["node-mainonly"],
+    null,
+    "unversioned latest record masks its older baseline",
+  );
+  assert.equal(records["node-invalid"], null, "unsupported version affects only its Node");
+});
+
+test("versioned records reject drive, device and UNC paths", async (t) => {
+  const { history } = await fixture(t);
+  for (const identity of [
+    "C:\\Users\\cuca\\input.md",
+    "\\\\?\\C:\\repo\\input.md",
+    "\\\\server\\share\\input.md",
+  ])
+    await assert.rejects(
+      history.captureUnlocked([], {
+        operation: "test.node-record.portability",
+        nodeRecords: {
+          "node-portable": {
+            v: 1,
+            materials: [{ identity, version: "a".repeat(64), fingerprintVersion: 2 }],
+          },
+        },
+      }),
+      /local machine paths/,
+    );
 });
 
 test("batched first timestamps retain publication across edits, removal and re-addition", async (t) => {

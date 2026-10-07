@@ -62,6 +62,7 @@ export class NodeFs implements FsAdapter {
       return observeMaterialResource(workspaceRoot, documentPath, resource, cacheDir, relocated);
     });
     const repository = await observedRepositoryMaterial(
+      workspaceRoot,
       observed.canonicalPath,
       observed.blobs,
       this.repositoryMaterials,
@@ -318,12 +319,12 @@ export class NodeFs implements FsAdapter {
                     : previous;
                 const prepared = await prepareNodeSyncSave(this, change.path, change.raw, {
                   nodes,
-                  previous: relocated,
+                  previous: relocated ?? undefined,
                   ...(original
                     ? { previousLocation: { documentPath: original.path, nodes: beforeNodes } }
                     : {}),
                 });
-                if (typeof id === "string") nodeRecords[id] = prepared.record;
+                if (prepared.record) nodeRecords[id] = prepared.record;
               }
             }
             await this.history.captureUnlocked(changes, {

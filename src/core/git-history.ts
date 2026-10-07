@@ -103,10 +103,72 @@ function commitMessage(metadata: CaptureMetadata, objectIds: readonly string[]):
     Object.entries(metadata.nodeRecords ?? {})
       .map(([id, record]) => {
         if (!isNodeId(id)) throw new Error(`Invalid Node record id: ${id}`);
-        return `\nTent-Node-Record: ${JSON.stringify([id, nodeBasisRecordSchema.parse(record)])}`;
+        const parsed = nodeBasisRecordSchema.parse(record);
+        if (containsLocalMachinePath(parsed))
+          throw new Error(
+            "Node records cannot contain local machine paths; use workspace-relative paths",
+          );
+        return `\nTent-Node-Record: ${JSON.stringify([id, parsed])}`;
       })
       .join("")
   );
+}
+
+function containsLocalMachinePath(value: unknown): boolean {
+  if (typeof value === "string") {
+    if (/^(?:[\\/]|file:)|(?:^|[^a-z0-9])[a-z]:[\\/]|\\\\[?.]\\/i.test(value)) return true;
+    // Canonical material identities can themselves contain JSON-encoded addresses.
+    try {
+      return containsLocalMachinePath(JSON.parse(value));
+    } catch {
+      return false;
+    }
+  }
+  if (Array.isArray(value)) return value.some(containsLocalMachinePath);
+  if (value && typeof value === "object")
+    return Object.entries(value).some(
+      ([key, nested]) => containsLocalMachinePath(key) || containsLocalMachinePath(nested),
+    );
+  return false;
+}
+
+function readRetainedNodeRecord(
+  line: string,
+): { id: string; record: NodeBasisRecord | null } | undefined {
+  const retained = rawNodeRecord(line);
+  if (!retained) return undefined;
+  const { id, value, validPair } = retained;
+  if (!validPair || !value || typeof value !== "object" || (value as { v?: unknown }).v !== 1)
+    return { id, record: null };
+  const parsed = nodeBasisRecordSchema.safeParse(value);
+  return {
+    id,
+    record: parsed.success && !containsLocalMachinePath(parsed.data) ? parsed.data : null,
+  };
+}
+
+function rawNodeRecord(
+  line: string,
+): { id: string; value: unknown; validPair: boolean } | undefined {
+  const payload = line.slice("Tent-Node-Record: ".length);
+  try {
+    const pair: unknown = JSON.parse(payload);
+    if (Array.isArray(pair) && typeof pair[0] === "string" && isNodeId(pair[0]))
+      return { id: pair[0], value: pair[1], validPair: pair.length === 2 };
+  } catch {
+    // A recognizable identity still supersedes its older baseline when its payload is corrupt.
+    const match = /^\s*\[\s*("(?:\\.|[^"\\])*")/.exec(payload);
+    if (match) {
+      try {
+        const id: unknown = JSON.parse(match[1]!);
+        if (typeof id === "string" && isNodeId(id))
+          return { id, value: undefined, validPair: false };
+      } catch {
+        /* An unreadable identity cannot be assigned to another Node. */
+      }
+    }
+  }
+  return undefined;
 }
 
 function gitEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -346,7 +408,7 @@ export class GitDocumentHistory {
   private knownHead: string | null | undefined;
   private knownEntries = new Map<string, string>();
   private recordHead: string | null | undefined;
-  private records: Record<string, NodeBasisRecord> = {};
+  private records: Record<string, NodeBasisRecord | null> = {};
   private firstTimesHead: string | null | undefined;
   private firstTimes = new Map<string, string>();
   private snapshotHead?: string;
@@ -588,22 +650,24 @@ export class GitDocumentHistory {
   }
 
   /** Latest declarations on the retained first-parent lineage; a reset rolls records back too. */
-  async nodeRecords(): Promise<Record<string, NodeBasisRecord>> {
+  async nodeRecords(): Promise<Record<string, NodeBasisRecord | null>> {
     await this.ensureRepository();
     const head = await this.retainedHead();
     if (this.recordHead !== head) {
-      this.records = await this.derivedAtHead("node-records", 1, head, async () => {
-        const records: Record<string, NodeBasisRecord> = {};
+      this.records = await this.derivedAtHead("node-records", 3, head, async () => {
+        const records: Record<string, NodeBasisRecord | null> = {};
+        const seen = new Set<string>();
         if (head)
           for (const event of this.firstParentRecords({
             head,
             records: await this.snapshotRecords(head),
           }).reverse())
-            for (const line of event.message.split("\n")) {
+            for (const line of event.message.split("\n").reverse()) {
               if (!line.startsWith("Tent-Node-Record: ")) continue;
-              const [id, record] = JSON.parse(line.slice("Tent-Node-Record: ".length));
-              if (!isNodeId(id)) throw new Error("Invalid retained Node record id");
-              if (!(id in records)) records[id] = nodeBasisRecordSchema.parse(record);
+              const retained = readRetainedNodeRecord(line);
+              if (!retained || seen.has(retained.id)) continue;
+              seen.add(retained.id);
+              records[retained.id] = retained.record;
             }
         return records;
       });
@@ -612,22 +676,56 @@ export class GitDocumentHistory {
     return structuredClone(this.records);
   }
 
+  /** Export copies all Git objects, including unreachable commits; audit without rewriting them. */
+  async unportableNodeRecordIds(): Promise<string[]> {
+    await this.ensureRepository();
+    const objects = await runGit(this.root, [
+      "cat-file",
+      "--batch-all-objects",
+      "--batch-check=%(objectname) %(objecttype)",
+    ]);
+    const commits = objects
+      .toString("ascii")
+      .trim()
+      .split("\n")
+      .filter((line) => line.endsWith(" commit"))
+      .map((line) => oid(line.slice(0, -" commit".length)));
+    if (!commits.length) return [];
+    const messages = await runGit(this.root, ["log", "--no-walk", "--format=%B", "--stdin"], {
+      input: Buffer.from(commits.join("\n") + "\n"),
+    });
+    const ids = new Set<string>();
+    for (const line of messages.toString("utf8").split("\n")) {
+      if (!line.startsWith("Tent-Node-Record: ")) continue;
+      const retained = rawNodeRecord(line);
+      if (!retained) continue;
+      const { id, value } = retained;
+      if (
+        value &&
+        typeof value === "object" &&
+        (value as { v?: unknown }).v === 1 &&
+        containsLocalMachinePath(value)
+      )
+        ids.add(id);
+    }
+    return [...ids];
+  }
+
   /** Material basis updates per retained first-parent capture. */
-  async nodeRecordEvents(): Promise<Record<string, Record<string, NodeBasisRecord>>> {
+  async nodeRecordEvents(): Promise<Record<string, Record<string, NodeBasisRecord | null>>> {
     await this.ensureRepository();
     const head = await this.retainedHead();
     if (!head) return {};
-    const result: Record<string, Record<string, NodeBasisRecord>> = {};
+    const result: Record<string, Record<string, NodeBasisRecord | null>> = {};
     for (const event of this.firstParentRecords({
       head,
       records: await this.snapshotRecords(head),
     })) {
-      const records: Record<string, NodeBasisRecord> = {};
+      const records: Record<string, NodeBasisRecord | null> = {};
       for (const line of event.message.split("\n")) {
         if (!line.startsWith("Tent-Node-Record: ")) continue;
-        const [id, record] = JSON.parse(line.slice("Tent-Node-Record: ".length));
-        if (!isNodeId(id)) throw new Error("Invalid retained Node record id");
-        records[id] = nodeBasisRecordSchema.parse(record);
+        const retained = readRetainedNodeRecord(line);
+        if (retained) records[retained.id] = retained.record;
       }
       if (Object.keys(records).length) result[event.commit] = records;
     }

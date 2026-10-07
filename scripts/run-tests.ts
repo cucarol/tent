@@ -37,6 +37,7 @@ export const INTEGRATION_TEST_FILES = Object.freeze([
   "test/node-discovery.test.ts",
   "test/node-move-recovery.test.ts",
   "test/node-records.test.ts",
+  "test/node-record-version.test.ts",
   "test/node-status.test.ts",
   "test/open-source.test.ts",
   "test/package.test.ts",

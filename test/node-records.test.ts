@@ -6,13 +6,13 @@ import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { NodeFs } from "../src/fs/node-fs.js";
+import { exportGraph } from "../src/fs/graph-export.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { createNode, moveNode, renameNode } from "../src/core/ops.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
 import { writeNodesBatch } from "../src/core/node-write-batch.js";
 import { confirmNodeSync, inspectNodeSync, linkNodeOutput } from "../src/core/node-sync.js";
-import { migrateNodeRecords } from "../src/core/node-record-migration.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { nodeNotePath } from "../src/core/paths.js";
 import { git } from "./helpers.js";
@@ -208,6 +208,25 @@ test("material cache survives short-lived processes and invalidates on byte chan
   );
 });
 
+test("workspace export excludes the disposable material cache", async (t) => {
+  const { root, system, adapter, resource } = await fixture(t);
+  await adapter.observeMaterial(resource, "Fact/Fact.md");
+  const cache = path.join(system, ".git", "tent-material-cache");
+  assert.ok((await fs.readdir(cache)).length > 0);
+  const settings = JSON.parse(await adapter.readFile("settings.json")) as { workspaceId: string };
+  const destination = path.join(root, "output", "cache-exclusion");
+  await exportGraph(
+    {
+      workspaceRoot: root,
+      systemRoot: system,
+      workspaceId: settings.workspaceId,
+      env: { fs: adapter },
+    },
+    { outputDir: "output/cache-exclusion" },
+  );
+  await assert.rejects(fs.stat(path.join(destination, ".tent", ".git", "tent-material-cache")));
+});
+
 test("renames and moves retain Node-ID material baselines without refreshing known behind", async (t) => {
   const { adapter, env, resource, material } = await fixture(t);
   const parent = await createNode(env, { parentPath: "", name: "Parent", type: "prompt" });
@@ -247,83 +266,4 @@ test("relocation retains changed attachment baselines and link-output normalizes
     (await readNodeForEdit(adapter, output.nodeId)).frontmatter.resource,
     "../Renamed/attachment.txt",
   );
-});
-
-test("migration transfers exact legacy hashes in one commit, preserves meaning, reports counts and is idempotent", async (t) => {
-  const { adapter, system, env, resource, material } = await fixture(t);
-  const goal = await createNode(env, { parentPath: "", name: "Goal", type: "goal" });
-  const id = await createNode(env, { parentPath: "Goal", name: "Legacy", type: "output" });
-  const current = await readNodeForEdit(adapter, id);
-  const legacy = serializeFrontmatter(
-    {
-      ...current.frontmatter,
-      resource,
-      sync: {
-        materials: [{ resource, version: createHash("sha256").update("old").digest("hex") }],
-      },
-      planned: true,
-      custom: { keep: true },
-    },
-    "exact body\n",
-  );
-  await adapter.writeFile(nodeNotePath(current.path), legacy);
-  await readNodeForEdit(adapter, id);
-  const migrated = await migrateNodeRecords(adapter);
-  assert.deepEqual(
-    { ...migrated, commit: undefined },
-    { scanned: 2, migrated: 1, materials: 1, removedFields: 2, commit: undefined },
-  );
-  const saved = await readNodeForEdit(adapter, id),
-    parsed = parseFrontmatter(saved.raw);
-  assert.equal(parsed.body, "exact body\n");
-  assert.deepEqual(parsed.data.generated, current.frontmatter.generated);
-  assert.deepEqual(parsed.data.custom, { keep: true });
-  assert.equal(parsed.data.sync, undefined);
-  assert.equal(parsed.data.planned, undefined);
-  assert.equal((await inspectNodeSync(adapter, id)).state, "behind");
-  assert.match(
-    await git(system, "show", "-s", "--format=%B", migrated.commit!),
-    /Tent-Node-Record:/,
-  );
-  assert.equal(
-    await git(system, "show", `${migrated.commit}:${nodeNotePath(current.path)}`),
-    saved.raw,
-  );
-  assert.deepEqual(await migrateNodeRecords(adapter), {
-    scanned: 2,
-    migrated: 0,
-    materials: 0,
-    removedFields: 0,
-  });
-  assert.equal((await adapter.history.nodeRecords())[id]!.goal!.nodeId, goal);
-  await fs.writeFile(material, "old");
-  assert.equal((await inspectNodeSync(adapter, id)).state, "synced");
-  const goalCurrent = await readNodeForEdit(adapter, goal);
-  await writeNodeDocument(adapter, goal, { baseEtag: goalCurrent.etag, body: "changed goal" });
-  assert.equal((await inspectNodeSync(adapter, id)).state, "behind");
-});
-
-test("migration failure restores every legacy document and never publishes new baseline records", async (t) => {
-  const { adapter, env, resource } = await fixture(t);
-  const id = await createNode(env, { parentPath: "", name: "Legacy", type: "prompt" });
-  const current = await readNodeForEdit(adapter, id);
-  const legacy = serializeFrontmatter(
-    {
-      ...current.frontmatter,
-      sync: { materials: [{ resource, version: "a".repeat(64) }] },
-      planned: true,
-    },
-    current.body,
-  );
-  await adapter.writeFile(nodeNotePath(current.path), legacy);
-  await readNodeForEdit(adapter, id);
-  const head = await adapter.history.currentCommit(),
-    records = await adapter.history.nodeRecords();
-  adapter.history.captureUnlocked = async () => {
-    throw new Error("migration capture injection");
-  };
-  await assert.rejects(migrateNodeRecords(adapter), /migration capture injection/);
-  assert.equal(await adapter.readFile(nodeNotePath(current.path)), legacy);
-  assert.equal(await adapter.history.currentCommit(), head);
-  assert.deepEqual(await adapter.history.nodeRecords(), records);
 });

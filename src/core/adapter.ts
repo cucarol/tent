@@ -15,7 +15,6 @@ export interface FsAdapter {
   ): Promise<{
     observedVersion: string;
     systemPath?: string;
-    legacyVersions?: string[];
     repository?: RepositoryMaterial;
     /** Present only when a missing declaration was read from another checkout. */
     readFrom?: string;

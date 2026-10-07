@@ -8,7 +8,6 @@ import { markdownMaterialHeading, materialContent } from "../core/material-secti
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { isNodeId } from "../core/id.js";
 import { nodeSemanticContent } from "../core/node-sync-record.js";
-import { legacyTextVersions } from "../core/node-semantic-history.js";
 
 /** Safely read and hash bytes; the Core caller supplies any content selection. */
 export async function observeSourceFile(
@@ -17,9 +16,7 @@ export async function observeSourceFile(
   cacheDir?: string,
   selection?: {
     key: string;
-    content: (
-      bytes: Buffer,
-    ) => string | Buffer | { content: string | Buffer; legacyVersions: string[] };
+    content: (bytes: Buffer) => string | Buffer;
   },
 ) {
   await checkedSourceFile(root, filename);
@@ -71,12 +68,6 @@ export async function observeSourceFile(
           observedVersion: cached.version as string,
           cacheHit: true,
           blobs: cached.blobs as { sha1: string; sha256: string },
-          ...(Array.isArray(cached.legacyVersions) &&
-          cached.legacyVersions.every(
-            (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
-          )
-            ? { legacyVersions: cached.legacyVersions as string[] }
-            : {}),
         };
       }
     }
@@ -111,13 +102,8 @@ export async function observeSourceFile(
     ) {
       throw new Error("Material changed while observing");
     }
-    let legacyVersions: string[] | undefined;
     if (selection) {
-      const selected = selection.content(Buffer.concat(chunks));
-      if (typeof selected === "object" && !Buffer.isBuffer(selected)) {
-        hash.update(selected.content);
-        legacyVersions = selected.legacyVersions;
-      } else hash.update(selected);
+      hash.update(selection.content(Buffer.concat(chunks)));
     }
     const observedVersion = hash.digest("hex");
     const blobs = { sha1: sha1.digest("hex"), sha256: sha256.digest("hex") };
@@ -125,10 +111,7 @@ export async function observeSourceFile(
       const temp = `${cachePath}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`;
       try {
         await mkdir(cacheDir!, { recursive: true });
-        await writeFile(
-          temp,
-          JSON.stringify({ signature, version: observedVersion, legacyVersions, blobs }),
-        );
+        await writeFile(temp, JSON.stringify({ signature, version: observedVersion, blobs }));
         await rename(temp, cachePath);
       } catch {
         await rm(temp, { force: true }).catch(() => undefined);
@@ -139,7 +122,6 @@ export async function observeSourceFile(
       observedVersion,
       cacheHit: false,
       blobs,
-      ...(legacyVersions ? { legacyVersions } : {}),
     };
   } finally {
     await handle.close();
@@ -183,22 +165,16 @@ export async function observeMaterialResource(
         try {
           const parsed = parseFrontmatter(normalized);
           if (typeof parsed.data.id === "string" && isNodeId(parsed.data.id))
-            return {
-              legacyVersions: legacyTextVersions(materialContent(raw, locator)),
-              content: nodeSemanticContent(
-                parsed.data,
-                heading === undefined ? parsed.body : materialContent(normalized, locator),
-                locator.kind === "path" ? locator.target : "",
-              ),
-            };
+            return nodeSemanticContent(
+              parsed.data,
+              heading === undefined ? parsed.body : materialContent(normalized, locator),
+              locator.kind === "path" ? locator.target : "",
+            );
         } catch {
           // Ordinary Markdown is material text even when its optional YAML is malformed.
         }
       }
-      return {
-        content: materialContent(normalized, locator),
-        legacyVersions: legacyTextVersions(materialContent(raw, locator)),
-      };
+      return materialContent(normalized, locator);
     },
   });
 }

@@ -169,6 +169,15 @@ test("Web Node edits retain legacy material addresses and reject changed address
   });
   assert.equal(body.status, 200, body.body);
   assert.deepEqual(parseFrontmatter(await tent.readFile(note)).data.sources, parsed.data.sources);
+  const record = (await tent.history.nodeRecords())["node-main"]!;
+  assert.equal(record.v, 1);
+  assert.equal(record.materials.length, 2);
+  assert.ok(
+    record.materials.every((material) =>
+      /^unresolved-sha256:[a-f0-9]{64}$/.test(material.identity),
+    ),
+  );
+  assert.ok(record.materials.every((material) => material.version === undefined));
   const current = await read();
   const raw = await call("PUT", "/api/nodes/node-main", {
     json: {

@@ -88,10 +88,6 @@ async function inspectCatalogNodes(
     observations.map((observation) => {
       const basis = bases.find((m) => m.identity === observation.identity);
       const recordedVersion = basis?.version;
-      const equivalentLegacy =
-        basis?.fingerprintVersion !== 2 &&
-        !!recordedVersion &&
-        observation.legacyVersions?.includes(recordedVersion);
       return {
         resource: observation.resource,
         ...(goalId ? { goalId } : {}),
@@ -100,7 +96,7 @@ async function inspectCatalogNodes(
         state: recordedVersion
           ? !observation.version
             ? "unavailable"
-            : observation.version === recordedVersion || equivalentLegacy
+            : observation.version === recordedVersion
               ? "current"
               : "changed"
           : unknownBasis
@@ -109,7 +105,11 @@ async function inspectCatalogNodes(
         ...(observation.reason
           ? { reason: observation.reason }
           : unknownBasis && !recordedVersion
-            ? { reason: "Output has no retained baseline for this goal material" }
+            ? {
+                reason: goalId
+                  ? "Output has no retained baseline for this goal material"
+                  : "Node record has no retained baseline for this material",
+              }
             : {}),
       };
     });
@@ -128,10 +128,25 @@ async function inspectCatalogNodes(
           path,
           undefined,
           nodeCatalog.byId,
-          record,
+          record ?? undefined,
         );
-        const materials = comparedMaterials(observations, record?.materials ?? []);
+        const recordUnreadable = hasRetainedHistory && !record && isOutputNode(data);
+        const materials = comparedMaterials(
+          observations,
+          record?.materials ?? [],
+          undefined,
+          recordUnreadable,
+        );
         const goals = isOutputNode(data) ? goalAncestors(current, nodeCatalog.byId) : [];
+        if (recordUnreadable)
+          materials.push({
+            resource: `/${path}`,
+            state: "unavailable",
+            reason:
+              records[current.nodeId] === null
+                ? "Node record unreadable; no retained baseline"
+                : "Node record missing; no retained baseline",
+          });
         for (const goal of goals) {
           const { raw: goalRaw } = await readCatalogDocument(fs, goal);
           const parsed = parseFrontmatter(goalRaw);
@@ -142,29 +157,22 @@ async function inspectCatalogNodes(
             nodeCatalog.byId,
           );
           const basis = record?.goals?.find((entry) => entry.nodeId === goal.nodeId);
-          const legacy = record?.goal?.nodeId === goal.nodeId ? record.goal : undefined;
-          const recordedVersion = basis?.version ?? legacy?.version;
-          const legacyBasisUnknown =
-            !!recordedVersion && !basis && legacy?.fingerprintVersion !== 2;
+          const recordedVersion = basis?.version;
           materials.push({
             resource: `/${nodeNotePath(goal.path)}`,
             goalId: goal.nodeId,
             currentVersion,
             ...(recordedVersion ? { recordedVersion } : {}),
             state: recordedVersion
-              ? legacyBasisUnknown
-                ? "unavailable"
-                : currentVersion === recordedVersion
-                  ? "current"
-                  : "changed"
+              ? currentVersion === recordedVersion
+                ? "current"
+                : "changed"
               : hasRetainedHistory
                 ? "unavailable"
                 : "unanchored",
-            ...(legacyBasisUnknown
-              ? { reason: "Legacy goal baseline cannot be reconstructed from retained history" }
-              : !recordedVersion && hasRetainedHistory
-                ? { reason: "Output has no retained baseline for this ancestor goal" }
-                : {}),
+            ...(!recordedVersion && hasRetainedHistory
+              ? { reason: "Output has no retained baseline for this ancestor goal" }
+              : {}),
           });
           const goalMaterials = await observeNodeMaterials(
             fs,

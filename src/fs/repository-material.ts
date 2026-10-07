@@ -122,16 +122,22 @@ function samePath(left: string, right: string) {
 
 /** Metadata names the safely observed raw bytes, including uncommitted edits. */
 export async function observedRepositoryMaterial(
+  workspaceRoot: string,
   filename: string,
   blobs: { sha1: string; sha256: string },
   cache = new RepositoryMaterialCache(),
 ): Promise<RepositoryMaterial | undefined> {
   try {
     const repo = await repository(path.dirname(filename), cache);
+    const pathRoot = await realpath(workspaceRoot);
     const relative = path.relative(repo.root, filename).split(path.sep).join("/");
     if (!(await trackedFiles(repo, cache)).has(relative)) return undefined;
     const blob = repo.format === "sha256" ? blobs.sha256 : blobs.sha1;
-    return repositoryMaterialSchema.parse({ commonDir: repo.commonDir, path: relative, blob });
+    return repositoryMaterialSchema.parse({
+      commonDir: path.relative(pathRoot, repo.commonDir).split(path.sep).join("/"),
+      path: relative,
+      blob,
+    });
   } catch {
     // Ordinary local files and untracked outputs still have their observed SHA basis.
     return undefined;
@@ -145,7 +151,7 @@ export async function relocatedRepositoryMaterial(
   cache = new RepositoryMaterialCache(),
 ) {
   repositoryMaterialSchema.parse(basis);
-  const commonDir = await realpath(basis.commonDir);
+  const commonDir = await realpath(path.resolve(workspaceRoot, basis.commonDir));
   const token = JSON.stringify(
     await Promise.all([
       signature(path.join(commonDir, "worktrees")),

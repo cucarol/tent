@@ -6,10 +6,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { observeMaterialResource } from "../src/fs/source-observation.js";
 import { GitDocumentHistory } from "../src/core/git-history.js";
-import {
-  retainedSemanticVersions,
-  reinterpretNodeBasisRecords,
-} from "../src/core/node-semantic-history.js";
 import { historicalNodeCatalog } from "../src/core/node-semantic-history.js";
 import {
   nodeMaterialFingerprint,
@@ -60,69 +56,6 @@ test("review fix: ordinary Markdown with malformed YAML remains observable text"
   await writeFile(filename, raw);
   const observed = await observeMaterialResource(root, "G/G.md", pathToFileURL(filename).href);
   assert.equal(observed.observedVersion, hash(raw.replace(/\r\n/g, "\n")));
-  assert.ok(observed.legacyVersions?.includes(hash(raw)));
-});
-
-test("review fix: foreign file URI legacy receipts never borrow same-suffix local Node history", async (t) => {
-  const root = await scratch(t);
-  const systemRoot = path.join(root, "own", ".tent");
-  const history = new GitDocumentHistory(systemRoot);
-  const localUri = pathToFileURL(path.join(systemRoot, "P", "P.md")).href;
-  const foreignUri = pathToFileURL(path.join(root, "foreign", ".tent", "P", "P.md")).href;
-  assert.equal(history.localFileUriDocumentPath(localUri), "P/P.md");
-  assert.equal(history.localFileUriDocumentPath(foreignUri), undefined);
-  assert.equal(
-    history.localFileUriDocumentPath(
-      pathToFileURL(path.join(systemRoot + "-other", "P", "P.md")).href,
-    ),
-    undefined,
-  );
-  const raw = serializeFrontmatter({ id: "node-p", type: "prompt" }, "local baseline\n");
-  const commit = "a".repeat(40),
-    version = { commit, path: "P/P.md" };
-  const localIdentity = JSON.stringify(["uri", localUri]);
-  const foreignIdentity = JSON.stringify(["uri", foreignUri]);
-  const record: NodeBasisRecord = {
-    materials: [
-      { identity: localIdentity, version: hash(raw) },
-      { identity: foreignIdentity, version: hash(raw) },
-    ],
-  };
-  t.mock.method(
-    history,
-    "derived",
-    async <T>(
-      _name: string,
-      _schemaVersion: number,
-      compute: (head: string | null) => Promise<T>,
-    ) => compute(commit),
-  );
-  t.mock.method(history, "changesInRange", async () => [
-    {
-      commit,
-      time: "2026-10-06T00:00:00Z",
-      objectIds: ["node-p"],
-      changes: [{ objectId: "node-p", after: version }],
-    },
-  ]);
-  t.mock.method(history, "nodeRecordEvents", async () => ({
-    [commit]: { "node-consumer": record },
-  }));
-  t.mock.method(history, "readVersions", async () => [{ version, raw, changedSince: false }]);
-  const interpreted = reinterpretNodeBasisRecords(
-    { "node-consumer": record },
-    await retainedSemanticVersions(history),
-  )["node-consumer"]!;
-  assert.equal(
-    interpreted.materials[0]!.fingerprintVersion,
-    2,
-    "proved local URI can use retained bytes",
-  );
-  assert.deepEqual(
-    interpreted.materials[1],
-    record.materials[1],
-    "foreign baseline stays unknown despite identical suffix and raw digest",
-  );
 });
 
 test("review fix: a batch URI confirmation uses final upstream sections and records goal material change", async (t) => {
@@ -151,6 +84,7 @@ test("review fix: a batch URI confirmation uses final upstream sections and reco
     suffix: "#Scope",
   };
   const previous: NodeBasisRecord = {
+    v: 1,
     materials: [
       {
         identity: syncMaterialIdentity(resource, "G/G.md", nodes),
@@ -177,11 +111,11 @@ test("review fix: a batch URI confirmation uses final upstream sections and reco
     nodes,
     finalDocuments: new Map([["P/P.md", finalUpstream]]),
   });
+  assert.ok(prepared.record);
   assert.equal(
     prepared.record.materials[0]!.version,
     nodeMaterialFingerprint(finalUpstream, locator, nodes),
   );
-  assert.ok(prepared.record.materialsRevision);
   assert.equal(diskReads, 0);
   assert.equal(observations, 0, "planned URI target does not need to exist on disk yet");
 });

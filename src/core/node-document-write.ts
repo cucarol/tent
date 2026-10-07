@@ -159,7 +159,7 @@ export async function savePreparedNodeDocumentUnlocked(
   try {
     version = await captureDocumentUnlocked(fs, path, raw, {
       operation,
-      nodeRecords: { [nodeId]: record },
+      ...(record ? { nodeRecords: { [nodeId]: record } } : {}),
       ...(output && (input.confirm || acknowledge) ? { acknowledgedOutputIds: [nodeId] } : {}),
     });
   } catch (error) {
