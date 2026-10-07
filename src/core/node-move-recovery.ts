@@ -33,7 +33,7 @@ const pendingMove = z
   })
   .strict();
 export type NodeMoveWrite = z.infer<typeof plannedWrite>;
-type PendingMove = z.infer<typeof pendingMove>;
+export type PendingMove = z.infer<typeof pendingMove>;
 
 const conflict = (path: string) =>
   new Error(`Pending Node move conflict: ${path}. Files and recovery record retained.`);
@@ -135,7 +135,7 @@ export async function recoverPendingNodeMoveUnlocked(fs: FsAdapter): Promise<voi
 export async function executeNodeMoveUnlocked(
   fs: FsAdapter,
   input: Omit<PendingMove, "version">,
-): Promise<void> {
+): Promise<PendingMove> {
   const identity = nodeNotePath(input.oldPath);
   const writes = [...input.writes];
   if (!writes.some((write) => write.originalPath === identity)) {
@@ -187,4 +187,12 @@ export async function executeNodeMoveUnlocked(
     await recoverPendingNodeMoveUnlocked(fs);
     throw error;
   }
+  return plan;
+}
+
+/** Undo a completed move whose Git capture failed; the caller holds the lock outside history tracking. */
+export async function revertNodeMoveUnlocked(fs: FsAdapter, plan: PendingMove): Promise<void> {
+  if (await fs.exists(NODE_MOVE_PENDING_PATH)) throw conflict("unfinished operation");
+  await fs.writeFile(NODE_MOVE_PENDING_PATH, JSON.stringify(validatePlan(plan)) + "\n");
+  await recoverPendingNodeMoveUnlocked(fs);
 }

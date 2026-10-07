@@ -21,10 +21,16 @@ than using another Tent from PATH.
 - **Hooks** are optional; every command works without them. See the
   tent-init host integration notes.
 
-## Paths in documents
+## Paths
 
-Addresses in `resource`, `sources` and links resolve from the document that
-declares them: `./` and `../` are relative to it, a single leading `/` starts
-at `.tent/`, and `file:` or other URIs are absolute. Relative paths can reach
-Workspace files outside `.tent/`; anything outside the Workspace needs a
-`file:` URI. Other text stays a plain description.
+- **CLI arguments** that name material (`--resource`, `--sources-json`,
+  `--source` and write JSON frontmatter) resolve from the Workspace root:
+  `docs/x.md`, `./docs/x.md` and `/docs/x.md` are the same file, and
+  `.tent/Area/Topic/Topic.md` is a Node file. A Node id also works.
+- **Stored documents** hold addresses that resolve from the document that
+  declares them; Tent rewrites CLI paths into this form when saving. `./` and
+  `../` are relative to the document, a single leading `/` starts at
+  `.tent/`, and `file:` or other URIs are absolute. Write this form yourself
+  only in raw Markdown edits and body links. Relative paths can reach
+  Workspace files outside `.tent/`; anything outside the Workspace needs a
+  `file:` URI. Other text stays a plain description.

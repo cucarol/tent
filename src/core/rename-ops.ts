@@ -7,7 +7,13 @@ import { buildNodeIndex, resolveNode, type OkfNode } from "./okf.js";
 import { normalizeTarget, resolveTargetPath } from "./link-target.js";
 import { rewriteMaterialPaths } from "./material.js";
 import { rewriteMarkdownDestinations } from "../markdown/links.js";
-import { executeNodeMoveUnlocked, type NodeMoveWrite } from "./node-move-recovery.js";
+import {
+  executeNodeMoveUnlocked,
+  revertNodeMoveUnlocked,
+  NODE_MOVE_PENDING_PATH,
+  type NodeMoveWrite,
+  type PendingMove,
+} from "./node-move-recovery.js";
 import type { OpsEnv } from "./ops-context.js";
 import { isOperationalPath } from "./paths.js";
 import { validateNodeName } from "./scaffold.js";
@@ -39,22 +45,98 @@ export interface RenameNodeResult {
  * - path-based Markdown links rewritten in the same mutation
  * - unqualified name targets rewrite only when Tent resolution uniquely hits this node
  * - refuses target collision, illegal names, operational paths
- * - on post-move failure: restore every touched note + tree
+ * - on post-move failure: restore notes + tree only when Tent Git HEAD did not record the rename
  */
 export async function renameNode(
   env: OpsEnv,
   nodeIdOrPath: string,
   newNameRaw: string,
 ): Promise<RenameNodeResult> {
-  return withTentMutation(env.fs, async () => renameNodeUnlocked(env, nodeIdOrPath, newNameRaw), {
-    operation: "node.rename",
-  });
+  let moved: CompletedMove | undefined;
+  return withTentMutation(
+    env.fs,
+    async () =>
+      renameNodeUnlocked(env, nodeIdOrPath, newNameRaw, async (plan) => {
+        moved = { plan, head: await readHead(env.fs) };
+      }),
+    { operation: "node.rename" },
+    // Moves restore themselves; a completed move is undone only when HEAD provably did not record it.
+    async (error) => {
+      if (!moved) return;
+      const { plan } = moved;
+      const cause = message(error).replace(
+        /^Tent files may already be saved, but Git capture failed; reread before retrying: /,
+        "Git capture failed: ",
+      );
+      const published = await renamePublished(env.fs, moved);
+      if (published)
+        throw new Error(
+          `Node rename to ${plan.newPath} is recorded in Tent Git HEAD and kept on disk, but finishing the Git capture failed. Cause: ${cause}`,
+        );
+      if (published === undefined)
+        throw new Error(
+          `Node rename to ${plan.newPath} is kept on disk because Tent Git could not show whether it was recorded; run workspace check before the next write. Cause: ${cause}`,
+        );
+      try {
+        await revertNodeMoveUnlocked(env.fs, plan);
+      } catch (rollback) {
+        // exists() cannot tell a missing record from an unreadable one, so only a found record is claimed.
+        const kept = await env.fs.exists(NODE_MOVE_PENDING_PATH).catch(() => false);
+        throw new Error(
+          `Node rename to ${plan.newPath} failed and could not be rolled back: ${message(rollback)}; ${kept ? "the recovery record is kept for the next write" : "Tent could not determine whether a recovery record was saved, so run workspace check before the next write"}. Cause: ${cause}`,
+        );
+      }
+      throw new Error(
+        `Node rename to ${plan.newPath} was rolled back; disk and Tent Git keep ${plan.oldPath}. Cause: ${cause}`,
+      );
+    },
+  );
+}
+
+function message(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+interface CompletedMove {
+  plan: PendingMove;
+  /** Tent Git HEAD read right after the move; undefined when it could not be read. */
+  head: string | null | undefined;
+}
+
+async function readHead(fs: FsAdapter): Promise<string | null | undefined> {
+  try {
+    return fs.history ? await fs.history.currentCommit() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * false only when HEAD is the commit read after the move, so the capture published nothing;
+ * true when HEAD records the renamed identity document; undefined when neither can be shown.
+ */
+async function renamePublished(
+  fs: FsAdapter,
+  { plan, head }: CompletedMove,
+): Promise<boolean | undefined> {
+  const current = await readHead(fs);
+  if (current === undefined) return undefined;
+  if (head !== undefined && current === head) return false;
+  const identity = plan.writes.find((write) => write.originalPath === nodeNotePath(plan.oldPath));
+  if (!current || !identity) return undefined;
+  try {
+    const retained = await fs.history!.read({ commit: current, path: identity.writePath });
+    return retained === identity.newContent ? true : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function renameNodeUnlocked(
   env: OpsEnv,
   nodeIdOrPath: string,
   newNameRaw: string,
+  onMoved: (plan: PendingMove) => Promise<void>,
 ): Promise<RenameNodeResult> {
   const tent = await loadTent(env.fs);
   const target = resolveRenameTarget(tent, nodeIdOrPath);
@@ -159,12 +241,14 @@ async function renameNodeUnlocked(
       materialMoves,
     )),
   );
-  await executeNodeMoveUnlocked(env.fs, {
-    nodeId: target.id,
-    oldPath,
-    newPath,
-    writes: plannedWrites,
-  });
+  await onMoved(
+    await executeNodeMoveUnlocked(env.fs, {
+      nodeId: target.id,
+      oldPath,
+      newPath,
+      writes: plannedWrites,
+    }),
+  );
 
   // order.json is id-keyed — no path rewrite. Attachments are node-keyed and stay put.
 

@@ -7,6 +7,7 @@ import { withFileMutationLock } from "./mutation-lock.js";
 import { constants } from "node:fs";
 import { checkedSourceFile } from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { execFile } from "node:child_process";
 import { GitDocumentHistory, type CaptureMetadata } from "../core/git-history.js";
 import { isHistoryDocument } from "../core/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
@@ -261,6 +262,32 @@ export class NodeFs implements FsAdapter {
 
   async removeEmptyDir(path: string): Promise<void> {
     await fs.rmdir(this.abs(path));
+  }
+
+  /** List the independent Tent Git HEAD tree without reading blobs or writing caches. */
+  async retainedDocumentPaths(): Promise<string[] | undefined> {
+    if (!(await this.exists(".git"))) return undefined;
+    const head = await this.history.currentCommit();
+    if (!head) return [];
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
+    );
+    const stdout = await new Promise<string>((resolve, reject) =>
+      execFile(
+        "git",
+        [
+          `--git-dir=${nodePath.join(this.root, ".git")}`,
+          "ls-tree",
+          "-r",
+          "--name-only",
+          "-z",
+          head,
+        ],
+        { env, windowsHide: true, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
+        (error, output) => (error ? reject(error) : resolve(output)),
+      ),
+    );
+    return stdout.split("\0").filter(Boolean);
   }
 
   async withDocumentHistory<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T> {

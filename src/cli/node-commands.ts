@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import { workspaceMaterialFields } from "./material-input.js";
+import { linkOutputResource, workspaceMaterialFields } from "./material-input.js";
 import { validateNodeName } from "../core/scaffold.js";
 import { nodeActorSchema } from "../core/node-provenance.js";
 import { isNodeId } from "../core/id.js";
@@ -194,9 +194,9 @@ export async function runNodeCommand(
           "index.md",
           workspaceRoot,
         );
-        const resource = material.resource as string;
         const result = await linkNodeOutput(fs, nodeRef(target), {
-          resource: resource.startsWith("../") ? resource.slice(3) : resource,
+          resource: linkOutputResource(material.resource as string),
+          label: flags.resource,
           name: flags.name,
           by: flags.by,
           cardId: flags.card,
@@ -213,8 +213,16 @@ export async function runNodeCommand(
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
         const allowed = ["json", "workspace", "base-etag", "by"];
-        if (Object.keys(flags).some((key) => !allowed.includes(key)) || !flags["base-etag"])
+        if (Object.keys(flags).some((key) => !allowed.includes(key)))
           return usage(nodeHelpText(sub));
+        if (!flags["base-etag"])
+          return usage(
+            [
+              `node confirm needs --base-etag <etag>: the etag of a complete live read of ${target}.`,
+              `Get it with \`tent node get ${target} --json\` (node.etag); a read:<etag> from a partial page is rejected, so use --full for long Nodes.`,
+              `Usage: ${NODE_COMMAND_HELP.confirm![0]}`,
+            ].join("\n"),
+          );
         const nodeId = nodeRef(target);
         const saved = await confirmNodeSync(fs, nodeId, {
           baseEtag: flags["base-etag"],
@@ -396,7 +404,8 @@ export async function runNodeCommand(
               },
             }),
             json,
-            (value) => formatWithContext(value, formatNode),
+            (value) =>
+              formatWithContext(value, (node) => `${formatNode(node)}\nETag: ${edit.etag}`),
           );
         }
         const { nodeId, ...options } = readerReadSchema.parse({
@@ -945,6 +954,13 @@ export function nodeHelpText(sub?: string): string {
     ...selected.flatMap((key) => commands[key]),
     "",
     ...new Set(selected.map((key) => notes[key]).filter(Boolean)),
+    ...(selected.some((key) =>
+      ["create", "link-output", "search", "write", "write-many"].includes(key),
+    )
+      ? [
+          "Git Bash rewrites arguments that start with / (such as /docs/x.md) into Windows paths; run the command with MSYS_NO_PATHCONV=1 to keep them.",
+        ]
+      : []),
     "All commands accept --workspace <path>. Options accept --key=value; use -- to end options.",
     "Content writes and confirmations accept --by <actor>; JSON writes accept by in the input. Accepted actor formats are human:<id>, process:<id>, and <producer>/<version>. Without a known actor, Tent records tent/<version>.",
     "Use --body - or --prompt - where supported to read stdin. Mutations use the Workspace lock and capture selected Git versions.",
@@ -1063,7 +1079,14 @@ function formatWithContext(value: unknown, format: (value: unknown) => string): 
 
 function formatReaderContent(value: unknown): string {
   const result = value as {
-    node?: { nodeId: string; name?: string; description?: string; text?: string; view?: string };
+    node?: {
+      nodeId: string;
+      name?: string;
+      description?: string;
+      text?: string;
+      view?: string;
+      etag?: string;
+    };
     items?: Array<{
       nodeId?: string;
       name?: string;
@@ -1076,10 +1099,12 @@ function formatReaderContent(value: unknown): string {
     }>;
     page?: { hasMore: boolean; nextCursor?: string; nextIndex?: number };
   };
-  if (result.node)
+  if (result.node) {
+    const etag = result.node.etag ? `\nETag: ${result.node.etag}` : "";
     return result.node.text !== undefined
-      ? `${result.node.nodeId}  ${result.node.view}\n${formatTextPage(result.node)}`
-      : `${result.node.nodeId}  ${result.node.name ?? ""}\n${result.node.description ?? ""}`;
+      ? `${result.node.nodeId}  ${result.node.view}${etag}\n${formatTextPage(result.node)}`
+      : `${result.node.nodeId}  ${result.node.name ?? ""}${etag}\n${result.node.description ?? ""}`;
+  }
   if (result.items)
     return (
       `${result.items.map((item) => (item.text !== undefined ? `${item.nodeId}\n${formatTextPage(item)}` : [item.commit, item.time, item.operation, item.nodeId, item.name ?? item.title, item.description].filter(Boolean).join("  "))).join("\n")}${result.page?.hasMore ? `\nNext: ${result.page.nextCursor ?? result.page.nextIndex}` : ""}` ||

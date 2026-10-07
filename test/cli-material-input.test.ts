@@ -26,6 +26,11 @@ async function fixture(t: TestContext) {
     nodes: [{ id: "node-goal", name: "Goal", type: "goal", body: "Deliver evidence." }],
   });
   await git(path.join(root, ".tent"), "init");
+  // Scaffolded Nodes start uncaptured; record them as Tent-created Nodes are.
+  const adapter = new NodeFs(path.join(root, ".tent"));
+  await adapter.history.captureUnlocked([
+    { path: "Goal/Goal.md", raw: await adapter.readFile("Goal/Goal.md") },
+  ]);
   await fs.mkdir(path.join(root, "docs"));
   await fs.writeFile(path.join(root, "docs/req.md"), "# Requirements\nFirst.\n");
   await fs.writeFile(path.join(root, "docs/proof.txt"), "Proof.");

@@ -22,7 +22,7 @@ tent workspace changes [--from <commit>] [--to <commit>] [--limit <n>] [--cursor
 tent workspace check [--json]
 tent workspace brief [--role <roleId>] [--json]
 tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
-Accepts --workspace <root> and --json. check reports broken links, invalid material addresses, missing local files and unavailable Markdown material sections without editing documents or capturing history. Exit 1 means issues or inspection errors; JSON remains on stdout. brief compares current local versions and returns at most 4 KiB, with behind Nodes first, then ahead Nodes. --role filters Card inputs; Node counts remain Workspace-wide. drift reports ahead and behind Nodes. Use node confirm after reviewing a Node; Tent records hashes itself.`;
+Accepts --workspace <root> and --json. check reports broken links, invalid material addresses, missing local files, unavailable Markdown material sections and Node documents whose disk and Tent Git presence differ (node-git-mismatch) without editing documents or capturing history. Exit 1 means issues or inspection errors; JSON remains on stdout. brief compares current local versions and returns at most 4 KiB, with behind Nodes first, then ahead Nodes. --role filters Card inputs; Node counts remain Workspace-wide. drift reports ahead and behind Nodes. Use node confirm after reviewing a Node; Tent records hashes itself.`;
 
 export async function runWorkspaceCommand(
   sub: string,
@@ -149,7 +149,7 @@ export async function runWorkspaceCommand(
               `${result.documents} documents; ${result.issues.length} issues; ${result.errors.length} inspection errors.`,
               ...result.issues.map(
                 (issue) =>
-                  `${issue.path}: ${issue.kind}: ${"target" in issue ? issue.target : (issue.resource ?? issue.field)} — ${issue.reason}`,
+                  `${issue.path}: ${issue.kind}: ${"target" in issue ? issue.target : "state" in issue ? issue.state : (issue.resource ?? issue.field)} — ${issue.reason}`,
               ),
               ...result.errors.map((error) => `${error.path}: ${error.reason}`),
               ...result.notices.map(

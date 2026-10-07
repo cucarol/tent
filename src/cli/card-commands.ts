@@ -1,8 +1,12 @@
+import path from "node:path";
 import { parseArgs } from "node:util";
 import { NodeFs } from "../fs/node-fs.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
-import { workspaceMaterialFields } from "./material-input.js";
+import { isFile, missingExplicitSources, workspaceMaterialFields } from "./material-input.js";
+import { localMaterialPath, materialLocator, type MaterialSource } from "../core/material.js";
+import { parseFrontmatter } from "../core/frontmatter.js";
 import {
+  verifyCardSourceVersions,
   createCardDocument,
   readCardDocument,
   takeCardDocument,
@@ -101,6 +105,7 @@ export async function runCardCommand(
     const fs = new NodeFs(systemRoot, "cli"),
       id = positionals[0]!;
     let result: unknown;
+    let warnings: string[] = [];
     if (sub === "watch") {
       const items = (await watchCardDocuments(fs, value("role")!, number("timeout"))).map(
         (item) => ({
@@ -139,12 +144,19 @@ export async function runCardCommand(
       ).map((source) =>
         source.trimStart().startsWith("{") ? JSON.parse(source) : { resource: source },
       );
+      const material = await workspaceMaterialFields({ sources }, "cards/input.md", workspaceRoot);
+      warnings = await missingExplicitSources(
+        sources,
+        material.sources as MaterialSource[],
+        "cards/input.md",
+        workspaceRoot,
+      );
       result = await createCardDocument(fs, {
         cardId: value("id"),
         prompt,
         title: value("title"),
         target: value("target"),
-        ...(await workspaceMaterialFields({ sources }, "cards/input.md", workspaceRoot)),
+        ...material,
       });
     } else if (sub === "deprecate")
       result = await deprecateCardDocument(fs, id, value("base-etag")!);
@@ -191,13 +203,18 @@ export async function runCardCommand(
       );
     const json = values.json === true || globals.json === true;
     const mutation = ["create", "move", "deprecate", "take"].includes(sub);
+    const sourceLines =
+      !json && ["show", "get", "take"].includes(sub)
+        ? await cardSourceLines(fs, workspaceRoot, result as { path?: string; sources?: unknown })
+        : undefined;
     return {
       exitCode: 0,
       stdout:
         (json
           ? JSON.stringify(mutation ? { ...(result as object), workspaceRoot } : result)
-          : formatCard(result, sub) + (mutation ? `\nWorkspace: ${workspaceRoot}` : "")) + "\n",
-      stderr: "",
+          : formatCard(result, sub, sourceLines) +
+            (mutation ? `\nWorkspace: ${workspaceRoot}` : "")) + "\n",
+      stderr: warnings.length ? `${warnings.join("\n")}\n` : "",
     };
   } catch (error) {
     return { exitCode: 1, stdout: "", stderr: cliErrorText(error, `tent card ${sub}`) + "\n" };
@@ -218,6 +235,8 @@ All commands accept --workspace PATH and --json. CLI output is paged; Core retur
 Sources keep their order. Selected Node/Role sources retain commit/path; external sources are addresses only.
 --source file paths use the Workspace root: docs/req.md, ./docs/req.md and /docs/req.md name the same file.
 Use --source node-ID for a Node, or --source .tent/Area/Topic/Topic.md for its Workspace path. JSON resource uses the same rules.
+Git Bash rewrites arguments that start with / (such as /docs/req.md) into Windows paths; run the command with MSYS_NO_PATHCONV=1 to keep them.
+A ./, / or .tent/ source that names no existing file, Node or Role prints a warning on stderr; the Card still keeps it.
 Show is a preview; take records reception and returns an input page. A replay is not a new execution.
 Use page.next for long input. Put requirements in Nodes; a Card briefly points to them. Update Nodes when requirements change.
 Targeted Cards require their Role; untargeted Cards can be received without one.
@@ -230,7 +249,61 @@ Cancelled published tasks can be deprecated without changing their input or rece
 `;
 }
 
-function formatCard(value: unknown, sub: string) {
+/** Text-only source summary: addresses with pinned identities or local file presence. */
+async function cardSourceLines(
+  fs: NodeFs,
+  workspaceRoot: string,
+  card: { path?: string; sources?: unknown },
+): Promise<string | undefined> {
+  if (!card.path || !Array.isArray(card.sources) || !card.sources.length) return undefined;
+  const owner = card.path;
+  const sources = card.sources as MaterialSource[];
+  const pinned = await verifyCardSourceVersions(
+    fs,
+    sources.flatMap((source) => (source.version !== undefined ? [{ owner, source }] : [])),
+  );
+  let next = 0;
+  const lines: string[] = [];
+  for (const [index, source] of sources.entries()) {
+    let detail: string;
+    if (source.version !== undefined) {
+      const read = pinned[next++]!;
+      const version = source.version as { commit?: unknown; path?: unknown };
+      const short = `@${String(version.commit).slice(0, 7)}`;
+      const file = String(version.path);
+      if (read instanceof Error) detail = `pinned ${short}, unavailable: ${read.message}`;
+      else if (file.startsWith("roles/")) {
+        const roleId = path.posix.basename(file, ".md");
+        const title = parseFrontmatter(read.raw).data.title;
+        detail = `Role ${typeof title === "string" && title ? title : roleId}  ${roleId}  ${short}`;
+      } else {
+        const name = path.posix.basename(path.posix.dirname(file));
+        detail = `Node ${name}  ${String(parseFrontmatter(read.raw).data.id)}  ${short}`;
+      }
+    } else {
+      let locator;
+      try {
+        locator = materialLocator(source.resource, owner, true);
+      } catch {
+        locator = undefined;
+      }
+      let filename: string | undefined;
+      try {
+        if (locator) filename = localMaterialPath(locator, workspaceRoot);
+      } catch {
+        locator = undefined;
+      }
+      if (!locator) detail = "invalid address";
+      else if (locator.kind === "unresolved") detail = "description text";
+      else if (filename === undefined) detail = "remote address, not fetched";
+      else detail = (await isFile(filename)) ? "file exists" : "file missing";
+    }
+    lines.push(`  ${index + 1}. ${source.resource}  ${detail}`);
+  }
+  return ["Sources:", ...lines].join("\n");
+}
+
+function formatCard(value: unknown, sub: string, sourceLines?: string) {
   if (["show", "get", "take"].includes(sub)) {
     const result = value as {
       state?: string;
@@ -256,6 +329,7 @@ function formatCard(value: unknown, sub: string) {
       result.diagnostic,
       result.currentReferences?.map((ref) => `${ref.kind} ${ref.id}  ${ref.path}`).join("\n"),
       result.currentReferencesDiagnostic,
+      sourceLines,
       formatTextPage(value),
     ]
       .filter((part) => part !== undefined && part !== "")

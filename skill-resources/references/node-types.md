@@ -28,9 +28,11 @@ suffixes are allowed.
 
 To classify content, ask what it rests on: the user's intent, an agreement to
 follow, or evidence from some time. Your own conclusions are `output` until
-the user agrees to them. Under a goal, though, an `output` counts as
-implementing it, so keep that goal's open questions and research in `prompt`
-Nodes. Change the type with `tent node type <node-id> <type> --base-etag <etag>`;
+the user agrees to them. Under a goal, only `output-asset` and
+`output-evidence` count as implementing it; an `output-issue` or
+`output-analysis` can sit under a goal without counting as implementation.
+Keep that goal's open questions and pending decisions in `prompt` Nodes.
+Change the type with `tent node type <node-id> <type> --base-etag <etag>`;
 the id stays.
 
 A Node takes the type of its main content. When one part will be read or

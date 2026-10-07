@@ -128,7 +128,10 @@ export async function runRoleCommand(
       stdout:
         (json
           ? JSON.stringify(mutation ? { ...(result as object), workspaceRoot } : result)
-          : formatRole(result, sub) + (mutation ? `\nWorkspace: ${workspaceRoot}` : "")) + "\n",
+          : (sub === "create"
+              ? `Created ${(result as { roleId: string }).roleId}  ${value("title")}`
+              : formatRole(result, sub)) + (mutation ? `\nWorkspace: ${workspaceRoot}` : "")) +
+        "\n",
       stderr: "",
     };
   } catch (error) {

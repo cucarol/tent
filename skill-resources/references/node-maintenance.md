@@ -68,18 +68,34 @@ commit or not at all; keep its returned ids and ETags.
 ## Material addresses
 
 `resource` is the main material; `sources` lists related material in order as
-`{resource, ...}`. Paths are relative to the Node's own file: from
-`.tent/Area/Topic/Topic.md`, the Workspace file `src/app.ts` is
-`../../../src/app.ts`. A leading `/` starts at `.tent/`, and anything outside
-the Workspace needs a `file:` URI. Point at the narrowest material that
-supports the fact. After saving, run `tent workspace check --json` once to
-find broken links and missing files.
+`{resource, ...}`. CLI arguments and stored documents use different anchors:
+
+- **CLI arguments** (`--resource`, `--sources-json`, `link-output --resource`,
+  `card create --source`, frontmatter in `node write --input-json` and
+  write-many) resolve from the Workspace root: `src/app.ts`, `./src/app.ts`
+  and `/src/app.ts` all name the Workspace file `src/app.ts`, and
+  `.tent/Area/Topic/Topic.md` names a Node file. A Node id also works. A bare
+  source that matches no file stays a description; use `./` for a file that
+  does not exist yet. Anything outside the Workspace needs a `file:` URI.
+- **Stored documents** hold addresses relative to the declaring file, and
+  Tent rewrites CLI paths into that form on save: from
+  `.tent/Area/Topic/Topic.md`, `src/app.ts` is stored as
+  `../../../src/app.ts`, and a stored leading `/` starts at `.tent/`. Write
+  this form yourself only in raw Markdown edits and body links.
+
+Point at the narrowest material that supports the fact. A `goal` or `prompt`
+does not take code files under `src/` as materials: its materials are the
+grounds for the intent, while code is the current state. To mention an
+implementation file, link it in the body; to track one, put it in the
+`resource` of an output. After saving, run `tent workspace check --json` once
+to find broken links and missing files.
 
 For large documents, reference the relevant section or sections instead of
 the whole file unless the fact genuinely depends on the entire document.
 
-For a Markdown material, use `../Design/Design.md#State` to track only that
-section (including its heading and subsections). Use the heading text from
+For a Markdown material, add the heading as a fragment, such as
+`--resource docs/design.md#State`, to track only that section (including its
+heading and subsections). Use the heading text from
 `node get-section --heading`; percent-encoded text works too. Editing another
 section leaves this material current. A missing or duplicated heading makes
 it unavailable and is reported by `workspace check`. Without a fragment, or
@@ -131,6 +147,11 @@ pending decisions are `prompt` Nodes. Only current `output-asset` and
 
 - `node rename` and `node move --parent <node-id|root>` keep the id and update
   links that point at the Node.
+- Node names follow Windows file-name rules on every platform: no
+  `< > : " / \ | ? *`, C0 control character (tab, CR, LF included), DEL,
+  U+2028 or U+2029, no trailing dot, and not `CON`, `PRN`, `AUX`, `NUL`,
+  `COM1`–`COM9`, `LPT1`–`LPT9`, `COM¹`–`COM³` or `LPT¹`–`LPT³` in any case,
+  with or without an extension; surrounding whitespace is trimmed.
 - `status` is `draft`, `stable` (the default) or `deprecated`, for this
   document only.
 - `node archive` deprecates a subtree; `node restore --archive-commit <commit>`

@@ -139,14 +139,29 @@ export async function ensureWorkspaceGitignore(workspaceFs: FsAdapter): Promise<
   await workspaceFs.writeFile(path, next);
 }
 
+/**
+ * Windows device names stay reserved with any extension, so every checkout must reject them.
+ * COM and LPT are also reserved with superscript ¹ ² ³ (U+00B9, U+00B2, U+00B3).
+ */
+const WINDOWS_RESERVED_NAME =
+  /^(?:con|prn|aux|nul|(?:com|lpt)[1-9\u00b9\u00b2\u00b3]) *(?:\..*)?$/i;
+
+/** Names become directories on every platform, so Windows file-name rules apply everywhere. */
 export function validateNodeName(value: string, parentPath = ""): string {
+  // Check the raw input, so trimming never hides a tab, newline or control character at either end.
+  if (/[\r\n\u2028\u2029]/.test(value)) throw new Error("Node name cannot contain newlines.");
+  if (value.includes("\t")) throw new Error("Node name cannot contain a tab.");
+  if (/[\x00-\x1F\x7F]/.test(value))
+    throw new Error("Node name cannot contain control characters.");
   const name = value.trim();
   if (!name) throw new Error("Node name cannot be empty.");
   if (name.length > 200) throw new Error("Node name cannot be longer than 200 characters.");
   if (/[\/\\]/.test(name)) throw new Error("Node name cannot contain path separators.");
-  if (/[\r\n]/.test(name)) throw new Error("Node name cannot contain newlines.");
-  if (/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(name))
-    throw new Error("Node name cannot contain control characters.");
+  const character = /[<>:"|?*]/.exec(name)?.[0];
+  if (character)
+    throw new Error(
+      `Node name cannot contain the character ${character} (Windows file names exclude < > : " / \\ | ? *).`,
+    );
   if (
     name === "." ||
     name === ".." ||
@@ -156,6 +171,12 @@ export function validateNodeName(value: string, parentPath = ""): string {
   ) {
     throw new Error(`Node name is reserved or excluded from the Node index: ${name}.`);
   }
+  if (name.endsWith("."))
+    throw new Error("Node name cannot end with a dot; Windows removes trailing dots.");
+  if (WINDOWS_RESERVED_NAME.test(name))
+    throw new Error(
+      `Node name ${name} is a reserved Windows device name (CON, PRN, AUX, NUL, COM1-COM9, LPT1-LPT9, COM¹-COM³, LPT¹-LPT³), with or without an extension.`,
+    );
   return name;
 }
 

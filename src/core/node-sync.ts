@@ -412,7 +412,15 @@ export function confirmNodeSync(
 export function linkNodeOutput(
   fs: FsAdapter,
   goalId: string,
-  input: { resource: string; name?: string; by?: string; cardId?: string; roleId?: string },
+  input: {
+    resource: string;
+    /** The caller's spelling of resource, used only in messages. */
+    label?: string;
+    name?: string;
+    by?: string;
+    cardId?: string;
+    roleId?: string;
+  },
 ) {
   return withTentMutation(
     fs,
@@ -458,7 +466,7 @@ export function linkNodeOutput(
           if (error && typeof error === "object" && "code" in error && error.code === "ENOENT")
             throw new NodeWriteError(
               "INVALID_INPUT",
-              `Output file not found: ${input.resource}. Create the file first, then run link-output again.`,
+              `Output file not found: ${input.label ?? input.resource}. Create the file first, then run link-output again.`,
             );
           throw error;
         }

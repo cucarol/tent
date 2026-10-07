@@ -5,6 +5,7 @@ import {
   materialLocator,
   localMaterialPath,
   isCardResponseSource,
+  type MaterialSource,
 } from "../core/material.js";
 import { isNodeId } from "../core/id.js";
 
@@ -72,4 +73,49 @@ export async function workspaceMaterialFields(
           ),
         }),
   };
+}
+
+/**
+ * Core link-output reads bare paths from the Workspace root and `/` from `.tent`.
+ * Convert an address serialized for `.tent/index.md` into that convention.
+ */
+export function linkOutputResource(address: string): string {
+  if (address.startsWith("../")) return address.slice(3);
+  if (address.startsWith("./")) return `/${address.slice(2)}`;
+  return address;
+}
+
+/** Explicit CLI path sources (`./`, `/`, `.tent/`) that name no existing file, Node or Role. */
+export async function missingExplicitSources(
+  input: readonly MaterialSource[],
+  stored: readonly MaterialSource[],
+  documentPath: string,
+  workspaceRoot: string,
+): Promise<string[]> {
+  const warnings: string[] = [];
+  for (const [index, source] of input.entries()) {
+    const value = source.resource.trim();
+    if (source.version !== undefined || !/^(?:\.\/|\/|\.tent\/)/.test(value)) continue;
+    const address = stored[index]!.resource;
+    let filename: string | undefined;
+    try {
+      filename = localMaterialPath(materialLocator(address, documentPath, true), workspaceRoot);
+    } catch {
+      continue;
+    }
+    if (filename && (await isFile(filename))) continue;
+    warnings.push(
+      `Warning: source ${JSON.stringify(source.resource)} names no existing Workspace file, Node or Role; the Card keeps it as ${JSON.stringify(address)}.`,
+    );
+  }
+  return warnings;
+}
+
+export async function isFile(filename: string): Promise<boolean> {
+  try {
+    return (await stat(filename)).isFile();
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+    throw error;
+  }
 }

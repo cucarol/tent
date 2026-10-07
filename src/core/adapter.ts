@@ -20,6 +20,8 @@ export interface FsAdapter {
     readFrom?: string;
   }>;
   readonly history?: GitDocumentHistory;
+  /** File paths in the independent Tent Git HEAD tree; undefined without Tent Git. */
+  retainedDocumentPaths?(): Promise<string[] | undefined>;
   /** Track selected identity-document writes inside the existing mutation lock. */
   withDocumentHistory?<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T>;
   /** 列出 dir 下的直接子项(相对帐根的路径)。 */
@@ -85,6 +87,8 @@ export function withTentMutation<T>(
   fs: FsAdapter,
   action: (recovered: Awaited<ReturnType<typeof recoverPendingDeleteUnlocked>>) => Promise<T>,
   metadata?: CaptureMetadata,
+  /** Runs under the lock, outside history tracking, after the action or its capture fails. */
+  onFailure?: (error: unknown) => Promise<void>,
 ): Promise<T> {
   // 唯一锁：始终 system root 下 mutation.lock，不使用嵌套 .tent/ 或其他路径。
   const actionWithHistory = async () => {
@@ -95,9 +99,14 @@ export function withTentMutation<T>(
     const recovered = fs.withDocumentHistory
       ? await fs.withDocumentHistory(recovery, { operation: "workspace.recovery" })
       : await recovery();
-    return fs.withDocumentHistory
-      ? fs.withDocumentHistory(() => action(recovered), metadata)
-      : action(recovered);
+    try {
+      return fs.withDocumentHistory
+        ? await fs.withDocumentHistory(() => action(recovered), metadata)
+        : await action(recovered);
+    } catch (error) {
+      await onFailure?.(error);
+      throw error;
+    }
   };
   return fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, actionWithHistory) : actionWithHistory();
 }

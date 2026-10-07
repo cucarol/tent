@@ -19,9 +19,11 @@ import { isNodeId, isRoleId, isCardId } from "./id.js";
 import { markdownMaterialHeading } from "./material-section.js";
 import { NodeSectionError } from "./markdown-section.js";
 import { retainedNodeRecords, syncMaterialIdentity } from "./node-sync-record.js";
+import { isHistoryDocument } from "./document-history.js";
 
 export type GraphCheckIssue =
   | { kind: "unresolved-link"; path: string; target: string; reason: string }
+  | { kind: "node-git-mismatch"; path: string; state: "disk-only" | "git-only"; reason: string }
   | {
       kind:
         | "invalid-material-address"
@@ -108,6 +110,32 @@ export async function checkGraph(
     },
   });
   const tent = await loadTent(observationFs);
+  const retainedPaths = await readonlyFs.retainedDocumentPaths?.();
+  if (retainedPaths) {
+    // Presence only: content edits are ordinary dirty files, captured by explicit reads.
+    const isNodeDocument = (file: string) =>
+      isHistoryDocument(file) &&
+      !file.startsWith(`${ROLES_DIR}/`) &&
+      !file.startsWith(`${CARDS_DIR}/`);
+    const retained = new Set(retainedPaths.filter(isNodeDocument));
+    const disk = new Set([...tent.byPath.keys()].map(nodeNotePath).filter(isNodeDocument));
+    for (const file of disk)
+      if (!retained.has(file))
+        result.issues.push({
+          kind: "node-git-mismatch",
+          path: file,
+          state: "disk-only",
+          reason: "Node document exists on disk but not in Tent Git HEAD",
+        });
+    for (const file of retained)
+      if (!disk.has(file))
+        result.issues.push({
+          kind: "node-git-mismatch",
+          path: file,
+          state: "git-only",
+          reason: "Tent Git HEAD records this Node document but it is missing on disk",
+        });
+  }
   const index = buildNodeIndex([...tent.byPath.values()].filter((node) => !node.invalid));
   async function readDocument(path: string, validate: (raw: string) => void, valid = true) {
     result.documents++;

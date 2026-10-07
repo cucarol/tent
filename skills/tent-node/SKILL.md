@@ -53,8 +53,10 @@ and write with that ETag. Afterwards run `tent workspace check --json` once.
   instead of retelling them.
 - `goal` and `prompt` hold confirmed intent, decisions and reasons. Commit
   ids, test counts and delivery status belong to Git and Cards; keep useful
-  verification as dated `output` evidence. Under a goal, only results that
-  implement it are `output`; its questions and research are `prompt`.
+  verification as dated `output` evidence. Under a goal, only `output-asset`
+  and `output-evidence` count as implementing it; `output-issue` and
+  `output-analysis` can sit there without counting. Its open questions are
+  `prompt`.
 - Never enter hashes; Tent records versions. Your confirmations are machine
   confirmations; pass `--by human:<id>` only for a person's actual review.
 
