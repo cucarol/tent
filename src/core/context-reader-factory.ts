@@ -10,6 +10,7 @@ import { contentEtag } from "./etag.js";
 import { nodeNotePath } from "./paths.js";
 import { canonicalSha256 } from "./canonical-digest.js";
 import { loadNodeCatalog, readCatalogDocument } from "./node-catalog.js";
+import { listWorkspaceRelations } from "./workspace-relations.js";
 
 /** Selected reads observe only headers elsewhere in the graph, never unrelated bodies. */
 export async function selectedContextReader(
@@ -46,6 +47,7 @@ function treeRevision(tent: LoadedTent) {
 export async function liveContextReader(
   fs: FsAdapter,
   source: Extract<ReaderSource, { kind: "live" }>,
+  options: { relations?: boolean } = {},
 ) {
   const readonlyFs = readOnlyFs(fs);
   const tent = await loadTent(readonlyFs);
@@ -73,5 +75,6 @@ export async function liveContextReader(
     source,
     documents,
     tent.roots.map((n) => n.id),
+    options.relations ? await listWorkspaceRelations(readonlyFs) : undefined,
   );
 }

@@ -69,6 +69,46 @@ test("repository metadata retains tracked raw bytes, and surviving main is used 
   await assert.rejects(relocatedRepositoryMaterial(main, basis), /no surviving local file/);
 });
 
+test("material inspection reads exact live content without discovering repository metadata", async (t) => {
+  const { main } = await fixture(t);
+  await initializeTentWorkspace(main);
+  const resource = pathToFileURL(path.join(main, "assets/result.txt")).href;
+  const recorded = await new NodeFs(path.join(main, ".tent")).observeMaterial(
+    resource,
+    "Output/Output.md",
+  );
+  assert.ok(recorded.repository);
+  const inspector = new NodeFs(path.join(main, ".tent"), "cli", "inspect");
+  const original = childProcess.execFile;
+  const calls: string[][] = [];
+  const mocked = t.mock.method(childProcess, "execFile", (...args: Parameters<typeof original>) => {
+    calls.push(args[1] as string[]);
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    const first = await inspector.observeMaterial(
+      resource,
+      "Output/Output.md",
+      recorded.repository,
+    );
+    assert.equal(first.observedVersion, recorded.observedVersion);
+    assert.equal(first.repository, undefined);
+    assert.deepEqual(calls, []);
+    await fs.writeFile(path.join(main, "assets/result.txt"), "changed live content\n");
+    const changed = await inspector.observeMaterial(
+      resource,
+      "Output/Output.md",
+      recorded.repository,
+    );
+    assert.notEqual(changed.observedVersion, first.observedVersion);
+    assert.deepEqual(calls, []);
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 test("repository fallback prefers current checkout and rejects a symlink instead of using another checkout", async (t) => {
   const { main, worktree, base } = await fixture(t);
   const basis = await observedRepositoryMaterial(

@@ -22,7 +22,7 @@ export type DocumentVersion = { commit: string; path: string };
 
 export type SnapshotIncoming = {
   from: SnapshotRef;
-  via: "link" | "resource" | "sources" | "card-source";
+  via: "link" | "mention" | "resource" | "sources" | "card-source";
   version?: DocumentVersion;
   changedSince?: boolean;
 };

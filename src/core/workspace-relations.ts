@@ -2,7 +2,7 @@ import path from "node:path";
 import { readOnlyFs, type FsAdapter } from "./adapter.js";
 import { loadTent } from "./tree.js";
 import { buildNodeIndex } from "./okf-index.js";
-import { extractOutLinksDetailed, resolveOutLink } from "../markdown/links.js";
+import { extractOutLinksDetailed, extractNodeMentions, resolveOutLink } from "../markdown/links.js";
 import { resolveTargetPath } from "./link-target.js";
 import {
   materialFields,
@@ -16,11 +16,13 @@ import { parseCardDocument, verifyCardSourceVersions } from "./card-document.js"
 import { isCardId, isRoleId } from "./id.js";
 import { CARDS_DIR, ROLES_DIR, nodeNotePath } from "./paths.js";
 import type { DocumentVersion } from "./git-history.js";
+import { contentEtag } from "./etag.js";
 
 export type DocumentRef = { kind: "node" | "role" | "card"; id: string };
 export type WorkspaceRelation = {
   from: DocumentRef;
-  via: "link" | "resource" | "sources";
+  fromEtag: string;
+  via: "link" | "mention" | "resource" | "sources";
   raw: string;
   target:
     | DocumentRef
@@ -47,6 +49,7 @@ export async function listWorkspaceRelations(fs: FsAdapter): Promise<WorkspaceRe
     path: nodeNotePath(node.path),
     data: node.fm as Record<string, unknown>,
     body: node.body,
+    etag: node.etag,
   }));
   for (const [directory, kind] of [
     [ROLES_DIR, "role"],
@@ -66,16 +69,27 @@ export async function listWorkspaceRelations(fs: FsAdapter): Promise<WorkspaceRe
         entries.slice(start, start + 8).map(async (entry) => {
           const id = entry.name.slice(0, -3);
           const file = `${directory}/${entry.name}`;
-          const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-            await readonlyFs.readBinary(file),
-          );
-          if (kind === "role") parseRoleDocument(id, raw);
-          else parseCardDocument(id, raw);
-          const parsed = parseFrontmatter(raw);
-          return { ref: { kind, id }, path: file, data: parsed.data, body: parsed.body };
+          const bytes = await readonlyFs.readBinary(file);
+          // I/O failures above stay visible; malformed unrelated identity documents are not edges.
+          try {
+            const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+            if (kind === "role") parseRoleDocument(id, raw);
+            else parseCardDocument(id, raw);
+            const parsed = parseFrontmatter(raw);
+            materialFields(parsed.data);
+            return {
+              ref: { kind, id },
+              path: file,
+              data: parsed.data,
+              body: parsed.body,
+              etag: contentEtag(raw),
+            };
+          } catch {
+            return undefined;
+          }
         }),
       );
-      documents.push(...batch);
+      documents.push(...batch.filter((document) => document !== undefined));
     }
   }
   const byPath = new Map(documents.map((d) => [d.path, d.ref]));
@@ -90,6 +104,7 @@ export async function listWorkspaceRelations(fs: FsAdapter): Promise<WorkspaceRe
     );
   }
   const relations: WorkspaceRelation[] = [];
+  const knownIds = new Set(nodes.map((node) => node.id));
   const pinned: Array<{
     relation: WorkspaceRelation;
     owner: string;
@@ -102,6 +117,7 @@ export async function listWorkspaceRelations(fs: FsAdapter): Promise<WorkspaceRe
         occurrence.index === undefined ? undefined : fields.sources?.[occurrence.index];
       const relation: WorkspaceRelation = {
         from: document.ref,
+        fromEtag: document.etag,
         via: occurrence.field,
         raw: occurrence.resource,
         target: occurrence.error
@@ -137,11 +153,22 @@ export async function listWorkspaceRelations(fs: FsAdapter): Promise<WorkspaceRe
       }
       relations.push({
         from: document.ref,
+        fromEtag: document.etag,
         via: "link",
         raw: link.raw,
         target,
         ...(link.label === undefined ? {} : { label: link.label }),
         ...(link.range ? { range: { start: link.range.start, end: link.range.end } } : {}),
+      });
+    }
+    for (const mention of extractNodeMentions(document.body, knownIds, document.ref.id)) {
+      relations.push({
+        from: document.ref,
+        fromEtag: document.etag,
+        via: "mention",
+        raw: mention.targetNodeId,
+        target: { kind: "node", id: mention.targetNodeId },
+        range: { start: mention.range.start, end: mention.range.end },
       });
     }
   }

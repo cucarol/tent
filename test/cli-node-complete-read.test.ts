@@ -179,8 +179,8 @@ test("batch, create, read-back and excerpt outputs expose no unrestricted replac
     search.items.find((item: { nodeId: string }) => item.nodeId === "node-alpha"),
     raw,
   );
-  const backlinks = await cli("backlinks", ["node-bravo"]);
-  assertIncomplete(backlinks.items[0], raw);
+  const incoming = await cli("relations", ["node-bravo", "--direction", "incoming"]);
+  assertIncomplete(incoming.items[0], raw);
   const full = (await cli("get", ["node-alpha", "--full"])).node;
   const saved = await cli("write", [
     "node-alpha",

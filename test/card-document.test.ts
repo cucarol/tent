@@ -661,6 +661,8 @@ test("filtered Card lists skip history and keep malformed-header diagnostics", a
     (await listCardDocuments(adapter, { roleId: "role-a", state: "pending" })).items,
     [],
   );
+  assert.deepEqual((await listCardDocuments(adapter, { cardIds: [] })).items, []);
+  assert.deepEqual((await listCardDocuments(adapter, { cardIds: ["card-missing"] })).items, []);
   await adapter.writeFile(
     "cards/card-invalid.md",
     "---\nid: different\ntype: card\nschemaVersion: 3\n---\n",

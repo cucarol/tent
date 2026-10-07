@@ -129,7 +129,9 @@ export async function relatedNodes(fs: FsAdapter, workspaceId: string, input: un
     workspaceId,
     ...(request.direction === "parent" || request.direction === "children"
       ? catalogRelations(await loadNodeCatalog(fs), { kind: "live", workspaceId }, request)
-      : (await liveContextReader(fs, { kind: "live", workspaceId })).relations(request)),
+      : (await liveContextReader(fs, { kind: "live", workspaceId }, { relations: true })).relations(
+          request,
+        )),
   };
 }
 

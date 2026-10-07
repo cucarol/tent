@@ -77,7 +77,11 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
       (await node("search", ["--resource", "src/reader.ts"])).items[0].nodeId,
       "node-readera",
     );
-    assert.equal((await node("backlinks", ["node-readerb"])).items[0].from.nodeId, "node-readera");
+    assert.equal(
+      (await node("relations", ["node-readerb", "--direction", "incoming"])).items[0].from.nodeId,
+      "node-readera",
+    );
+    assert.equal((await runNodeCommand("backlinks", ["node-readerb"], globals)).exitCode, 1);
     await git(path.join(workspace, ".tent"), "init");
     const created = parse(
       await runCardCommand("create", ["--prompt", "reader", "--source", ".tent/A/A.md"], globals),

@@ -37,6 +37,7 @@ export class NodeFs implements FsAdapter {
   constructor(
     root: string,
     private readonly entry: CaptureMetadata["entry"] = "core",
+    private readonly materialPurpose: "record" | "inspect" = "record",
   ) {
     this.root = nodePath.resolve(root);
     this.history = new GitDocumentHistory(this.root, entry);
@@ -62,12 +63,16 @@ export class NodeFs implements FsAdapter {
       readFrom = relocated.root;
       return observeMaterialResource(workspaceRoot, documentPath, resource, cacheDir, relocated);
     });
-    const repository = await observedRepositoryMaterial(
-      workspaceRoot,
-      observed.canonicalPath,
-      observed.blobs,
-      this.repositoryMaterials,
-    );
+    // Synchronization reads compare observed content; repository metadata is needed when recording a basis.
+    const repository =
+      this.materialPurpose === "inspect"
+        ? undefined
+        : await observedRepositoryMaterial(
+            workspaceRoot,
+            observed.canonicalPath,
+            observed.blobs,
+            this.repositoryMaterials,
+          );
     const relative = nodePath.relative(this.root, observed.canonicalPath);
     const inside =
       relative !== ".." &&

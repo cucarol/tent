@@ -21,11 +21,13 @@ const nodeReadContainers = new Set([
 export function incompleteNodeRead<T>(value: T): T {
   if (Array.isArray(value)) return value.map(incompleteNodeRead) as T;
   if (!value || typeof value !== "object") return value;
+  const nonNode = !("nodeId" in value) && ("roleId" in value || "cardId" in value);
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [
       key,
       (key === "etag" || key === "expectedEtag" || key === "currentEtag") &&
-      typeof item === "string"
+      typeof item === "string" &&
+      !nonNode
         ? incompleteNodeReadEtag(item)
         : nodeReadContainers.has(key)
           ? incompleteNodeRead(item)

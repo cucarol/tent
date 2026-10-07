@@ -738,6 +738,7 @@ export async function watchCardDocuments(
 export async function listCardDocuments(
   fs: FsAdapter,
   options: {
+    cardIds?: readonly string[];
     roleId?: string;
     includeOpen?: boolean;
     state?: CardDocumentState;
@@ -745,6 +746,7 @@ export async function listCardDocuments(
   } = {},
 ) {
   if (options.roleId) await roleAvailable(fs, options.roleId);
+  const cardIds = options.cardIds ? new Set(options.cardIds) : undefined;
   const items: Array<Record<string, unknown>> = [];
   const selected: Array<Record<string, unknown> & { path: string }> = [];
   const sourceSets = new Map<string, MaterialSource[]>();
@@ -753,6 +755,7 @@ export async function listCardDocuments(
     : []) {
     const id = entry.name.slice(0, -3);
     if (entry.isDir || !entry.name.endsWith(".md") || !isCardId(id)) continue;
+    if (cardIds && !cardIds.has(id)) continue;
     const path = cardPath(id);
     try {
       const raw = fs.readFrontmatter ? await fs.readFrontmatter(path) : await fs.readFile(path),

@@ -13,8 +13,9 @@ import { parseFrontmatter } from "./frontmatter.js";
 import { buildOkfNodeIndex } from "./okf-index.js";
 import { nodeNotePath } from "./paths.js";
 import { documentVersionSchema, type DocumentVersion } from "./git-history.js";
-import { extractOutLinksDetailed, resolveOutLink } from "../markdown/links.js";
+import { extractOutLinksDetailed, extractNodeMentions, resolveOutLink } from "../markdown/links.js";
 import { documentLifecycle } from "./document-status.js";
+import type { WorkspaceRelation, DocumentRef } from "./workspace-relations.js";
 
 export type ReaderSource =
   | { kind: "live"; workspaceId: string }
@@ -208,6 +209,7 @@ export class ContextReader {
     readonly source: ReaderSource,
     documents: ReaderDocument[],
     readonly rootNodeIds: string[],
+    private readonly workspaceRelations?: WorkspaceRelation[],
   ) {
     this.documents = documents.map((d) => {
       const {
@@ -252,6 +254,7 @@ export class ContextReader {
           invalid,
         }),
       ),
+      ...(workspaceRelations ? { relations: workspaceRelations } : {}),
     });
   }
   private document(id: string): MaterializedDocument {
@@ -437,6 +440,62 @@ export class ContextReader {
         if (doc && (p.direction === "parent" || visible.has(id) || p.includeArchived))
           items.push(this.summary(doc));
       }
+    } else if (this.workspaceRelations) {
+      const refSummary = (ref: DocumentRef) => {
+        const node = ref.kind === "node" ? this.byId.get(ref.id) : undefined;
+        return node
+          ? { ...this.summary(node), kind: ref.kind, id: ref.id, archived: node.archived }
+          : { kind: ref.kind, id: ref.id, [`${ref.kind}Id`]: ref.id, name: ref.id };
+      };
+      for (const relation of this.workspaceRelations) {
+        if (
+          p.direction === "outgoing"
+            ? relation.from.kind !== "node" || relation.from.id !== p.nodeId
+            : relation.target.kind !== "node" || relation.target.id !== p.nodeId
+        )
+          continue;
+        const from = relation.from.kind === "node" ? this.byId.get(relation.from.id) : undefined;
+        if (p.direction === "incoming" && from?.archived && !p.includeArchived) continue;
+        const { via, target, fromEtag, range: occurrenceRange, ...occurrence } = relation;
+        if (from && from.etag !== fromEtag)
+          throw new ReaderError(
+            "SOURCE_CHANGED",
+            "Node changed during relation observation; retry",
+          );
+        const bodyRange = occurrenceRange
+          ? range(occurrenceRange.start, occurrenceRange.end)
+          : undefined;
+        const start =
+          from && bodyRange ? boundary(from.body, Math.max(0, bodyRange.start - 64)) : 0;
+        const end =
+          from && bodyRange
+            ? boundary(from.body, Math.min(from.body.length, bodyRange.end + 64, start + 256))
+            : 0;
+        items.push({
+          ...occurrence,
+          from: refSummary(relation.from),
+          kind: via === "resource" || via === "sources" ? "material" : via,
+          ...(via === "resource" || via === "sources"
+            ? { field: via, resource: relation.raw }
+            : {}),
+          ...(bodyRange ? { range: bodyRange } : {}),
+          ...(from && bodyRange
+            ? { text: from.body.slice(start, end), textRange: range(start, end) }
+            : {}),
+          target:
+            target.kind === "node" || target.kind === "role" || target.kind === "card"
+              ? refSummary(target)
+              : target,
+          ...(target.kind === "unresolved" ? { unresolved: true } : {}),
+          ...(target.kind === "invalid" ? { error: target.error } : {}),
+          read: {
+            [`${relation.from.kind}Id`]: relation.from.id,
+            view: bodyRange ? "body" : "raw",
+            expectedEtag: fromEtag,
+            ...(bodyRange ? { range: bodyRange } : {}),
+          },
+        });
+      }
     } else {
       const index = buildOkfNodeIndex(
         this.documents
@@ -455,6 +514,7 @@ export class ContextReader {
           .filter((node) => !node.invalid)
           .map((node) => [nodeNotePath(node.path), node]),
       );
+      const knownIds = new Set(this.byId.keys());
       for (const from of this.documents) {
         if (
           from.invalid ||
@@ -503,6 +563,23 @@ export class ContextReader {
             ...(target
               ? { target: { ...this.summary(target), archived: target.archived } }
               : { unresolved: resolved.kind !== "artifact", kind: resolved.kind }),
+          });
+        }
+        for (const mention of extractNodeMentions(from.body, knownIds, from.nodeId)) {
+          if (p.direction === "incoming" && mention.targetNodeId !== p.nodeId) continue;
+          const target = this.document(mention.targetNodeId);
+          items.push({
+            from: this.summary(from),
+            kind: "mention",
+            raw: mention.targetNodeId,
+            range: mention.range,
+            target: { ...this.summary(target), archived: target.archived },
+            read: {
+              nodeId: from.nodeId,
+              view: "body",
+              expectedEtag: from.etag,
+              range: mention.range,
+            },
           });
         }
       }

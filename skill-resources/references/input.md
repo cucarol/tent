@@ -26,11 +26,14 @@ a passing mention, so read the Node before relying on it. Type, tags and
   the whole document. `--full` reads all of it.
 - `tent node read-many <node-id> <node-id> ... --json` reads several Nodes.
 - `--view raw` includes the frontmatter.
-- Live goal reads add a `context` summary of ancestors, scoped prompts,
-  subtree outputs with status, and Cards with receiver and progress. It is
+- Live Node reads add a `context` summary of ancestors, children grouped by
+  type, incoming and outgoing associations, and Cards pinning the Node with
+  state, receiver and progress. Outputs also show their goal chain and sync
+  state; goals retain scoped prompts and subtree outputs. Bare known Node
+  ids in body text outside Markdown links appear as `mention` associations. It is
   separate from `text`, limited to 1 KiB, and appears on the first page or
   with `--full`. Follow the listed ids for full content; omitted counts can
-  be explored with `node relations`, `node list` and `card list`. Historical
+  be explored with `node relations --direction parent|children|incoming|outgoing`. Historical
   reads retain their pinned content without this live summary.
 
 ## Versions

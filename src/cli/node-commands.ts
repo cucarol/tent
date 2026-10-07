@@ -66,7 +66,6 @@ import {
 import { canonicalSha256 } from "../core/canonical-digest.js";
 import { nodeReadRevisionEtag } from "../core/node-read-basis.js";
 import { inspectNodeSync, confirmNodeSync, linkNodeOutput } from "../core/node-sync.js";
-import { nodeTypePrimary } from "../core/node-type.js";
 import { goalContextText } from "./goal-context.js";
 import { cliErrorText } from "./error-text.js";
 
@@ -160,7 +159,7 @@ export async function runNodeCommand(
       cwd: globals.cwd,
       workspace: flags.workspace ?? globals.workspace,
     });
-    const fs = new NodeFs(systemRoot, "cli");
+    const fs = new NodeFs(systemRoot, "cli", sub === "get" ? "inspect" : "record");
     const { workspaceId } = await readWorkspaceSettings(fs);
     if (!workspaceId)
       throw new Error(
@@ -356,7 +355,7 @@ export async function runNodeCommand(
         if (typeof target !== "string") return target;
         const ref = nodeRef(target);
         const withContext = async <T extends { node: { type?: string } }>(value: T) =>
-          !flags["version-json"] && !flags.cursor && nodeTypePrimary(value.node.type) === "goal"
+          !flags["version-json"] && !flags.cursor
             ? { ...value, context: await goalContextText(fs, ref) }
             : value;
         if (flags.full === "true") {
@@ -413,10 +412,7 @@ export async function runNodeCommand(
           ...coreReaderFlags(flags),
         });
         const observed = await readNode(fs, workspaceId, { nodeId, ...options });
-        const maxBytes =
-          16 * 1024 -
-          256 -
-          (!flags["version-json"] && nodeTypePrimary(observed.node.type) === "goal" ? 1024 : 0);
+        const maxBytes = 16 * 1024 - 256 - (!flags["version-json"] ? 1024 : 0);
         if (observed.node.view !== "summary")
           pageText(observed.node, `node.get:${nodeId}`, {
             cursor: flags.cursor,
@@ -524,20 +520,16 @@ export async function runNodeCommand(
         });
         return print(result, json, formatReader);
       }
-      case "relations":
-      case "backlinks": {
+      case "relations": {
         const target = oneTarget(
           positionals,
           `tent node ${sub} <nodeId> [--direction parent|children|outgoing|incoming] [--json]`,
         );
         if (typeof target !== "string") return target;
         const options = coreReaderFlags(flags);
-        if (sub === "backlinks" && options.direction && options.direction !== "incoming")
-          return usage("backlinks only supports incoming relations.");
         const input = readerRelationsSchema.parse({
           ...options,
           nodeId: target === "root" ? null : nodeRef(target),
-          ...(sub === "backlinks" ? { direction: "incoming" } : {}),
         });
         const result = pageItems(await relatedNodes(fs, workspaceId, input), `node.${sub}`, {
           limit: numberFlag(flags, "limit"),
@@ -892,9 +884,6 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
   ],
   relations: [
     "tent node relations <nodeId|root> --direction parent|children|outgoing|incoming [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
-  ],
-  backlinks: [
-    "tent node backlinks <nodeId> [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
   ],
   create: [
     "tent node create <name> --type <type> [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--by <actor>] [--json]",

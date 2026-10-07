@@ -77,6 +77,33 @@ export function extractOutLinksDetailed(body: string, occurrences = false): Extr
   });
   return out;
 }
+
+/** Bare known Node handles in body text; Markdown link spans are already represented as links. */
+export function extractNodeMentions(body: string, knownIds: ReadonlySet<string>, fromId?: string) {
+  const mentions: Array<{
+    targetNodeId: string;
+    range: { unit: "utf16"; start: number; end: number };
+  }> = [];
+  const links: Array<{ start: number; end: number }> = [];
+  walk(fromMarkdown(body), (node) => {
+    if (!["link", "linkReference", "definition"].includes(node.type)) return;
+    const start = node.position?.start.offset,
+      end = node.position?.end.offset;
+    if (start !== undefined && end !== undefined) links.push({ start, end });
+    return "skip";
+  });
+  let linkIndex = 0;
+  for (const match of body.matchAll(/(?<![a-zA-Z0-9_-])node-[a-z0-9]{6}(?![a-zA-Z0-9_-])/g)) {
+    while (links[linkIndex] && links[linkIndex]!.end <= match.index) linkIndex++;
+    if (links[linkIndex] && links[linkIndex]!.start <= match.index) continue;
+    if (match[0] === fromId || !knownIds.has(match[0])) continue;
+    mentions.push({
+      targetNodeId: match[0],
+      range: { unit: "utf16", start: match.index, end: match.index + match[0].length },
+    });
+  }
+  return mentions;
+}
 export function resolveOutLink(
   index: Map<string, OkfNode[]>,
   link: OutLink,

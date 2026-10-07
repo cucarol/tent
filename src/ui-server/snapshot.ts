@@ -121,7 +121,7 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
   const from = (id: string) => relations.filter((r) => r.from.id === id);
   const linksOf = (id: string): SnapshotLink[] =>
     from(id)
-      .filter((r) => r.via === "link" && r.target.kind !== "uri")
+      .filter((r) => (r.via === "link" || r.via === "mention") && r.target.kind !== "uri")
       .map((r) => ({
         label: r.label ?? r.raw,
         href: r.raw,
@@ -131,7 +131,7 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
     ...r.target,
     kind: r.target.kind === "unresolved" ? "text" : r.target.kind,
     resource: r.raw,
-    field: r.via === "link" ? undefined : r.via,
+    field: r.via === "link" || r.via === "mention" ? undefined : r.via,
     index: r.index,
     title: r.title,
   });
@@ -157,7 +157,7 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
   for (const n of nodes) {
     n.links = linksOf(n.id);
     n.materials = from(n.id)
-      .filter((r) => r.via !== "link")
+      .filter((r) => r.via === "resource" || r.via === "sources")
       .map(material);
     n.history = touching(n.id, n.notePath);
   }

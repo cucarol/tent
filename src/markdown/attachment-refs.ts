@@ -11,7 +11,7 @@ export type AttachmentReference = {
 
 /**
  * Resolve an attachment pointer to a path relative to the Tent system root.
- * Used by graph export without adding attachment edges to Node backlinks.
+ * Used by graph export without adding attachment edges to Node relations.
  */
 function resolveAttachmentPath(raw: string, sourcePath?: string): string | undefined {
   let target = raw.trim();

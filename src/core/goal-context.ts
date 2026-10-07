@@ -4,25 +4,30 @@ import { parseFrontmatter } from "./frontmatter.js";
 import { nodeTypePrimary } from "./node-type.js";
 import { documentLifecycle } from "./document-status.js";
 import { listCardDocuments } from "./card-document.js";
-import { readCardGoalIds, type CardProgressInput } from "./card-progress.js";
-import { type MaterialSource } from "./material.js";
+import { listWorkspaceRelations, type WorkspaceRelation } from "./workspace-relations.js";
+import { navigationIds } from "./context-reader.js";
 
 export type GoalContextItem = {
-  kind: "ancestor" | "prompt" | "output" | "card";
+  kind:
+    "ancestor" | "child" | "incoming" | "outgoing" | "goal" | "prompt" | "output" | "card" | "self";
   id: string;
   name: string;
   description: string;
+  type?: string;
+  relationKinds?: WorkspaceRelation["via"][];
   state?: string;
+  sync?: true;
+  progress?: string | null;
   receiver?: string;
 };
 
-/** Live structural context, without capturing neighbouring documents or replaying history. */
+/** Complete live associations for every Node type; CLI alone bounds the navigation hint. */
 export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<GoalContextItem[]> {
   fs = readOnlyFs(fs);
   const catalog = await loadNodeCatalog(fs);
-  const goal = catalog.byId.get(nodeId);
-  if (!goal || nodeTypePrimary(goal.type) !== "goal") return [];
-  const visible = (node: CatalogNode) => {
+  const selected = catalog.byId.get(nodeId);
+  if (!selected) return [];
+  const active = (node: CatalogNode) => {
     const status = documentLifecycle(parseFrontmatter(node.header).data).status;
     return !node.archived && (status === "draft" || status === "stable");
   };
@@ -33,11 +38,21 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
       id: node.nodeId,
       name: node.name,
       description: typeof data.description === "string" ? data.description : "",
-      ...(kind === "output" ? { state: documentLifecycle(data).status ?? "invalid" } : {}),
+      type: node.type,
+      ...(nodeTypePrimary(node.type) === "output"
+        ? {
+            state: documentLifecycle(data).status ?? "invalid",
+            ...(kind === "self" ||
+            kind === "output" ||
+            (kind === "child" && nodeTypePrimary(selected.type) === "goal")
+              ? { sync: true as const }
+              : {}),
+          }
+        : {}),
     };
   };
-  const scopes = [goal];
-  let parent = goal.parentNodeId;
+  const scopes = [selected];
+  let parent = selected.parentNodeId;
   while (parent) {
     const node = catalog.byId.get(parent);
     if (!node) break;
@@ -45,49 +60,112 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
     parent = node.parentNodeId;
   }
   const ancestors = scopes.slice(1).map((node) => item(node, "ancestor"));
-  const ancestorIds = new Set(scopes.map((node) => node.nodeId));
-  const prompts = scopes.flatMap((scope) =>
-    scope.childNodeIds.flatMap((id) => {
+  const visible = navigationIds(catalog.byId.values());
+  const children = selected.childNodeIds
+    .flatMap((id) => {
       const node = catalog.byId.get(id);
-      return node &&
-        visible(node) &&
-        !ancestorIds.has(id) &&
-        nodeTypePrimary(node.type) === "prompt"
-        ? [item(node, "prompt")]
-        : [];
-    }),
-  );
-  const outputs = [...catalog.byId.values()]
-    .filter(
-      (node) =>
-        visible(node) &&
-        nodeTypePrimary(node.type) === "output" &&
-        node.path.startsWith(goal.path + "/"),
-    )
-    .map((node) => item(node, "output"));
-  const cards = (await listCardDocuments(fs)).items.filter((card) => !card.diagnostic);
-  const inputs: CardProgressInput[] = [];
-  for (const card of cards) {
-    const path = String(card.path);
-    const raw = fs.readFrontmatter ? await fs.readFrontmatter(path) : await fs.readFile(path);
-    const data = parseFrontmatter(raw).data;
-    inputs.push({
-      cardId: String(card.cardId),
-      state: card.state as CardProgressInput["state"],
-      sources: Array.isArray(data.sources) ? (data.sources as MaterialSource[]) : [],
+      return node && visible.has(id) ? [item(node, "child")] : [];
+    })
+    .sort((a, b) => (a.type ?? "").localeCompare(b.type ?? "") || a.id.localeCompare(b.id));
+  const result: GoalContextItem[] = [...ancestors, ...children];
+  if (nodeTypePrimary(selected.type) === "output") {
+    result.unshift(item(selected, "self"));
+    result.push(
+      ...scopes
+        .slice(1)
+        .filter((node) => nodeTypePrimary(node.type) === "goal")
+        .map((node) => item(node, "goal")),
+    );
+  }
+  if (nodeTypePrimary(selected.type) === "goal") {
+    const covered = new Set(
+      scopes.map((node) => node.nodeId).concat(children.map((node) => node.id)),
+    );
+    result.push(
+      ...scopes.flatMap((scope) =>
+        scope.childNodeIds.flatMap((id) => {
+          const node = catalog.byId.get(id);
+          return node && active(node) && !covered.has(id) && nodeTypePrimary(node.type) === "prompt"
+            ? [item(node, "prompt")]
+            : [];
+        }),
+      ),
+    );
+    result.push(
+      ...[...catalog.byId.values()]
+        .filter(
+          (node) =>
+            active(node) &&
+            !covered.has(node.nodeId) &&
+            nodeTypePrimary(node.type) === "output" &&
+            node.path.startsWith(selected.path + "/"),
+        )
+        .map((node) => item(node, "output")),
+    );
+  }
+  const relations = await listWorkspaceRelations(fs);
+  const pinnedCardIds = [
+    ...new Set(
+      relations
+        .filter(
+          (relation) =>
+            relation.from.kind === "card" &&
+            relation.target.kind === "node" &&
+            relation.target.id === nodeId &&
+            relation.via === "sources" &&
+            relation.version,
+        )
+        .map((relation) => relation.from.id),
+    ),
+  ];
+  const cards = (
+    await listCardDocuments(fs, { includeDeprecated: true, cardIds: pinnedCardIds })
+  ).items.filter((card) => !card.diagnostic);
+  const cardById = new Map(cards.map((card) => [String(card.cardId), card]));
+  const associations = new Map<string, GoalContextItem>();
+  for (const relation of relations) {
+    const incoming = relation.target.kind === "node" && relation.target.id === nodeId;
+    const outgoing = relation.from.kind === "node" && relation.from.id === nodeId;
+    if (!incoming && !outgoing) continue;
+    const ref = incoming ? relation.from : relation.target;
+    if (ref.kind !== "node" && ref.kind !== "role" && ref.kind !== "card") continue;
+    const node = ref.kind === "node" ? catalog.byId.get(ref.id) : undefined;
+    if (incoming && node?.archived) continue;
+    const pinned =
+      incoming && ref.kind === "card" && relation.via === "sources" && relation.version;
+    const kind = pinned ? "card" : incoming ? "incoming" : "outgoing";
+    const key = `${kind}:${ref.id}`;
+    const existing = associations.get(key);
+    if (existing) {
+      if (!existing.relationKinds!.includes(relation.via))
+        existing.relationKinds!.push(relation.via);
+      continue;
+    }
+    const card = ref.kind === "card" ? cardById.get(ref.id) : undefined;
+    const metadata =
+      ref.kind === "role"
+        ? parseFrontmatter(await fs.readFile(`roles/${ref.id}.md`)).data
+        : undefined;
+    associations.set(key, {
+      ...(node
+        ? item(node, kind)
+        : {
+            kind,
+            id: ref.id,
+            name: String(card?.title ?? metadata?.title ?? ref.id),
+            description: typeof metadata?.description === "string" ? metadata.description : "",
+            type: ref.kind,
+          }),
+      relationKinds: [relation.via],
+      ...(card
+        ? {
+            state: String(card.state),
+            progress: card.progress == null ? null : String(card.progress),
+            description: `${card.goalCount}/${card.totalGoalCount}`,
+            receiver: String(card.receivedBy ?? card.target ?? "open"),
+          }
+        : {}),
     });
   }
-  const goals = await readCardGoalIds(fs, inputs);
-  const related: GoalContextItem[] = cards
-    .filter((card) => goals.get(String(card.cardId))?.goalIds.has(nodeId))
-    .sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)))
-    .map((card) => ({
-      kind: "card",
-      id: String(card.cardId),
-      name: String(card.title ?? card.cardId),
-      description: `${card.goalCount}/${card.totalGoalCount}`,
-      state: String(card.progress ?? card.state),
-      receiver: String(card.receivedBy ?? card.target ?? "open"),
-    }));
-  return [...ancestors, ...prompts, ...outputs, ...related];
+  return [...result, ...associations.values()];
 }

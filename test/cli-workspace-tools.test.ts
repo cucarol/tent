@@ -122,7 +122,11 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
       result(await runNodeCommand("search", ["Original fact"], globals)).items.length,
       1,
     );
-    assert.deepEqual(result(await runNodeCommand("backlinks", ["node-fact"], globals)).items, []);
+    assert.deepEqual(
+      result(await runNodeCommand("relations", ["node-fact", "--direction", "incoming"], globals))
+        .items,
+      [],
+    );
     const readFact = async () =>
       result(await runNodeCommand("get", ["node-fact", "--full"], globals)).node;
     const observed = await readFact();
