@@ -50,6 +50,20 @@ Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.ten
 
 包内包含 CLI 与 Web UI 静态资源。运行同包 `cli.mjs ui --workspace <工作区路径>` 可打开界面（例如 `node <插件路径>/cli.mjs ui --workspace <工作区路径>`）；`--no-open` 只打印地址。服务仅在当前终端前台运行，Ctrl+C 退出，不注册 Session。其他命令直接读写文档和 Git，无需启动 UI 服务。
 
+## Role 与 Card 的维护者说明
+
+Role 在 `.tent/roles/<role-id>.md` 中保存持续方向的目的、边界、方法和 Node 入口。它提供上下文，不占用锁，也不登记或绑定宿主 Session；多个会话可以按同一 Role 工作。共享事实由 Node 保存，Role 只链接事实入口。
+
+Card 保存一次固定输入：短指令、可选接收 Role，以及按顺序排列的来源。Node 和 Role 来源钉住所选版本，其他来源保留地址。CLI 将从 Workspace 根目录传入的路径转换为相对 Card 文档的地址。发布后的 prompt、title 和 sources 不可修改；需求变化写回来源 Node，接收者在 brief 中获知变化后读取当前 Node。尚未决定的要求留在 draft Node。
+
+`show` 只预览，`take` 记录接收。重复接收返回 `replayed: true`，应继续已有工作。`pending` 表示尚未接收，`consumed` 表示已经接收，完成后仍保持该状态。有 target 的 Card 必须带对应 Role 接收；公开 Card 可不带 Role。仅 pending Card 可以改派；取消使用 `deprecate`，保留原输入与接收记录，默认列表隐藏它。
+
+进度由 Card 来源中的 goal 和实际产出决定：`received-no-output` 表示已接收但尚无对应结果，`needs-review` 表示有待复核的响应，`has-output` 表示每个请求目标下已有当前有效的实现产出。`goalCount` 与 `totalGoalCount` 分别是已满足与请求的目标数。没有 goal 来源的 Card 只显示接收情况。当前实现产出的生成或确认时间提供完成时间；确认无关产出不会完成 Card。
+
+产出通过 `node link-output --card <id>` 标明回答哪张 Card，无需另发回复 Card。显式 Card 可以跨 Role，但必须已接收、未作废，并在产出的 goal 祖先链上有来源目标。省略 Card 时，`--role` 必须匹配该目标唯一未完成 Card 的接收 Role。文件在 Workspace checkout 落地后才关联，候选分支应先集成。落后的响应需要复核，不能据此宣称完成。
+
+`card watch` 只观察提交到 Tent Git 的、指向指定 Role 的未作废 pending Card，不写文件或历史；空闲时每三秒检查 HEAD。公开 Card 通过 list 的 `--include-open` 查询。Hook 行为和宿主验收边界见下文。
+
 ## 作者与确认
 
 Node 正文或语义元数据变化时记录 OKF 原生 `generated: {by, at}`；确认时记录 `verified: [{by, at}]`，按 actor 保留最新一项。确认不改正文或生成时间，内容修改也不抹掉既有复核记录。读取、无变化保存和生命周期修改不刷新生成时间。`stale_after` 到期使 Node 落后；`status: deprecated` 的 Node 不进入当前上下文。
