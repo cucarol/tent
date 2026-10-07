@@ -91,18 +91,18 @@ function findDuplicateIds(roots: Node[]): Set<string> {
 function applyDuplicateInvalid(
   node: Node,
   duplicateIds: Set<string>,
-  inherited?: { rootId: string; reason: string },
+  inherited?: { rootPath: string; reason: string },
 ): void {
   const direct = duplicateIds.has(node.id)
     ? {
-        rootId: node.id,
+        rootPath: node.path,
         reason: `Duplicate id: ${node.id}; independent Nodes must have unique ids.`,
       }
     : undefined;
   const invalid = inherited || direct;
   if (invalid) {
     node.invalid = true;
-    node.invalidRootId = invalid.rootId;
+    node.invalidRootPath = invalid.rootPath;
     node.invalidReason = invalid.reason;
   }
   for (const child of node.children) applyDuplicateInvalid(child, duplicateIds, invalid);
@@ -186,7 +186,7 @@ async function loadNode(fs: FsAdapter, path: string, parent: Node | null): Promi
     parent,
   };
   if (parseError || schemaError) {
-    node.invalidRootId = path;
+    node.invalidRootPath = path;
     node.invalidReason = parseError ? `Invalid frontmatter: ${parseError}` : schemaError;
   }
 
@@ -247,16 +247,16 @@ function normalizeTags(value: unknown): string[] {
   return out;
 }
 
-function resolveSubtree(node: Node, inheritedInvalid?: { rootId: string; reason: string }): void {
+function resolveSubtree(node: Node, inheritedInvalid?: { rootPath: string; reason: string }): void {
   const directInvalid = node.invalid
     ? {
-        rootId: node.invalidRootId || node.path,
+        rootPath: node.invalidRootPath || node.path,
         reason: node.invalidReason || "Invalid frontmatter.",
       }
     : invalidIdentityReference(node);
   const invalid = inheritedInvalid || directInvalid;
   node.invalid = !!invalid;
-  node.invalidRootId = invalid?.rootId;
+  node.invalidRootPath = invalid?.rootPath;
   node.invalidReason = invalid?.reason;
   const lifecycle = documentLifecycle(node.fm);
   node.status = lifecycle.status;
@@ -265,10 +265,10 @@ function resolveSubtree(node: Node, inheritedInvalid?: { rootId: string; reason:
   for (const c of node.children) resolveSubtree(c, invalid);
 }
 
-function invalidIdentityReference(node: Node): { rootId: string; reason: string } | undefined {
+function invalidIdentityReference(node: Node): { rootPath: string; reason: string } | undefined {
   if (!isNodeId(node.id)) {
     return {
-      rootId: node.path,
+      rootPath: node.path,
       reason: `Invalid Node id: ${node.id || "<missing>"}; canonical Node ids must start with node-.`,
     };
   }

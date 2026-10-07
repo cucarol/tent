@@ -8,6 +8,7 @@ import {
   readRolePage,
 } from "../core/role-context.js";
 import { pageItems, pageText, formatTextPage } from "./reader-page.js";
+import { cliErrorText } from "./error-text.js";
 
 export type RoleCommandOptions = {
   workspace?: string;
@@ -131,11 +132,7 @@ export async function runRoleCommand(
       stderr: "",
     };
   } catch (error) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: (error instanceof Error ? error.message : String(error)) + "\n",
-    };
+    return { exitCode: 1, stdout: "", stderr: cliErrorText(error, `tent role ${sub}`) + "\n" };
   }
 }
 

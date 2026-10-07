@@ -44,20 +44,31 @@ export async function roleSummaries(fs: FsAdapter) {
     const roleId = entry.name.slice(0, -3);
     if (entry.isDir || !entry.name.endsWith(".md") || !isRoleId(roleId)) continue;
     const path = roleDocumentPath(roleId);
+    let raw: string;
     try {
-      const raw = fs.readFrontmatter ? await fs.readFrontmatter(path) : await fs.readFile(path);
+      raw = fs.readFrontmatter ? await fs.readFrontmatter(path) : await fs.readFile(path);
+    } catch (error) {
+      roles.push({ roleId, path, diagnostic: `Role file is unreadable: ${shortCause(error)}.` });
+      continue;
+    }
+    try {
       const document = parseRoleDocument(roleId, raw);
       const title = document.title ?? roleId;
       roles.push({ roleId, path, title, ...documentLifecycle(parseFrontmatter(raw).data) });
-    } catch {
+    } catch (error) {
       roles.push({
         roleId,
         path,
-        diagnostic: "Role header is invalid; inspect the original file.",
+        diagnostic: `Role header is invalid: ${shortCause(error)}; inspect the original file.`,
       });
     }
   }
   return roles;
+}
+
+function shortCause(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return [...(message.split(/\r?\n/)[0] ?? "").replace(/\.$/, "")].slice(0, 200).join("");
 }
 
 export async function listRoleContexts(fs: FsAdapter) {

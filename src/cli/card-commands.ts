@@ -13,6 +13,7 @@ import {
   type CardDocumentState,
 } from "../core/card-document.js";
 import { pageItems, pageText, formatTextPage } from "./reader-page.js";
+import { cliErrorText } from "./error-text.js";
 
 export type CardCommandOptions = {
   workspace?: string;
@@ -199,11 +200,7 @@ export async function runCardCommand(
       stderr: "",
     };
   } catch (error) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: (error instanceof Error ? error.message : String(error)) + "\n",
-    };
+    return { exitCode: 1, stdout: "", stderr: cliErrorText(error, `tent card ${sub}`) + "\n" };
   }
 }
 

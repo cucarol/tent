@@ -8,6 +8,7 @@ import { serializeFrontmatter } from "../src/core/frontmatter.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { readGoalContext } from "../src/core/goal-context.js";
+import { goalContextText } from "../src/cli/goal-context.js";
 import { git } from "./helpers.js";
 
 test("goal get exposes bounded live context without changing document bytes or capturing neighbours", async (t) => {
@@ -72,6 +73,9 @@ test("goal get exposes bounded live context without changing document bytes or c
   assert.ok(Buffer.byteLength(JSON.stringify(first)) <= 16 * 1024);
   for (const id of ["node-scope", "node-decision", "node-rule", "node-result", created.cardId])
     assert.ok(first.context.includes(id), first.context);
+  // The English CLI hint adds no CJK labels of its own; this fixture's names are ASCII.
+  assert.doesNotMatch(first.context, /[\p{Script=Han}\u3000-\u303f\uff00-\uffef]/u);
+  assert.match(first.context, /^Context\nAncestor Scope node-scope /);
   // Imported outputs have no retained goal basis, so context must expose review debt.
   assert.match(first.context, /stable\/behind/);
   assert.match(first.context, /received-no-output/);
@@ -98,13 +102,18 @@ test("goal get exposes bounded live context without changing document bytes or c
   );
   const text = await runNodeCommand("get", ["node-goal", "--view", "summary"], { workspace });
   assert.equal(text.exitCode, 0, text.stderr);
-  assert.match(text.stdout, /上下文/);
+  assert.match(text.stdout, /Context/);
   for (let i = 0; i < 30; i++)
     await write(`Scope/Rule${i}`, `node-extra${i}`, "prompt", "large description", {
       description: "超长描述".repeat(1000),
     });
   const crowded = await node("node-goal", "--view", "summary");
   assert.ok(Buffer.byteLength(JSON.stringify({ context: crowded.context })) <= 1024);
-  assert.match(crowded.context, /省略/);
+  assert.match(
+    crowded.context,
+    /\nOmitted .*Rule\+\d+.*; continue with relations\/list\/card list$/,
+  );
   assert.ok(crowded.context.includes("node-decision"));
+  await write("Lonely", "node-lonely", "goal", "alone");
+  assert.equal(await goalContextText(adapter, "node-lonely"), "Context: no related items");
 });

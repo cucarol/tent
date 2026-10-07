@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { userInfo } from "node:os";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
@@ -333,6 +334,12 @@ test("saving checks the version the edit started from", async (t) => {
     ),
   );
   assert.match(before.raw, /See \[other\]/);
+  const invalid = await call("GET", "/api/history/document?at=nothex:Main/Main.md");
+  assert.equal(invalid.status, 422);
+  const invalidError = json<{ error: { code: string; message: string } }>(invalid).error;
+  assert.equal(invalidError.code, "INVALID_INPUT");
+  assert.match(invalidError.message, /^commit: Invalid string/);
+  assert.doesNotMatch(invalidError.message, /^\[|"code"|"path"/);
 });
 
 test("Cards are published with pinned sources", async (t) => {
@@ -368,6 +375,40 @@ test("only images inside the workspace are served", async (t) => {
       target,
     );
   assert.equal((await call("GET", "/api/files?path=docs/missing.png")).status, 404);
+});
+
+test("filesystem failures other than a missing path are not reported as 404", async (t) => {
+  const { call, dist } = await fixture(t);
+  const failure = (code: string) => Object.assign(new Error(`${code}: injected failure`), { code });
+  const realpath = fs.realpath;
+  const stat = fs.stat;
+  const image = path.join("docs", "shot.png");
+  const index = path.resolve(dist, "index.html");
+  const mocks = [
+    t.mock.method(fs, "realpath", (async (target: string, options?: unknown) => {
+      if (String(target).endsWith(image)) throw failure("EACCES");
+      return realpath(target, options as never);
+    }) as unknown as typeof fs.realpath),
+    t.mock.method(fs, "stat", (async (target: string, options?: unknown) => {
+      if (path.resolve(String(target)) === index) throw failure("EIO");
+      return stat(target, options as never);
+    }) as unknown as typeof fs.stat),
+  ];
+  // The server imports the fs/promises namespace; publish the mocks to its live bindings.
+  syncBuiltinESMExports();
+  try {
+    const denied = await call("GET", "/api/files?path=docs/shot.png");
+    assert.equal(denied.status, 500);
+    assert.equal(json<{ error: { code: string } }>(denied).error.code, "INTERNAL");
+    assert.equal((await call("GET", "/", { token: null })).status, 500);
+    assert.equal((await call("GET", "/api/files?path=docs/missing.png")).status, 404);
+    assert.equal((await call("GET", "/api/files?path=docs/shot.png/inner.png")).status, 404);
+  } finally {
+    for (const mock of mocks) mock.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.equal((await call("GET", "/api/files?path=docs/shot.png")).status, 200);
+  assert.equal((await call("GET", "/", { token: null })).status, 200);
 });
 
 test("direct Card publication supports immutable reads, pending moves and reception conflicts", async (t) => {

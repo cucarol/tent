@@ -119,7 +119,7 @@ async function inspectCatalogNodes(
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const { raw } = await readCatalogDocument(fs, current);
-        const { data, body } = parseFrontmatter(raw);
+        const { data } = parseFrontmatter(raw);
         const path = nodeNotePath(current.path);
         const record = records[current.nodeId];
         const observations = await observeNodeMaterials(

@@ -217,6 +217,38 @@ test("Role CLI works without Service and legacy or missing Roles never become em
   );
 });
 
+test("Role discovery separates unreadable files from invalid headers and keeps listing", async (t) => {
+  const { adapter } = await fixture(t);
+  await createRoleContext(adapter, { roleId: "role-good", title: "Good", body: "Readable." });
+  await createRoleContext(adapter, { roleId: "role-locked", title: "Locked", body: "Hidden." });
+  await adapter.writeFile("roles/role-old.md", "---\ntype: role\nroleId: role-old\n---\nold\n");
+  const readFrontmatter = adapter.readFrontmatter.bind(adapter);
+  t.mock.method(adapter, "readFrontmatter", async (file: string) => {
+    if (file === "roles/role-locked.md")
+      throw Object.assign(new Error("EACCES: permission denied, open 'role-locked.md'"), {
+        code: "EACCES",
+      });
+    return readFrontmatter(file);
+  });
+  const { items } = await listRoleContexts(adapter);
+  assert.deepEqual(
+    items.map((role) => [role.roleId, role.title, role.diagnostic]),
+    [
+      ["role-good", "Good", undefined],
+      [
+        "role-locked",
+        undefined,
+        "Role file is unreadable: EACCES: permission denied, open 'role-locked.md'.",
+      ],
+      [
+        "role-old",
+        undefined,
+        "Role header is invalid: Role document identity/path mismatch: roles/role-old.md; inspect the original file.",
+      ],
+    ],
+  );
+});
+
 test("Role writes canonicalize known Node ids in Markdown links", async (t) => {
   const { adapter } = await fixture(t);
   await adapter.writeFile("Fact/Fact.md", "---\nid: node-fact\ntype: prompt\n---\nFact");

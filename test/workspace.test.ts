@@ -4,10 +4,24 @@ import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { test } from "node:test";
 import { findTentSystemRoot } from "../src/core/status.js";
+import { workspaceRootFromSystemRoot } from "../src/core/paths.js";
 import { resolveWorkspacePaths } from "../src/cli/workspace-path.js";
 import { tentIndexMarker } from "../src/core/scaffold.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { git } from "./helpers.js";
+
+test("a .tent at a filesystem root derives that root, keeping its separator", () => {
+  assert.equal(workspaceRootFromSystemRoot("/.tent"), "/");
+  assert.equal(workspaceRootFromSystemRoot("/.tent/"), "/");
+  assert.equal(workspaceRootFromSystemRoot("C:\\.tent"), "C:\\");
+  assert.equal(workspaceRootFromSystemRoot("C:/.tent"), "C:/");
+  assert.equal(workspaceRootFromSystemRoot("C:\\work\\.tent"), "C:\\work");
+  assert.equal(workspaceRootFromSystemRoot("/work/.tent"), "/work");
+  assert.equal(workspaceRootFromSystemRoot("/work/notes"), undefined);
+  const hostRoot = workspaceRootFromSystemRoot(path.join(path.parse(process.cwd()).root, ".tent"));
+  assert.equal(hostRoot, path.parse(process.cwd()).root);
+  assert.ok(path.isAbsolute(hostRoot!));
+});
 
 test("workspace discovery skips ordinary index.md files and respects explicit boundaries", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "tent-workspace-discovery-"));

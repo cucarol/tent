@@ -10,6 +10,7 @@ import { createCardDocument } from "../src/core/card-document.js";
 import { renameNode } from "../src/core/rename-ops.js";
 import { withTentMutation } from "../src/core/adapter.js";
 import { testScratchRoot } from "./scratch.js";
+import { loadTent } from "../src/core/tree.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
@@ -380,6 +381,48 @@ test("file inspection failures are diagnostics, not missing file findings", asyn
   assert.deepEqual(result.issues, []);
   assert.equal(result.errors.length, 2);
   assert.ok(result.errors.every((error) => /EACCES/.test(error.reason)));
+});
+
+test("duplicate identities report their own path, not an unreadable Node named like the id", async (t) => {
+  const { workspace, write, adapter, fileExists } = await fixture(t);
+  await write("node-dup/node-dup.md", { id: "node-unreadable" }, "unreadable");
+  await write("A/A.md", { id: "node-dup" }, "first");
+  await write("A/Child/Child.md", { id: "node-child" }, "child");
+  await write("B/B.md", { id: "node-dup" }, "second");
+  const readFile = adapter.readFile.bind(adapter);
+  const readBinary = adapter.readBinary.bind(adapter);
+  const unreadable = [
+    t.mock.method(adapter, "readFile", async (file: string) => {
+      if (file === "node-dup/node-dup.md") throw new Error("EIO: unreadable Node");
+      return readFile(file);
+    }),
+    t.mock.method(adapter, "readBinary", async (file: string) => {
+      if (file === "node-dup/node-dup.md") throw new Error("EIO: unreadable Node");
+      return readBinary(file);
+    }),
+  ];
+  const duplicate = "Duplicate id: node-dup; independent Nodes must have unique ids.";
+  const result = await checkGraph(adapter, workspace, fileExists);
+  assert.deepEqual(
+    [...result.errors].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+    [
+      { path: "A/A.md", reason: duplicate },
+      { path: "A/Child/Child.md", reason: duplicate },
+      { path: "B/B.md", reason: duplicate },
+      { path: "node-dup/node-dup.md", reason: "EIO: unreadable Node" },
+    ],
+  );
+  for (const mock of unreadable) mock.mock.restore();
+  const tent = await loadTent(adapter);
+  assert.deepEqual(
+    ["A", "A/Child", "B", "node-dup"].map((path) => [path, tent.byPath.get(path)?.invalidRootPath]),
+    [
+      ["A", "A"],
+      ["A/Child", "A"],
+      ["B", "B"],
+      ["node-dup", undefined],
+    ],
+  );
 });
 
 test("unreadable Node documents and directory areas do not prevent checking healthy siblings", async (t) => {

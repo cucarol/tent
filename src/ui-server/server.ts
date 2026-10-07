@@ -24,6 +24,7 @@ import { TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/paths.js";
 import { findTentSystemRoot } from "../core/status.js";
 import { readWorkspaceRevision } from "../core/workspace-revision.js";
 import { readWorkspaceSettings } from "../core/workspace-settings.js";
+import { validationIssueText } from "../core/validation-message.js";
 import { NodeFs } from "../fs/node-fs.js";
 import type { Snapshot } from "../ui/data/types.js";
 import { buildSnapshot } from "./snapshot.js";
@@ -367,7 +368,8 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     )
       throw new HttpError(422, "INVALID_INPUT", "Only images inside the workspace can be shown");
     const root = await fsp.realpath(workspaceRoot);
-    const real = await fsp.realpath(path.join(root, ...parts)).catch(() => {
+    const real = await fsp.realpath(path.join(root, ...parts)).catch((error: unknown) => {
+      if (!isMissing(error)) throw error;
       throw new HttpError(404, "NOT_FOUND", `No such file: ${relative}`);
     });
     if (!real.startsWith(root + path.sep))
@@ -390,7 +392,10 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     const target = path.resolve(staticDir, relative);
     const type = STATIC_TYPES[path.extname(target).toLowerCase()];
     if (!type || !target.startsWith(staticDir + path.sep)) return end(res, 404);
-    const stat = await fsp.stat(target).catch(() => null);
+    const stat = await fsp.stat(target).catch((error: unknown) => {
+      if (isMissing(error)) return null;
+      throw error;
+    });
     if (!stat?.isFile()) return end(res, 404);
     const headers: Record<string, string | number> = {
       "Content-Type": type,
@@ -502,6 +507,11 @@ function listen(server: ReturnType<typeof createServer>, port: number) {
   });
 }
 
+/** Only a missing path is "not found"; other filesystem failures reach httpError. */
+function isMissing(error: unknown): boolean {
+  return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException)?.code ?? "");
+}
+
 function httpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
   const message = error instanceof Error ? error.message : String(error);
@@ -521,7 +531,7 @@ function httpError(error: unknown): HttpError {
       error.details,
     );
   if (error instanceof Error && error.name === "ZodError")
-    return new HttpError(422, "INVALID_INPUT", message);
+    return new HttpError(422, "INVALID_INPUT", validationIssueText(error) ?? message);
   // Another Tent writer (the CLI, say) holds the lock; nothing was written, so the page retries.
   if (/already running another write operation/.test(message))
     return new HttpError(503, "BUSY", message);

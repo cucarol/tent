@@ -2,7 +2,7 @@ import { materialFields, validateMaterialAddresses, type MaterialFields } from "
 // Tent 状态动作的统一入口，供 CLI 与插件共同调用。
 
 import { FsAdapter, withTentMutation } from "./adapter.js";
-import { loadTent, join, dirName, nodeNotePath, LoadedTent } from "./tree.js";
+import { loadTent, join, nodeNotePath, LoadedTent } from "./tree.js";
 import { isNodeId, makeUniqueNodeId } from "./id.js";
 import { NODE_FRONTMATTER_KEY_ORDER, serializeFrontmatter } from "./frontmatter.js";
 import { loadOrder, saveOrder, ROOT_KEY } from "./order.js";
@@ -79,7 +79,11 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
   if (existing.has(id)) {
     throw new Error(`Node id already exists: ${id}.`);
   }
-  const beforeOrder = await env.fs.readFile(ORDER_PATH).catch(() => null);
+  // Only a missing order table is removed on rollback; other read failures stop before any write.
+  const beforeOrder = await env.fs.readFile(ORDER_PATH).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    throw error;
+  });
   try {
     await ensureDir(env.fs, path);
     await env.fs.writeFile(notePath, content);

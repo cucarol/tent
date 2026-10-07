@@ -14,6 +14,7 @@ import {
 } from "../core/context-brief.js";
 import { canonicalSha256 } from "../core/canonical-digest.js";
 import { pageItems } from "./reader-page.js";
+import { cliErrorText } from "./error-text.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
 
 export const workspaceHelpText = `tent workspace export --output <new-output-or-scratch-directory>
@@ -101,7 +102,7 @@ export async function runWorkspaceCommand(
       };
     }
     if (sub === "drift") {
-      const inspected = await inspectWorkspaceDrift(fs, roots.workspaceRoot);
+      const inspected = await inspectWorkspaceDrift(fs);
       const result = pageItems(
         {
           items: inspected.items,
@@ -199,7 +200,7 @@ export async function runWorkspaceCommand(
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+      stderr: `${cliErrorText(error, `tent workspace ${sub}`)}\n`,
     };
   }
 }

@@ -58,6 +58,52 @@ for (const failure of ["none", "body", "order"] as const) {
   });
 }
 
+test("Node creation keeps the existing order table when its snapshot read fails", async (t) => {
+  const adapter = await fixture(t);
+  const env = { fs: adapter, clock: { now: () => "2026-10-04T00:00:00.000Z" }, tentName: "test" };
+  await createNode(env, { parentPath: "", name: "Existing", type: "prompt", body: "kept" });
+  const order = await adapter.readFile("order.json");
+  const existing = await adapter.readFile("Existing/Existing.md");
+  const exists = adapter.exists.bind(adapter);
+  const read = adapter.readFile.bind(adapter);
+  const write = adapter.writeFile.bind(adapter);
+  // The rollback snapshot is the order read that follows the target path check.
+  let armed = false;
+  let injected = 0;
+  const writes: string[] = [];
+  t.mock.method(adapter, "exists", async (file: string) => {
+    if (file === "New") armed = true;
+    return exists(file);
+  });
+  t.mock.method(adapter, "readFile", async (file: string) => {
+    if (file === "order.json" && armed) {
+      armed = false;
+      injected++;
+      throw Object.assign(new Error("EIO: injected order snapshot failure"), { code: "EIO" });
+    }
+    return read(file);
+  });
+  t.mock.method(adapter, "writeFile", async (file: string, raw: string) => {
+    writes.push(file);
+    if (file === "New/New.md") throw new Error("injected Node write failure");
+    await write(file, raw);
+  });
+  const failure = await createNode(env, { parentPath: "", name: "New", type: "prompt" }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  assert.equal(await read("order.json"), order);
+  assert.match(String(failure), /EIO: injected order snapshot failure/);
+  assert.equal(injected, 1);
+  assert.deepEqual(
+    writes.filter((file) => file === "order.json" || file.startsWith("New/")),
+    [],
+  );
+  assert.equal(await read("Existing/Existing.md"), existing);
+  assert.equal(await exists("New"), false);
+  assert.deepEqual([...(await loadTent(adapter)).byPath.keys()], ["Existing"]);
+});
+
 test("invalid initial references never publish a partial Node", async (t) => {
   const adapter = await fixture(t);
   const env = { fs: adapter, clock: { now: () => "2026-10-04T00:00:00.000Z" }, tentName: "test" };

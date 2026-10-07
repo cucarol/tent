@@ -3,7 +3,7 @@ import { readGoalContext, type GoalContextItem } from "../core/goal-context.js";
 import { inspectNodeSync } from "../core/node-sync.js";
 
 const budget = 1024;
-const labels = { ancestor: "上级", prompt: "规则", output: "产出", card: "Card" };
+const labels = { ancestor: "Ancestor", prompt: "Rule", output: "Output", card: "Card" };
 const clip = (value: string, length: number) => {
   const chars = [...value.replace(/\s+/g, " ").trim()];
   return chars.length > length ? chars.slice(0, length - 1).join("") + "…" : chars.join("");
@@ -13,7 +13,7 @@ const bytes = (value: string) => Buffer.byteLength(JSON.stringify({ context: val
 /** Keep the read payload and its edit token independent of this bounded navigation hint. */
 export async function goalContextText(fs: FsAdapter, nodeId: string): Promise<string> {
   const items = await readGoalContext(fs, nodeId);
-  if (!items.length) return "上下文：无关联项";
+  if (!items.length) return "Context: no related items";
   const selected: GoalContextItem[] = [];
   const render = (entries: GoalContextItem[], length = 12, descriptionLength = 8) => {
     const lines = entries.map(
@@ -26,7 +26,7 @@ export async function goalContextText(fs: FsAdapter, nodeId: string): Promise<st
         entries.filter((item) => item.kind === kind).length;
       return count ? [`${labels[kind as keyof typeof labels]}+${count}`] : [];
     });
-    return `上下文\n${lines.join("\n")}${omitted.length ? `\n省略 ${omitted.join(" ")}；用 relations/list/card list 继续查找` : ""}`;
+    return `Context\n${lines.join("\n")}${omitted.length ? `\nOmitted ${omitted.join(" ")}; continue with relations/list/card list` : ""}`;
   };
   // Reserve one result and one Card before filling scope rules; each category stays discoverable.
   const priority = [

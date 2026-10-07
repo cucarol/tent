@@ -65,7 +65,10 @@ export function workspaceRootFromSystemRoot(systemRoot: string): string | undefi
   const base = normalized.split(/[\\/]/).pop() ?? "";
   if (base !== TENT_SYSTEM_DIR) return undefined;
   const parent = normalized.replace(/[\\/]+[^\\/]+$/, "");
-  return parent || undefined;
+  if (parent && !/^[A-Za-z]:$/.test(parent)) return parent;
+  // A filesystem root keeps its separator: "/", "C:\" or "C:/".
+  const separator = /[\\/]/.exec(normalized.slice(parent.length))?.[0];
+  return separator ? parent + separator : undefined;
 }
 
 /** 从 workspace 根得到 system root 路径（字符串拼接，不访问磁盘）。 */

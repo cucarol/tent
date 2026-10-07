@@ -21,7 +21,8 @@ test("Node help is offline and does not parse or read requested content", async 
   ] as Array<[string, string[]]>) {
     const result = await runNodeCommand(sub, args, globals);
     assert.equal(result.exitCode, 0, result.stderr);
-    assert.equal(result.stdout, nodeHelpText(sub));
+    assert.equal(result.stdout, nodeHelpText(sub) + "\n");
+    assert.ok(!result.stdout.endsWith("\n\n"), sub);
     if (sub === "create") {
       assert.match(result.stdout, /--sources-json/);
       assert.doesNotMatch(result.stdout, /tent node (write|delete|get)/);
@@ -29,6 +30,34 @@ test("Node help is offline and does not parse or read requested content", async 
     if (sub === "get") assert.doesNotMatch(result.stdout, /Write JSON|base-etag|tent node create/);
   }
   assert.equal((await runNodeCommand("fork", ["node-unused"], globals)).exitCode, 1);
+});
+
+test("CLI validation errors name the command, argument and field instead of issue JSON", async (t) => {
+  const scratch = path.resolve(".scratch");
+  await mkdir(scratch, { recursive: true });
+  const root = await mkdtemp(path.join(scratch, "cli-validation-"));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  const workspace = path.join(root, "workspace");
+  await scaffoldInWorkspace(new NodeFs(workspace), { name: "Validation" });
+  const globals = { workspace };
+  const search = await runNodeCommand("search", [], globals);
+  const batch = await runNodeCommand("write-many", ["--input-json", '{"items":[]}'], globals);
+  const create = await runNodeCommand(
+    "create",
+    ["Bad", "--type", "prompt", "--sources-json", '[{"resource":""}]'],
+    globals,
+  );
+  for (const result of [search, batch, create]) {
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout, "");
+    assert.doesNotMatch(result.stderr, /^\[|"code"|"path"/);
+  }
+  assert.equal(search.stderr, "tent node search: Supply exactly one query or resource\n");
+  assert.match(batch.stderr, /^tent node write-many --input-json: items: Too small: .+\n$/);
+  assert.equal(
+    create.stderr,
+    "tent node create: sources[0].resource: Resource must not be empty\n",
+  );
 });
 
 test("CLI manages Workspace objects directly and preserves CAS", async () => {

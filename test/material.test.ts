@@ -53,6 +53,25 @@ test("standard sources preserve duplicates, spelling, order and unknown values",
   }
 });
 
+test("standalone material validation names resource and sources in issue paths", () => {
+  const paths = (data: Record<string, unknown>) => {
+    try {
+      materialFields(data);
+    } catch (error) {
+      assert.ok(error instanceof Error && error.name === "ZodError");
+      return (error as Error & { issues: Array<{ path: PropertyKey[] }> }).issues.map(
+        (issue) => issue.path,
+      );
+    }
+    return [];
+  };
+  assert.deepEqual(paths({ resource: "" }), [["resource"]]);
+  assert.deepEqual(paths({ sources: [{ resource: "ok" }, { resource: " " }] }), [
+    ["sources", 1, "resource"],
+  ]);
+  assert.deepEqual(paths({ sources: "file.md" }), [["sources"]]);
+});
+
 test("material locations use the declaring document and single Workspace", () => {
   const root = path.resolve(".scratch", "material-resolve");
   const cases = [

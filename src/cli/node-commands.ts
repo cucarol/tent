@@ -68,6 +68,7 @@ import { nodeReadRevisionEtag } from "../core/node-read-basis.js";
 import { inspectNodeSync, confirmNodeSync, linkNodeOutput } from "../core/node-sync.js";
 import { nodeTypePrimary } from "../core/node-type.js";
 import { goalContextText } from "./goal-context.js";
+import { cliErrorText } from "./error-text.js";
 
 export type NodeCommandOptions = {
   workspace?: string;
@@ -102,7 +103,7 @@ export async function runNodeCommand(
   try {
     const { positionals, flags } = parseFlags(args);
     if (flags.help === "true" || ["help", "--help", "-h"].includes(sub)) {
-      return { exitCode: 0, stdout: nodeHelpText(sub), stderr: "" };
+      return { exitCode: 0, stdout: nodeHelpText(sub) + "\n", stderr: "" };
     }
     if (!Object.prototype.hasOwnProperty.call(NODE_COMMAND_HELP, sub)) return usage(nodeHelpText());
     if (flags.heading !== undefined && !["append", "get-section", "write-section"].includes(sub))
@@ -843,7 +844,8 @@ export async function runNodeCommand(
         return usage(nodeHelpText());
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const inputJson = args.some((arg) => arg === "--input-json" || arg.startsWith("--input-json="));
+    const message = cliErrorText(error, `tent node ${sub}${inputJson ? " --input-json" : ""}`);
     const details =
       error instanceof NodeWriteError ||
       error instanceof NodeSectionError ||

@@ -137,7 +137,7 @@ export async function inspectCurrentContext(
 }
 
 export type CurrentContext = Awaited<ReturnType<typeof inspectCurrentContext>>;
-export async function inspectWorkspaceDrift(fs: FsAdapter, workspaceRoot: string) {
+export async function inspectWorkspaceDrift(fs: FsAdapter) {
   const sync = await inspectWorkspaceSync(fs);
   return {
     items: contextDriftItems({ sync }),

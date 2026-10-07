@@ -142,8 +142,8 @@ export async function checkGraph(
   for (const node of tent.byPath.values()) {
     const file = nodeNotePath(node.path);
     if (node.invalid && !failedReads.has(file)) {
-      const unavailableAncestor = node.invalidRootId
-        ? failedReads.get(nodeNotePath(node.invalidRootId))
+      const unavailableAncestor = node.invalidRootPath
+        ? failedReads.get(nodeNotePath(node.invalidRootPath))
         : undefined;
       error(file, unavailableAncestor ?? node.invalidReason ?? "Invalid Node document");
     }

@@ -220,7 +220,7 @@ export function prepareNodeDocumentWrite(
     const nextParsed = parseFrontmatter(rawInput);
     // The Node id is the document identity and cannot be changed here.
     assertRawDocsWriteReserved(diskParsed.data, nextParsed.data);
-    validateSyncMetadata(diskParsed.data, nextParsed.data);
+    validateSyncMetadata(nextParsed.data);
     assertNodeProvenanceEdit(diskParsed.data, nextParsed.data);
     assertStatusEdit(diskParsed.data, nextParsed.data);
     normalizeOptionalNodeType(nextParsed.data.type);
@@ -249,7 +249,7 @@ export function prepareNodeDocumentWrite(
     }
     const current = parseFrontmatter(diskRaw);
     const merged = { ...current.data, ...frontmatter };
-    validateSyncMetadata(current.data, merged);
+    validateSyncMetadata(merged);
     assertNodeProvenanceEdit(current.data, merged);
     assertStatusEdit(current.data, merged);
     if (frontmatter && "type" in frontmatter)
@@ -271,7 +271,7 @@ export function prepareNodeDocumentWrite(
   return nextRaw;
 }
 
-function validateSyncMetadata(previous: Record<string, unknown>, next: Record<string, unknown>) {
+function validateSyncMetadata(next: Record<string, unknown>) {
   try {
     assertNodeRecordFields(next);
   } catch (error) {

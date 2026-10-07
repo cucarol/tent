@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import * as z from "zod/v4";
-import { readOnlyFs, type FsAdapter } from "./adapter.js";
+import { readOnlyFs } from "./adapter.js";
 import { canonicalDocumentReferencesWithPaths } from "./document-links.js";
 import { contentEtag } from "./etag.js";
 import {

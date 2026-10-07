@@ -13,13 +13,24 @@ export type MaterialSource = z.infer<typeof sourceSchema>;
 export type MaterialFields = { resource?: string; sources?: MaterialSource[] };
 
 export function materialFields(data: Record<string, unknown>): MaterialFields {
-  if (data.sources !== undefined) sourcesSchema.parse(data.sources);
+  if (data.sources !== undefined) parseField(sourcesSchema, "sources", data.sources);
   return {
-    ...(data.resource === undefined ? {} : { resource: resourceSchema.parse(data.resource) }),
+    ...(data.resource === undefined
+      ? {}
+      : { resource: parseField(resourceSchema, "resource", data.resource) }),
     // Validate shape without using a parser projection that may drop unknown
     // own keys such as __proto__. Parsed Markdown/RPC data is already JSON-safe.
     ...(data.sources === undefined ? {} : { sources: data.sources as MaterialSource[] }),
   };
+}
+
+/** Standalone field validation keeps the field name at the start of each issue path. */
+function parseField<T>(schema: z.ZodType<T>, field: string, value: unknown): T {
+  const result = schema.safeParse(value);
+  if (result.success) return result.data;
+  throw new z.ZodRealError(
+    result.error.issues.map((issue) => ({ ...issue, path: [field, ...issue.path] })),
+  );
 }
 
 export function materialOccurrences(data: Record<string, unknown>) {

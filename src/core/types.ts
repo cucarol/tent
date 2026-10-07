@@ -32,8 +32,8 @@ export interface Node {
   archived: boolean;
   /** 自身或祖先引用了不存在的 type。失效子树退出正常流程。 */
   invalid: boolean;
-  /** 直接失效的根节点 id;子孙沿用。 */
-  invalidRootId?: string;
+  /** Path of the directly invalid root Node; descendants inherit it. */
+  invalidRootPath?: string;
   invalidReason?: string;
   /** 相对帐根(system root)的路径,如 "goal/挖新alpha"。 */
   path: string;
