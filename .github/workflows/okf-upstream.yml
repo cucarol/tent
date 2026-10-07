@@ -1,0 +1,25 @@
+name: OKF upstream
+
+# Compares the pinned docs/upstream/okf-SPEC.md with upstream okf/SPEC.md.
+# Kept out of ci.yml and release.yml so that `npm run check` stays offline.
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run okf:upstream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

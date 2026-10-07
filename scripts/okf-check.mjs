@@ -5,12 +5,24 @@ import { pathToFileURL } from "node:url";
 import { parseDocument, isMap } from "yaml";
 import { fromMarkdown } from "mdast-util-from-markdown";
 
-const SPEC = "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md";
+const PINNED_SPEC = path.resolve(import.meta.dirname, "../docs/upstream/okf-SPEC.md");
 const RUNTIME_DIRS = new Set([".git", "temp", "attachments"]);
+
+// 门禁离线对照固定的上游副本：版本与来源取自其头部注释，由 npm run okf:upstream 维护。
+export function pinnedOkfSpec(file = PINNED_SPEC) {
+  const header = /^<!--\r?\n([\s\S]*?)\r?\n-->/.exec(fs.readFileSync(file, "utf8"))?.[1] ?? "";
+  const field = (name) => new RegExp(`^${name}: (\\S+)\\r?$`, "m").exec(header)?.[1];
+  const version = field("okf-version"),
+    source = field("source");
+  if (!version || !source)
+    throw new Error(`Pinned OKF spec header lacks okf-version or source: ${file}`);
+  return { version, source };
+}
 
 // OKF 结构合规与 Tent 链接完整性独立报告；断链不使 OKF 文档失去合规性。
 export function validateBundle(bundle, { workspace = false } = {}) {
   const root = path.resolve(bundle);
+  const pinned = pinnedOkfSpec();
   if (!fs.statSync(root).isDirectory()) throw new Error(`Not a bundle directory: ${root}`);
   const errors = [],
     links = [],
@@ -121,8 +133,8 @@ export function validateBundle(bundle, { workspace = false } = {}) {
     });
   }
   return {
-    spec: SPEC,
-    okfVersion: "0.2",
+    spec: pinned.source,
+    okfVersion: pinned.version,
     bundle: root,
     files: files.length,
     conformant: errors.length === 0,
@@ -155,7 +167,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     if (json) console.log(JSON.stringify(result));
     else {
       console.log(
-        `Tent OKF 0.2 structure: ${result.files} Markdown files, ${result.errors.length} error(s)`,
+        `Tent OKF ${result.okfVersion} structure: ${result.files} Markdown files, ${result.errors.length} error(s)`,
       );
       console.log(`Link integrity (separate): ${result.linkIntegrity.issues.length} issue(s)`);
       for (const issue of [...result.errors, ...result.linkIntegrity.issues])

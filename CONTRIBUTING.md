@@ -43,6 +43,8 @@ New current-product `*.test.ts` files are included in **full** and **fast** by d
 
 List selected files without running: `node --import tsx scripts/run-tests.ts full --list` (also `fast` / `integration`).
 
+OKF checks run offline against the pinned `docs/upstream/okf-SPEC.md`; when the daily `OKF upstream` workflow (`npm run okf:upstream`) goes red, the `main` Role refreshes the copy with `npm run okf:upstream -- --update` within a week and sends a Card to the `judge` Role to re-check every OKF reference.
+
 Generated `cli.mjs` is intentionally ignored. `npm run build` recreates it before package tests or packaging. `npm run plugin:build` creates a new complete plugin directory without overwriting an existing delivery.
 
 Pull requests should explain the behavior change, tests added, and any compatibility impact on existing Tent directories.
