@@ -11,7 +11,6 @@ import { canonicalDocumentReferences } from "./document-links.js";
 import {
   isRequirementNode,
   isOutputNode,
-  isImplementationOutputNode,
   goalAncestors,
   nodeSemanticFingerprint,
   observeNodeMaterials,
@@ -24,6 +23,7 @@ import {
   type NodeTrustTier,
 } from "./node-provenance.js";
 import { createNodeUnlocked } from "./ops.js";
+import { normalizeTagList } from "./tags.js";
 import { ReaderError } from "./context-reader.js";
 import { validateNodeName } from "./scaffold.js";
 import { listCardDocuments, readCardDocument } from "./card-document.js";
@@ -292,7 +292,7 @@ async function inspectCatalogNodes(
   for (const goal of nodes.filter((n) => isRequirementNode({ type: n.type }))) {
     if (goal.uncertain) continue;
     const subtreeOutputs = nodes.filter(
-      (n) => isImplementationOutputNode(n) && n.path.startsWith(goal.path + "/"),
+      (n) => isOutputNode(n) && n.path.startsWith(goal.path + "/"),
     );
     const owned = subtreeOutputs;
     const uncertainSubtree = nodes.some((n) => n.uncertain && n.path.startsWith(goal.path + "/"));
@@ -304,8 +304,8 @@ async function inspectCatalogNodes(
       if (!goal.behind) goal.state = "ahead";
       const reasons = [
         subtreeOutputs.length
-          ? "Implementation output is behind this goal's content or materials"
-          : "Goal subtree has no current implementation output Node",
+          ? "An output is behind this goal's content or materials"
+          : "Goal subtree has no current output Node",
       ];
       goal.reasons.push(...reasons);
       if (fs.history && (await fs.exists(".git")))
@@ -420,11 +420,14 @@ export function linkNodeOutput(
     by?: string;
     cardId?: string;
     roleId?: string;
+    tags?: string[];
   },
 ) {
   return withTentMutation(
     fs,
     async () => {
+      // A plain output: tags come only from the caller.
+      const tags = normalizeTagList(input.tags ?? []);
       const catalog = await loadNodeCatalog(fs),
         goal = catalog.byId.get(goalId);
       if (
@@ -563,7 +566,8 @@ export function linkNodeOutput(
         {
           parentPath: goal.path,
           name,
-          type: "output-asset",
+          type: "output",
+          ...(tags.length ? { tags } : {}),
           resource: descriptor.resource,
           ...(cardId ? { sources: [{ resource: `/${cardRecordPath(cardId)}` }] } : {}),
           by: input.by,

@@ -22,7 +22,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, init = true)
 
 test("output acknowledgment facts survive unchanged documents and records in a fresh history reader", async (t) => {
   const { root, history } = await fixture(t);
-  const raw = "---\nid: node-output\ntype: output-evidence\n---\nunchanged\n";
+  const raw = "---\nid: node-output\ntype: output\ntags: [evidence]\n---\nunchanged\n";
   const record = { v: 1 as const, materials: [], futureField: { retained: true } };
   const first = await history.captureUnlocked([{ path: "Output/Output.md", raw }], {
     operation: "node.create",

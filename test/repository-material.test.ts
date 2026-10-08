@@ -146,7 +146,7 @@ test("Node material survives merge and deleted worktree, while live edits and tr
     {
       name: "Goal",
       parentPath: "",
-      type: "goal-requirement",
+      type: "goal",
       body: "Requirement",
     },
   );
@@ -316,7 +316,7 @@ test("committed main deletion stays unavailable with a retained or reused worktr
   const adapter = new NodeFs(path.join(main, ".tent"));
   const goal = await createNode(
     { fs: adapter, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Deletion" },
-    { name: "Goal", parentPath: "", type: "goal-requirement", body: "Requirement" },
+    { name: "Goal", parentPath: "", type: "goal", body: "Requirement" },
   );
   const output = await linkNodeOutput(adapter, goal, { resource: "assets/result.txt" });
   assert.equal((await inspectNodeSync(adapter, output.nodeId)).state, "synced");
@@ -367,7 +367,7 @@ test("worktree path warnings preserve creation and the declared live-path observ
   const adapter = new NodeFs(path.join(main, ".tent"));
   const goal = await createNode(
     { fs: adapter, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Live checkout" },
-    { name: "Goal", parentPath: "", type: "goal-requirement", body: "Requirement" },
+    { name: "Goal", parentPath: "", type: "goal", body: "Requirement" },
   );
   const relative = ".worktrees/topic/assets/result.txt";
   const linked = await runNodeCommand("link-output", [goal, "--resource", relative], {

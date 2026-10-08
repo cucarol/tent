@@ -14,10 +14,12 @@ Start from what you have and stop once you have what the task needs:
 | A file | `tent node search --resource <path> --json` |
 | A Node, and want its neighbours | `tent node relations <node-id> --direction <parent\|children\|outgoing\|incoming> --json` |
 | The tree | `tent node list [--parent <node-id>] --json` |
+| A type or tag | `tent node list --type output --tag evidence --json` (whole subtree; every `--tag` must match) |
+| The tags in use | `tent node tags` |
 
 Keep the `node-` ids you find; names and paths can change. A search hit can be
 a passing mention, so read the Node before relying on it. Type, tags and
-`description` help judge relevance first; see [Node types](node-types.md).
+`description` help judge relevance first; see [Node types and tags](node-types.md).
 
 ## Read
 

@@ -17,7 +17,7 @@ async function fixture(t: TestContext) {
     write: (fields: Record<string, unknown>) =>
       adapter.writeFile(
         "Out/Out.md",
-        serializeFrontmatter({ id: "node-out", type: "output-asset", ...fields }, "result"),
+        serializeFrontmatter({ id: "node-out", type: "output", ...fields }, "result"),
       ),
   };
 }
@@ -53,16 +53,27 @@ test("outputs without valid declared time provide no completion timestamp", asyn
   }
 });
 
-test("activity excludes deprecated outputs and non-output Nodes", async (t) => {
+test("activity excludes deprecated outputs, invalid types and non-output Nodes", async (t) => {
   const { adapter, write } = await fixture(t);
   const generated = { by: "process:test", at: "2026-01-01T00:00:00Z" };
   await write({ generated, status: "deprecated" });
   assert.deepEqual(await readOutputActivity(adapter), new Map());
   await write({ generated, type: "prompt" });
   assert.deepEqual(await readOutputActivity(adapter), new Map());
-  for (const type of ["output", "output-analysis", "output-issue", "output-custom"]) {
-    await write({ generated, type });
-    assert.deepEqual(await readOutputActivity(adapter), new Map(), type);
+  await write({ generated, type: "output-evidence" });
+  assert.deepEqual(await readOutputActivity(adapter), new Map(), "former labels are invalid");
+});
+
+test("every current output has activity, whatever its tags", async (t) => {
+  const { adapter, write } = await fixture(t);
+  const generated = { by: "process:test", at: "2026-01-01T00:00:00Z" };
+  for (const tags of [[], ["issue"], ["analysis"], ["custom"], ["asset", "evidence"]]) {
+    await write({ generated, ...(tags.length ? { tags } : {}) });
+    assert.equal(
+      (await readOutputActivity(adapter)).get("node-out"),
+      "2026-01-01T00:00:00.000Z",
+      tags.join(","),
+    );
   }
 });
 

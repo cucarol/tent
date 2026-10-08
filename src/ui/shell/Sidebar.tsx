@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, describe, type KnownWorkspace } from "../data/api.js";
-import type { Graph } from "../data/store.js";
+import { primaryOf, type Graph } from "../data/store.js";
 import type { SnapshotCard, SnapshotNode, SnapshotRef } from "../data/types.js";
 import { isDraft, editDraft, useDraft } from "../data/drafts.js";
 import { cardProgressLabel } from "../data/card-progress.js";
@@ -916,7 +916,7 @@ function Peek({ graph, work, id, top }: { graph: Graph; work: Work; id: string; 
     (c) => !isDraft(c) && c.sources.some((s) => s.id === n.id),
   );
   const holders = [...new Set(cards.map(work.laneOf).filter((l) => l !== PUBLIC))];
-  const [primary, ...tag] = n.type.split("-");
+  const primary = primaryOf(n.type);
   return (
     <div className="peek" ref={box} style={{ top: y }} role="tooltip">
       <div className="peek-head">
@@ -925,7 +925,7 @@ function Peek({ graph, work, id, top }: { graph: Graph; work: Work; id: string; 
           <div className="peek-name">{n.name}</div>
           <div className="peek-type">
             <b className={`p-${primary}`}>{primary}</b>
-            {tag.length > 0 && ` · ${tag.join("-")}`}
+            {n.tags.length > 0 && ` · ${n.tags.join(", ")}`}
           </div>
         </div>
       </div>

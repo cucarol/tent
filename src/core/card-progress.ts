@@ -1,15 +1,16 @@
 import { readOnlyFs, type FsAdapter } from "./adapter.js";
 import type { CardDocumentState } from "./card-document.js";
 import { parseFrontmatter } from "./frontmatter.js";
-import { isNodeId } from "./id.js";
 import { documentVersionSchema, type DocumentVersion } from "./git-history.js";
 import { materialLocator, type MaterialSource } from "./material.js";
 import { loadNodeCatalog } from "./node-catalog.js";
-import { isRequirementNode, isImplementationOutputNode } from "./node-sync-record.js";
+import { isRequirementNode, isOutputNode } from "./node-sync-record.js";
 import { inspectNodesSync } from "./node-sync.js";
 import { documentLifecycle } from "./document-status.js";
 import { nodeVerifications, okfTimestampSchema } from "./node-provenance.js";
 import { cardRecordPath, nodeNotePath } from "./paths.js";
+import { parseRoleDocument } from "./role-document.js";
+import { canonicalIdentityError } from "./tree.js";
 
 export type CardProgress = "pending" | "received-no-output" | "needs-review" | "has-output";
 export type CardProgressItem = {
@@ -54,6 +55,23 @@ export function deriveCardProgress(
   };
 }
 
+/** A pinned Node or Role must still pass its own identity rules; null when it does. */
+export function cardSourceIdentityError(
+  path: string,
+  raw: string,
+  data: Record<string, unknown>,
+): string | null {
+  if (path.startsWith("roles/")) {
+    try {
+      parseRoleDocument(path.slice(6, -3), raw);
+      return null;
+    } catch {
+      return "Selected Role is invalid";
+    }
+  }
+  return canonicalIdentityError(data) ?? null;
+}
+
 /** Read only the versions pinned by these Cards, never replay document history. */
 export async function readCardGoalIds(fs: FsAdapter, cards: readonly CardProgressInput[]) {
   const result = new Map(
@@ -91,8 +109,9 @@ export async function readCardGoalIds(fs: FsAdapter, cards: readonly CardProgres
       const read = byVersion.get(key(entry.version))!;
       if (read instanceof Error) throw read;
       const data = read.frontmatter ?? parseFrontmatter(read.raw).data;
-      if (typeof data.id === "string" && isNodeId(data.id) && isRequirementNode(data))
-        target.goalIds.add(data.id);
+      const identityError = cardSourceIdentityError(entry.version.path, read.raw, data);
+      if (identityError) throw new Error(identityError);
+      if (isRequirementNode(data)) target.goalIds.add(data.id as string);
     } catch (error) {
       target.diagnostics.push(
         `Cannot derive Card progress from ${entry.source.resource}: ${String(error)}`,
@@ -111,9 +130,7 @@ function active(node: { archived: boolean; header: string }) {
 export async function readOutputActivity(fs: FsAdapter): Promise<Map<string, string>> {
   const result = new Map<string, string>();
   const catalog = await loadNodeCatalog(readOnlyFs(fs));
-  const outputs = [...catalog.byId.values()].filter(
-    (node) => isImplementationOutputNode(node) && active(node),
-  );
+  const outputs = [...catalog.byId.values()].filter((node) => isOutputNode(node) && active(node));
   if (!outputs.length) return result;
   const inspections = new Map(
     (
@@ -162,9 +179,7 @@ export async function readCardProgress(
     return result;
   }
   const catalog = await loadNodeCatalog(readOnlyFs(fs));
-  const outputs = [...catalog.byId.values()].filter(
-    (node) => isImplementationOutputNode(node) && active(node),
-  );
+  const outputs = [...catalog.byId.values()].filter((node) => isOutputNode(node) && active(node));
   const responses = new Map(
     outputs.map((node) => {
       const sources = parseFrontmatter(node.header).data.sources;

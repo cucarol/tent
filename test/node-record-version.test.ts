@@ -162,7 +162,8 @@ for (const hasResource of [false, true]) {
     const output = await createNode(env, {
       parentPath: "",
       name: "Output",
-      type: "output-asset",
+      type: "output",
+      tags: ["asset"],
       body: "original output",
       ...(hasResource ? { resource: pathToFileURL(material).href } : {}),
     });
@@ -215,7 +216,8 @@ test("confirm without baseline preserves behind until missing local material bec
   const output = await createNode(env, {
     parentPath: "",
     name: "Missing Material Output",
-    type: "output-asset",
+    type: "output",
+    tags: ["asset"],
     resource: pathToFileURL(material).href,
   });
   await commitTrailers([trailer(output, { v: 1, materials: "damaged" })]);
@@ -243,7 +245,8 @@ test("confirm without baseline keeps remote material neutral while establishing 
   const output = await createNode(env, {
     parentPath: "",
     name: "Remote Material Output",
-    type: "output-evidence",
+    type: "output",
+    tags: ["evidence"],
     resource: "https://example.invalid/material.md",
   });
   await commitTrailers([trailer(output, { materials: [] })]);

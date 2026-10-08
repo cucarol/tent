@@ -49,7 +49,7 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   const created = await f.node("create", [
     "Requirement",
     "--type",
-    "goal-requirement",
+    "goal",
     "--resource",
     "requirement.md",
     "--body",
@@ -143,7 +143,15 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   assert.ok(
     brief.value.unlinkedOutputs.some((item: { address?: string }) => item.address === "loose.svg"),
   );
-  await f.node("create", ["Loose output", "--type", "output-asset", "--resource", "loose.svg"]);
+  await f.node("create", [
+    "Loose output",
+    "--type",
+    "output",
+    "--tags",
+    "asset",
+    "--resource",
+    "loose.svg",
+  ]);
   brief = await f.workspace("brief");
   assert.deepEqual(brief.value.unlinkedOutputs, []);
   drift = (await f.workspace("drift")).value;
@@ -154,7 +162,7 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   const decision = await f.node("create", [
     "Conversation decision",
     "--type",
-    "prompt-decision",
+    "prompt",
     "--body",
     "A decision made in conversation",
   ]);
@@ -173,13 +181,7 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
 test("CLI rejects retired flags and confirmation still requires a full live read basis", async (t) => {
   const f = await fixture(t);
   await fs.writeFile(path.join(f.root, "basis.txt"), "evidence");
-  const created = await f.node("create", [
-    "Plan",
-    "--type",
-    "prompt-rule",
-    "--resource",
-    "basis.txt",
-  ]);
+  const created = await f.node("create", ["Plan", "--type", "prompt", "--resource", "basis.txt"]);
   const id = created.node.nodeId;
   assert.equal((await f.node("check", [id])).state, "synced");
   for (const [sub, flag] of [

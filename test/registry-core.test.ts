@@ -28,14 +28,14 @@ test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS
     name: "demo",
     nodes: [
       { name: "aim", type: "goal", body: "# demo · aim" },
-      { name: "out", type: "output-asset" },
+      { name: "out", type: "output" },
     ],
   });
 
   const tent = await loadTent(fsa);
   assert.deepEqual(tent.roots.map((box) => box.path).sort(), ["aim", "out"]);
   assert.match(await fsa.readFile("aim/aim.md"), /# demo · aim/);
-  assert.match(await fsa.readFile("out/out.md"), /type: output-asset/);
+  assert.match(await fsa.readFile("out/out.md"), /^type: output$/m);
   assert.equal(parseFrontmatter(await fsa.readFile("out/out.md")).body, "");
 
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "tent-scaffold-workspace-"));
@@ -80,7 +80,7 @@ test("tags frontmatter:数组往返且键序在 type 后", async () => {
   const raw = serializeFrontmatter(
     {
       id: "node-tagged",
-      type: "prompt-reference",
+      type: "prompt",
       tags: ["backend-hardening", "needs,quote"],
       owner: "reviewer",
     },
@@ -88,10 +88,7 @@ test("tags frontmatter:数组往返且键序在 type 后", async () => {
     NODE_FRONTMATTER_KEY_ORDER,
   );
 
-  assert.match(
-    raw,
-    /type: prompt-reference\ntags: \[backend-hardening, "needs,quote"\]\nowner: reviewer/,
-  );
+  assert.match(raw, /type: prompt\ntags: \[backend-hardening, "needs,quote"\]\nowner: reviewer/);
   const parsed = parseFrontmatter(raw);
   assert.deepEqual(parsed.data.tags, ["backend-hardening", "needs,quote"]);
   assert.equal(parsed.data.owner, "reviewer");

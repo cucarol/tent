@@ -28,7 +28,7 @@ test("propagation baseline: ancestor material change survives goal confirmation"
   await createNode(env, { name: "Inner", type: "goal", parentPath: "Outer", body: "requirement" });
   const output = await createNode(env, {
     name: "Result",
-    type: "output-evidence",
+    type: "output",
     parentPath: "Outer/Inner",
     body: "observed",
   });
@@ -62,7 +62,8 @@ test("deprecated ancestor stays in output dependencies while Card excludes its d
   const output = await createNode(env, {
     parentPath: "Outer/Inner",
     name: "Evidence",
-    type: "output-evidence",
+    type: "output",
+    tags: ["evidence"],
     sources: [{ resource: "/cards/card-request.md" }],
   });
   await fs.writeFile("../material.txt", "second\n");

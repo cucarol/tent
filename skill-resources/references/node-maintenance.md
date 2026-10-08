@@ -7,11 +7,12 @@ Exact arguments: `tent node --help`. Pass Markdown and JSON through stdin
 
 Save what later work needs and cannot easily rebuild: confirmed intent
 (`goal`); rules, decisions with their reasons and references (`prompt`);
-results, verification and observed problems (`output`). See
-[Node types](node-types.md). Update the Node that owns a fact before creating
-another, and split out a part that will be read or revised on its own. Leave
-out one-off details, raw tool output and what Git already records. Keep who
-confirmed a decision and when, if known; never invent it.
+results, verification and observed problems (`output`). Tags name the form
+and topic; see [Node types and tags](node-types.md). Update the Node that
+owns a fact before creating another, and split out a part that will be read
+or revised on its own. Leave out one-off details, raw tool output and what
+Git already records. Keep who confirmed a decision and when, if known; never
+invent it.
 
 ## Write the body
 
@@ -27,8 +28,10 @@ checked and when. Link other Nodes with relative Markdown links, or with
 tent node create <name> --type <type> [--parent <node-id>] [--body -] [--resource <path>] [--sources-json <JSON>] [--tags a,b] --json
 ```
 
-The name becomes the folder and file name. If a create fails unclearly, check
-whether the Node exists before retrying.
+The type is `goal`, `prompt` or `output`. Take tags from `tent node tags`
+(tags in use, with counts) or the presets before inventing one. The name
+becomes the folder and file name. If a create fails unclearly, check whether
+the Node exists before retrying.
 
 ## Change part of a Node
 
@@ -109,8 +112,8 @@ Tent records material versions in Git when you save; never enter hashes.
 
 - **behind**: recorded material changed or is missing, `stale_after` passed,
   or any ancestor goal's content or material changed relative to the output;
-- **ahead**: a goal with no active asset/evidence output in its subtree, or
-  whose implementation outputs lag behind that goal's content or materials.
+- **ahead**: a goal with no active output in its subtree, or whose outputs
+  lag behind that goal's content or materials. Tags do not change this.
 
 A goal can be both. After reading the
 complete Node and the changed material, run
@@ -130,7 +133,8 @@ identity.
 ## Outputs
 
 `tent node link-output <goal-id> --resource <path-or-node-id> [--name <name>] [--role <id>] [--card <id>]`
-creates an `output-asset` child named after the file. Paths resolve from the
+creates an `output` child named after the file; it gets only the tags you
+pass with `--tags a,b`, such as `asset` or `evidence`. Paths resolve from the
 Workspace root and the file must exist. Link a result only once it is in
 that checkout. Tracked materials retain a repository-relative location and
 can still be observed from a surviving checkout after worktree removal.
@@ -140,8 +144,8 @@ a unique incomplete Card received by that Role. An explicit Card may cross
 Roles, but must be received, not deprecated, and reference a goal on this
 output's ancestor chain. When a
 goal changes, review its outputs and confirm them. Questions, research and
-pending decisions are `prompt` Nodes. Only current `output-asset` and
-`output-evidence` count as implementation; issues and analyses do not.
+pending decisions are `prompt` Nodes. Every current output counts for its
+goals and the Card it names, whatever its tags, including an `issue`.
 
 ## Structure and lifecycle
 

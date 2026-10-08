@@ -23,6 +23,7 @@ import { loadNodeCatalog } from "../src/core/node-catalog.js";
 import { incompleteNodeReadEtag } from "../src/core/node-read-basis.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
+import { inspectCurrentContext, makeContextBrief } from "../src/core/context-brief.js";
 
 async function fixture(t: TestContext, history = true) {
   await mkdir(testScratchRoot(), { recursive: true });
@@ -56,7 +57,7 @@ for (const method of ["single", "batch", "whole-body"] as const) {
       type: "goal",
       resource: pathToFileURL(path.join(root, "Upstream/Upstream.md")).href + "#Plan",
     });
-    const output = await create("Evidence", "output-evidence", "Goal");
+    const output = await create("Evidence", "output", "Goal");
     const sync = () => inspectNodeSync(new NodeFs(root), goal);
     const record = (await fs.history.nodeRecords())[output];
     assert.ok(record);
@@ -108,7 +109,7 @@ for (const method of ["single", "batch", "whole-body"] as const) {
       (await new NodeFs(root).history.changesInRange()).at(-1)!.time,
     );
     await confirmNodeSync(fs, output, { baseEtag: (await readNodeForEdit(fs, output)).etag });
-    const sibling = await create("Second", "output-evidence", "Goal");
+    const sibling = await create("Second", "output", "Goal");
     await edit(goal, { body: "independent requirement\n" });
     const since = (await sync()).ahead?.since;
     assert.ok(since);
@@ -142,7 +143,7 @@ test("same receipt cannot distinguish readable A from uncaptured unavailable A",
     type: "goal",
     resource: pathToFileURL(path.join(root, "Upstream/Upstream.md")).href + "#Plan",
   });
-  const output = await create("Evidence", "output-evidence", "Goal");
+  const output = await create("Evidence", "output", "Goal");
   const beforeHead = (await fs.history.currentCommit())!;
   const beforeRaw = await fs.readFile("Goal/Evidence/Evidence.md");
   const original = await fs.readFile("Upstream/Upstream.md");
@@ -200,7 +201,7 @@ for (const method of ["single", "batch"] as const) {
   test(`published ${method} output save survives ordinary index mirror failure`, async (t) => {
     const { fs, root, env, create, edit } = await fixture(t);
     const goal = await create("Goal", "goal");
-    const output = await create("Evidence", "output-evidence", "Goal");
+    const output = await create("Evidence", "output", "Goal");
     await edit(goal, { body: "requirement B\n" });
     const before = await readNodeForEdit(fs, output);
     const beforeHead = await fs.history.currentCommit();
@@ -286,7 +287,7 @@ for (const method of ["single", "batch"] as const) {
   test(`neutral ${method} output link normalization cannot acknowledge goal drift`, async (t) => {
     const { fs, root, env, create, edit } = await fixture(t);
     const goal = await create("Goal", "goal");
-    const output = await create("Evidence", "output-evidence", "Goal");
+    const output = await create("Evidence", "output", "Goal");
     const target = await create("Target");
     await edit(output, { body: `[target](${target})\n` });
     await edit(goal, { body: "requirement B\n" });
@@ -376,7 +377,7 @@ for (const independentMismatch of [false, true]) {
       body: "requirement A\n",
       resource: pathToFileURL(path.join(root, "Upstream/Upstream.md")).href + "#Plan",
     });
-    const output = await create("Evidence", "output-evidence", "Goal");
+    const output = await create("Evidence", "output", "Goal");
     const sync = () => inspectNodeSync(new NodeFs(root), goal);
     assert.equal((await sync()).ahead, undefined);
     if (independentMismatch) await edit(goal, { body: "requirement B\n" });
@@ -415,7 +416,7 @@ for (const unreadable of ["deleted", "invalid"] as const) {
       type: "goal",
       resource: upstream,
     });
-    const output = await create("Evidence", "output-evidence", "Goal");
+    const output = await create("Evidence", "output", "Goal");
     // A receipt newer than the retained document must not hide its later removal.
     await confirmNodeSync(fs, output, { baseEtag: (await readNodeForEdit(fs, output)).etag });
     const file = "Upstream/Upstream.md";
@@ -450,7 +451,7 @@ test("retained file URI material cannot follow a relocated Node identity", async
     type: "goal",
     resource: pathToFileURL(path.join(root, file)).href,
   });
-  await create("Evidence", "output-evidence", "Goal");
+  await create("Evidence", "output", "Goal");
   // Retain an external relocation without rewriting the absolute URI declaration.
   await fs.mkdir("Moved");
   await fs.move(file, "Moved/Moved.md");
@@ -484,7 +485,7 @@ test("portable file URI receipts retain exact ahead transition times", async (t)
     type: "goal",
     resource: pathToFileURL(path.join(root, "Upstream/Upstream.md")).href,
   });
-  await create("Evidence", "output-evidence", "Goal");
+  await create("Evidence", "output", "Goal");
   assert.equal((await inspectNodeSync(new NodeFs(root), goal)).ahead, undefined);
   await edit(upstream, { body: "changed material\n" });
   const event = (await new NodeFs(root).history.changesInRange()).at(-1)!;
@@ -502,8 +503,8 @@ test("external receipt mismatch stays continuous when another retained material 
     resource,
     sources: [{ resource: upstream }],
   });
-  await create("First", "output-evidence", "Goal");
-  const second = await create("Second", "output-evidence", "Goal");
+  await create("First", "output", "Goal");
+  const second = await create("Second", "output", "Goal");
   await writeFile(path.join(workspace, "input.txt"), "input v2");
   await confirmNodeSync(fs, second, { baseEtag: (await readNodeForEdit(fs, second)).etag });
   const before = await inspectNodeSync(new NodeFs(root), goal);
@@ -527,10 +528,10 @@ for (const mode of ["neutral", "independent", "meaningful"] as const) {
   test(`legacy output ${mode} rewrite uses normalized body evidence`, async (t) => {
     const { fs, root, create, edit } = await fixture(t);
     const goal = await create("Goal", "goal");
-    const output = await create("Evidence", "output-evidence", "Goal");
+    const output = await create("Evidence", "output", "Goal");
     const target = await create("Target");
     await edit(output, { body: `[target](${target})\n` });
-    if (mode === "independent") await create("Second", "output-evidence", "Goal");
+    if (mode === "independent") await create("Second", "output", "Goal");
     await edit(goal, { body: "requirement B\n" });
     const before = (await inspectNodeSync(new NodeFs(root), goal)).ahead?.since;
     assert.ok(before);
@@ -588,7 +589,8 @@ test("link-output accepts Workspace paths, bundle addresses, Node IDs and URIs w
   const linked = await linkNodeOutput(fs, goal, { resource: "out/page.html" });
   assert.equal(linked.path, "Parent/Goal/page.html");
   const saved = await readNodeForEdit(fs, linked.nodeId);
-  assert.equal(saved.frontmatter.type, "output-asset");
+  assert.equal(saved.frontmatter.type, "output");
+  assert.equal(saved.frontmatter.tags, undefined, "link-output adds no tag of its own");
   assert.equal(
     materialLocator(saved.frontmatter.resource as string, nodeNotePath(saved.path)).kind,
     "path",
@@ -610,8 +612,18 @@ test("link-output accepts Workspace paths, bundle addresses, Node IDs and URIs w
   assert.equal(await fs.history.currentCommit(), retainedHead);
   const duplicate = await linkNodeOutput(fs, goal, { resource: "./out/page.html" });
   assert.equal(duplicate.path, "Parent/Goal/page.html 2");
-  const explicit = await linkNodeOutput(fs, goal, { resource: "out/page.html", name: "Selected" });
+  const explicit = await linkNodeOutput(fs, goal, {
+    resource: "out/page.html",
+    name: "Selected",
+    tags: ["ui", "asset", "ui"],
+  });
   assert.equal(explicit.path, "Parent/Goal/Selected");
+  assert.deepEqual((await readNodeForEdit(fs, explicit.nodeId)).frontmatter.tags, ["asset", "ui"]);
+  await assert.rejects(
+    linkNodeOutput(fs, goal, { resource: "out/page.html", name: "Bad", tags: ["a/b"] }),
+    /Tag name cannot contain path separators/,
+  );
+  assert.equal(await fs.exists("Parent/Goal/Bad"), false);
   await mkdir(path.join(root, "attachments"), { recursive: true });
   await writeFile(path.join(root, "attachments", "asset.svg"), "asset");
   const bundle = await linkNodeOutput(fs, goal, { resource: "/attachments/asset.svg" });
@@ -716,7 +728,7 @@ test("workspace inspection keeps catalog order and isolates each Node's conflict
 
 test("goal and hierarchical output follow the two-stage production and confirmation cycle", async (t) => {
   const { fs, workspace, create, edit } = await fixture(t);
-  const goal = await create("Goal", "goal-requirement");
+  const goal = await create("Goal", "goal");
   assert.equal((await inspectNodeSync(fs, goal)).state, "ahead");
   assert.ok((await inspectNodeSync(fs, goal)).aheadSince);
   const output = await linkNodeOutput(fs, goal, {
@@ -724,8 +736,8 @@ test("goal and hierarchical output follow the two-stage production and confirmat
     name: "Deliverable",
     by: "writer/1",
   });
-  // Analysis tracks dependencies but does not itself implement its goal.
-  const bodyOutput = await create("Analysis", "output-analysis", "Goal");
+  // Any output, such as an analysis, tracks dependencies and counts for its goal.
+  const bodyOutput = await create("Analysis", "output", "Goal");
   assert.equal((await inspectNodeSync(fs, bodyOutput)).state, "synced");
   assert.equal((await inspectNodeSync(fs, goal)).state, "synced");
   await edit(goal, { body: "changed requirement\n", by: "writer/2" });
@@ -745,11 +757,11 @@ test("goal and hierarchical output follow the two-stage production and confirmat
 
 test("review regression: goal addresses and body drift, metadata and line endings do not", async (t) => {
   const { fs, create, edit, resource } = await fixture(t);
-  const goal = await create("Goal", "goal-requirement");
-  const output = await create("Evidence", "output-evidence", "Goal");
+  const goal = await create("Goal", "goal");
+  const output = await create("Evidence", "output", "Goal");
   for (const frontmatter of [
     { tags: ["reviewed"] },
-    { type: "goal-direction" },
+    { type: "goal", tags: ["reviewed", "direction"] },
     { description: "metadata" },
   ]) {
     await edit(goal, { frontmatter });
@@ -777,11 +789,11 @@ test("review regression: confirming changed goal materials keeps owned outputs p
     type: "goal",
     sources: [{ resource }],
   });
-  const output = await create("Evidence", "output-evidence", "Goal");
+  const output = await create("Evidence", "output", "Goal");
   await create("Transparent", "prompt", "Goal");
-  const deep = await create("Deep", "output-evidence", "Goal/Transparent");
+  const deep = await create("Deep", "output", "Goal/Transparent");
   const nested = await create("Nested", "goal", "Goal");
-  const nestedOutput = await create("Nested Evidence", "output-evidence", "Goal/Nested");
+  const nestedOutput = await create("Nested Evidence", "output", "Goal/Nested");
   await writeFile(path.join(workspace, "input.txt"), "new requirement\n");
   assert.equal((await inspectNodeSync(fs, goal)).state, "behind");
   const beforeConfirm = await fs.history.currentCommit();
@@ -869,7 +881,7 @@ test("review regression: confirming Node materials and converting LF to CRLF doe
 test("goal material ahead time survives an output-only material declaration", async (t) => {
   const { fs, root, env, workspace, resource, create, edit } = await fixture(t);
   const goal = await createNode(env, { parentPath: "", name: "Goal", type: "goal", resource });
-  const output = await create("Evidence", "output-evidence", "Goal");
+  const output = await create("Evidence", "output", "Goal");
   await writeFile(path.join(workspace, "input.txt"), "new material");
   await edit(goal, { confirm: true });
   const before = await inspectNodeSync(new NodeFs(root), goal);
@@ -900,8 +912,8 @@ test("retained Node material starts ahead at its change and keeps that transitio
     type: "goal",
     resource: pathToFileURL(path.join(root, "Upstream/Upstream.md")).href + "#Plan",
   });
-  const wholeOutput = await create("Evidence", "output-evidence", "Whole");
-  const sectionOutput = await create("Evidence", "output-evidence", "Section");
+  const wholeOutput = await create("Evidence", "output", "Whole");
+  const sectionOutput = await create("Evidence", "output", "Section");
   const container = await create("Container");
   const sync = (id: string) => inspectNodeSync(new NodeFs(root), id);
   async function datedEdit(
@@ -988,7 +1000,7 @@ test("retained Node material starts ahead at its change and keeps that transitio
 test("unretained external material changes have no guessed ahead time, even after goal confirmation", async (t) => {
   const { fs, root, env, workspace, resource, create, edit } = await fixture(t);
   const goal = await createNode(env, { parentPath: "", name: "Goal", type: "goal", resource });
-  await create("Evidence", "output-evidence", "Goal");
+  await create("Evidence", "output", "Goal");
   await writeFile(path.join(workspace, "input.txt"), "changed externally");
   const before = await inspectNodeSync(new NodeFs(root), goal);
   assert.ok(before.ahead);
@@ -1008,7 +1020,7 @@ test("an output can acknowledge uncaptured live Node material without borrowing 
     type: "goal",
     resource: upstream,
   });
-  const output = await create("Evidence", "output-evidence", "Goal");
+  const output = await create("Evidence", "output", "Goal");
   const upstreamPath = "Upstream/Upstream.md";
   const initial = await fs.readFile(upstreamPath);
   await fs.writeFile(upstreamPath, initial.replace("original", "uncaptured new material"));
@@ -1053,7 +1065,7 @@ test("deprecated and archived goal ancestors retain the existing output dependen
   const { fs, env, resource, workspace, create, edit } = await fixture(t);
   const outer = await createNode(env, { parentPath: "", name: "Outer", type: "goal", resource });
   const inner = await create("Inner", "goal", "Outer");
-  const output = await create("Evidence", "output-evidence", "Outer/Inner");
+  const output = await create("Evidence", "output", "Outer/Inner");
   await writeFile(path.join(workspace, "input.txt"), "changed material");
   const before = await inspectNodeSync(fs, output);
   assert.ok(before.behind);
@@ -1087,9 +1099,8 @@ test("same-basis inline and batch output confirmations do not lend an old transi
             type: "goal",
             resource: upstream,
           });
-          const output = await create("Evidence", "output-evidence", "Goal");
-          const other =
-            method === "batch" ? await create("Analysis", "output-analysis", "Goal") : undefined;
+          const output = await create("Evidence", "output", "Goal");
+          const other = method === "batch" ? await create("Analysis", "output", "Goal") : undefined;
           const upstreamPath = "Upstream/Upstream.md";
           const original = await fs.readFile(upstreamPath);
           await edit(upstream, { body: "retained material B" });
@@ -1193,7 +1204,7 @@ test("same-basis inline and batch output confirmations do not lend an old transi
 test("repeat output confirmation records its acknowledgment with identical bytes and basis", async (t) => {
   const { fs, root, create, edit } = await fixture(t);
   const goal = await create("Goal", "goal");
-  const output = await create("Evidence", "output-evidence", "Goal");
+  const output = await create("Evidence", "output", "Goal");
   t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-07T04:00:00Z") });
   await edit(output, { confirm: true });
   const firstHead = await fs.history.currentCommit();
@@ -1218,7 +1229,7 @@ test("metadata, append and section output writes explicitly acknowledge no outpu
     type: "goal",
     resource: upstream,
   });
-  const output = await create("Evidence", "output-evidence", "Goal");
+  const output = await create("Evidence", "output", "Goal");
   const initial = (await fs.history.nodeRecords())[output];
   assert.ok(initial);
   // A changed receipt proves successful observation, unlike same-basis initialization.
@@ -1275,8 +1286,8 @@ test("one output's acknowledged material observation clears stale times across s
     type: "goal",
     resource: upstream,
   });
-  const first = await create("First", "output-evidence", "Goal");
-  const second = await create("Second", "output-evidence", "Goal");
+  const first = await create("First", "output", "Goal");
+  const second = await create("Second", "output", "Goal");
   const original = await fs.readFile("Upstream/Upstream.md");
   await edit(upstream, { body: "retained material B" });
   assert.ok((await inspectNodeSync(new NodeFs(root), goal)).ahead?.since);
@@ -1313,11 +1324,11 @@ test("one output's acknowledged material observation clears stale times across s
     type: "goal",
     resource: upstream,
   });
-  await create("First", "output-evidence", "Acquisition");
+  await create("First", "output", "Acquisition");
   await edit(upstream, { body: "retained material E" });
   assert.ok((await inspectNodeSync(new NodeFs(root), acquiredGoal)).ahead?.since);
   await fs.writeFile("Upstream/Upstream.md", original);
-  await create("Second", "output-evidence", "Acquisition");
+  await create("Second", "output", "Acquisition");
   assert.deepEqual(
     (await new NodeFs(root).history.changesInRange()).at(-1)!.acknowledgedOutputIds,
     [],
@@ -1341,10 +1352,10 @@ test("an output confirmation cannot treat an unreadable section's retained basis
     type: "goal",
     resource: pathToFileURL(path.join(root, "Upstream/Upstream.md")).href + "#Plan",
   });
-  const output = await create("Evidence", "output-evidence", "Goal");
+  const output = await create("Evidence", "output", "Goal");
   const original = await fs.readFile("Upstream/Upstream.md");
   await edit(upstream, { body: "## Plan\n\nmaterial B\n" });
-  const sibling = await create("Second", "output-evidence", "Goal");
+  const sibling = await create("Second", "output", "Goal");
   const firstSince = (await inspectNodeSync(new NodeFs(root), goal)).ahead?.since;
   assert.ok(firstSince);
   const retained = await fs.readFile("Upstream/Upstream.md");
@@ -1408,8 +1419,8 @@ test("a separately proven goal mismatch preserves continuous ahead through ambig
     type: "goal",
     resource: upstream,
   });
-  const first = await create("First", "output-evidence", "Goal");
-  await create("Second", "output-evidence", "Goal");
+  const first = await create("First", "output", "Goal");
+  await create("Second", "output", "Goal");
   const original = await fs.readFile("Upstream/Upstream.md");
   await edit(upstream, { body: "material B" });
   const since = (await inspectNodeSync(new NodeFs(root), goal)).ahead?.since;
@@ -1441,7 +1452,7 @@ test("a separately proven goal mismatch preserves continuous ahead through ambig
 test("output review of uncaptured goal bytes cannot make its confirmation the ahead start", async (t) => {
   const { fs, root, workspace, create, edit } = await fixture(t);
   const goal = await create("Goal", "goal");
-  const output = await create("Evidence", "output-evidence", "Goal");
+  const output = await create("Evidence", "output", "Goal");
   const original = await fs.readFile("Goal/Goal.md");
   await fs.writeFile("Goal/Goal.md", original.replace("original", "external goal C"));
   await edit(output, { confirm: true });
@@ -1457,10 +1468,10 @@ test("output review of uncaptured goal bytes cannot make its confirmation the ah
   for (const method of ["create", "link"] as const) {
     const name = `New ${method}`;
     const otherGoal = await create(name, "goal");
-    await create("First", "output-evidence", name);
+    await create("First", "output", name);
     const otherRaw = await fs.readFile(`${name}/${name}.md`);
     await fs.writeFile(`${name}/${name}.md`, otherRaw.replace("original", "external goal C"));
-    if (method === "create") await create("Second", "output-evidence", name);
+    if (method === "create") await create("Second", "output", name);
     else
       await linkNodeOutput(fs, otherGoal, {
         resource: pathToFileURL(path.join(workspace, "output.txt")).href,
@@ -1484,7 +1495,7 @@ test("output review of uncaptured goal bytes cannot make its confirmation the ah
 test("a missing output goal basis stays unavailable after tags and rename", async (t) => {
   const { fs, root, env, create, edit } = await fixture(t);
   await create("Goal", "goal");
-  const output = await create("Evidence", "output-evidence", "Goal");
+  const output = await create("Evidence", "output", "Goal");
   await fs.history.captureUnlocked([], {
     operation: "test.old-record",
     nodeRecords: { [output]: { v: 1, materials: [] } },
@@ -1503,7 +1514,7 @@ test("review regression: ahead.since follows the latest transition, survives met
   const { fs, workspace, create, edit } = await fixture(t);
   const goal = await create("Goal", "goal");
   const first = (await inspectNodeSync(fs, goal)).ahead?.since;
-  const output = await create("Evidence", "output-evidence", "Goal");
+  const output = await create("Evidence", "output", "Goal");
   assert.equal((await inspectNodeSync(fs, goal)).ahead, undefined);
   await edit(goal, { body: "new goal" });
   const head = (await fs.history.currentCommit())!;
@@ -1546,11 +1557,11 @@ test("single Node sync reads only its body and the required goal or subtree outp
   const ordinary = await create("Ordinary");
   const goal = await create("Goal", "goal");
   const nested = await create("Nested", "goal", "Goal");
-  const own = await create("Own", "output-evidence", "Goal");
-  await create("Nested Output", "output-evidence", "Goal/Nested");
+  const own = await create("Own", "output", "Goal");
+  await create("Nested Output", "output", "Goal/Nested");
   await create("Unrelated Child", "prompt", "Goal");
   await create("Elsewhere", "goal");
-  await create("Other Output", "output-evidence", "Elsewhere");
+  await create("Other Output", "output", "Elsewhere");
   await edit(nested, { body: "changed nested goal" });
   const read = fs.readFile.bind(fs),
     bodies = new Set<string>();
@@ -1580,6 +1591,34 @@ test("single Node sync reads only its body and the required goal or subtree outp
   assert.equal((await inspectNodeSync(fs, goal)).state, "ahead");
 });
 
+test("an issue-tagged output is enough for its goal and clears the brief's goal without outputs", async (t) => {
+  const { fs, env, workspace, create } = await fixture(t);
+  const goal = await create("Goal", "goal");
+  const lonely = await create("Lonely", "goal");
+  await create("Question", "prompt", "Lonely");
+  let brief = makeContextBrief(await inspectCurrentContext(fs, workspace));
+  assert.deepEqual(brief.counts, { ahead: 2, behind: 0 });
+  await createNode(env, {
+    parentPath: "Goal",
+    name: "Known problem",
+    type: "output",
+    tags: ["issue"],
+    body: "Fails on Windows paths.\n",
+  });
+  const sync = await inspectWorkspaceSync(fs);
+  assert.deepEqual(sync.requirementsWithoutOutputs, [lonely]);
+  assert.equal(sync.nodes.find((node) => node.nodeId === goal)!.ahead, undefined);
+  assert.deepEqual(sync.nodes.find((node) => node.nodeId === lonely)!.ahead?.reasons, [
+    "Goal subtree has no current output Node",
+  ]);
+  brief = makeContextBrief(await inspectCurrentContext(fs, workspace));
+  assert.deepEqual(brief.counts, { ahead: 1, behind: 0 });
+  assert.deepEqual(
+    brief.ahead.map((item) => item.nodeId),
+    [lonely],
+  );
+});
+
 test("explicit deprecated Nodes remain inspectable while workspace inspection excludes them", async (t) => {
   const { fs, create, edit } = await fixture(t, false);
   const id = await create("Deprecated");
@@ -1601,11 +1640,11 @@ test("explicit deprecated Nodes remain inspectable while workspace inspection ex
   assert.equal(workspace.counts.synced, 0);
 });
 
-test("entire goal chain, implementation presence and deprecated outputs are independent", async (t) => {
+test("entire goal chain, output presence and deprecated outputs are independent", async (t) => {
   const { fs, create, edit } = await fixture(t);
-  const top = await create("Direction", "goal-direction");
+  const top = await create("Direction", "goal");
   const child = await create("Small", "goal", "Direction");
-  const output = await create("Evidence", "output-evidence", "Direction/Small");
+  const output = await create("Evidence", "output", "Direction/Small");
   assert.equal((await inspectNodeSync(fs, output)).goalId, child);
   assert.notEqual((await inspectNodeSync(fs, top)).state, "ahead");
   await edit(top, { body: "parent changes" });
@@ -1635,9 +1674,7 @@ test("a goal counts ahead and behind independently and each cause resolves separ
   assert.ok(result.ahead && result.behind);
   assert.deepEqual(inspected.counts, { synced: 0, ahead: 1, behind: 1, unanchored: 0 });
   assert.match(result.behind.reasons.join("; "), /Material changed/);
-  assert.deepEqual(result.ahead.reasons, [
-    "Goal subtree has no current implementation output Node",
-  ]);
+  assert.deepEqual(result.ahead.reasons, ["Goal subtree has no current output Node"]);
   assert.equal(result.ahead.since, result.aheadSince);
   await edit(goal, { body: "ordinary change" });
   assert.ok((await inspectNodeSync(fs, goal)).behind, "ordinary save cannot clear behind");
@@ -1648,9 +1685,7 @@ test("a goal counts ahead and behind independently and each cause resolves separ
   await edit(goal, { body: "new requirement" });
   result = await inspectNodeSync(fs, goal);
   assert.ok(result.behind && result.ahead);
-  assert.deepEqual(result.ahead.reasons, [
-    "Implementation output is behind this goal's content or materials",
-  ]);
+  assert.deepEqual(result.ahead.reasons, ["An output is behind this goal's content or materials"]);
   const read = await readNodeForEdit(fs, goal);
   await confirmNodeSync(fs, goal, { baseEtag: read.etag });
   result = await inspectNodeSync(fs, goal);
@@ -1719,7 +1754,7 @@ test("confirmation and structure edits do not drift goal version; moving existin
   const target = await create("Target", "prompt");
   const goal = await create("Goal", "goal");
   await edit(goal, { body: `[target](../Target/Target.md)\n` });
-  const output = await create("Evidence", "output-evidence");
+  const output = await create("Evidence", "output");
   await moveNode(env, output, goal, { mode: "inside" });
   assert.equal((await inspectNodeSync(fs, output)).state, "synced");
   await edit(goal, { confirm: true });
@@ -1748,7 +1783,7 @@ test("batch new output uses final goal and self material bytes, without embedded
         ref: "output",
         parent: "@goal",
         name: "Output",
-        type: "output-evidence",
+        type: "output",
         resource: "@output",
         body: "implementation",
       },

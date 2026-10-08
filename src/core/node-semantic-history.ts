@@ -2,6 +2,7 @@ import type { CatalogNode } from "./node-catalog.js";
 import { parseFrontmatter, type ParsedFrontmatter } from "./frontmatter.js";
 import { materialIdentity, materialLocator } from "./material.js";
 import { nodeNotePath } from "./paths.js";
+import { canonicalIdentityError } from "./tree.js";
 import { rewriteMarkdownDestinations } from "../markdown/links.js";
 
 type Documents = Map<string, { path: string; raw: string }>;
@@ -23,18 +24,46 @@ export function historicalFrontmatterReader(): typeof parseFrontmatter {
   };
 }
 
+const identityValidity = new WeakMap<ParsedFrontmatter, boolean>();
+/** Retained bytes pass the same identity and type rules as a live document. */
+export function historicalIdentityValid(parsed: ParsedFrontmatter): boolean {
+  let valid = identityValidity.get(parsed);
+  if (valid === undefined) {
+    valid = canonicalIdentityError(parsed.data) === undefined;
+    identityValidity.set(parsed, valid);
+  }
+  return valid;
+}
+
+/**
+ * The Nodes a live `byId` index would hold for these retained documents. An
+ * unparseable or invalid document leaves out its whole subtree, so nothing
+ * below it counts as an output, a material Node or a dependency.
+ */
 export function historicalNodeCatalog(
   documents: Documents,
   readFrontmatter = parseFrontmatter,
 ): Map<string, CatalogNode> {
+  const parsedById = new Map<string, ParsedFrontmatter>();
+  const invalidPaths = new Set<string>();
+  for (const [nodeId, document] of documents) {
+    try {
+      const parsed = readFrontmatter(document.raw);
+      if (historicalIdentityValid(parsed)) parsedById.set(nodeId, parsed);
+      else invalidPaths.add(document.path);
+    } catch {
+      invalidPaths.add(document.path);
+    }
+  }
+  const isolated = (path: string) => {
+    for (let at = path; at; at = at.slice(0, Math.max(0, at.lastIndexOf("/"))))
+      if (invalidPaths.has(at)) return true;
+    return false;
+  };
   const nodes = new Map<string, CatalogNode>();
   for (const [nodeId, document] of documents) {
-    let parsed;
-    try {
-      parsed = readFrontmatter(document.raw);
-    } catch {
-      continue;
-    }
+    const parsed = parsedById.get(nodeId);
+    if (!parsed || (invalidPaths.size && isolated(document.path))) continue;
     nodes.set(nodeId, {
       nodeId,
       path: document.path,

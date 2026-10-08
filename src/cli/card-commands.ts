@@ -243,7 +243,7 @@ Targeted Cards require their Role; untargeted Cards can be received without one.
 Watch reads committed pending Cards for exactly that Role, writes no files, and exits when input exists.
 It checks HEAD every 3 seconds; omit --timeout to wait indefinitely, or use 0 for one immediate check.
 Watch exit codes: 0 = Cards (one line per Card, or a JSON array); 2 = timeout (no output); 1 = error.
-Progress counts current output-asset/evidence Nodes whose sources explicitly name this Card. goalCount counts pinned goals containing those outputs; behind responses leave unsatisfied goals in needs-review. Generated/verified timestamps on current implementation outputs provide completion times. Progress reads current documents without replaying history.
+Progress counts current output Nodes, whatever their tags, whose sources explicitly name this Card. goalCount counts pinned goals containing those outputs; behind responses leave unsatisfied goals in needs-review. Generated/verified timestamps on current outputs provide completion times. Progress reads current documents without replaying history.
 Only published pending Cards can move. Requirements awaiting a decision belong in Nodes marked status: draft.
 Cancelled published tasks can be deprecated without changing their input or reception. Deprecated Cards are excluded from lists by default.
 `;

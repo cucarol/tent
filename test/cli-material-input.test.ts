@@ -340,7 +340,7 @@ test("Card response source roots match stored documents while ordinary CLI paths
     await cli("create", [
       "Manual response",
       "--type",
-      "output-evidence",
+      "output",
       "--parent",
       "node-goal",
       "--sources-json",

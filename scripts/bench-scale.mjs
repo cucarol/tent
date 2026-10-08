@@ -211,7 +211,8 @@ function generate(root, ws, cli, opts, build) {
       op: "create",
       ref: `g${g}`,
       name: `Goal${g}`,
-      type: "goal-requirement",
+      type: "goal",
+      tags: ["requirement"],
       body: body(),
     });
     for (let p = 0; p < 2; p++)
@@ -219,7 +220,8 @@ function generate(root, ws, cli, opts, build) {
         op: "create",
         ref: `g${g}p${p}`,
         name: `Decision${g}x${p}`,
-        type: "prompt-decision",
+        type: "prompt",
+        tags: ["decision"],
         parent: `@g${g}`,
         body: body(),
       });
@@ -228,7 +230,8 @@ function generate(root, ws, cli, opts, build) {
         op: "create",
         ref: `g${g}s${s}`,
         name: `Sub${g}x${s}`,
-        type: "goal-todo",
+        type: "goal",
+        tags: ["todo"],
         parent: `@g${g}`,
         body: body(),
       });
@@ -237,7 +240,8 @@ function generate(root, ws, cli, opts, build) {
           op: "create",
           ref: `g${g}s${s}o${o}`,
           name: `Out${g}x${s}x${o}`,
-          type: "output-evidence",
+          type: "output",
+          tags: ["evidence"],
           parent: `@g${g}s${s}`,
           body: body(),
         };
@@ -298,7 +302,7 @@ function generate(root, ws, cli, opts, build) {
     d.raw += `\nEdit ${i}: revised after review (${Math.floor(rand() * 1e6)}).\n`;
     commit("node.write", d.id, d.rel, d.raw);
   }
-  const topGoals = docs.filter((d) => d.type === "goal-requirement");
+  const topGoals = docs.filter((d) => d.type === "goal" && d.rel.split("/").length === 2);
   for (let c = 0; c < cardCount; c++) {
     const id = `card-${c.toString(36).padStart(8, "0")}`;
     const goal = topGoals[c % topGoals.length];
@@ -323,7 +327,7 @@ function generate(root, ws, cli, opts, build) {
   const count = Number(git(ws, ["rev-list", "--count", "HEAD"]));
   if (count !== totalCommits) fail(`Commit count mismatch: expected ${totalCommits}, got ${count}`);
   const result = {
-    schemaVersion: 1,
+    schemaVersion: 2, // 2: exact Node types with tags
     kind: "tent-cli-scale-fixture",
     workspace: ws,
     seed: 42,
@@ -399,7 +403,7 @@ function measure(root, ws, cli, opts, build) {
   if (inside(source, ws) || inside(ws, source))
     fail("Fixture and measurement workspace must not contain each other");
   const fixture = JSON.parse(fs.readFileSync(path.join(source, marker), "utf8"));
-  if (fixture.kind !== "tent-cli-scale-fixture" || fixture.schemaVersion !== 1)
+  if (fixture.kind !== "tent-cli-scale-fixture" || fixture.schemaVersion !== 2)
     fail("Unsupported fixture marker");
   const materialRoot = scratchPath(root, fixture.workspace, "fixture-material-root");
   if (!fs.statSync(materialRoot).isDirectory()) fail("Original fixture materials must still exist");

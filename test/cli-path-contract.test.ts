@@ -63,15 +63,7 @@ test("link-output, node create and card create resolve the same Workspace-root a
     const created = parse(
       await runNodeCommand(
         "create",
-        [
-          `Created ${index}`,
-          "--type",
-          "output-asset",
-          "--parent",
-          "node-goal",
-          "--resource",
-          input,
-        ],
+        [`Created ${index}`, "--type", "output", "--parent", "node-goal", "--resource", input],
         globals,
       ),
     ).node;

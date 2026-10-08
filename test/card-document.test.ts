@@ -268,7 +268,7 @@ test("Card progress counts only outputs explicitly responding to this Card", asy
   );
   await adapter.writeFile(
     "Notes/Notes.md",
-    serializeFrontmatter({ id: "node-notes", type: "prompt-spec" }, "Notes"),
+    serializeFrontmatter({ id: "node-notes", type: "prompt" }, "Notes"),
   );
   const plain = await createCardDocument(adapter, {
     cardId: "card-nogoal",

@@ -9,7 +9,6 @@ import {
   isCardResponseSource,
 } from "./material.js";
 import { materialContent, markdownMaterialHeading } from "./material-section.js";
-import { nodeTypePrimary } from "./node-type.js";
 import { recordNodeVerification } from "./node-provenance.js";
 import { loadNodeCatalog, type CatalogNode } from "./node-catalog.js";
 import { nodeNotePath } from "./paths.js";
@@ -39,14 +38,12 @@ export function assertNodeRecordFields(data: Record<string, unknown>): void {
         throw new Error("Material hashes belong to the Git record layer, not Node sources");
 }
 
-export function isRequirementNode(data: Record<string, unknown>): boolean {
-  return typeof data.type === "string" && nodeTypePrimary(data.type) === "goal";
+export function isRequirementNode(data: { type?: unknown }): boolean {
+  return data.type === "goal";
 }
+/** Any output, whatever its tags, is evidence for goals and Cards. */
 export function isOutputNode(data: { type?: unknown }): boolean {
-  return typeof data.type === "string" && nodeTypePrimary(data.type) === "output";
-}
-export function isImplementationOutputNode(data: { type?: unknown }): boolean {
-  return data.type === "output-asset" || data.type === "output-evidence";
+  return data.type === "output";
 }
 export function nearestGoal(
   node: CatalogNode,

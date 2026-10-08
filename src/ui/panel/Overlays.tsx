@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { cardTitle, primaryOf, suffixOf, type Graph } from "../data/store.js";
+import { cardTitle, primaryOf, type Graph } from "../data/store.js";
 import type { SnapshotRef } from "../data/types.js";
 import { CardGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
@@ -16,7 +16,7 @@ function items(graph: Graph): Item[] {
       name: n.name,
       sub: n.description || n.type,
       hay: `${n.name} ${n.id} ${n.type} ${n.description} ${n.tags.join(" ")} ${n.body}`.toLowerCase(),
-      kindLabel: suffixOf(n.type) || primaryOf(n.type),
+      kindLabel: primaryOf(n.type),
     })),
     ...graph.snapshot.roles.map((r) => ({
       ref: { kind: "role" as const, id: r.id },

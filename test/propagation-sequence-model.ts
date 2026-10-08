@@ -16,12 +16,13 @@ import {
 } from "../src/core/card-document.js";
 import { createRoleContext } from "../src/core/role-context.js";
 
-const outputTypes = ["output-asset", "output-evidence", "output-analysis", "output-issue"] as const;
+// Every output counts for its goals and Cards; tags only vary the documents.
+const outputTags = ["asset", "evidence", "analysis", "issue"] as const;
 const roles = ["role-a", "role-b"] as const;
 export type Graph = {
   goals: {
     materials: { kind: "file" | "node"; body: string }[];
-    outputs: { type: string; card?: number; cardGoal?: number }[];
+    outputs: { tag: string; card?: number; cardGoal?: number }[];
     cards: { target?: string; receiver?: string; received: boolean }[];
   }[];
 };
@@ -44,7 +45,6 @@ export class InvariantFailure extends Error {
   }
 }
 const normalized = (s: string) => s.replace(/\r\n?/g, "\n");
-const implementation = (type: string) => type === "output-asset" || type === "output-evidence";
 export function random(seed: number) {
   let state = seed >>> 0;
   return () => {
@@ -66,7 +66,7 @@ export function generate(seed: number): Sequence {
         kind: pick(["file", "node"] as const),
         body: "material first\nsecond line\n",
       })),
-      outputs: Array.from({ length: int(4) }, () => ({ type: pick(outputTypes) })),
+      outputs: Array.from({ length: int(4) }, () => ({ tag: pick(outputTags) })),
       cards: Array.from({ length: int(3) }, () => {
         const target = rng() < 0.5 ? pick(roles) : undefined;
         return { target, receiver: target ?? pick([...roles, undefined]), received: rng() < 0.7 };
@@ -86,7 +86,7 @@ export function generate(seed: number): Sequence {
     });
     graph.goals[0]!.materials = [{ kind: "file", body: "material first\n" }];
     graph.goals[0]!.cards = [{ target: "role-b", receiver: "role-b", received: true }];
-    graph.goals[1]!.outputs = [{ type: "output-evidence", card: 0, cardGoal: 0 }];
+    graph.goals[1]!.outputs = [{ tag: "evidence", card: 0, cardGoal: 0 }];
     prefix.push({ kind: "material", goal: 0, slot: 0 }, { kind: "goal-confirm", goal: 0 });
   }
   if (seed === 2) {
@@ -97,15 +97,14 @@ export function generate(seed: number): Sequence {
     };
     prefix.push({ kind: "link", goal: 0, role: "role-a", explicit: false });
   }
-  if (seed === 3)
-    graph.goals[0] = { materials: [], outputs: [{ type: "output-issue" }], cards: [] };
+  if (seed === 3) graph.goals[0] = { materials: [], outputs: [{ tag: "issue" }], cards: [] };
   if (seed === 4) {
     graph.goals = Array.from({ length: 3 }, () => ({
       materials: [
         { kind: "file", body: "file input\n" },
         { kind: "node", body: "Node input\n" },
       ],
-      outputs: [{ type: "output-evidence" }, { type: "output-issue" }],
+      outputs: [{ tag: "evidence" }, { tag: "issue" }],
       cards: [{ target: "role-b", receiver: "role-b", received: true }],
     }));
     prefix.push(
@@ -169,7 +168,7 @@ type Output = {
   id: string;
   goal: number;
   path: string;
-  type: string;
+  tag?: string;
   active: boolean;
   card?: string;
   resource?: Material;
@@ -262,7 +261,8 @@ export class SequenceRunner {
           id = await createNode(this.env, {
             parentPath: "",
             name,
-            type: "prompt-reference",
+            type: "prompt",
+            tags: ["reference"],
             body: material.body,
           });
           location = `${name}/${name}.md`;
@@ -273,7 +273,8 @@ export class SequenceRunner {
       const id = await createNode(this.env, {
         parentPath,
         name: `G${index}`,
-        type: "goal-requirement",
+        type: "goal",
+        tags: ["requirement"],
         body,
         sources: materials.map((m) => ({ resource: this.relative(goalPath, m.location) })),
       });
@@ -301,7 +302,8 @@ export class SequenceRunner {
         const id = await createNode(this.env, {
           parentPath,
           name,
-          type: o.type,
+          type: "output",
+          tags: [o.tag],
           body: "observed output\n",
           ...(card ? { sources: [{ resource: `/cards/${card}.md` }] } : {}),
         });
@@ -309,7 +311,7 @@ export class SequenceRunner {
           id,
           goal,
           path: `${parentPath}/${name}`,
-          type: o.type,
+          tag: o.tag,
           active: true,
           card,
           baseline: this.basis(goal),
@@ -396,9 +398,7 @@ export class SequenceRunner {
     }
     for (const [index, goal] of this.goals.entries())
       if (goal.active) {
-        const subtree = this.outputs.filter(
-          (o) => o.active && o.goal >= index && implementation(o.type),
-        );
+        const subtree = this.outputs.filter((o) => o.active && o.goal >= index);
         const expectedAhead = !subtree.length || subtree.some((o) => this.driftForGoal(o, index));
         this.expect(
           !!byId.get(goal.id)?.ahead === expectedAhead,
@@ -417,11 +417,7 @@ export class SequenceRunner {
       );
       const responding = this.outputs.filter(
         (o) =>
-          o.active &&
-          implementation(o.type) &&
-          o.card === card.id &&
-          o.goal >= card.goal &&
-          this.goals[card.goal]!.active,
+          o.active && o.card === card.id && o.goal >= card.goal && this.goals[card.goal]!.active,
       );
       const complete = responding.filter((o) => !this.behind(o));
       const review = responding.filter((o) => this.behind(o));
@@ -512,7 +508,7 @@ export class SequenceRunner {
       await this.edit(goal.id, { frontmatter: { tags: [`tag-${this.tick}`] } });
     else if (op.kind === "goal-type")
       await this.edit(goal.id, {
-        frontmatter: { type: this.tick % 2 ? "goal-direction" : "goal-requirement" },
+        frontmatter: { type: "goal", tags: [this.tick % 2 ? "direction" : "requirement"] },
       });
     else if (op.kind === "goal-append") {
       await appendNodeBody(this.fs, goal.id, { body: `addition ${this.tick}` });
@@ -565,9 +561,7 @@ export class SequenceRunner {
         c.active &&
         c.received &&
         c.goal === op.goal &&
-        !this.outputs.some(
-          (o) => o.active && o.card === c.id && implementation(o.type) && !this.behind(o),
-        ),
+        !this.outputs.some((o) => o.active && o.card === c.id && !this.behind(o)),
     );
     const eligible = relevant.filter((c) => op.role && c.receiver === op.role);
     const reject = explicit ? !explicit.received : relevant.length > 0 && eligible.length !== 1;
@@ -614,7 +608,6 @@ export class SequenceRunner {
       id: receipt.nodeId,
       goal: op.goal,
       path: receipt.path,
-      type: "output-asset",
       active: true,
       card: chosen?.id,
       resource,

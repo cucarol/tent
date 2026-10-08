@@ -6,8 +6,8 @@ import { isNodeId } from "../core/id.js";
 // Agent-facing parsing and rendering; document semantics and locking belong to Core.
 
 import { materialFields } from "../core/material.js";
-import { normalizeOptionalNodeType, NODE_TYPE_PRESETS } from "../core/node-type.js";
-import { normalizeTagName } from "../core/tags.js";
+import { normalizeOptionalNodeType, isNodeType } from "../core/node-type.js";
+import { normalizeTagName, NODE_TAG_PRESETS, type NodeTagCount } from "../core/tags.js";
 import { nodeWriteInputSchema } from "../core/node-write.js";
 import {
   writeNodesBatch,
@@ -22,6 +22,7 @@ import {
   readNodeForEdit,
   readFullNodeTree,
   listNodes,
+  listNodeTags,
   searchNodes,
   relatedNodes,
 } from "../core/node-query.js";
@@ -49,7 +50,6 @@ import { documentLifecycle } from "../core/document-status.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { loadNodeCatalog } from "../core/node-catalog.js";
 import {
-  readerListSchema,
   readerReadSchema,
   readerRelationsSchema,
   readerSearchSchema,
@@ -100,7 +100,7 @@ export async function runNodeCommand(
   globals: NodeCommandOptions = {},
 ): Promise<NodeCommandResult> {
   try {
-    const { positionals, flags } = parseFlags(args);
+    const { positionals, flags, tagFilters } = parseFlags(args);
     if (flags.help === "true" || ["help", "--help", "-h"].includes(sub)) {
       return { exitCode: 0, stdout: nodeHelpText(sub) + "\n", stderr: "" };
     }
@@ -139,6 +139,7 @@ export async function runNodeCommand(
       return usage("--role is only valid for node link-output");
     if (flags.name !== undefined && sub !== "link-output")
       return usage("--name is only valid for node link-output");
+    if (tagFilters.length && sub !== "list") return usage("--tag is only valid for node list");
     if (flags.body === "-" && flags["sources-json"] === "-")
       return usage("Only one input can read stdin");
     if (flags["version-json"] !== undefined && (sub !== "get" || flags.full === "true"))
@@ -185,7 +186,7 @@ export async function runNodeCommand(
       case "link-output": {
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
-        const allowed = ["json", "workspace", "resource", "name", "by", "card", "role"];
+        const allowed = ["json", "workspace", "resource", "name", "by", "card", "role", "tags"];
         if (Object.keys(flags).some((key) => !allowed.includes(key)) || !flags.resource)
           return usage(nodeHelpText(sub));
         const material = await workspaceMaterialFields(
@@ -200,6 +201,7 @@ export async function runNodeCommand(
           by: flags.by,
           cardId: flags.card,
           roleId: flags.role,
+          tags: parseCsv(flags.tags).map(normalizeTagName),
         });
         return mutationPrint(result, json, () =>
           [
@@ -335,8 +337,14 @@ export async function runNodeCommand(
       }
       case "list": {
         if (positionals.length > 0) return usage("tent node list [--full] [--json]");
+        if (flags.type !== undefined && !isNodeType(flags.type))
+          return usage("--type must be goal, prompt or output.");
+        const filters = {
+          ...(flags.type !== undefined ? { type: flags.type } : {}),
+          ...(tagFilters.length ? { tags: tagFilters } : {}),
+        };
         if (flags.full === "true") {
-          if (Object.keys(readerFlags(flags)).length)
+          if (Object.keys(readerFlags(flags)).length || Object.keys(filters).length)
             return usage("--full cannot be combined with reader filters or paging.");
           const nodes = (await readFullNodeTree(fs, { capture: true })) as NodeProjection[];
           return print({ source: { kind: "live" }, workspaceId, nodes }, json, () =>
@@ -344,7 +352,7 @@ export async function runNodeCommand(
           );
         }
         const result = pageItems(
-          await listNodes(fs, workspaceId, readerListSchema.parse(coreReaderFlags(flags))),
+          await listNodes(fs, workspaceId, { ...coreReaderFlags(flags), ...filters }),
           "node.list",
           { limit: numberFlag(flags, "limit"), cursor: flags.cursor },
         );
@@ -805,6 +813,18 @@ export async function runNodeCommand(
         return mutationPrint(incompleteNodeRead(result), json, () => `Updated type for ${ref}`);
       }
       case "tags": {
+        if (!positionals.length && flags["base-etag"] === undefined) {
+          if (
+            Object.keys(flags).some(
+              (key) => !["json", "workspace", "include-archived"].includes(key),
+            )
+          )
+            return usage(nodeHelpText("tags"));
+          const result = await listNodeTags(fs, workspaceId, {
+            includeArchived: flags["include-archived"] === "true",
+          });
+          return print(result, json, formatTags);
+        }
         const action = positionals[0];
         const target = positionals[1];
         const baseEtag = flagValue(flags, "base-etag");
@@ -864,7 +884,7 @@ export async function runNodeCommand(
 
 const NODE_COMMAND_HELP: Record<string, string[]> = {
   list: [
-    "tent node list [--parent <nodeId|root>] [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
+    "tent node list [--parent <nodeId|root>] [--type goal|prompt|output] [--tag <tag>]... [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
     "tent node list --full [--json]",
   ],
   get: [
@@ -877,7 +897,7 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
   check: ["tent node check <nodeId> [--json]"],
   confirm: ["tent node confirm <nodeId> --base-etag <complete-live-etag> [--by <actor>] [--json]"],
   "link-output": [
-    "tent node link-output <goalId> --resource <address> [--name <name>] [--by <actor>] [--role <roleId>] [--card <id>] [--json]",
+    "tent node link-output <goalId> --resource <address> [--name <name>] [--tags a,b] [--by <actor>] [--role <roleId>] [--card <id>] [--json]",
   ],
   search: [
     "tent node search [query | --resource <address>] [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
@@ -886,7 +906,7 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
     "tent node relations <nodeId|root> --direction parent|children|outgoing|incoming [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
   ],
   create: [
-    "tent node create <name> --type <type> [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--by <actor>] [--json]",
+    "tent node create <name> --type goal|prompt|output [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--by <actor>] [--json]",
   ],
   write: [
     "tent node write <nodeId> [--body <text>|-] [--confirm] --base-etag <etag> [--by <actor>] [--read-back] [--json]",
@@ -903,15 +923,18 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
   archive: ["tent node archive <nodeId> [--json]"],
   restore: ["tent node restore <nodeId> --archive-commit <commit> [--json]"],
   delete: ["tent node delete <nodeId> [--json]"],
-  type: ["tent node type <nodeId> <type> --base-etag <live-etag> [--by <actor>] [--json]"],
+  type: [
+    "tent node type <nodeId> goal|prompt|output --base-etag <live-etag> [--by <actor>] [--json]",
+  ],
   tags: [
+    "tent node tags [--include-archived] [--json]",
     "tent node tags set|add|remove <nodeId> <tag[,tag...]> --base-etag <live-etag> [--by <actor>] [--json]",
   ],
 };
 export function nodeHelpText(sub?: string): string {
   const commands = NODE_COMMAND_HELP;
   const notes: Record<string, string> = {
-    list: "Default reads scan headers and return bounded metadata without full-document ETags. --full explicitly reads the complete tree.",
+    list: "Default reads scan headers and return bounded metadata without full-document ETags. Without filters the list shows direct children; --type and repeated --tag (all must match) select matching Nodes from the whole subtree under --parent, or the Workspace. --full explicitly reads the complete tree.",
     get: 'All body/raw reads return text, including --full; view chooses the content, never the field name. Live goal first/full reads append a separate context summary up to 1 KiB; follow its ids for full content. Before replacing body/raw content, read --full or --view raw --full. Incomplete reads expose read:<etag> for continuation and metadata-only edits, never content replacement. Range JSON uses {"unit":"utf16","start":0,"end":10}. Continue a cursor with the same source, expected ETag and query. --version-json reads the captured Git document even after live edits/deletion.',
     "read-many":
       "All items share 16 KiB. Resume the input list using page.nextIndex as --start with the same Node IDs. A partial item has its own cursor: continue with node get --version-json <item.version> --cursor <item.page.nextCursor> and the same view. Each new batch observes current live documents.",
@@ -920,10 +943,10 @@ export function nodeHelpText(sub?: string): string {
     confirm:
       "After reviewing the complete live Node and its evidence, confirm that it remains valid. Tent records current material versions and, for an output, the current versions and materials of every goal ancestor. This does not prove semantic correctness.",
     "link-output":
-      "Create an output-asset child of the selected goal. Local file paths, including / addresses, resolve from the Workspace root and are saved relative to the output document. Node IDs and absolute URIs are supported. Local files must exist and be readable. The default name is the file name. Remote addresses are never fetched. The returned nodeId identifies the new output. --card explicitly selects its response Card. Automatic selection requires --role matching the receiver of exactly one incomplete Card for this goal; otherwise choose --card. The receipt names the selected Card.",
+      "Create an output child of the selected goal; --tags adds tags, none are added automatically. Local file paths, including / addresses, resolve from the Workspace root and are saved relative to the output document. Node IDs and absolute URIs are supported. Local files must exist and be readable. The default name is the file name. Remote addresses are never fetched. The returned nodeId identifies the new output. --card explicitly selects its response Card. Automatic selection requires --role matching the receiver of exactly one incomplete Card for this goal; otherwise choose --card. The receipt names the selected Card.",
     search:
       "resource is a file path from the Workspace root (for example .tent/Node/Node.md or src/file.ts) or an absolute URI. Exact resource matching preserves query/fragment identity and does not infer bare source text.",
-    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output depends on every goal ancestor. Suggested types: ${NODE_TYPE_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; local paths resolve from the Workspace root, including / addresses, and are saved relative to the new Node document. Card response sources /cards/<card-id>.md keep their .tent root. Bare sources are descriptive unless they match an existing Workspace file; use ./ for a file that does not exist yet. Node IDs and absolute URIs are supported. Inspect an uncertain result before retrying.`,
+    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output depends on every goal ancestor. The type is goal, prompt or output; tags name form and topic, preferably from tent node tags or the presets ${NODE_TAG_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; local paths resolve from the Workspace root, including / addresses, and are saved relative to the new Node document. Card response sources /cards/<card-id>.md keep their .tent root. Bare sources are descriptive unless they match an existing Workspace file; use ./ for a file that does not exist yet. Node IDs and absolute URIs are supported. Inspect an uncertain result before retrying.`,
     write:
       'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"src/file.ts","sources":[{"resource":".tent/Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields and unchanged material declarations are preserved. New local material declarations in frontmatter use Workspace-root paths, as in create. A full-body output rewrite that changes its body after normalizing line endings refreshes its materials and every goal dependency. Goal/prompt saves, metadata edits, no-ops, append and write-section retain existing baselines. --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
     append:
@@ -932,6 +955,8 @@ export function nodeHelpText(sub?: string): string {
       "Match the unique Markdown document heading text outside lists and blockquotes. The complete section includes its heading and ends at the next same-level or higher-level heading. Code blocks do not define sections. sectionEtag authorizes replacing only this section.",
     "write-section":
       "Replace the selected section with complete Markdown from --body, including any replacement heading. The title may change or be removed. Other body bytes are preserved. Use sectionEtag from get-section; changes to other sections do not conflict. Ordinary saves retain material baselines.",
+    type: "The type is what the content rests on: goal, prompt or output. Form and topic belong in tags.",
+    tags: "Without arguments, list the tags of current Nodes with their counts, marking presets; --include-archived also counts deprecated Nodes. Prefer an existing tag or a preset to a new synonym. Tags add no behavior.",
     "write-many":
       'Batch JSON: {"items":[{"op":"create","ref":"rules","name":"Rules","type":"prompt","body":"..."},{"op":"update","nodeId":"node-existing","baseEtag":"<complete-read etag>","body":"...","confirm":true}]}. Create parent is null/omitted, an existing Node ID or @ref. @ref also works in Markdown links and material addresses, including forward references. New resource and sources fields use Workspace-root file paths, as in create; raw updates use stored document-relative addressing. Unchanged material declarations are preserved. Ordinary updates retain recorded material baselines; confirm:true refreshes the final saved content and output bases. All items validate before saving under one lock and one Tent commit; failures roll back the batch. Ordered results contain nodeId, path and etag. Existing Node updates require a complete read ETag; read: bases are rejected.',
   };
@@ -999,12 +1024,17 @@ function stringList(value: unknown, label: string): string[] {
   return value;
 }
 
-function parseFlags(args: string[]): { positionals: string[]; flags: Record<string, string> } {
+function parseFlags(args: string[]): {
+  positionals: string[];
+  flags: Record<string, string>;
+  tagFilters: string[];
+} {
   const { positionals, values } = parseArgs({
     args,
     allowPositionals: true,
     options: {
       help: { type: "boolean", short: "h" },
+      tag: { type: "string", multiple: true },
       ...Object.fromEntries(
         ["json", "full", "include-archived", "read-back", "confirm"].map((name) => [
           name,
@@ -1042,10 +1072,25 @@ function parseFlags(args: string[]): { positionals: string[]; flags: Record<stri
       ),
     },
   });
+  const { tag, ...single } = values;
   const flags = Object.fromEntries(
-    Object.entries(values).map(([name, value]) => [name, String(value)]),
+    Object.entries(single).map(([name, value]) => [name, String(value)]),
   );
-  return { positionals, flags };
+  return { positionals, flags, tagFilters: (tag ?? []).map(normalizeTagName) };
+}
+
+function formatTags(value: unknown): string {
+  const { tags, presets } = value as { tags: NodeTagCount[]; presets: string[] };
+  const width = String(tags[0]?.count ?? 0).length;
+  return [
+    ...(tags.length
+      ? tags.map(
+          (item) =>
+            `${String(item.count).padStart(width)}  ${item.tag}${item.preset ? "  (preset)" : ""}`,
+        )
+      : ["No tags yet."]),
+    `Presets: ${presets.join(", ")}`,
+  ].join("\n");
 }
 
 function numberFlag(flags: Record<string, string>, key: string) {

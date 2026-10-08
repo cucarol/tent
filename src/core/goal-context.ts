@@ -1,7 +1,7 @@
 import { readOnlyFs, type FsAdapter } from "./adapter.js";
 import { loadNodeCatalog, type CatalogNode } from "./node-catalog.js";
 import { parseFrontmatter } from "./frontmatter.js";
-import { nodeTypePrimary } from "./node-type.js";
+import { nodeTypeOf } from "./node-type.js";
 import { documentLifecycle } from "./document-status.js";
 import { listCardDocuments } from "./card-document.js";
 import { listWorkspaceRelations, type WorkspaceRelation } from "./workspace-relations.js";
@@ -39,12 +39,12 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
       name: node.name,
       description: typeof data.description === "string" ? data.description : "",
       type: node.type,
-      ...(nodeTypePrimary(node.type) === "output"
+      ...(nodeTypeOf(node.type) === "output"
         ? {
             state: documentLifecycle(data).status ?? "invalid",
             ...(kind === "self" ||
             kind === "output" ||
-            (kind === "child" && nodeTypePrimary(selected.type) === "goal")
+            (kind === "child" && nodeTypeOf(selected.type) === "goal")
               ? { sync: true as const }
               : {}),
           }
@@ -68,16 +68,16 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
     })
     .sort((a, b) => (a.type ?? "").localeCompare(b.type ?? "") || a.id.localeCompare(b.id));
   const result: GoalContextItem[] = [...ancestors, ...children];
-  if (nodeTypePrimary(selected.type) === "output") {
+  if (nodeTypeOf(selected.type) === "output") {
     result.unshift(item(selected, "self"));
     result.push(
       ...scopes
         .slice(1)
-        .filter((node) => nodeTypePrimary(node.type) === "goal")
+        .filter((node) => nodeTypeOf(node.type) === "goal")
         .map((node) => item(node, "goal")),
     );
   }
-  if (nodeTypePrimary(selected.type) === "goal") {
+  if (nodeTypeOf(selected.type) === "goal") {
     const covered = new Set(
       scopes.map((node) => node.nodeId).concat(children.map((node) => node.id)),
     );
@@ -85,7 +85,7 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
       ...scopes.flatMap((scope) =>
         scope.childNodeIds.flatMap((id) => {
           const node = catalog.byId.get(id);
-          return node && active(node) && !covered.has(id) && nodeTypePrimary(node.type) === "prompt"
+          return node && active(node) && !covered.has(id) && nodeTypeOf(node.type) === "prompt"
             ? [item(node, "prompt")]
             : [];
         }),
@@ -97,7 +97,7 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
           (node) =>
             active(node) &&
             !covered.has(node.nodeId) &&
-            nodeTypePrimary(node.type) === "output" &&
+            nodeTypeOf(node.type) === "output" &&
             node.path.startsWith(selected.path + "/"),
         )
         .map((node) => item(node, "output")),

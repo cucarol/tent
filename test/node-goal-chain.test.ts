@@ -15,10 +15,7 @@ test("an imported output without any retained record cannot gain a baseline from
   await scaffoldTent(fs, { name: "Propagation" });
   const env = { fs, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Propagation" };
   await createNode(env, { parentPath: "", name: "Goal", type: "goal", body: "Intent" });
-  const raw = serializeFrontmatter(
-    { id: "node-imported", type: "output-evidence" },
-    "Imported evidence",
-  );
+  const raw = serializeFrontmatter({ id: "node-imported", type: "output" }, "Imported evidence");
   await fs.writeFile("Goal/Imported/Imported.md", raw);
   await fs.history.captureUnlocked([{ path: "Goal/Imported/Imported.md", raw }]);
   assert.ok((await inspectNodeSync(fs, "node-imported")).behind);
@@ -48,7 +45,7 @@ test("output metadata, equivalent newlines and partial edits retain a changed de
   const output = await createNode(env, {
     parentPath: "Goal",
     name: "Output",
-    type: "output-evidence",
+    type: "output",
     body: "## Result\nOld body.\n",
   });
   await fs.writeFile("../material.txt", "second\n");
@@ -58,7 +55,7 @@ test("output metadata, equivalent newlines and partial edits retain a changed de
   }
   const original = await inspectNodeSync(fs, output);
   assert.ok(original.behind);
-  await edit({ frontmatter: { tags: ["review"], type: "output-asset" } });
+  await edit({ frontmatter: { tags: ["review", "asset"], type: "output" } });
   assert.ok((await inspectNodeSync(fs, output)).behind);
   const read = await readNodeForEdit(fs, output);
   await edit({ body: read.body.replace(/\n/g, "\r\n") });
@@ -102,7 +99,7 @@ test("output rewrites acknowledge final output bytes also used by ancestor goal 
         ref: "output",
         parent: "@goal",
         name: "Output",
-        type: "output-evidence",
+        type: "output",
         body: "Initial result",
       },
     ],

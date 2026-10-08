@@ -18,11 +18,10 @@ import { isHistoryDocument } from "./document-history.js";
 import { parseRoleDocument } from "./role-document.js";
 import { boundary, ReaderError, type ReaderRange } from "./context-reader.js";
 import { canonicalSha256 } from "./canonical-digest.js";
-import { canonicalIdentityError } from "./tree.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { loadNodeCatalog, readCatalogDocument } from "./node-catalog.js";
 import { listWorkspaceRelations, type DocumentRef } from "./workspace-relations.js";
-import { readCardProgress } from "./card-progress.js";
+import { cardSourceIdentityError, readCardProgress } from "./card-progress.js";
 
 export type CardDocumentState = "pending" | "consumed";
 type CardFields = Record<string, unknown> & {
@@ -275,17 +274,8 @@ async function captureSources(fs: FsAdapter, owner: string, sources: MaterialSou
   );
 }
 function validateSource(file: string, raw: string) {
-  const data = parseFrontmatter(raw).data;
-  if (file.startsWith("roles/")) {
-    try {
-      parseRoleDocument(file.slice(6, -3), raw);
-    } catch {
-      invalid("Selected Role is invalid");
-    }
-  } else {
-    const error = canonicalIdentityError(data);
-    if (error) invalid(error);
-  }
+  const error = cardSourceIdentityError(file, raw, parseFrontmatter(raw).data);
+  if (error) invalid(error);
 }
 
 async function checkedCard(fs: FsAdapter, id: string, reception?: { roleId?: string }) {

@@ -73,7 +73,7 @@ test("Node CLI forwards explicit actors through content writes, confirmation and
     "agent/section",
   ]);
   assert.equal((await data()).generated.by, "agent/section");
-  await run("type", [id, "prompt-spec", "--base-etag", await etag(), "--by", "agent/type"]);
+  await run("type", [id, "goal", "--base-etag", await etag(), "--by", "agent/type"]);
   assert.equal((await data()).generated.by, "agent/type");
   await run("tags", ["set", id, "reviewed", "--base-etag", await etag(), "--by", "agent/tags"]);
   assert.equal((await data()).generated.by, "agent/tags");

@@ -30,14 +30,14 @@ test("goal get exposes bounded live context without changing document bytes or c
     );
   };
   const body = "目标正文\n" + "长文😀".repeat(6000);
-  await write("Scope", "node-scope", "prompt-spec", "scope");
-  await write("Scope/Rule", "node-rule", "prompt-rule", "rule");
-  await write("Scope/Goal", "node-goal", "goal-requirement", body);
-  await write("Scope/Goal/Decision", "node-decision", "prompt-decision", "decision");
-  await write("Scope/Goal/Result", "node-result", "output-evidence", "result");
+  await write("Scope", "node-scope", "prompt", "scope", { tags: ["spec"] });
+  await write("Scope/Rule", "node-rule", "prompt", "rule");
+  await write("Scope/Goal", "node-goal", "goal", body);
+  await write("Scope/Goal/Decision", "node-decision", "prompt", "decision", { tags: ["decision"] });
+  await write("Scope/Goal/Result", "node-result", "output", "result", { tags: ["evidence"] });
   await write("Scope/Goal/Nested", "node-nested", "goal", "nested");
   await write("Scope/Goal/Nested/Result", "node-nestedresult", "output", "nested result");
-  await write("Scope/Old", "node-old", "prompt-rule", "old", { status: "deprecated" });
+  await write("Scope/Old", "node-old", "prompt", "old", { status: "deprecated" });
   await write("Unrelated", "node-unrelated", "prompt", "unrelated");
   await git(system, "init");
   await git(system, "add", ".");
@@ -57,7 +57,7 @@ test("goal get exposes bounded live context without changing document bytes or c
   );
   await runCardCommand("take", [created.cardId], globals);
   const before = await git(system, "rev-parse", "HEAD");
-  await write("Scope/Rule", "node-rule", "prompt-rule", "uncaptured neighbour");
+  await write("Scope/Rule", "node-rule", "prompt", "uncaptured neighbour");
   const context = await readGoalContext(adapter, "node-goal");
   assert.deepEqual(
     context.filter((item) => item.kind === "ancestor").map((item) => item.id),
@@ -142,10 +142,10 @@ test("all Node types disclose complete live association categories and incoming 
   await scaffoldInWorkspace(new NodeFs(workspace), { name: "Associations" });
   const system = path.join(workspace, ".tent"),
     adapter = new NodeFs(system);
-  const write = async (folder: string, id: string, type: string, body = "") => {
+  const write = async (folder: string, id: string, type: string, body = "", tags?: string[]) => {
     await adapter.writeFile(
       `${folder}/${path.posix.basename(folder)}.md`,
-      serializeFrontmatter({ id, type }, body),
+      serializeFrontmatter({ id, type, ...(tags ? { tags } : {}) }, body),
     );
   };
   await write("Goal", "node-goal00", "goal");
@@ -155,10 +155,10 @@ test("all Node types disclose complete live association categories and incoming 
     "prompt",
     "node-peer00 and `node-peer00`\n" + "Text😀".repeat(5000),
   );
-  await write("Goal/Subject/A", "node-chld01", "output-evidence");
-  await write("Goal/Subject/B", "node-chld02", "goal-requirement");
-  await write("Goal/Subject/C", "node-chld03", "prompt-reference");
-  await write("Goal/Output", "node-outp00", "output-evidence");
+  await write("Goal/Subject/A", "node-chld01", "output", "", ["evidence"]);
+  await write("Goal/Subject/B", "node-chld02", "goal", "", ["requirement"]);
+  await write("Goal/Subject/C", "node-chld03", "prompt", "", ["reference"]);
+  await write("Goal/Output", "node-outp00", "output", "", ["evidence"]);
   await write("Peer", "node-peer00", "prompt", "node-subj00");
   await adapter.writeFile(
     "roles/role-reader.md",
@@ -199,7 +199,7 @@ test("all Node types disclose complete live association categories and incoming 
   const associations = await readGoalContext(adapter, "node-subj00");
   assert.deepEqual(
     associations.filter((item) => item.kind === "child").map((item) => item.type),
-    ["goal-requirement", "output-evidence", "prompt-reference"],
+    ["goal", "output", "prompt"],
   );
   for (const [kind, id] of [
     ["ancestor", "node-goal00"],

@@ -36,20 +36,24 @@ test("PLUGIN.md matches SPEC goal ancestry and brief counts", async () => {
   assert.doesNotMatch(plugin, /四种同步状态计数/);
 });
 
-test("type guidance counts only assets and evidence as goal implementation", async () => {
+test("type guidance: exact types, tags carry form and topic, every output counts", async () => {
+  const formerTypes =
+    /\b(goal|prompt|output)-(direction|requirement|decision|spec|reference|procedure|asset|evidence|analysis|issue)\b|NODE_TYPE_PRESETS|implementing it/;
   const spec = flat(await read("docs/SPEC.md"));
-  assert.match(spec, /Only `output-asset` and `output-evidence` count as implementation results/);
-  const types = flat(await read("skill-resources/references/node-types.md"));
+  assert.match(spec, /a Node has one `type`, exactly `goal`, `prompt` or `output`/);
   assert.match(
-    types,
-    /Under a goal, only `output-asset` and `output-evidence` count as implementing it; an `output-issue` or `output-analysis` can sit under a goal without counting/,
+    spec,
+    /A goal without any active `output` anywhere in its subtree is ahead; tags do not change this/,
   );
+  assert.doesNotMatch(spec, formerTypes);
+  const types = flat(await read("skill-resources/references/node-types.md"));
+  assert.match(types, /Any current `output` under a goal counts as its result, whatever its tags/);
+  assert.match(types, /run `tent node tags`/);
+  assert.doesNotMatch(types, formerTypes);
   assert.doesNotMatch(types, /an `output` counts as implementing it/);
   const skill = flat(await read("skills/tent-node/SKILL.md"));
-  assert.match(
-    skill,
-    /Under a goal, only `output-asset` and `output-evidence` count as implementing it; `output-issue` and `output-analysis` can sit there without counting/,
-  );
+  assert.match(skill, /Under a goal, every `output` counts as its result/);
+  assert.doesNotMatch(skill, formerTypes);
   assert.doesNotMatch(skill, /only results that implement it are `output`/);
 });
 

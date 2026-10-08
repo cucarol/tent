@@ -95,10 +95,10 @@ const at = (layout: Layout, id: string) => {
 
 test("siblings read goal, then prompt, then output, otherwise keeping their order", () => {
   const graph = graphOf([
-    node("a", null, "output-analysis"),
+    node("a", null, "output"),
     node("b", null),
     node("c", null, "goal"),
-    node("d", null, "prompt-spec"),
+    node("d", null, "prompt"),
   ]);
   assert.deepEqual(
     graph.childrenOf(null).map((n) => n.id),

@@ -6,7 +6,7 @@ import { isCardResponseSource } from "../src/core/material.js";
 test("semantic fingerprints preserve ordered source addresses and body while excluding administrative metadata", () => {
   const data = {
     id: "node-goal",
-    type: "goal-requirement",
+    type: "goal",
     tags: ["initial"],
     resource: "../../main.txt",
     sources: [{ resource: "../../first.txt", description: "initial" }],
@@ -16,7 +16,7 @@ test("semantic fingerprints preserve ordered source addresses and body while exc
   const initial = fingerprint();
   assert.equal(
     fingerprint({
-      type: "goal-direction",
+      type: "prompt",
       tags: ["done"],
       verified: { by: "human:cuca", at: "2026-10-06T00:00:00Z" },
       sources: [{ resource: "../../first.txt", description: "edited metadata" }],

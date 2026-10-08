@@ -13,13 +13,9 @@ import { isDraft } from "./drafts.js";
 
 export type Primary = "goal" | "prompt" | "output";
 
+/** Node types are exactly goal, prompt or output; anything else renders as prompt. */
 export function primaryOf(type: string): Primary {
-  const p = type.split("-")[0];
-  return p === "goal" || p === "output" ? p : "prompt";
-}
-export function suffixOf(type: string): string {
-  const i = type.indexOf("-");
-  return i < 0 ? "" : type.slice(i + 1);
+  return type === "goal" || type === "output" ? type : "prompt";
 }
 
 export type NodeState = {

@@ -4,7 +4,6 @@ import { isNodeId } from "./id.js";
 import { canonicalDocumentLinks } from "./document-links.js";
 import { materialLocator, materialOccurrences } from "./material.js";
 import {
-  isImplementationOutputNode,
   isOutputNode,
   isRequirementNode,
   nodeMaterialFingerprint,
@@ -12,6 +11,7 @@ import {
   syncMaterialIdentity,
 } from "./node-sync-record.js";
 import {
+  historicalIdentityValid,
   historicalNodeCatalog,
   historicalFrontmatterReader,
   historicalFingerprintReader,
@@ -19,7 +19,9 @@ import {
 
 /** Derive the last false → true transition from retained identity and material events. */
 export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Record<string, string>> {
-  return history.derived("goal-ahead-times", 17, async () => {
+  // Version 18: any output satisfies a goal and invalid retained subtrees leave the
+  // catalog, so earlier cached transitions are stale.
+  return history.derived("goal-ahead-times", 18, async () => {
     const events = await history.changesInRange();
     const recordEvents = await history.nodeRecordEvents();
     const versions = events.flatMap((event) =>
@@ -89,10 +91,11 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
     };
     const structureOf = (raw: string) => {
       try {
-        const { data } = readFrontmatter(raw);
+        const parsed = readFrontmatter(raw);
         return JSON.stringify([
-          typeof data.type === "string" ? data.type : null,
-          data.status === "deprecated",
+          typeof parsed.data.type === "string" ? parsed.data.type : null,
+          parsed.data.status === "deprecated",
+          historicalIdentityValid(parsed),
         ]);
       } catch {
         return "invalid";
@@ -241,7 +244,7 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
         );
         for (const [path, id] of nodesByDocumentPath) retainedNodesByDocumentPath.set(path, id);
         const active = [...nodes.values()].filter((node) => !node.archived);
-        const outputs = active.filter(isImplementationOutputNode);
+        const outputs = active.filter(isOutputNode);
         goals = active.filter((node) => isRequirementNode({ type: node.type }));
         hasOutputs = new Set(
           goals

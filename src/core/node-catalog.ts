@@ -15,6 +15,7 @@ import {
 import { documentLifecycle } from "./document-status.js";
 import { contentEtag } from "./etag.js";
 import { canonicalSha256 } from "./canonical-digest.js";
+import { normalizeNodeTags } from "./tags.js";
 
 /** A header observation is navigation data, never a full-document edit token. */
 export type CatalogNode = {
@@ -111,9 +112,8 @@ function summarize(node: CatalogNode) {
     ...nodeSummary({
       ...node,
       type: typeof data.type === "string" ? data.type : node.type,
-      tags: Array.isArray(data.tags)
-        ? data.tags.filter((tag): tag is string => typeof tag === "string")
-        : [],
+      // The same tag set that `node tags` counts, so every counted tag can be filtered.
+      tags: normalizeNodeTags(data.tags),
       description: typeof data.description === "string" ? data.description : undefined,
     }),
     ...documentLifecycle(data),
@@ -153,6 +153,57 @@ export function catalogRelations(catalog: NodeCatalog, source: ReaderSource, p: 
     source,
     revision,
     { nodeId: p.nodeId, direction: p.direction, includeArchived: p.includeArchived ?? false },
+    items,
+  );
+}
+
+/**
+ * Matching Nodes anywhere below a parent (default: the Workspace root), in
+ * tree order. Every requested tag must be present; deprecated Nodes need
+ * includeArchived.
+ */
+export function catalogMatches(
+  catalog: NodeCatalog,
+  source: ReaderSource,
+  p: {
+    parentNodeId?: string | null;
+    includeArchived?: boolean;
+    type?: string;
+    tags?: readonly string[];
+  },
+) {
+  const tags = p.tags ?? [];
+  const items: ReturnType<typeof summarize>[] = [];
+  const visit = (ids: readonly string[]) => {
+    for (const id of ids) {
+      const node = catalog.byId.get(id);
+      if (!node) continue;
+      const summary = summarize(node);
+      if (
+        (p.includeArchived || !node.archived) &&
+        (p.type === undefined || summary.type === p.type) &&
+        tags.every((tag) => summary.tags.includes(tag))
+      )
+        items.push(summary);
+      visit(node.childNodeIds);
+    }
+  };
+  visit(
+    p.parentNodeId ? requireCatalogNode(catalog, p.parentNodeId).childNodeIds : catalog.rootNodeIds,
+  );
+  const revision = canonicalSha256({
+    rootNodeIds: catalog.rootNodeIds,
+    nodes: [...catalog.byId.values()],
+  });
+  return readerResult(
+    source,
+    revision,
+    {
+      parentNodeId: p.parentNodeId ?? null,
+      includeArchived: p.includeArchived ?? false,
+      ...(p.type === undefined ? {} : { type: p.type }),
+      ...(tags.length ? { tags: [...tags] } : {}),
+    },
     items,
   );
 }

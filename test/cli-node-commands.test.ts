@@ -94,7 +94,7 @@ test("direct Node CLI creates standard materials and uses observed CAS for metad
         "--parent",
         "node-parent",
         "--type",
-        "output-proof",
+        "output",
         "--body",
         "-",
         "--resource",
@@ -255,4 +255,199 @@ test("separate direct CLI processes retain Git versions and reject a stale edit 
   assert.equal(parseFrontmatter(await tent.readFile("Parent/Parent.md")).data.status, undefined);
   assert.equal(parseFrontmatter(await tent.readFile("Parent/Parent.md")).body, "next");
   await assert.rejects(fs.stat(path.join(root, "absent-service")), { code: "ENOENT" });
+});
+
+test("node list filters exact types and every tag across a subtree, with paging and archives", async (t) => {
+  const { root, cli } = await fixture(t, "list-filters-");
+  const make = async (name: string, type: string, parent: string, tags = "") =>
+    (
+      await cli("create", [
+        name,
+        "--type",
+        type,
+        "--parent",
+        parent,
+        ...(tags ? ["--tags", tags] : []),
+      ])
+    ).node.nodeId as string;
+  const evidence = await make("Evidence", "output", "node-parent", "evidence,ui");
+  const issue = await make("Issue", "output", "node-parent", "issue,ui");
+  const decision = await make("Decision", "prompt", "node-parent", "decision");
+  const nested = await make("Nested", "goal", "node-parent");
+  const deep = await make("Deep", "output", nested, "evidence");
+  const old = await make("Old", "output", "node-other", "evidence,legacy");
+  const read = await cli("get", [old, "--full"]);
+  await cli(
+    "write",
+    [old, "--input-json", "-"],
+    JSON.stringify({ baseEtag: read.node.etag, frontmatter: { status: "deprecated" } }),
+  );
+  const ids = async (...args: string[]) =>
+    (await cli("list", args)).items.map((item: { nodeId: string }) => item.nodeId);
+
+  assert.deepEqual(
+    await ids("--parent", "node-parent"),
+    [evidence, issue, decision, nested],
+    "without filters only direct children are listed",
+  );
+  assert.deepEqual(await ids("--type", "output"), [evidence, issue, deep]);
+  assert.deepEqual(await ids("--tag", "ui"), [evidence, issue]);
+  assert.deepEqual(await ids("--tag", "evidence", "--tag", "ui"), [evidence]);
+  assert.deepEqual(await ids("--type", "output", "--tag", "evidence"), [evidence, deep]);
+  assert.deepEqual(
+    (await ids("--tag", "evidence", "--include-archived")).sort(),
+    [deep, evidence, old].sort(),
+  );
+  assert.deepEqual(await ids("--parent", nested, "--type", "output"), [deep]);
+  assert.deepEqual(await ids("--type", "prompt", "--tag", "decision"), [decision]);
+  assert.deepEqual(await ids("--type", "goal", "--tag", "ui"), []);
+  const first = await cli("list", ["--type", "output", "--limit", "1"]);
+  assert.deepEqual(first.scope, { parentNodeId: null, includeArchived: false, type: "output" });
+  assert.equal(first.items[0].nodeId, evidence);
+  const second = await cli("list", [
+    "--type",
+    "output",
+    "--limit",
+    "1",
+    "--cursor",
+    first.page.nextCursor,
+  ]);
+  assert.equal(second.items[0].nodeId, issue);
+
+  for (const [args, message] of [
+    [["--type", "output-evidence"], "--type must be goal, prompt or output.\n"],
+    [["--type", "Output"], "--type must be goal, prompt or output.\n"],
+    [["--full", "--type", "output"], "--full cannot be combined with reader filters or paging.\n"],
+    [["--full", "--tag", "ui"], "--full cannot be combined with reader filters or paging.\n"],
+  ] as const) {
+    const rejected = await runNodeCommand("list", [...args], { workspace: root });
+    assert.equal(rejected.exitCode, 1);
+    assert.equal(rejected.stderr, message);
+  }
+  const misplaced = await runNodeCommand("get", [evidence, "--tag", "ui"], { workspace: root });
+  assert.equal(misplaced.exitCode, 1);
+  assert.equal(misplaced.stderr, "--tag is only valid for node list\n");
+});
+
+test("every tag node tags counts can select its Node in node list", async (t) => {
+  const { tent, cli } = await fixture(t, "tag-filter-normalized-");
+  await tent.mkdir("Padded");
+  await tent.writeFile(
+    "Padded/Padded.md",
+    '---\nid: node-padded\ntype: prompt\ntags: ["  evidence  ", analysis, "  "]\n---\nhand-written\n',
+  );
+  assert.deepEqual((await cli("tags", [])).tags, [
+    { tag: "analysis", count: 1, preset: true },
+    { tag: "evidence", count: 1, preset: true },
+  ]);
+  for (const tag of ["evidence", "  evidence  "]) {
+    const listed = await cli("list", ["--tag", tag]);
+    assert.deepEqual(
+      listed.items.map((item: { nodeId: string; tags: string[] }) => [item.nodeId, item.tags]),
+      [["node-padded", ["evidence", "analysis"]]],
+      JSON.stringify(tag),
+    );
+  }
+});
+
+test("node tags lists tags in use with counts and preset marks; types accept exactly three values", async (t) => {
+  const { root, cli } = await fixture(t, "tag-counts-");
+  for (const [name, tags] of [
+    ["A", "evidence,ui"],
+    ["B", "ui,evidence"],
+    ["C", "decision"],
+    ["D", "issue"],
+  ])
+    await cli("create", [name, "--type", "output", "--tags", tags]);
+  const old = (await cli("create", ["Old", "--type", "output", "--tags", "legacy,evidence"])).node
+    .nodeId;
+  const read = await cli("get", [old, "--full"]);
+  await cli(
+    "write",
+    [old, "--input-json", "-"],
+    JSON.stringify({ baseEtag: read.node.etag, frontmatter: { status: "deprecated" } }),
+  );
+  const presets = [
+    "direction",
+    "requirement",
+    "decision",
+    "spec",
+    "reference",
+    "procedure",
+    "asset",
+    "evidence",
+    "analysis",
+    "issue",
+  ];
+  const listed = await cli("tags", []);
+  assert.deepEqual(listed.tags, [
+    { tag: "evidence", count: 2, preset: true },
+    { tag: "ui", count: 2, preset: false },
+    { tag: "decision", count: 1, preset: true },
+    { tag: "issue", count: 1, preset: true },
+  ]);
+  assert.deepEqual(listed.presets, presets);
+  assert.deepEqual((await cli("tags", ["--include-archived"])).tags.slice(0, 2), [
+    { tag: "evidence", count: 3, preset: true },
+    { tag: "ui", count: 2, preset: false },
+  ]);
+  const text = await runNodeCommand("tags", [], { workspace: root });
+  assert.equal(text.exitCode, 0, text.stderr);
+  assert.equal(
+    text.stdout,
+    [
+      "2  evidence  (preset)",
+      "2  ui",
+      "1  decision  (preset)",
+      "1  issue  (preset)",
+      `Presets: ${presets.join(", ")}`,
+      "",
+    ].join("\n"),
+  );
+  const rejectedTags = await runNodeCommand("tags", ["--limit", "2"], { workspace: root });
+  assert.equal(rejectedTags.exitCode, 1);
+
+  const created = await runNodeCommand("create", ["Bad", "--type", "output-asset"], {
+    workspace: root,
+  });
+  assert.equal(created.exitCode, 1);
+  assert.equal(created.stderr, "Node type must be goal, prompt or output.\n");
+  const target = (await cli("create", ["Typed", "--type", "prompt"])).node;
+  const changed = await runNodeCommand(
+    "type",
+    [target.nodeId, "prompt-decision", "--base-etag", target.etag],
+    { workspace: root },
+  );
+  assert.equal(changed.exitCode, 1);
+  assert.equal(changed.stderr, "Node type must be goal, prompt or output.\n");
+  const full = await cli("get", [target.nodeId, "--full"]);
+  await cli("type", [target.nodeId, "goal", "--base-etag", full.node.etag]);
+  assert.equal((await cli("get", [target.nodeId, "--full"])).node.type, "goal");
+});
+
+test("link-output creates a plain output and adds only the tags it is given", async (t) => {
+  const { root, cli } = await fixture(t, "link-output-tags-");
+  await fs.writeFile(path.join(root, "page.html"), "<p>done</p>");
+  const plain = await cli("link-output", ["node-parent", "--resource", "page.html"]);
+  const plainNode = (await cli("get", [plain.nodeId, "--full"])).node;
+  assert.equal(plainNode.type, "output");
+  assert.deepEqual(plainNode.tags, []);
+  const tagged = await cli("link-output", [
+    "node-parent",
+    "--resource",
+    "page.html",
+    "--name",
+    "Tagged",
+    "--tags",
+    "asset,ui",
+  ]);
+  const taggedNode = (await cli("get", [tagged.nodeId, "--full"])).node;
+  assert.equal(taggedNode.type, "output");
+  assert.deepEqual(taggedNode.tags, ["asset", "ui"]);
+  assert.deepEqual(
+    (await cli("list", ["--type", "output", "--tag", "asset"])).items.map(
+      (item: { nodeId: string }) => item.nodeId,
+    ),
+    [tagged.nodeId],
+  );
 });

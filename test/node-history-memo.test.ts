@@ -31,10 +31,14 @@ for (const unreadable of ["missing-section", "deleted", "invalid", "older-readab
         const rows: [string, string, string][] = [
           ["node-u", "U", material("A")],
           ["node-g", "G", goal],
-          ["node-o", "G/O", note("node-o", "output-evidence", "implementation\n")],
+          ["node-o", "G/O", note("node-o", "output", "implementation\n", { tags: ["evidence"] })],
         ];
         if (independent)
-          rows.push(["node-s", "G/S", note("node-s", "output-evidence", "sibling\n")]);
+          rows.push([
+            "node-s",
+            "G/S",
+            note("node-s", "output", "sibling\n", { tags: ["evidence"] }),
+          ]);
         const nodes = catalog(rows);
         const goalVersion = (raw: string) => {
           const parsed = parseFrontmatter(raw);
@@ -181,8 +185,8 @@ test("history memo respects first matching path and independent section variants
   const raw = note("node-p", "prompt", "## One\n[ref](./Ref/Ref.md)\n## Two\nsecond\n");
   const nodes = catalog([
     ["node-p", "P", raw],
-    ["node-first", "P/Ref", "first"],
-    ["node-second", "P/Ref", "second"],
+    ["node-first", "P/Ref", note("node-first", "prompt", "first\n")],
+    ["node-second", "P/Ref", note("node-second", "prompt", "second\n")],
   ]);
   const memo = historicalFingerprintReader<string>(historicalFrontmatterReader());
   const version = (suffix: string) => {
@@ -204,7 +208,7 @@ test("history memo respects first matching path and independent section variants
   assert.equal(version("#One"), expected);
   const withoutFirst = catalog([
     ["node-p", "P", raw],
-    ["node-second", "P/Ref", "second"],
+    ["node-second", "P/Ref", note("node-second", "prompt", "second\n")],
   ]);
   assert.notEqual(
     expected,
@@ -216,11 +220,11 @@ test("history memo respects first matching path and independent section variants
   );
 });
 
-test("ahead replay keeps metadata-stable times and the latest implementation transition", async (t) => {
+test("ahead replay keeps metadata-stable times across a tag change and the latest output transition", async (t) => {
   const rows: [string, string, string][] = [
     ["node-g", "G", note("node-g", "goal", "outer\n")],
     ["node-n", "G/N", note("node-n", "goal", "inner\n")],
-    ["node-o", "G/N/O", note("node-o", "output-evidence", "output\n")],
+    ["node-o", "G/N/O", note("node-o", "output", "output\n", { tags: ["evidence"] })],
   ];
   const nodes = catalog(rows);
   const initialParsed = parseFrontmatter(rows[1]![2]);
@@ -236,7 +240,7 @@ test("ahead replay keeps metadata-stable times and the latest implementation tra
     goals: [{ nodeId: "node-n", version: fingerprint, fingerprintVersion: 2, materials: [] }],
   };
   const changed = note("node-n", "goal", "changed\n");
-  const metadata = note("node-n", "goal-direction", "changed\n", { tags: ["metadata"] });
+  const metadata = note("node-n", "goal", "changed\n", { tags: ["direction", "metadata"] });
   const changedParsed = parseFrontmatter(changed);
   const current = nodeSemanticFingerprint(
     changedParsed.data,
@@ -290,4 +294,58 @@ test("ahead replay keeps metadata-stable times and the latest implementation tra
   assert.deepEqual(times, { "node-n": "time-4" });
   events.splice(3);
   assert.deepEqual(await latestGoalAheadTimes(history), { "node-n": "time-1" });
+});
+
+test("an output below an invalid retained Node never satisfies its goal", async (t) => {
+  const parents: [string, string][] = [
+    ["prompt", note("node-p", "prompt", "plan\n")],
+    ["unknown type", note("node-p", "reference", "plan\n")],
+    ["former suffix", note("node-p", "prompt-spec", "plan\n")],
+    ["padded type", note("node-p", "  prompt  ", "plan\n")],
+    ["unparseable", "---\nid: node-p\ntype: [prompt\n---\nplan\n"],
+  ];
+  for (const [label, parent] of parents) {
+    const events: HistoryCommit[] = Array.from({ length: 3 }, (_, i) => ({
+      commit: String(i).repeat(40),
+      time: `time-${i}`,
+      objectIds: [],
+      changes: [],
+    }));
+    events[0]!.changes = [
+      { objectId: "node-g", after: { commit: events[0]!.commit, path: "G/G.md" } },
+    ];
+    events[1]!.changes = [
+      { objectId: "node-p", after: { commit: events[1]!.commit, path: "G/P/P.md" } },
+      { objectId: "node-o", after: { commit: events[1]!.commit, path: "G/P/O/O.md" } },
+    ];
+    events[2]!.changes = [{ objectId: "node-o" }];
+    const versions = new Map([
+      [`${events[0]!.commit}:G/G.md`, note("node-g", "goal", "want\n")],
+      [`${events[1]!.commit}:G/P/P.md`, parent],
+      [`${events[1]!.commit}:G/P/O/O.md`, note("node-o", "output", "done\n")],
+    ]);
+    const history = new GitDocumentHistory("unused");
+    t.mock.method(
+      history,
+      "derived",
+      async <T>(_n: string, _v: number, compute: (head: string | null) => Promise<T>) =>
+        compute(events.at(-1)!.commit),
+    );
+    t.mock.method(history, "changesInRange", async () => events);
+    t.mock.method(history, "nodeRecordEvents", async () => ({}));
+    t.mock.method(history, "readVersions", async (requested: readonly DocumentVersion[]) =>
+      requested.map((version) => ({
+        version,
+        raw: versions.get(`${version.commit}:${version.path}`)!,
+        changedSince: false,
+      })),
+    );
+    // A valid output ends the first ahead period and its deletion starts a new one.
+    // Below an invalid Node the output never existed, so the goal stays ahead since time-0.
+    assert.equal(
+      (await latestGoalAheadTimes(history))["node-g"],
+      label === "prompt" ? "time-2" : "time-0",
+      label,
+    );
+  }
 });

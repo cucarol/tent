@@ -8,6 +8,7 @@ import { Node, NodeFrontmatter } from "./types.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { loadOrder, sortByOrder, OrderMap, ROOT_KEY } from "./order.js";
 import { normalizeOptionalNodeType } from "./node-type.js";
+import { normalizeNodeTags } from "./tags.js";
 import {
   isOperationalPath,
   isSystemNoteName,
@@ -230,21 +231,10 @@ function normalizeIdentity(data: Record<string, unknown>): {
   if (!type) delete fm.type;
   // Unknown frontmatter remains opaque user metadata. Runtime never translates
   // retired collaboration keys into canonical Node or Card state.
-  const tags = normalizeTags(data.tags);
+  const tags = normalizeNodeTags(data.tags);
   if (tags.length > 0) fm.tags = tags;
   else delete fm.tags;
   return { fm, tags };
-}
-
-function normalizeTags(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const out: string[] = [];
-  for (const item of value) {
-    if (typeof item !== "string") continue;
-    const tag = item.trim();
-    if (tag && !out.includes(tag)) out.push(tag);
-  }
-  return out;
 }
 
 function resolveSubtree(node: Node, inheritedInvalid?: { rootPath: string; reason: string }): void {

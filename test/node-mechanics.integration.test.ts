@@ -80,13 +80,21 @@ test("Node Git budgets use retained history and unchanged selected bytes, with f
       ["node", "write-many", "--input-json", "-"],
       JSON.stringify({
         items: [
-          { op: "create", ref: "goal", name: "Goal", type: "goal-requirement", body },
+          {
+            op: "create",
+            ref: "goal",
+            name: "Goal",
+            type: "goal",
+            tags: ["requirement"],
+            body,
+          },
           {
             op: "create",
             ref: "prompt",
             name: "Prompt",
             parent: "@goal",
-            type: "prompt-decision",
+            type: "prompt",
+            tags: ["decision"],
             body,
             sources: [{ resource: "source.md" }],
           },
@@ -94,7 +102,8 @@ test("Node Git budgets use retained history and unchanged selected bytes, with f
             op: "create",
             ref: "long",
             name: "Long",
-            type: "prompt-reference",
+            type: "prompt",
+            tags: ["reference"],
             body: "Long line for pagination.\n".repeat(2400),
           },
         ],
@@ -117,7 +126,7 @@ test("Node Git budgets use retained history and unchanged selected bytes, with f
     let args: string[] = [],
       input: string | undefined;
     if (op === "create")
-      args = ["node", "create", "Added", "--type", "prompt-decision", "--body", body];
+      args = ["node", "create", "Added", "--type", "prompt", "--tags", "decision", "--body", body];
     if (op === "append") args = ["node", "append", prompt, "--body", "Added fact."];
     if (op === "write" || op === "confirm") {
       const selected = (await run(workspace, ["node", "get", prompt, "--full"], undefined, 1)).value
@@ -150,7 +159,8 @@ test("Node Git budgets use retained history and unchanged selected bytes, with f
           op: "create",
           ref: `new${i}`,
           name: `Batch${i}`,
-          type: "prompt-decision",
+          type: "prompt",
+          tags: ["decision"],
           body,
         })),
       });

@@ -8,10 +8,12 @@ import {
   readerSearchSchema,
 } from "./context-reader.js";
 import { liveContextReader, selectedContextReader } from "./context-reader-factory.js";
+import * as z from "zod/v4";
 import {
   loadNodeCatalog,
   catalogSummary,
   catalogRelations,
+  catalogMatches,
   readCatalogDocument,
 } from "./node-catalog.js";
 import {
@@ -26,6 +28,8 @@ import { nodeNotePath } from "./paths.js";
 import { loadTent, canonicalIdentityError } from "./tree.js";
 import { materialFields } from "./material.js";
 import { isNodeId } from "./id.js";
+import { NODE_TYPES } from "./node-type.js";
+import { NODE_TAG_PRESETS, countNodeTags, normalizeTagName } from "./tags.js";
 
 /** Short-lived callers share these queries; no mount, registry, watcher or read-time repair. */
 export async function readNode(fs: FsAdapter, workspaceId: string, input: unknown) {
@@ -103,15 +107,43 @@ export async function readNodeForEdit(
   };
 }
 
+/** Without type or tag filters a list shows direct children; filters search the whole subtree. */
+export const nodeListSchema = readerListSchema.extend({
+  type: z.enum(NODE_TYPES).optional(),
+  tags: z
+    .array(z.string())
+    .transform((tags) => [...new Set(tags.map(normalizeTagName))])
+    .optional(),
+});
+
 export async function listNodes(fs: FsAdapter, workspaceId: string, input: unknown) {
-  const request = readerListSchema.parse(input);
+  const { type, tags, ...request } = nodeListSchema.parse(input);
+  const catalog = await loadNodeCatalog(fs);
+  const source = { kind: "live" as const, workspaceId };
   return {
     workspaceId,
-    ...catalogRelations(
-      await loadNodeCatalog(fs),
-      { kind: "live", workspaceId },
-      { nodeId: request.parentNodeId ?? null, direction: "children", ...request },
-    ),
+    ...(type === undefined && !tags?.length
+      ? catalogRelations(catalog, source, {
+          nodeId: request.parentNodeId ?? null,
+          direction: "children",
+          ...request,
+        })
+      : catalogMatches(catalog, source, { ...request, type, tags })),
+  };
+}
+
+/** Tags in use with their counts, plus the suggested presets; no registry is consulted. */
+export async function listNodeTags(
+  fs: FsAdapter,
+  workspaceId: string,
+  input: { includeArchived?: boolean } = {},
+) {
+  const catalog = await loadNodeCatalog(fs);
+  const nodes = [...catalog.tree.byPath.values()].filter((node) => !node.invalid);
+  return {
+    workspaceId,
+    tags: countNodeTags(nodes, input),
+    presets: [...NODE_TAG_PRESETS],
   };
 }
 

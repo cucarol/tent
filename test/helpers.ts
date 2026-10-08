@@ -47,7 +47,7 @@ export async function makeTent(): Promise<string> {
   await box("output", "id: node-outzone\ntype: output");
   await box("output/alpha仓库指针", "id: node-o1\ntype: output");
   await fs.mkdir(path.join(dir, "temp"), { recursive: true });
-  await box("prompt/旧站资料", "id: node-a1\ntype: prompt-asset");
+  await box("prompt/旧站资料", "id: node-a1\ntype: prompt");
   return dir;
 }
 

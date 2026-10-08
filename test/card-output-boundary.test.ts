@@ -42,7 +42,7 @@ async function fixture() {
   });
   await createNode(env, {
     name: "Notes",
-    type: "prompt-spec",
+    type: "prompt",
     parentPath: "",
     body: "Agreements",
   });

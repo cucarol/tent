@@ -247,8 +247,8 @@ test("docs/skill drift: current Node/Role/Card protocol and canonical type", asy
   const spec = await fs.readFile(path.join(repoRoot, "docs", "SPEC.md"), "utf8");
 
   // SPEC: canonical Node type, immutable Card, and optional Role.
-  assert.match(spec, /one non-empty `type` field/);
-  assert.match(spec, /`goal`, `prompt`, or `output`/);
+  assert.match(spec, /a Node has one `type`, exactly `goal`, `prompt` or `output`/);
+  assert.doesNotMatch(spec, /NODE_TYPE_PRESETS|primary\[-secondary\]/);
   assert.match(spec, /three semantic concepts are Node, Role, and Card/i);
   assert.doesNotMatch(spec, /TaskResult|WorkspaceLane|currentResultId|acceptMode|task\.bindOutput/);
   assert.doesNotMatch(spec, /Base type definitions may set optional `workspacePointer: true`/);

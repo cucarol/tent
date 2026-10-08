@@ -8,7 +8,7 @@ import {
   type WorkspaceSync,
 } from "./context-brief.js";
 import { nodeNotePath } from "./paths.js";
-import { nodeTypePrimary } from "./node-type.js";
+import { nodeTypeOf } from "./node-type.js";
 
 export type StopQuestion = {
   kind: "unlinked-output" | "behind-node" | "possible-intent";
@@ -59,7 +59,7 @@ export function questionsForObservedTurn(
       .filter((key): key is string => !!key),
   );
   const requirements = sync.nodes.filter(
-    (node) => nodeTypePrimary(node.type) === "goal" && !nodeUncertain(node),
+    (node) => nodeTypeOf(node.type) === "goal" && !nodeUncertain(node),
   );
   const sameMaterial = requirements
     .filter((node) =>

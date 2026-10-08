@@ -11,7 +11,7 @@ import {
   type UIEvent,
 } from "react";
 import { api, ApiError, describe, type NodeDocument } from "../data/api.js";
-import { cardTitle, primaryOf, suffixOf, type Graph } from "../data/store.js";
+import { cardTitle, primaryOf, type Graph } from "../data/store.js";
 import type {
   SnapshotCard,
   SnapshotCommit,
@@ -732,12 +732,6 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
               eyebrow={
                 <>
                   <b className={`p-${p}`}>{p}</b>
-                  {suffixOf(node.type) && (
-                    <>
-                      <span className="dot-sep">·</span>
-                      <span>{suffixOf(node.type)}</span>
-                    </>
-                  )}
                   {node.status !== "stable" && (
                     <span className="pill">{t.node.status(node.status)}</span>
                   )}

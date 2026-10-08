@@ -1,8 +1,7 @@
 import type { MaterialSource } from "./material.js";
 import type { DocumentStatus } from "./document-status.js";
+import type { NodeType } from "./node-type.js";
 // The Tent 核心类型。这一层是唯一真相,插件和 CLI 都 import 它。
-
-export type NodeType = string;
 
 /** Node identity-file frontmatter. Canonical user Nodes persist non-empty `type` and `id`. */
 export interface NodeFrontmatter {

@@ -6,7 +6,7 @@ import { loadTent, join, nodeNotePath, LoadedTent } from "./tree.js";
 import { isNodeId, makeUniqueNodeId } from "./id.js";
 import { NODE_FRONTMATTER_KEY_ORDER, serializeFrontmatter } from "./frontmatter.js";
 import { loadOrder, saveOrder, ROOT_KEY } from "./order.js";
-import { Node, NodeType } from "./types.js";
+import { Node } from "./types.js";
 import { assertContentMutable, isContentMutable } from "./tree.js";
 import { normalizeTagList } from "./tags.js";
 import { normalizeOptionalNodeType } from "./node-type.js";
@@ -32,7 +32,8 @@ export { moveNode, type MoveNodeResult, type MovePosition } from "./move-ops.js"
 export interface NewNodeInput extends MaterialFields {
   parentPath: string; // "" = 顶层
   name: string;
-  type: NodeType;
+  /** Validated as goal, prompt or output. */
+  type: string;
   body?: string;
   tags?: string[];
   by?: string;

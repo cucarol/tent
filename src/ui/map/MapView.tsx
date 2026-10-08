@@ -24,7 +24,7 @@ import {
   type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { primaryOf, suffixOf, type Graph, type Hand, type Primary } from "../data/store.js";
+import { primaryOf, type Graph, type Hand, type Primary } from "../data/store.js";
 import type { SnapshotCommit, SnapshotRef, SyncFlag, SyncFlags } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
@@ -148,7 +148,11 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
           {data.src.n}
         </span>
       )}
-      {suffixOf(n.type) && <span className="mcard-tag">{suffixOf(n.type)}</span>}
+      {n.tags.length > 0 && (
+        <span className="mcard-tag" title={n.tags.join(", ")}>
+          {n.tags[0]}
+        </span>
+      )}
       {hands.length > 0 && <Faces graph={data.graph} hands={hands} />}
       {n.childIds.length > 0 && (
         <button
