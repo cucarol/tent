@@ -1,3 +1,4 @@
+import { aheadKind } from "../data/reasons.js";
 import {
   createContext,
   memo,
@@ -297,8 +298,13 @@ function PeekCard({ graph, peek, flag }: { graph: Graph; peek: Peek; flag?: Sync
       )}
       {flag?.ahead && (
         <div className="map-peek-flag is-ahead">
-          <b>{t.map.aheadWhy(flag.ahead.since ? ago(flag.ahead.since) : null)}</b>
-          <span>{t.map.aheadNext}</span>
+          <b>
+            {t.map.aheadWhy(
+              flag.ahead.since ? ago(flag.ahead.since) : null,
+              aheadKind(flag.ahead.reasons),
+            )}
+          </b>
+          <span>{t.map.aheadNext(aheadKind(flag.ahead.reasons))}</span>
         </div>
       )}
       <p>{n.description || t.node.noSummary}</p>

@@ -509,6 +509,46 @@ test("direct Card publication supports immutable reads, pending moves and recept
   assert.equal(await tent.readFile(`cards/${cardId}.md`), cardBytes);
 });
 
+test("a fresh snapshot follows a material change outside Tent at the same revision", async (t) => {
+  const { call, tent, workspace } = await fixture(t);
+  await createRoleContext(tent, { roleId: "role-review", title: "Review", body: "Review" });
+  const created = await call("POST", "/api/cards", {
+    json: {
+      prompt: "Review this",
+      sources: [{ resource: "/Other/Other.md" }],
+      target: "role-review",
+    },
+  });
+  const { cardId } = json<{ cardId: string }>(created);
+  await takeCardDocument(tent, cardId, "role-review");
+  const output = await linkNodeOutput(tent, "node-other", {
+    resource: "docs/notes.txt",
+    roleId: "role-review",
+  });
+  const done = await call("GET", "/api/snapshot");
+  const card = (r: typeof done) => json<Snapshot>(r).cards.find((c) => c.id === cardId)!;
+  assert.equal(card(done).progress, "has-output");
+
+  // No Tent commit: the revision stays, so the cached snapshot still says done.
+  await fs.writeFile(path.join(workspace, "docs/notes.txt"), "changed outside Tent");
+  const cached = await call("GET", "/api/snapshot");
+  assert.equal(json<Snapshot>(cached).workspace.revision, json<Snapshot>(done).workspace.revision);
+  assert.equal(card(cached).progress, "has-output");
+
+  const fresh = await call("GET", "/api/snapshot?fresh=1", {
+    headers: { "If-None-Match": done.headers.etag! },
+  });
+  assert.equal(fresh.status, 200);
+  assert.equal(card(fresh).progress, "needs-review");
+  assert.deepEqual(card(fresh).reviewOutputNodeIds, [output.nodeId]);
+  assert.equal(
+    json<Snapshot>(fresh).nodes.find((n) => n.id === output.nodeId)!.outputAt,
+    undefined,
+  );
+  // Later reads share the rebuilt snapshot.
+  assert.equal(card(await call("GET", "/api/snapshot")).progress, "needs-review");
+});
+
 test("removed Card endpoints and invalid create requests never write Card files", async (t) => {
   const { call } = await fixture(t);
   for (const input of [

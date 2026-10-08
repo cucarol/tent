@@ -1,4 +1,5 @@
 import { createElement, Fragment, type ReactNode } from "react";
+import { summarizeBehind } from "./data/reasons.js";
 
 /**
  * The interface speaks Chinese or English. Workspace content (names, bodies, commit messages) stays as written.
@@ -9,20 +10,9 @@ const STORE_KEY = "tent-lang";
 
 /** Places a React node, such as a link to a Role, inside a sentence. */
 const phrase = (...parts: ReactNode[]) => createElement(Fragment, null, ...parts);
-/** File names of material addresses, the first two joined. */
-const names = (paths: string[], sep: string) =>
-  paths
-    .slice(0, 2)
-    .map((p) => decode(p.split(/[\\/]/).pop()!))
-    .join(sep);
-/** Reasons carry encoded addresses such as "SPEC.md#Reception%20and%20outputs". */
-const decode = (s: string) => {
-  try {
-    return decodeURIComponent(s);
-  } catch {
-    return s;
-  }
-};
+/** The first two names, then how many there are in all. */
+const list = (names: string[], sep: string, more: (n: number) => string) =>
+  names.slice(0, 2).join(sep) + (names.length > 2 ? more(names.length) : "");
 /** "1 source", "2 sources". */
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -160,13 +150,26 @@ const zh = {
     flagStep: "依次选中",
     behindCount: (n: number) => `落后 ${n}`,
     aheadCount: (n: number) => `领先 ${n}`,
-    /** The changed materials by file name, at most two. */
-    behindWhy: (reasons: string[]) =>
-      `落后：${names(reasons, "、")}${reasons.length > 2 ? ` 等 ${reasons.length} 份材料改过` : " 改过"}`,
+    /** Why a Node is behind, by kind of reason; changed files by name, at most two. */
+    behindWhy: (reasons: string[]) => {
+      const s = summarizeBehind(reasons);
+      const more = (n: number) => ` 等 ${n} 份材料`;
+      const parts = [
+        s.changed.length && `${list(s.changed, "、", more)} 改过`,
+        s.deleted.length && `${list(s.deleted, "、", more)} 已删除`,
+        s.baseline && `${s.baseline} 份材料还没有基线，复核后确认一次`,
+        s.uncertain && `${s.uncertain} 份材料无法核对`,
+        s.stale && `内容已在 ${s.stale} 到期`,
+        s.other[0],
+      ].filter(Boolean);
+      return `落后：${parts.join("；") || "原因未知"}`;
+    },
     behindNext: "复核这些材料后确认，标记就会消失",
-    aheadWhy: (since: string | null) =>
-      since ? `领先：${since}记下，还没有产出` : "领先：还没有产出",
-    aheadNext: "做出东西后，在它下面挂一个产出",
+    /** Why a goal is ahead; `since` is when it last became ahead. */
+    aheadWhy: (since: string | null, kind: "empty" | "behind") =>
+      `领先${since ? `（${since}起）` : ""}：${kind === "behind" ? "产出还没跟上" : "还没有产出"}`,
+    aheadNext: (kind: "empty" | "behind"): string =>
+      kind === "behind" ? "按新要求复核下面的产出，跟上后确认" : "做出东西后，在它下面挂一个产出",
     commitOnlyOther: "这次只改了 Role、Card 或其他文件",
     /** What a commit did to Nodes, e.g. "新建 1 · 修改 2：A、B 等 3 个". */
     commitSummary: (added: number, changed: number, names: string[]) =>
@@ -451,7 +454,7 @@ const zh = {
     calm: "都同步了，没有落后或领先的 Node。",
     checking: "正在对照材料检查…",
     goalChanged: (since: string | null, n: number) =>
-      `领先：${since ? `${since}改过` : "改过"}，${n} 个产出要按新要求复核`,
+      `领先${since ? `（${since}起）` : ""}：${n} 个产出要按新要求复核`,
   },
   doc: {
     workspaceFile: (path: string) => `工作区文件：${path}`,
@@ -596,12 +599,27 @@ const en: Messages = {
     flagStep: "Select each in turn",
     behindCount: (n) => `${n} behind`,
     aheadCount: (n) => `${n} ahead`,
-    behindWhy: (reasons) =>
-      `Behind: ${names(reasons, ", ")}${reasons.length > 2 ? ` and ${reasons.length - 2} more` : ""} changed`,
+    behindWhy: (reasons) => {
+      const s = summarizeBehind(reasons);
+      const more = (n: number) => ` and ${n - 2} more`;
+      const parts = [
+        s.changed.length && `${list(s.changed, ", ", more)} changed`,
+        s.deleted.length && `${list(s.deleted, ", ", more)} deleted`,
+        s.baseline &&
+          `${count(s.baseline, "material")} without a baseline yet; confirm once after review`,
+        s.uncertain && `${count(s.uncertain, "material")} Tent cannot check`,
+        s.stale && `content expired on ${s.stale}`,
+        s.other[0],
+      ].filter(Boolean);
+      return `Behind: ${parts.join("; ") || "unknown reason"}`;
+    },
     behindNext: "Review those materials, then confirm to clear the mark",
-    aheadWhy: (since) =>
-      since ? `Ahead: recorded ${since}, no output yet` : "Ahead: no output yet",
-    aheadNext: "Once something is made, add an output under it",
+    aheadWhy: (since, kind) =>
+      `Ahead${since ? ` since ${since}` : ""}: ${kind === "behind" ? "outputs have not caught up" : "no output yet"}`,
+    aheadNext: (kind) =>
+      kind === "behind"
+        ? "Review the outputs below against it, then confirm"
+        : "Once something is made, add an output under it",
     commitOnlyOther: "This commit only changed Roles, Cards or other files",
     commitSummary: (added, changed, names) =>
       `${[added > 0 && `${added} added`, changed > 0 && `${changed} changed`].filter(Boolean).join(" · ")}: ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` and ${names.length - 2} more` : ""}`,
@@ -898,7 +916,7 @@ const en: Messages = {
     calm: "All in sync: nothing is behind or ahead.",
     checking: "Checking against the materials…",
     goalChanged: (since, n) =>
-      `Ahead: changed${since ? ` ${since}` : ""}; ${count(n, "output")} to review against it`,
+      `Ahead${since ? ` since ${since}` : ""}: ${count(n, "output")} to review against it`,
   },
   doc: {
     workspaceFile: (path) => `Workspace file: ${path}`,

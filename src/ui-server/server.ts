@@ -115,7 +115,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   const tokenDigest = createHash("sha256").update(token).digest();
   let port = 0;
   let cached: Snapshot | undefined;
-  let building: { revision: string; snapshot: Promise<Snapshot> } | undefined;
+  let building: { revision: string; fresh: boolean; snapshot: Promise<Snapshot> } | undefined;
   // Tent's lock turns a second writer away instead of waiting, so writes from this service queue up.
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T>(write: () => Promise<T>): Promise<T> => {
@@ -124,13 +124,16 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     return run;
   };
 
-  /** One build per revision, shared by every request that arrives while it runs. */
-  const snapshot = async () => {
+  /**
+   * One build per revision, shared by every request that arrives while it runs. A fresh build reruns
+   * the same revision: material changes outside Tent move Card progress without a new revision.
+   */
+  const snapshot = async (fresh = false) => {
     const revision = await readWorkspaceRevision(queryFs);
-    if (cached?.workspace.revision === revision) return cached;
-    if (building?.revision !== revision) {
+    if (!fresh && cached?.workspace.revision === revision) return cached;
+    if (building?.revision !== revision || (fresh && !building.fresh)) {
       const pending = buildSnapshot({ fs: queryFs, workspace, revision });
-      building = { revision, snapshot: pending };
+      building = { revision, fresh, snapshot: pending };
       pending.then(
         (built) => {
           cached = built;
@@ -183,9 +186,10 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       });
     }
     if (route === "GET /api/snapshot") {
-      const current = await snapshot();
+      const fresh = url.searchParams.get("fresh") === "1";
+      const current = await snapshot(fresh);
       const etag = `"${current.workspace.revision}"`;
-      if (req.headers["if-none-match"] === etag) return end(res, 304, { ETag: etag });
+      if (!fresh && req.headers["if-none-match"] === etag) return end(res, 304, { ETag: etag });
       return json(res, 200, current, { ETag: etag });
     }
     if (nodeId && method === "GET") {

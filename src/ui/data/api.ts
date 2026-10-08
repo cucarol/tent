@@ -159,6 +159,8 @@ export const api = {
       "/api/snapshot",
       revision ? { headers: { "If-None-Match": `"${revision}"` } } : {},
     ),
+  /** Rebuilds at the same revision: Card progress and completions follow materials outside Tent. */
+  freshSnapshot: () => call<Snapshot>("/api/snapshot?fresh=1"),
   revision: () => call<{ revision: string }>("/api/revision"),
   /** Ahead and behind Nodes, computed fresh: material changes do not move the revision. */
   sync: () => call<{ revision: string; nodes: SyncFlags }>("/api/sync"),

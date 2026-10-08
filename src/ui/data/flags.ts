@@ -1,8 +1,10 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { ApiError, api, changes } from "./api.js";
-import type { SyncFlags } from "./types.js";
+import type { Snapshot, SyncFlags } from "./types.js";
 
 const NONE: SyncFlags = {};
+/** How often a visible page compares materials again. */
+export const SYNC_EVERY = 30_000;
 /** Before the first read: no flags yet, but not known to be in sync either. */
 export const UNREAD: SyncFlags = {};
 
@@ -12,8 +14,10 @@ export const useFlags = () => useContext(FlagsContext);
 
 /**
  * Ahead and behind Nodes. Reread when the page opens, regains focus, saves, or the workspace revision
- * moves; not on a timer, because each read compares every material. A service without the endpoint
- * leaves the map unmarked.
+ * moves, and every `SYNC_EVERY` while visible: a material edited outside Tent leaves the revision as it
+ * was. Each read compares every material (seconds on a large workspace), so the timer is slower than
+ * the revision check and never queues behind a read in flight. A service without the endpoint leaves
+ * the map unmarked.
  */
 export function useSyncFlags(revision: string | undefined): SyncFlags {
   const [flags, setFlags] = useState<SyncFlags>(UNREAD);
@@ -75,6 +79,9 @@ export function watchSyncFlags(publish: (flags: SyncFlags) => void) {
     }
   };
   void read();
+  const timer = setInterval(() => {
+    if (!busy) void read();
+  }, SYNC_EVERY);
   window.addEventListener("focus", read);
   document.addEventListener("visibilitychange", read);
   changes.addEventListener("change", read);
@@ -88,9 +95,51 @@ export function watchSyncFlags(publish: (flags: SyncFlags) => void) {
     },
     stop() {
       stopped = true;
+      clearInterval(timer);
       window.removeEventListener("focus", read);
       document.removeEventListener("visibilitychange", read);
       changes.removeEventListener("change", read);
     },
+  };
+}
+
+/**
+ * The snapshot's Card progress and completions were derived from materials as they stood when it was
+ * built; a later material change outside Tent does not move the revision. Returns a key for the
+ * disagreement, so each one asks for one rebuild, or null when the snapshot agrees with the flags.
+ */
+export function snapshotDisagrees(snapshot: Snapshot, flags: SyncFlags): string | null {
+  if (flags === UNREAD) return null;
+  const behind = (id: string) => !!flags[id]?.behind;
+  const stale =
+    snapshot.cards.some(
+      (c) =>
+        c.outputNodeIds.some(behind) || (c.reviewOutputNodeIds ?? []).some((id) => !behind(id)),
+    ) || snapshot.nodes.some((n) => n.outputAt && behind(n.id));
+  if (!stale) return null;
+  const marked = Object.keys(flags).filter(behind).sort();
+  return `${snapshot.workspace.revision}:${marked.join(",")}`;
+}
+
+/**
+ * Follows `snapshotDisagrees`: asks for one rebuilt snapshot per disagreement and applies it only while
+ * the page still shows that revision; a newer revision brings its own snapshot.
+ */
+export function snapshotRebuilder(
+  apply: (update: (current: Snapshot | null) => Snapshot | null) => void,
+) {
+  let asked: string | null = null;
+  return (snapshot: Snapshot | null, flags: SyncFlags) => {
+    const key = snapshot && snapshotDisagrees(snapshot, flags);
+    if (!key || key === asked) return;
+    asked = key;
+    api
+      .freshSnapshot()
+      .then((fresh) =>
+        apply((current) =>
+          current?.workspace.revision === fresh.workspace.revision ? fresh : current,
+        ),
+      )
+      .catch(() => {});
   };
 }

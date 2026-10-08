@@ -1,3 +1,4 @@
+import { aheadKind } from "../data/reasons.js";
 import { useState } from "react";
 import { cardTitle, primaryOf, type Graph } from "../data/store.js";
 import { isDraft } from "../data/drafts.js";
@@ -314,7 +315,10 @@ export function NowView({
                           {flag.behind
                             ? t.map.behindWhy(flag.behind.reasons)
                             : !reviewing.has(n.id)
-                              ? t.map.aheadWhy(flag.ahead?.since ? ago(flag.ahead.since) : null)
+                              ? t.map.aheadWhy(
+                                  flag.ahead?.since ? ago(flag.ahead.since) : null,
+                                  aheadKind(flag.ahead?.reasons),
+                                )
                               : null}
                           {reviewing.has(n.id) && (
                             <>

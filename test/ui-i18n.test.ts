@@ -53,3 +53,50 @@ test("a long workspace path keeps the folders at its end", () => {
   );
   assert.equal(pathTail("/a/" + "x".repeat(50)), "…/" + "x".repeat(50));
 });
+
+test("behind and ahead reasons read by kind, not as file names", () => {
+  setLang("zh", false);
+  assert.equal(
+    t.map.behindWhy([
+      "Goal node-ab12cd: Material changed: ../../docs/SPEC.md#Reception%20and%20outputs",
+      "Material changed: ../src/a.ts",
+    ]),
+    "落后：SPEC.md#Reception and outputs、a.ts 改过",
+  );
+  assert.equal(
+    t.map.behindWhy(["Content is stale on or after 2026-10-01"]),
+    "落后：内容已在 2026-10-01 到期",
+  );
+  assert.equal(
+    t.map.behindWhy([
+      "Goal node-ab12cd: Output has no retained baseline for this ancestor goal: /A/A.md",
+      "Goal node-ab12cd: Output has no retained baseline for this goal material: ../README.md",
+      "Goal node-ab12cd: Remote material version is unknown; no network request was made: https://example.com/x",
+    ]),
+    "落后：2 份材料还没有基线，复核后确认一次；1 份材料无法核对",
+  );
+  assert.equal(
+    t.map.behindWhy([
+      "Repository material was deleted in the main checkout: src/shared.ts: ../../src/shared.ts",
+    ]),
+    "落后：shared.ts 已删除",
+  );
+  assert.equal(t.map.aheadWhy("3 小时前", "empty"), "领先（3 小时前起）：还没有产出");
+  assert.equal(t.map.aheadWhy(null, "behind"), "领先：产出还没跟上");
+  assert.equal(t.now.goalChanged("3 小时前", 2), "领先（3 小时前起）：2 个产出要按新要求复核");
+
+  setLang("en", false);
+  assert.equal(
+    t.map.behindWhy(["Material changed: a.md", "Material changed: b.md", "Material changed: c.md"]),
+    "Behind: a.md, b.md and 1 more changed",
+  );
+  assert.equal(
+    t.map.behindWhy(["Content is stale on or after 2026-10-01"]),
+    "Behind: content expired on 2026-10-01",
+  );
+  assert.equal(
+    t.map.aheadWhy("3 hours ago", "behind"),
+    "Ahead since 3 hours ago: outputs have not caught up",
+  );
+  setLang("zh", false);
+});

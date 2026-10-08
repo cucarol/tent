@@ -20,7 +20,7 @@ import { NowView } from "./now/NowView.js";
 import { Reader } from "./panel/Reader.js";
 import { Palette } from "./panel/Overlays.js";
 import { isDraft, loadLocalDrafts, useDraftCards } from "./data/drafts.js";
-import { FlagsContext, useSyncFlags } from "./data/flags.js";
+import { FlagsContext, snapshotRebuilder, useSyncFlags } from "./data/flags.js";
 import { useDragState } from "./shell/drag.js";
 import { carried, sourceIds, useWork, type Work } from "./shell/work.js";
 import type { Graph } from "./data/store.js";
@@ -176,6 +176,9 @@ export function App() {
       changes.removeEventListener("change", check);
     };
   }, [revision]);
+  // Card progress and completions depend on materials, which change without a new revision.
+  const rebuild = useMemo(() => snapshotRebuilder(setSnapshot), []);
+  useEffect(() => rebuild(snapshot, flags), [rebuild, snapshot, flags]);
   useEffect(() => {
     if (lost) setToast(lost);
   }, [lost]);
