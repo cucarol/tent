@@ -4,7 +4,7 @@ Thanks for helping improve Tent.
 
 ## Ground Rules
 
-- Put behavioral and permission rules in `src/core/`.
+- Put behavioral rules in `src/core/`.
 - Keep the CLI as a thin entrypoint to Core and filesystem helpers.
 - Keep Node, Role and Card behavior in Core and SPEC.
 - Keep context documents outside operational directories such as `temp/`.

@@ -2,25 +2,30 @@
 
 [中文](README.zh-CN.md)
 
-Tent keeps a project's working context inside the project: the goals you confirmed, the decisions later work must follow, the evidence that something was done, and the inputs passed from one agent session to the next. It is a small graph of Markdown files in `.tent/`, versioned by its own Git history. Agents read and maintain it through Skills and a CLI. You browse and edit it in a local web page.
+**A context graph for your project: what you decided, what got built, and what has drifted.**
 
-Version 0.1.1. Early, and changing; see [Status](#status).
+Tent is a project's context graph, the counterpart of a code graph. A code graph maps how the code fits together. Tent records what happened and why: the goals the user confirmed, the agreements later work follows, and the evidence of what was built. It shows what is ahead: goals that nothing implements yet. It shows what is behind: facts whose material has changed since they were recorded. It is not a notebook and not a task board. Agents read and maintain it through Skills and a CLI. You browse it in a local web page.
 
 ## When it helps
 
-Tent is for projects that outgrow a single handoff note: several directions at once, requirements that get revised or withdrawn, work that spans many sessions or several agents. For a small task, a plain notes file is simpler and works just as well. Use that.
-
-Installing Tent alone does not make an agent use it. Ask for it: "use Tent", "record this as a Node", "send a Card to the reporting Role".
+Tent is for projects that outgrow a single handoff note: several directions at once, requirements that get revised, work across many sessions or agents. For a small task, a plain notes file is simpler and works as well.
 
 ## The model
 
-Everything lives in `.tent/` at the root of a project folder. Your real files stay where they are; Tent points at them.
+Everything lives in `.tent/` at the project root. The folder that holds `.tent/` is the workspace. `.tent/` keeps its own Git history in `.tent/.git`, apart from your repository. Your files stay where they are; Tent points at them. `tent new` changes one thing outside `.tent/`: it adds `.tent/` to the project's `.gitignore`.
 
-- **Node**: one durable fact, as Markdown with YAML frontmatter. Its `type` says what it rests on: `goal` for intent the user confirmed, `prompt` for agreements later work follows, `output` for evidence observed at a point in time. A project may add a suffix, in `primary[-secondary]` form, such as `prompt-decision`.
-- **Role**: a continuing direction, with its purpose, boundaries and useful entry points. It is not a running agent, a permission or a model setting.
-- **Card**: one fixed input. A prompt, the Nodes and files it rests on (Tent pins the Nodes and Roles to their Git versions), and optionally a target Role. A session takes a Card to record that it received it. To change an input, send a new Card.
+- **Node**: one durable fact, as Markdown with YAML frontmatter. Its `type` is exactly `goal`, `prompt` or `output`, and says what the content rests on:
+  - `goal`: intent the user confirmed.
+  - `prompt`: an agreement later work follows.
+  - `output`: evidence observed at a point in time.
 
-Writes check an ETag, so two sessions cannot silently overwrite each other. Tent's history lives in `.tent/.git`, apart from your project's repository; `tent new` only adds `.tent/` to the project's `.gitignore`. The exact rules are in [docs/SPEC.md](docs/SPEC.md).
+  `tags` say what form the content takes and what it is about. They are free text and change no behavior. Tent suggests presets such as `decision` and `evidence`.
+- **Role**: a continuing direction, with its purpose, boundaries and entry points. It is not a running agent or a permission.
+- **Card**: one fixed input. It holds a prompt, its sources and an optional target Role. Node and Role sources are pinned to their Git versions. A session takes a Card to record that it received it. A Card never changes after it is sent; to change the input, send a new Card.
+
+Two findings come from comparing the graph with your files. A goal is **ahead** while no current output exists under it. Every current output under a goal counts as implementing it, whatever its tags. A Node is **behind** when its material, a file or Node it points to, has changed since Tent recorded its version. Behind propagates down the goal chain: when a goal's text or material changes, every output under it goes behind, and the goal is ahead until they are reviewed. A behind output needs review; it does not count as done.
+
+File paths you give the CLI as material, such as `--resource` or a Card `--source`, resolve from the workspace root. A write that replaces content must present the ETag it read, so two sessions cannot silently overwrite each other. The exact rules are in [docs/SPEC.md](docs/SPEC.md).
 
 ## Install
 
@@ -28,16 +33,16 @@ You need Node.js 22.19+ and Git.
 
 ### Codex
 
-Download `tent-plugin-0.1.1.zip` from [Releases](https://github.com/cucarol/tent/releases/tag/0.1.1) and extract it to a folder you will keep. Add that folder as a local marketplace:
+Download `tent-plugin-<version>.zip` from the [latest release](https://github.com/cucarol/tent/releases/latest). Extract it to a folder you will keep; it holds `.agents/` and `plugins/`. Add that folder as a local marketplace and install the plugin:
 
 ```sh
 codex plugin marketplace add "<absolute path to the extracted folder>"
 codex plugin add tent@tent-local
 ```
 
-The extracted folder must contain both `.agents/` and `plugins/`. It includes the CLI, web UI, Skills and Hooks; no npm install is needed for this package.
+The plugin bundles four Skills, two Hooks, the CLI and the web UI. It needs no npm install. Codex asks you to review the SessionStart and Stop Hooks; every command works without them. Details: [docs/PLUGIN.md](docs/PLUGIN.md).
 
-To build from source instead:
+To build from source:
 
 ```sh
 git clone https://github.com/cucarol/tent.git
@@ -48,7 +53,7 @@ codex plugin marketplace add "$PWD/release"
 codex plugin add tent@tent-local
 ```
 
-`npm run plugin:build` writes the complete plugin to `release/plugins/tent`: four Skills, two Hooks, the CLI and the web UI. It also writes a local marketplace next to it. Codex asks you to review the SessionStart and Stop Hooks; Tent works without them. Details: [docs/PLUGIN.md](docs/PLUGIN.md).
+`npm run plugin:build` writes the plugin to `release/plugins/tent` and a local marketplace next to it. It refuses to overwrite an existing build.
 
 Or give your agent this:
 
@@ -61,23 +66,67 @@ Check that the four Skills appear, and let me review the new Hooks.
 
 ### Other agents
 
-Codex is the only host with a package so far. Any agent that can run shell commands can use the bundled CLI directly:
+Codex is the only host with a plugin package. Any agent that runs shell commands can use the bundled CLI:
 
 ```sh
 node "<plugin folder>/cli.mjs" --help
 ```
 
-The plugin folder is `plugins/tent` inside the extracted download, or `release/plugins/tent` after a source build. To install only the CLI, run `npm install -g vibe-tent` (the same package is attached to the Release as `vibe-tent-0.1.1.tgz`). This exposes `tent`; it does not register a Codex plugin.
+The plugin folder is `plugins/tent` in the extracted download, or `release/plugins/tent` after a source build. To install only the CLI, run `npm install -g vibe-tent`. This gives you the `tent` command; it does not register a Codex plugin. Each release also carries the same package as `vibe-tent-<version>.tgz`.
 
 ## Use
 
-In the examples, `tent` is short for `node <plugin>/cli.mjs`. Agents find their own copy.
+`tent` below is the npm command; with the plugin, run `node "<plugin folder>/cli.mjs"` instead. Each command prints the id the next one needs. `<goal-id>`, `<card-id>`, `<output-id>` and `<etag>` stand for those values.
 
-1. **Start**: ask your agent to set up Tent in a project folder, or run `tent new .`. This creates an empty `.tent/`. Tent does not scan the project or write Nodes for you.
-2. **Keep facts**: while you work, have the agent record what later sessions must not get wrong (a confirmed goal, a decision and its reason, what a test actually showed), and read the relevant Nodes before it starts.
-3. **Hand off**: when work moves to another session or direction, create a Card with the prompt and the Nodes it depends on. The next session takes it and starts from there.
+1. **Create a Tent.** In the project root, this creates an empty `.tent/` with its own Git history.
 
-Most work needs no Role and no Card. Commits, reviews and merges stay in your normal Git workflow.
+   ```sh
+   tent new .
+   ```
+
+2. **Record a goal.** The brief lists it as ahead: nothing implements it yet.
+
+   ```sh
+   tent node create "Email sign-in" --type goal --body "Users sign in with an email address and a one-time code."
+   tent workspace brief
+   ```
+
+3. **Send a Card.** The Card carries the prompt and pins the goal at its current version.
+
+   ```sh
+   tent card create --prompt "Implement email sign-in." --source <goal-id>
+   ```
+
+4. **Take it.** The session that does the work takes the Card, and Tent records the reception.
+
+   ```sh
+   tent card take <card-id>
+   ```
+
+5. **Link an output.** Once the work exists as a file, the output records it under the goal and answers the Card.
+
+   ```sh
+   echo "export function signIn(email) {}" > login.js
+   tent node link-output <goal-id> --resource login.js --card <card-id>
+   ```
+
+6. **Change the material.** The brief now lists the output as behind and the Card as `needs-review`.
+
+   ```sh
+   echo "export const CODE_TTL_MINUTES = 10;" >> login.js
+   tent workspace brief
+   ```
+
+7. **Confirm.** After reviewing the change, confirm the output with the `etag` from a full read.
+
+   ```sh
+   tent node get <output-id> --full --json
+   tent node confirm <output-id> --base-etag <etag>
+   ```
+
+`tent workspace brief` now reports `behind 0 · ahead 0`.
+
+In daily work your agent runs these commands through the Skills when you ask: "use Tent", "record this as a goal", "send a Card to the reporting Role". Most work needs no Role and no Card. Commits, reviews and merges stay in your Git workflow.
 
 ## Web UI
 
@@ -85,13 +134,13 @@ Most work needs no Role and no Card. Commits, reviews and merges stay in your no
 tent ui --workspace <project folder>
 ```
 
-A local page with the map of Nodes, Roles and Cards and how they connect. You can edit Nodes, create Cards, leave notes on the map, and switch between workspaces you have opened. It runs in the terminal you started it from; Ctrl+C stops it. `--port` picks a port, and `--no-open` prints the address without opening a browser.
+The server runs in this terminal; Ctrl+C stops it. The page opens on Now: Role work from Cards, outputs since your last visit, and what is ahead or behind. The map shows Nodes, Roles and Cards and how they link, with the same marks. You can edit and confirm Nodes, write Cards, and switch between workspaces you have opened. `--port` picks the port. `--no-open` prints the address without opening a browser.
 
 ## Status
 
-- **One maintainer, version 0.1.1.** The file format and commands may still change; [SPEC](docs/SPEC.md) is the contract.
-- **No evidence yet that it beats plain notes.** In the latest October 2026 comparison on a project with changing requirements, Markdown completed integration; Tent's initial decomposition timed out and its final integration was cut short by the shared token budget. A stale Tent summary was corrected in the next stage, while higher observed decomposition cost recurred; these local findings do not establish a quality or efficiency benefit.
-- **Hooks need host approval.** The first test's Hooks were untrusted, so their absence does not show that the host mode cannot deliver them. Review and trust Hooks in the host if you want to enable them; every command works without them.
+- **One maintainer.** The file format and commands may still change. [docs/SPEC.md](docs/SPEC.md) is the contract.
+- **No evidence yet that it beats plain notes.** The latest comparison ran in October 2026 on a project with changing requirements. The Markdown group completed integration. Tent's initial decomposition timed out, and the shared token budget cut its final integration short. A stale Tent summary was corrected in the next stage. Higher decomposition cost showed up again. These local findings do not establish a quality or efficiency benefit.
+- **Hooks need host approval.** In the first test the Hooks were untrusted, so their absence there does not show that the host cannot deliver them. Review and trust them in the host to enable them. Every command works without them.
 
 ## Development
 
@@ -102,7 +151,11 @@ npm run test:fast
 npm run ui:dev -- --workspace <project folder>
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Security
+
+Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes. Do not open a public issue.
 
 ## License
 

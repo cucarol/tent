@@ -183,12 +183,19 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   }
   assert.equal(pkg.scripts?.["test:grok-e2e"], undefined);
   assert.equal(pkg.scripts?.["test:foreground-e2e"], undefined);
-  // Both languages carry the same install path and Node type rule.
+  // Both languages carry the same install path, the three-type Node model and no release number.
+  assert.match(readme, /`type` is exactly `goal`, `prompt` or `output`/);
+  assert.match(readmeZh, /`type` 只能是 `goal`、`prompt` 或 `output`/);
   for (const text of [readme, readmeZh]) {
     assert.match(text, /npm run plugin:build/);
     assert.match(text, /release\/plugins\/tent/);
     assert.match(text, /codex plugin add tent@tent-local/);
-    assert.match(text, /`primary\[-secondary\]`/);
+    assert.match(text, /`tags`/);
+    assert.match(text, /`decision`/);
+    assert.doesNotMatch(text, /primary\[-secondary\]/, "type suffixes are retired");
+    assert.doesNotMatch(text, /`(?:goal|prompt|output)-[a-z]+`/, "type suffixes are retired");
+    assert.doesNotMatch(text, /\b\d+\.\d+\.\d+\b/, "the release version is set at tag time");
+    assert.match(text, /https:\/\/github\.com\/cucarol\/tent\/releases\/latest/);
   }
   assert.ok(pkg.files.includes("README.zh-CN.md"), "npm package carries the linked Chinese README");
   assert.match(spec, /three semantic concepts are Node, Role, and Card/i);
