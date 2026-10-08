@@ -328,7 +328,17 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
           sessionId: "large",
           turnId: "one",
           observedAt: "2026-02-01T00:00:00.000Z",
-          files: [],
+          files: [
+            {
+              kind: "written",
+              address: "输出".repeat(5000),
+              version: {
+                state: "uncertain",
+                phase: "stop",
+                observedAt: "2026-02-01T00:00:00.000Z",
+              },
+            },
+          ],
           signals: [],
           uncertain: false,
         },
@@ -351,7 +361,7 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
       { address: "输出".repeat(5000), observedAt: "2026-02-01T00:00:00.000Z", sessionId: "large" },
     ],
   };
-  const brief = makeContextBrief(context, { now: "2026-02-01T00:00:00.000Z" });
+  const brief = makeContextBrief(context);
   assert.deepEqual(brief.counts, { ahead: 50, behind: 50 });
   assert.ok(Buffer.byteLength(JSON.stringify(brief) + "\n") <= 4096);
   assert.ok(Buffer.byteLength(formatContextBrief(brief) + "\n") <= 4096);
@@ -364,7 +374,71 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
     0,
     "an address never becomes a misleading truncated path",
   );
-  assert.ok(brief.ahead[0].ageSeconds === 31 * 24 * 3600);
+  assert.equal(brief.ahead[0].since, "2026-01-01T00:00:00.000Z");
+  assert.equal("ageSeconds" in brief.ahead[0], false);
+});
+
+test("CLI discovery text and JSON stay byte-identical when the clock advances one second", async (t) => {
+  const f = await fixture(t);
+  const created = await f.node("create", [
+    "Requirement",
+    "--type",
+    "goal",
+    "--body",
+    "Unfulfilled",
+  ]);
+  const id = created.node.nodeId;
+  await f.node("create", ["Context", "--type", "prompt", "--parent", id, "--body", "Details"]);
+  const card = await runCardCommand(
+    "create",
+    ["--prompt", "Read requirement", "--source", id],
+    f.options,
+  );
+  assert.equal(card.exitCode, 0, card.stderr);
+  const since = (await f.node("check", [id])).ahead.since;
+  assert.ok(since, "fixture must expose a known ahead start time");
+  const head = await git(path.join(f.root, ".tent"), "rev-parse", "HEAD");
+  // Crossing 59s -> 1m catches both the old JSON age and the text formatAge boundary.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse(since) + 59_000 });
+  const readAll = async () => {
+    const outputs: Record<string, string> = {};
+    for (const json of [false, true]) {
+      const options = { workspace: f.root, json };
+      const calls = [
+        ["brief", () => runWorkspaceCommand("brief", [], options)],
+        ["drift", () => runWorkspaceCommand("drift", [], options)],
+        ["card list", () => runCardCommand("list", [], options)],
+        ["node get", () => runNodeCommand("get", [id, "--full"], options)],
+        ["node list", () => runNodeCommand("list", [], options)],
+        [
+          "node relations",
+          () => runNodeCommand("relations", [id, "--direction", "children"], options),
+        ],
+      ] as const;
+      for (const [name, read] of calls) {
+        const result = await read();
+        assert.equal(result.exitCode, 0, `${name}: ${result.stderr}`);
+        outputs[`${name} ${json ? "json" : "text"}`] = result.stdout;
+      }
+    }
+    return outputs;
+  };
+  const before = await readAll();
+  const brief = JSON.parse(before["brief json"]);
+  assert.equal(brief.ahead[0].since, since);
+  assert.equal("ageSeconds" in brief.ahead[0], false);
+  assert.ok(before["brief text"].includes(`since ${since}`));
+  assert.equal(JSON.parse(before["card list json"]).items.length, 1);
+  assert.ok(
+    JSON.parse(before["drift json"]).items.some(
+      (item: { kind: string }) => item.kind === "node-ahead",
+    ),
+  );
+  assert.equal(JSON.parse(before["node relations json"]).items.length, 1);
+  t.mock.timers.tick(1000);
+  const after = await readAll();
+  for (const name of Object.keys(before)) assert.equal(after[name], before[name], name);
+  assert.equal(await git(path.join(f.root, ".tent"), "rev-parse", "HEAD"), head);
 });
 
 test("brief counts historical unrecorded files but only lists three recent sessions", () => {
@@ -375,7 +449,17 @@ test("brief counts historical unrecorded files but only lists three recent sessi
     sessionId: `session-${index}`,
     turnId: "turn-1",
     observedAt: `${day}T00:00:00.000Z`,
-    files: [],
+    files: [
+      {
+        kind: "written" as const,
+        address: `file-${index}.md`,
+        version: {
+          state: "uncertain" as const,
+          phase: "stop" as const,
+          observedAt: `${day}T00:00:00.000Z`,
+        },
+      },
+    ],
     signals: [],
     uncertain: false,
   }));
@@ -397,7 +481,7 @@ test("brief counts historical unrecorded files but only lists three recent sessi
       })),
     ],
   };
-  const brief = makeContextBrief(context, { now: "2026-02-01T00:00:00.000Z" });
+  const brief = makeContextBrief(context);
   assert.deepEqual(
     new Set(brief.unlinkedOutputs.map((item) => item.nodeId ?? item.address)),
     new Set(["file-0.md", "file-1.md", "file-2.md"]),
@@ -405,6 +489,84 @@ test("brief counts historical unrecorded files but only lists three recent sessi
   assert.equal(brief.omitted.unlinkedOutputs, 2);
   assert.match(formatContextBrief(brief), /2 older or omitted unrecorded files/);
   assert.equal(context.unlinkedOutputs.length, 5, "the full observation source remains intact");
+});
+
+test("brief's inclusive seven-day window follows the latest observed write, not the clock or reads", (t) => {
+  const observedAt = "2026-02-20T00:00:00.000Z";
+  const files = [
+    { address: "latest-linked.md", kind: "written" as const, at: "2026-02-08T00:00:00.000Z" },
+    { address: "middle.md", kind: "written" as const, at: "2026-02-03T00:00:00.000Z" },
+    { address: "boundary.md", kind: "written" as const, at: "2026-02-01T00:00:00.000Z" },
+    { address: "too-old.md", kind: "written" as const, at: "2026-01-31T23:59:59.999Z" },
+    { address: "latest-read.md", kind: "read" as const, at: observedAt },
+  ];
+  const context: CurrentContext = {
+    sync: {
+      nodes: [],
+      counts: { synced: 0, ahead: 0, behind: 0, unanchored: 0 },
+      outputNodes: [{ nodeId: "node-linked", path: "Linked", resource: "../../latest-linked.md" }],
+      requirementsWithoutOutputs: [],
+    },
+    observations: {
+      events: [
+        {
+          schema: 1,
+          type: "turn",
+          sessionId: "boundary",
+          turnId: "one",
+          observedAt,
+          files: files.map(({ address, kind, at }) => ({
+            address,
+            kind,
+            version: { state: "uncertain", phase: "stop", observedAt: at },
+          })),
+          signals: [],
+          uncertain: false,
+        },
+      ],
+      uncertain: false,
+    },
+    cards: { revision: "r", items: [] },
+    changedCardSources: { items: [], diagnostics: [] },
+    unlinkedOutputs: [],
+  };
+  context.unlinkedOutputs = findUnlinkedOutputs(
+    context.sync,
+    context.observations.events,
+    process.cwd(),
+  );
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-02-08T00:00:00.000Z") - 1000 });
+  const before = makeContextBrief(context);
+  assert.deepEqual(
+    before.unlinkedOutputs.map((item) => item.address),
+    ["middle.md", "boundary.md"],
+  );
+  assert.equal(before.omitted.unlinkedOutputs, 1);
+  t.mock.timers.tick(2000);
+  const after = makeContextBrief(context);
+  assert.equal(JSON.stringify(after), JSON.stringify(before));
+  assert.equal(formatContextBrief(after), formatContextBrief(before));
+  context.sync.outputNodes = [];
+  context.unlinkedOutputs = findUnlinkedOutputs(
+    context.sync,
+    context.observations.events,
+    process.cwd(),
+  );
+  assert.deepEqual(
+    makeContextBrief(context).unlinkedOutputs.map((item) => item.address),
+    ["latest-linked.md", "middle.md", "boundary.md"],
+  );
+  context.observations.events[0]!.files = context.observations.events[0]!.files.filter(
+    (file) => file.kind === "read",
+  );
+  context.unlinkedOutputs = findUnlinkedOutputs(
+    context.sync,
+    context.observations.events,
+    process.cwd(),
+  );
+  assert.deepEqual(makeContextBrief(context).unlinkedOutputs, []);
+  context.observations.events = [];
+  assert.deepEqual(makeContextBrief(context).unlinkedOutputs, []);
 });
 
 test("brief and drift both show a dual-status goal and leave neutral recorded output quiet", () => {

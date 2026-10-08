@@ -195,9 +195,12 @@ const shorten = (value: string, length: number) =>
 /** This is a discovery page; omitted details are counted, never misrepresented as complete addresses. */
 export function makeContextBrief(
   context: CurrentContext,
-  options: { roleId?: string; now?: string } = {},
+  options: { roleId?: string } = {},
 ): ContextBrief {
-  const now = Date.parse(options.now ?? new Date().toISOString());
+  const latestWrite = context.observations.events
+    .flatMap((event) => event.files)
+    .filter((file) => file.kind === "written")
+    .reduce((latest, file) => Math.max(latest, Date.parse(file.version.observedAt)), -Infinity);
   const recentSessions = new Set(
     [
       ...new Set(
@@ -207,12 +210,13 @@ export function makeContextBrief(
       ),
     ].slice(0, 3),
   );
-  const cutoff = now - 7 * 24 * 60 * 60 * 1000;
+  const cutoff = latestWrite - 7 * 24 * 60 * 60 * 1000;
   const recentUnlinked = context.unlinkedOutputs
     .filter(
       (output) =>
         output.observedAt &&
         Date.parse(output.observedAt) >= cutoff &&
+        Date.parse(output.observedAt) <= latestWrite &&
         output.sessionId &&
         recentSessions.has(output.sessionId),
     )
@@ -233,7 +237,6 @@ export function makeContextBrief(
         ...(node.ahead!.since
           ? {
               since: node.ahead!.since,
-              ageSeconds: Math.max(0, Math.floor((now - Date.parse(node.ahead!.since!)) / 1000)),
             }
           : { sinceUnknown: true }),
       })),
@@ -335,7 +338,7 @@ export function formatContextBrief(brief: ContextBrief): string {
           : String(item.nodeId ?? item.cardId ?? item.address);
       const detail =
         key === "ahead"
-          ? `${String(item.name ?? "")}; ${item.since ? `since ${item.since} (${formatAge(Number(item.ageSeconds))})` : "start time not recorded"}`
+          ? `${String(item.name ?? "")}; ${item.since ? `since ${item.since}` : "start time not recorded"}`
           : String(item.reason ?? item.title ?? item.kind ?? item.at ?? item.address ?? "");
       lines.push(
         `- ${identity}${detail && detail !== identity ? ` ${detail}` : ""}${item.progress || item.state ? ` [${item.progress || item.state}${Number(item.totalGoalCount) > 0 ? ` ${item.goalCount}/${item.totalGoalCount}` : ""}]` : ""}`,
@@ -360,11 +363,4 @@ export function formatContextBrief(brief: ContextBrief): string {
   if (brief.roleId)
     lines.push(`Card filter: ${brief.roleId}; synchronization counts cover the whole Workspace.`);
   return lines.join("\n");
-}
-
-function formatAge(seconds: number) {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
-  return `${Math.floor(seconds / 86400)}d`;
 }
