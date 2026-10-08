@@ -3,6 +3,7 @@
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { renameWithRetry } from "../fs/rename-with-retry.js";
 
 export type KnownWorkspace = { root: string; name: string; id: string; openedAt: string };
 
@@ -65,7 +66,7 @@ export async function rememberWorkspace(
     await fsp.mkdir(path.dirname(file), { recursive: true });
     const temp = `${file}.${process.pid}.tmp`;
     await fsp.writeFile(temp, JSON.stringify({ version: 1, workspaces }, null, 2) + "\n");
-    await fsp.rename(temp, file);
+    await renameWithRetry(temp, file);
   };
   const pending = (writes.get(fileKey) ?? Promise.resolve()).then(write, write);
   writes.set(fileKey, pending);
