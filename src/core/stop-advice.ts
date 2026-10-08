@@ -85,7 +85,7 @@ export function questionsForObservedTurn(
   if (newOutput)
     questions.push({
       kind: "unlinked-output",
-      question: `This turn produced ${literal(newOutput.address)} without an output Node. Which goal should record it?`,
+      question: `${literal(newOutput.address)} was written this turn and no output Node records it.`,
       answers: [
         ...candidates.map((node) => `Create an output Node under ${node.nodeId}`),
         ...(candidates.length ? [] : ["Find or create a confirmed goal first"]),
@@ -116,7 +116,7 @@ export function questionsForObservedTurn(
   if (behind)
     questions.push({
       kind: "behind-node",
-      question: `A file version observed this turn puts ${behind.nodeId} behind. Does the Node's judgment still hold?`,
+      question: `${behind.nodeId} is behind after a file version observed this turn.`,
       answers: [
         "Still holds: read it fully, then node confirm",
         "Changed: update the Node and confirm",
@@ -126,7 +126,7 @@ export function questionsForObservedTurn(
   if (event.signals.length && !event.nodeOrCardChanged)
     questions.push({
       kind: "possible-intent",
-      question: `Turn ${literal(event.turnId)} may contain ${event.signals.includes("possible-decision") ? "a new decision or requirement" : "a new requirement"}. Which judgment should be saved?`,
+      question: `Turn ${literal(event.turnId)} reads like ${event.signals.includes("possible-decision") ? "a new decision or requirement" : "a new requirement"}.`,
       answers: [
         ...(candidates[0] ? [`Update existing ${candidates[0].nodeId}`] : []),
         "Create a confirmed goal or prompt",
@@ -136,33 +136,21 @@ export function questionsForObservedTurn(
   return questions.slice(0, 3);
 }
 
+const INCOMPLETE = "Some observations are incomplete; workspace brief shows the current state.";
+
 export function formatStopQuestions(
   questions: StopQuestion[],
   uncertain = false,
 ): string | undefined {
-  const lines = [
-    "Tent turn review (addresses and options are advisory; nothing is saved automatically):",
-  ];
+  const lines = ["Tent turn review:"];
   let count = 0;
   for (const question of questions.slice(0, 3)) {
     const candidate = `${count + 1}. ${question.question}\nOptions: ${question.answers.join("; ")}.`;
-    if (
-      !fits(
-        [
-          ...lines,
-          candidate,
-          ...(uncertain
-            ? ["Some observations are incomplete; use workspace brief to check the current state."]
-            : []),
-        ].join("\n"),
-      )
-    )
-      continue;
+    if (!fits([...lines, candidate, ...(uncertain ? [INCOMPLETE] : [])].join("\n"))) continue;
     lines.push(candidate);
     count++;
   }
-  if (uncertain)
-    lines.push("Some observations are incomplete; use workspace brief to check the current state.");
+  if (uncertain) lines.push(INCOMPLETE);
   if (!count && !uncertain) return undefined;
   return lines.join("\n");
 }

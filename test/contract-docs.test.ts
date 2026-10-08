@@ -9,20 +9,46 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const read = (file: string) => fs.readFile(path.join(repoRoot, file), "utf8");
 const flat = (text: string) => text.replace(/\s+/g, " ");
 
-test("path references separate Workspace-root CLI arguments from stored addresses", async () => {
-  for (const file of [
-    "skill-resources/references/node-maintenance.md",
-    "skill-resources/references/access.md",
-  ]) {
-    const text = flat(await read(file));
-    assert.match(text, /\*\*CLI arguments\*\*[^*]* resolve from the Workspace root/, file);
-    assert.match(text, /\*\*Stored documents\*\*[^*]*Tent rewrites CLI paths/, file);
-    assert.match(text, /`\.\/docs\/x\.md`|`\.\/src\/app\.ts`/, file);
-    assert.doesNotMatch(text, /Paths are relative to the Node's own file/, file);
-    assert.doesNotMatch(text, /## Paths in documents/, file);
+// Agent-facing text: every SKILL.md, the shared references and the tent-init Hook reference.
+async function agentFacingFiles(): Promise<string[]> {
+  const files = ["skills/tent-init/references/host-hooks.md"];
+  for (const entry of await fs.readdir(path.join(repoRoot, "skills"), { withFileTypes: true }))
+    if (entry.isDirectory()) files.push(`skills/${entry.name}/SKILL.md`);
+  for (const name of await fs.readdir(path.join(repoRoot, "skill-resources", "references")))
+    if (name.endsWith(".md")) files.push(`skill-resources/references/${name}`);
+  return files.sort();
+}
+
+test("Agent-facing Skill text stays within its byte budget and links one level deep", async () => {
+  let total = 0;
+  for (const file of await agentFacingFiles()) {
+    const text = await read(file);
+    const bytes = Buffer.byteLength(text, "utf8");
+    total += bytes;
+    if (file.endsWith("/SKILL.md")) assert.ok(bytes <= 2000, `${file}: ${bytes} bytes`);
+    assert.doesNotMatch(text, /Maintainer background|docs\/(?:PLUGIN|SPEC)\.md/, file);
+    assert.doesNotMatch(text, /\\\|/, `${file} escapes a table pipe`);
+    if (!file.endsWith("/SKILL.md"))
+      assert.doesNotMatch(text, /\]\((?![a-z]+:)[^)]*\.md(?:#[^)]*)?\)/, `${file} links a file`);
   }
-  for (const file of ["skills/tent-card/SKILL.md", "skill-resources/references/cards.md"])
-    assert.match(flat(await read(file)), /Workspace[- ]root/, file);
+  assert.ok(total <= 12000, `Agent-facing Skill text is ${total} bytes`);
+});
+
+test("material paths are defined once, in node-maintenance", async () => {
+  const maintenance = flat(await read("skill-resources/references/node-maintenance.md"));
+  assert.match(
+    maintenance,
+    /Pass Workspace-root paths like `docs\/x\.md`; Tent stores them relative to the Node's own file/,
+  );
+  assert.match(maintenance, /`docs\/x\.md#State`/);
+  const access = flat(await read("skill-resources/references/access.md"));
+  assert.doesNotMatch(access, /relative to the Node's own file|Workspace-root path/);
+  const cards = flat(await read("skill-resources/references/cards.md"));
+  assert.match(
+    cards,
+    /`--source` takes a Node id or a Workspace-root path such as `docs\/req\.md`/,
+  );
+  assert.doesNotMatch(cards, /`\.\/docs\/req\.md`|`\/docs\/req\.md`/);
 });
 
 test("PLUGIN.md matches SPEC goal ancestry and brief counts", async () => {
@@ -36,7 +62,7 @@ test("PLUGIN.md matches SPEC goal ancestry and brief counts", async () => {
   assert.doesNotMatch(plugin, /四种同步状态计数/);
 });
 
-test("type guidance: exact types, tags carry form and topic, every output counts", async () => {
+test("type guidance names exactly three types and the preset tags", async () => {
   const formerTypes =
     /\b(goal|prompt|output)-(direction|requirement|decision|spec|reference|procedure|asset|evidence|analysis|issue)\b|NODE_TYPE_PRESETS|implementing it/;
   const spec = flat(await read("docs/SPEC.md"));
@@ -46,21 +72,40 @@ test("type guidance: exact types, tags carry form and topic, every output counts
     /A goal without any active `output` anywhere in its subtree is ahead; tags do not change this/,
   );
   assert.doesNotMatch(spec, formerTypes);
-  const types = flat(await read("skill-resources/references/node-types.md"));
-  assert.match(types, /Any current `output` under a goal counts as its result, whatever its tags/);
-  assert.match(types, /run `tent node tags`/);
+  const types = await read("skill-resources/references/node-types.md");
+  for (const type of ["goal", "prompt", "output"])
+    assert.match(types, new RegExp(`^\\| \`${type}\` \\|`, "m"), type);
+  // The suggested tag vocabulary, NODE_TAG_PRESETS in Core.
+  for (const tag of [
+    "direction",
+    "requirement",
+    "decision",
+    "spec",
+    "reference",
+    "procedure",
+    "asset",
+    "evidence",
+    "analysis",
+    "issue",
+  ])
+    assert.match(types, new RegExp(`^\\| \`${tag}\` \\|`, "m"), tag);
+  assert.match(flat(types), /Every current `output` under a goal counts as its result/);
+  assert.match(flat(types), /from `tent node tags`/);
   assert.doesNotMatch(types, formerTypes);
   assert.doesNotMatch(types, /an `output` counts as implementing it/);
   const skill = flat(await read("skills/tent-node/SKILL.md"));
-  assert.match(skill, /Under a goal, every `output` counts as its result/);
   assert.doesNotMatch(skill, formerTypes);
   assert.doesNotMatch(skill, /only results that implement it are `output`/);
+  for (const file of await agentFacingFiles())
+    assert.doesNotMatch(await read(file), /\b(?:goal|prompt|output)-(?!id\b)[a-z]+/, file);
 });
 
 test("goal and prompt materials exclude src code, which belongs in body links or outputs", async () => {
   const text = flat(await read("skill-resources/references/node-maintenance.md"));
-  assert.match(text, /A `goal` or `prompt` does not take code files under `src\/` as materials/);
-  assert.match(text, /link it in the body; to track one, put it in the `resource` of an output/);
+  assert.match(text, /A `goal` or `prompt` takes its grounds as material, not code/);
+  const plugin = flat(await read("docs/PLUGIN.md"));
+  assert.match(plugin, /不以 `src\/` 下代码为材料/);
+  assert.match(plugin, /\[Codex Hooks\]\(https:\/\/learn\.chatgpt\.com\/docs\/hooks\)/);
 });
 
 test("Card progress is null when every requested goal is deprecated, even while pending", async () => {
@@ -85,11 +130,9 @@ test("SPEC records the Node name, rename rollback, check and Card warning contra
     spec,
     /The raw input is rejected if it contains a C0 control character \(U\+0000–U\+001F, including tab, CR and LF\), DEL \(U\+007F\), U\+2028 or U\+2029, even at either end; leading and trailing whitespace as JavaScript `trim\(\)` defines it is then removed\. C1 controls \(U\+0080–U\+009F\) are not rejected/,
   );
-  const maintenance = flat(await read("skill-resources/references/node-maintenance.md"));
-  assert.match(
-    maintenance,
-    /`COM1`–`COM9`, `LPT1`–`LPT9`, `COM¹`–`COM³` or `LPT¹`–`LPT³` in any case, with or without an extension/,
-  );
+  // The CLI reports a rejected name; the rule lives in SPEC and the maintainer guide.
+  const plugin = flat(await read("docs/PLUGIN.md"));
+  assert.match(plugin, /`COM1`–`COM9`、`LPT1`–`LPT9`、`COM¹`–`COM³`、`LPT¹`–`LPT³`/);
   assert.match(
     spec,
     /fails while Tent Git HEAD is still the commit read after the move, the rename is rolled back/,

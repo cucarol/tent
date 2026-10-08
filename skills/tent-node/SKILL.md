@@ -1,66 +1,43 @@
 ---
 name: tent-node
-description: "Read the Tent Nodes a task needs before working, and save the decisions, rules, results and problems from the work as Nodes for later work."
+description: "Reads and records context as Tent Nodes. Use when a task needs Tent context, or work produced a decision, rule, result or problem."
 ---
 
 # Tent Node
 
-Nodes hold project context that should outlast one conversation. Run the
-[bundled CLI](../../skill-resources/references/access.md) against the existing
-Workspace.
+Run `tent` as [access](../../skill-resources/references/access.md) shows.
 
 ## Before working
 
-1. For the current situation, run `tent workspace brief`: behind and ahead
-   Nodes, pending Cards and recent files not yet recorded. Otherwise start
-   from a Node the user, a Role or a Card points to, or a focused
-   `tent node search`.
-2. Read those Nodes, following links only as far as the task needs
-   ([finding context](../../skill-resources/references/input.md)).
-3. Treat each by its [type](../../skill-resources/references/node-types.md):
-   work toward `goal`, follow `prompt`, check `output` against its material.
+| When | Command | Read |
+| --- | --- | --- |
+| No pointer | `tent workspace brief` | `behind`, `ahead`, `cardInputs` |
+| A Node id | `tent node get <id>` | `text`, `etag`, `context` |
+| A topic | `tent node search "<term>"` | `items` |
+
+Treat each Node by its [type](../../skill-resources/references/node-types.md). More reads: [input](../../skill-resources/references/input.md).
 
 ## After working
 
-Update only the Nodes your work affected
-([saving](../../skill-resources/references/node-maintenance.md)):
+Update only the Nodes your work touched; if nothing changed, change nothing.
 
-- A new confirmed intent, rule, decision, result or problem: update the Node
-  that owns the fact, or create one.
-- A fact your work made wrong: correct it.
-- A result that implements a goal:
-  `tent node link-output <goal-id> --resource <path>`, once the file is in
-  the Workspace checkout (after merging a worktree or branch).
-- A behind Node whose judgment still holds after you read the changed
-  material: `tent node confirm`. If the judgment changed, save the correction
-  with `node write --confirm`. A full-body output rewrite also refreshes its
-  dependencies; metadata edits, appends and section edits do not.
-- A decision: make it within your Role, or send a Card to the Role that owns
-  it; do not stop to wait for the user. Record it in a Node; the user may
-  still change it.
-- Nothing changed: leave the Nodes alone.
+| When | Command | Read |
+| --- | --- | --- |
+| Add text | `tent node append <id> --heading <title> --body -` | `etag` |
+| Edit a section | `tent node get-section <id> --heading <title>`, then `tent node write-section <id> --heading <title> --base-etag <sectionEtag> --body -` with the whole section, heading included | `sectionEtag`, then `etag` |
+| Rewrite, or confirm a behind Node that holds | `tent node get <id> --full --json`, then `tent node write <id> --base-etag <etag> --body -` or `tent node confirm <id> --base-etag <etag>` | `etag` |
+| New fact | `tent node create <name> --type <type> [--parent <id>] --tags <tag> --body -` | `node.nodeId` |
+| A file implements a goal | `tent node link-output <goal-id> --resource <path> --tags asset` | `nodeId` |
 
-Add text with `node append` and change one heading with `node write-section`.
-Before replacing a whole body, read it with `tent node get <id> --full --json`
-and write with that ETag. Afterwards run `tent workspace check --json` once.
+More: [saving](../../skill-resources/references/node-maintenance.md). After saving, run `tent workspace check --json` once and fix what it lists.
 
-## Writing
+## How to write
 
-- Open with what the Node is and how to use it, state facts directly, and
-  label anything unverified.
-- Keep one Node per independently useful fact, and facts that change together
-  in one Node; the parent sets scope. Link to material and other Nodes
-  instead of retelling them.
-- `goal` and `prompt` hold confirmed intent, decisions and reasons. Commit
-  ids, test counts and delivery status belong to Git and Cards; keep useful
-  verification as dated `output` evidence. Under a goal, every `output`
-  counts as its result, so its questions and research are `prompt`.
-- The type is only `goal`, `prompt` or `output`; tags carry form and topic.
-  Run `tent node tags` first and reuse a tag in use or a preset such as
-  `decision`, `evidence` or `issue`
-  ([types and tags](../../skill-resources/references/node-types.md)).
-- Never enter hashes; Tent records versions. Your confirmations are machine
-  confirmations; pass `--by human:<id>` only for a person's actual review.
+One Node per separately used fact, under the Node it narrows; link instead of retelling. Example:
 
-Ordinary work needs neither a Role nor a Card; see
-[tent-role](../tent-role/SKILL.md) and [tent-card](../tent-card/SKILL.md).
+```markdown
+Sign-in rules; follow them when changing login.
+Users sign in with email and a one-time code.
+Agreed with the user on 2026-10-08 for [Login](node-abc123).
+Unverified: whether SSO skips the code.
+```

@@ -247,7 +247,7 @@ test("Stop exposes uncertain Node inspection and excludes its goal from intent c
   assert.equal(formatObservedTurnAdvice({ ...sync, nodes: [] }, ".", event, previous), undefined);
   const warning = formatObservedTurnAdvice(sync, ".", event, previous);
   assert.ok(warning);
-  assert.match(warning, /observations are incomplete; use workspace brief/);
+  assert.match(warning, /observations are incomplete; workspace brief shows the current state/);
   assert.equal((warning.match(/^[1-3]\. /gm) ?? []).length, 0);
   assert.ok(Buffer.byteLength(JSON.stringify({ systemMessage: warning }) + "\n") <= 2048);
   const decision = formatObservedTurnAdvice(
@@ -257,7 +257,7 @@ test("Stop exposes uncertain Node inspection and excludes its goal from intent c
     previous,
   );
   assert.ok(decision);
-  assert.match(decision, /Which judgment should be saved/);
+  assert.match(decision, /reads like a new decision or requirement/);
   assert.match(decision, /observations are incomplete/);
   assert.doesNotMatch(decision, /Update existing node-uncertain/);
   assert.equal(

@@ -1,54 +1,17 @@
-# Find and read Tent context
+# Find and read
 
-Pass `--workspace <root>` when your shell runs outside the Workspace.
+| When | Command | Read |
+| --- | --- | --- |
+| A file | `tent node search --resource <path>` | `items[].nodeId` |
+| Children or parent | `tent node relations <id> --direction children` (or `parent`) | `items[].nodeId` |
+| Links in or out | `tent node relations <id> --direction incoming --json` (or `outgoing`) | `items[].from` for incoming, `items[].target` for outgoing: `kind`, `id`, or `workspacePath` for a file |
+| A type or tag | `tent node list --type prompt --tag decision` | `items[].nodeId` |
+| The tree | `tent node list`, then `--cursor <page.nextCursor>` | `items` |
+| A Node's next page | `tent node get <id> --cursor <page.nextCursor>` | `text` |
+| A whole Node | `tent node get <id> --full --json`; `--view raw` adds frontmatter | `text`, `etag`, `version` |
 
-## Find
+First-page and `--full` reads add `context` (at most 1 KiB): ancestors, children, links in and out, and Cards that pin the Node.
 
-Start from what you have and stop once you have what the task needs:
+Open `node-`, `role-` and `card-` ids with `node get`, `role show` and `card show`.
 
-| You have | Run |
-| --- | --- |
-| Nothing specific | `tent workspace brief` |
-| A Node id | `tent node get <node-id> --json` |
-| A topic or term | `tent node search "<term>" --json` |
-| A file | `tent node search --resource <path> --json` |
-| A Node, and want its neighbours | `tent node relations <node-id> --direction <parent\|children\|outgoing\|incoming> --json` |
-| The tree | `tent node list [--parent <node-id>] --json` |
-| A type or tag | `tent node list --type output --tag evidence --json` (whole subtree; every `--tag` must match) |
-| The tags in use | `tent node tags` |
-
-Keep the `node-` ids you find; names and paths can change. A search hit can be
-a passing mention, so read the Node before relying on it. Type, tags and
-`description` help judge relevance first; see [Node types and tags](node-types.md).
-
-## Read
-
-- Reads return content in `text`, one bounded page at a time. Continue with
-  `--cursor <page.nextCursor> --expected-etag <etag>`; a partial page is not
-  the whole document. `--full` reads all of it.
-- `tent node read-many <node-id> <node-id> ... --json` reads several Nodes.
-- `--view raw` includes the frontmatter.
-- Live Node reads add a `context` summary of ancestors, children grouped by
-  type, incoming and outgoing associations, and Cards pinning the Node with
-  state, receiver and progress. Outputs also show their goal chain and sync
-  state; goals retain scoped prompts and subtree outputs. Bare known Node
-  ids in body text outside Markdown links appear as `mention` associations. It is
-  separate from `text`, limited to 1 KiB, and appears on the first page or
-  with `--full`. Follow the listed ids for full content; omitted counts can
-  be explored with `node relations --direction parent|children|incoming|outgoing`. Historical
-  reads retain their pinned content without this live summary.
-
-## Versions
-
-Whole-document reads return `version: {commit, path}`. With it,
-`node get --version-json '<version>'` rereads those bytes,
-`node diff --from-json <old> --to-json <new>` compares two versions,
-`node history <node-id>` lists versions across moves, and
-`workspace changes --from <commit> --to <commit>` lists what changed. A Card's
-sources are pinned versions; keep them apart from live results.
-
-## Material
-
-`resource` and `sources` point at files, pages or images. Read them with your
-usual tools when the task needs them; Tent stores the address, not the content.
-A pointer does not mean the material was read or is still current.
+`version` names the bytes you read: `tent node get <id> --version-json '<version>'` rereads them; `tent node history <id>` lists earlier ones.

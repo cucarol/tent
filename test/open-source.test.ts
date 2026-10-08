@@ -53,7 +53,7 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
     "utf8",
   );
   const recipients = await fs.readFile(
-    path.join(repoRoot, "skill-resources", "references", "recipients.md"),
+    path.join(repoRoot, "skill-resources", "references", "roles.md"),
     "utf8",
   );
   const inputSkill = await fs.readFile(
@@ -205,7 +205,7 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
     assert.equal(await exists(path.join(repoRoot, "skills", name, "agents", "openai.yaml")), true);
   }
   assert.ok(nodeMaintenance.trim(), "Node maintenance resource must be included");
-  assert.ok(recipients.trim(), "Card recipient resource must be included");
+  assert.ok(recipients.trim(), "Role command resource must be included");
   const canonicalPublicContracts = [spec, inputSkill, recipients].join("\n");
   for (const retired of [
     /agent:<agentId>/i,

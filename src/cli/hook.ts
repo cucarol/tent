@@ -60,7 +60,7 @@ export async function runHookCommand(
           JSON.stringify({
             hookSpecificOutput: {
               hookEventName: "SessionStart",
-              additionalContext: `Tent is available in this Workspace.\nWorkspace: ${workspaceRoot}\nCLI: ${command}\nCurrent context: ${command} workspace brief --workspace ${JSON.stringify(workspaceRoot)} --json (at most 4 KiB).\nBuild: ${formatBuildIdentity(identity)}\n${mismatch ? `${mismatch}\n` : ""}`,
+              additionalContext: `Tent Workspace: ${workspaceRoot}\nTent CLI: ${command}\nCurrent context (at most 4 KiB): Tent CLI with workspace brief --json\nBuild: ${formatBuildIdentity(identity)}\n${mismatch ? `${mismatch}\n` : ""}`,
             },
           }) + "\n",
       };

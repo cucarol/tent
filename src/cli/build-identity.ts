@@ -67,7 +67,7 @@ export async function sourceBuildMismatch(
     ]);
     const commit = await git(workspaceRoot, ["rev-parse", "HEAD"]);
     if (!commit || commit === identity.commit) return;
-    return `Tent runtime build differs from Workspace source: runtime ${identity.commit.slice(0, 12)}, source ${commit.slice(0, 12)}. Rebuild or reinstall from the intended source; different commits do not establish which is older.`;
+    return `Tent runtime build differs from Workspace source: runtime ${identity.commit.slice(0, 12)}, source ${commit.slice(0, 12)}.`;
   } catch {
     return;
   }

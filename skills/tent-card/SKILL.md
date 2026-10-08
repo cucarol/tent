@@ -1,24 +1,25 @@
 ---
 name: tent-card
-description: "Send, receive, transfer or cancel a Tent Card; check its reception and outputs."
+description: "Sends, takes, moves, cancels and tracks Tent Cards. Use when work is handed to or from a Role, or a Card id comes up."
 ---
 
 # Tent Card
 
-| When | Run / do | Check |
+Run `tent` as [access](../../skill-resources/references/access.md) shows; more commands in [cards](../../skill-resources/references/cards.md).
+
+| When | Command | Read |
 | --- | --- | --- |
-| Send work | Save requirements in [Nodes](../tent-node/SKILL.md), one goal per result; `tent card create --prompt - --source <goal-id> --target <role-id>` | Use a short prompt; repeat `--source` as needed; omit target for public work |
-| Preview | `tent card show <card-id> --json` | Read `text`, `sources`, warnings; continue `page.next` |
-| Start | `tent card take <card-id> --role <role-id> --json` | `replayed: true`: continue existing work; read sources |
-| Source changed | `tent node get <node-id>` | Read the current Node named in brief |
-| Record result | `tent node link-output <goal-id> --resource <path> --card <card-id>` | File must be in the Workspace checkout; check returned `cardId` |
-| Check work | `tent card show <card-id> --json` | `consumed` means received; inspect `progress` and actual outputs |
-| Move / cancel | Use [Card commands](../../skill-resources/references/cards.md) | Read latest `etag` first |
+| Hand work to a Role | Save the requirements as goal Nodes, then `tent card create` as below | `cardId` |
+| Preview, or check handed-off work | `tent card show <card-id>` | `text`, `sources`; `state`, `progress`, `outputNodeIds` |
+| Start on it | `tent card take <card-id> --role <role-id>` | `replayed` (`true`: continue that work), `sources` |
+| `tent workspace brief` lists `changedCardSources` | `tent node get <node-id>` | current `text` |
+| The result file is in the Workspace checkout | `tent node link-output <goal-id> --resource <path> --card <card-id>` | `cardId` |
+| Idle as a Role, if the host wakes you after a background command | `tent card watch --role <role-id>` in the background | exit 0 prints Cards to take |
 
-File paths use the Workspace root. Change requirements in Nodes, never in the published Card. Keep undecided requirements in draft Nodes. No reply Card is needed for results.
+The receiver starts without this conversation; name the goal and let the sources carry the rest:
 
-## Wait
+```text
+printf 'Build the login goal.\n' | tent card create --prompt - --source node-abc123 --source docs/req.md --target role-xyz789
+```
 
-If the host can wake you after a background command, run `tent card watch --role <role-id>`. Take or move returned Cards, then wait again. For an authorized scheduled check use `--timeout 0`; ask before creating a lasting schedule. If the host stops the wait, report it without repeated restarts. Otherwise check pending Cards when a session starts.
-
-Maintainer background: [plugin guide](../../docs/PLUGIN.md).
+Change requirements in the Nodes; a published Card stays as sent.
