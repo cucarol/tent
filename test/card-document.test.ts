@@ -587,19 +587,30 @@ test("Received Card source inspection compares live content, follows Node identi
   const otherCanFinish = new Promise<void>((resolve) => {
     releaseOther = resolve;
   });
-  const fallback = setTimeout(releaseOther, 200);
+  let failOrder!: (error: Error) => void;
+  const orderTimeout = new Promise<never>((_, reject) => (failOrder = reject));
+  const deadline = setTimeout(() => {
+    failOrder(new Error("Received Card read did not complete within the test deadline"));
+    releaseOther();
+  }, 60_000);
   const reads = t.mock.method(adapter, "readBinary", async (file: string) => {
     if (file === otherRole.path) await otherCanFinish;
     const raw = await readBinary(file);
     if (file === received.path) {
+      // Outlast the old 200 ms fallback; successful order follows read completion.
+      await delay(250);
       completed.push(received.cardId);
       releaseOther();
     } else if (file === otherRole.path) completed.push(otherRole.cardId);
     return raw;
   });
-  const ordered = await inspectReceivedCardSourceChanges(adapter);
-  clearTimeout(fallback);
-  reads.mock.restore();
+  const inspection = inspectReceivedCardSourceChanges(adapter);
+  const ordered = await Promise.race([inspection, orderTimeout]).finally(async () => {
+    clearTimeout(deadline);
+    releaseOther();
+    await inspection.catch(() => undefined);
+    reads.mock.restore();
+  });
   assert.deepEqual(completed, [received.cardId, otherRole.cardId]);
   assert.deepEqual(
     ordered.items.map((item) => item.cardId),
@@ -751,7 +762,7 @@ test("untargeted Card receives without a Role and preserves that choice on retry
   });
   await assert.rejects(
     () => takeCardDocument(adapter, targeted.cardId, undefined),
-    /supply --role role-a/,
+    /is addressed to role-a; you took it as no Role/,
   );
   await takeCardDocument(adapter, targeted.cardId, "role-a");
   await assert.rejects(

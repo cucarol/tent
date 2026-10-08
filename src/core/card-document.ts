@@ -627,10 +627,13 @@ export function takeCardDocument(
       if (current.data.target && roleId === undefined)
         throw new CardDocumentError(
           "RECEPTION_CONFLICT",
-          `Card is addressed to ${current.data.target}; supply --role ${current.data.target}`,
+          `Card ${id} is addressed to ${current.data.target}; you took it as no Role.`,
         );
       if (current.data.target && current.data.target !== roleId)
-        throw new CardDocumentError("RECEPTION_CONFLICT", "Card is addressed to another Role");
+        throw new CardDocumentError(
+          "RECEPTION_CONFLICT",
+          `Card ${id} is addressed to ${current.data.target}; you took it as ${roleId}.`,
+        );
       if (current.data.state !== "pending" && current.data.receivedBy !== roleId)
         throw new CardDocumentError(
           "RECEPTION_CONFLICT",
@@ -813,6 +816,14 @@ export async function listCardDocuments(
     for (const item of visible)
       if (!item.diagnostic) Object.assign(item, progress.get(String(item.cardId)));
   }
+  visible.sort((a, b) => {
+    const aTime = String(a.publishedAt ?? ""),
+      bTime = String(b.publishedAt ?? "");
+    if (aTime !== bTime) return aTime > bTime ? -1 : 1;
+    const aId = String(a.cardId),
+      bId = String(b.cardId);
+    return aId < bId ? -1 : aId > bId ? 1 : 0;
+  });
   return { revision: canonicalSha256(visible), items: visible };
 }
 

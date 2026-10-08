@@ -17,7 +17,7 @@ import {
   type CardDocumentState,
 } from "../core/card-document.js";
 import { pageItems, pageText, formatTextPage } from "./reader-page.js";
-import { cliErrorText } from "./error-text.js";
+import { cliErrorText, type ErrorContext } from "./error-text.js";
 
 export type CardCommandOptions = {
   workspace?: string;
@@ -32,6 +32,7 @@ export async function runCardCommand(
   args: string[],
   globals: CardCommandOptions = {},
 ): Promise<CardCommandResult> {
+  const errorContext: ErrorContext = { workspace: globals.workspace };
   if (!sub || ["help", "--help", "-h"].includes(sub) || args.includes("--help"))
     return { exitCode: 0, stdout: cardHelpText(sub), stderr: "" };
   try {
@@ -71,6 +72,9 @@ export async function runCardCommand(
     });
     const value = (key: string) => (values as Record<string, unknown>)[key] as string | undefined;
     const number = (key: string) => (value(key) === undefined ? undefined : Number(value(key)));
+    errorContext.workspace = value("workspace") ?? globals.workspace;
+    if (positionals.length === 1 && !["create", "list", "watch"].includes(sub))
+      errorContext.target = { kind: "card", id: positionals[0]! };
     if (positionals.length !== (["create", "list", "watch"].includes(sub) ? 0 : 1))
       throw new Error("Expected one Card id except for create/list/watch");
     if (sub === "watch" && !value("role")) throw new Error("Watch requires --role role-ID");
@@ -212,12 +216,16 @@ export async function runCardCommand(
       stdout:
         (json
           ? JSON.stringify(mutation ? { ...(result as object), workspaceRoot } : result)
-          : formatCard(result, sub, sourceLines) +
+          : formatCard(result, sub, sourceLines, value("target")) +
             (mutation ? `\nWorkspace: ${workspaceRoot}` : "")) + "\n",
       stderr: warnings.length ? `${warnings.join("\n")}\n` : "",
     };
   } catch (error) {
-    return { exitCode: 1, stdout: "", stderr: cliErrorText(error, `tent card ${sub}`) + "\n" };
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: cliErrorText(error, `tent card ${sub}`, errorContext) + "\n",
+    };
   }
 }
 
@@ -232,6 +240,7 @@ export function cardHelpText(_sub?: string) {
   tent card take card-ID [--role role-ID]
   tent card watch --role role-ID [--timeout SECONDS]
 All commands accept --workspace PATH and --json. CLI output is paged; Core returns complete data.
+list prints newest first; --start N continues the same page set under --expected-revision.
 Sources keep their order. Selected Node/Role sources retain commit/path; external sources are addresses only.
 --source file paths use the Workspace root: docs/req.md, ./docs/req.md and /docs/req.md name the same file.
 Use --source node-ID for a Node, or --source .tent/Area/Topic/Topic.md for its Workspace path. JSON resource uses the same rules.
@@ -303,19 +312,40 @@ async function cardSourceLines(
   return ["Sources:", ...lines].join("\n");
 }
 
-function formatCard(value: unknown, sub: string, sourceLines?: string) {
+function formatCard(value: unknown, sub: string, sourceLines?: string, target?: string) {
+  const identity = value as {
+    cardId: string;
+    title?: string;
+    target?: string;
+    state?: string;
+    status?: string;
+    etag?: string;
+    path?: string;
+  };
+  if (sub === "create")
+    return `cardId: ${identity.cardId}\ntarget: ${target ?? "public"}\nstate: ${identity.state}`;
+  const header = [
+    [identity.cardId, identity.title ?? identity.path].filter(Boolean).join("  "),
+    "target" in identity ? `Target: ${identity.target ?? target ?? "public"}` : undefined,
+    identity.etag ? `ETag: ${identity.etag}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
   if (["show", "get", "take"].includes(sub)) {
     const result = value as {
       state?: string;
       progress?: string | null;
       goalCount?: number;
       totalGoalCount?: number;
-      diagnostic?: string;
+      diagnostic?: string | { code: string; message: string };
       notice?: string;
+      replayed?: boolean;
       currentReferences?: Array<{ kind: string; id: string; path: string }>;
       currentReferencesDiagnostic?: string;
     };
     return [
+      header,
+      result.replayed !== undefined ? `Replayed: ${result.replayed}` : undefined,
       [
         result.state,
         result.progress,
@@ -326,7 +356,9 @@ function formatCard(value: unknown, sub: string, sourceLines?: string) {
         .filter(Boolean)
         .join("  "),
       result.notice,
-      result.diagnostic,
+      typeof result.diagnostic === "object"
+        ? `${result.diagnostic.code}: ${result.diagnostic.message}`
+        : result.diagnostic,
       result.currentReferences?.map((ref) => `${ref.kind} ${ref.id}  ${ref.path}`).join("\n"),
       result.currentReferencesDiagnostic,
       sourceLines,
@@ -369,5 +401,5 @@ function formatCard(value: unknown, sub: string, sourceLines?: string) {
         .join("\n") + (result.page.hasMore ? `\nNext: ${JSON.stringify(result.page.next)}` : "")
     );
   }
-  return JSON.stringify(value, null, 2);
+  return `${header}\nState: ${identity.state ?? sub}${identity.status ? `\nStatus: ${identity.status}` : ""}`;
 }

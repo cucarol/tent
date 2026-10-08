@@ -67,7 +67,7 @@ import { canonicalSha256 } from "../core/canonical-digest.js";
 import { nodeReadRevisionEtag } from "../core/node-read-basis.js";
 import { inspectNodeSync, confirmNodeSync, linkNodeOutput } from "../core/node-sync.js";
 import { goalContextText } from "./goal-context.js";
-import { cliErrorText } from "./error-text.js";
+import { cliErrorText, type ErrorContext } from "./error-text.js";
 
 export type NodeCommandOptions = {
   workspace?: string;
@@ -99,12 +99,44 @@ export async function runNodeCommand(
   args: string[],
   globals: NodeCommandOptions = {},
 ): Promise<NodeCommandResult> {
+  const errorContext: ErrorContext = { workspace: globals.workspace };
   try {
     const { positionals, flags, tagFilters } = parseFlags(args);
+    errorContext.workspace = flags.workspace ?? globals.workspace;
+    errorContext.heading = flags.heading;
+    errorContext.baseEtag = flags["base-etag"];
+    errorContext.json = globals.json === true || flags.json === "true";
+    if (sub === "link-output") errorContext.outputResource = flags.resource;
+    const target = sub === "tags" ? positionals[1] : positionals[0];
+    if (
+      target &&
+      [
+        "get",
+        "check",
+        "link-output",
+        "confirm",
+        "history",
+        "relations",
+        "append",
+        "get-section",
+        "write-section",
+        "write",
+        "rename",
+        "move",
+        "archive",
+        "restore",
+        "delete",
+        "type",
+        "tags",
+      ].includes(sub)
+    )
+      errorContext.target = { kind: "node", id: target };
     if (flags.help === "true" || ["help", "--help", "-h"].includes(sub)) {
       return { exitCode: 0, stdout: nodeHelpText(sub) + "\n", stderr: "" };
     }
     if (!Object.prototype.hasOwnProperty.call(NODE_COMMAND_HELP, sub)) return usage(nodeHelpText());
+    if (flags.id !== undefined && sub !== "create")
+      return usage("--id is only valid for node create");
     if (flags.heading !== undefined && !["append", "get-section", "write-section"].includes(sub))
       return usage("--heading is only valid for node append, get-section or write-section");
     if (
@@ -160,6 +192,7 @@ export async function runNodeCommand(
       cwd: globals.cwd,
       workspace: flags.workspace ?? globals.workspace,
     });
+    errorContext.workspaceRoot = workspaceRoot;
     const fs = new NodeFs(systemRoot, "cli", sub === "get" ? "inspect" : "record");
     const { workspaceId } = await readWorkspaceSettings(fs);
     if (!workspaceId)
@@ -411,8 +444,7 @@ export async function runNodeCommand(
               },
             }),
             json,
-            (value) =>
-              formatWithContext(value, (node) => `${formatNode(node)}\nETag: ${edit.etag}`),
+            formatReader,
           );
         }
         const { nodeId, ...options } = readerReadSchema.parse({
@@ -543,7 +575,7 @@ export async function runNodeCommand(
           limit: numberFlag(flags, "limit"),
           cursor: flags.cursor,
         });
-        return print(result, json, formatReader);
+        return print(result, json, (value) => formatRelations(value, input.direction));
       }
       case "create": {
         const materials = materialFields({
@@ -583,6 +615,7 @@ export async function runNodeCommand(
           workspaceRoot,
         );
         const created = await createNode(env, {
+          id: flags.id,
           name,
           type,
           parentPath,
@@ -682,6 +715,7 @@ export async function runNodeCommand(
               };
         if (writeInput?.by !== undefined) validateActor(writeInput.by, "by");
         const input = nodeWriteInputSchema.parse(writeInput);
+        errorContext.baseEtag = input.baseEtag;
         const ref = nodeRef(target);
         const previous =
           input.frontmatter === undefined ? undefined : await readNodeForEdit(fs, ref);
@@ -866,7 +900,6 @@ export async function runNodeCommand(
     }
   } catch (error) {
     const inputJson = args.some((arg) => arg === "--input-json" || arg.startsWith("--input-json="));
-    const message = cliErrorText(error, `tent node ${sub}${inputJson ? " --input-json" : ""}`);
     const details =
       error instanceof NodeWriteError ||
       error instanceof NodeSectionError ||
@@ -877,7 +910,11 @@ export async function runNodeCommand(
     return {
       exitCode: 1,
       stdout: "",
-      stderr: message + (details ? `\n${JSON.stringify(details)}` : "") + "\n",
+      stderr:
+        cliErrorText(error, `tent node ${sub}${inputJson ? " --input-json" : ""}`, {
+          ...errorContext,
+          details,
+        }) + "\n",
     };
   }
 }
@@ -906,7 +943,7 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
     "tent node relations <nodeId|root> --direction parent|children|outgoing|incoming [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
   ],
   create: [
-    "tent node create <name> --type goal|prompt|output [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--by <actor>] [--json]",
+    "tent node create <name> --type goal|prompt|output [--id node-ID] [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--by <actor>] [--json]",
   ],
   write: [
     "tent node write <nodeId> [--body <text>|-] [--confirm] --base-etag <etag> [--by <actor>] [--read-back] [--json]",
@@ -935,7 +972,7 @@ export function nodeHelpText(sub?: string): string {
   const commands = NODE_COMMAND_HELP;
   const notes: Record<string, string> = {
     list: "Default reads scan headers and return bounded metadata without full-document ETags. Without filters the list shows direct children; --type and repeated --tag (all must match) select matching Nodes from the whole subtree under --parent, or the Workspace. --full explicitly reads the complete tree.",
-    get: 'All body/raw reads return text, including --full; view chooses the content, never the field name. Live goal first/full reads append a separate context summary up to 1 KiB; follow its ids for full content. Before replacing body/raw content, read --full or --view raw --full. Incomplete reads expose read:<etag> for continuation and metadata-only edits, never content replacement. Range JSON uses {"unit":"utf16","start":0,"end":10}. Continue a cursor with the same source, expected ETag and query. --version-json reads the captured Git document even after live edits/deletion.',
+    get: 'All body/raw reads return text, including --full; view chooses the content, never the field name. Live goal first/full reads append a separate context summary up to 1 KiB; follow its ids for full content. A page that holds the complete body returns the full ETag; read:<etag> appears only when the body was truncated and allows continuation and metadata edits only. Read with --full before replacing or confirming content. Range JSON uses {"unit":"utf16","start":0,"end":10}. Continue a cursor with the same source, expected ETag and query. --version-json reads the captured Git document even after live edits/deletion.',
     "read-many":
       "All items share 16 KiB. Resume the input list using page.nextIndex as --start with the same Node IDs. A partial item has its own cursor: continue with node get --version-json <item.version> --cursor <item.page.nextCursor> and the same view. Each new batch observes current live documents.",
     check:
@@ -946,7 +983,7 @@ export function nodeHelpText(sub?: string): string {
       "Create an output child of the selected goal; --tags adds tags, none are added automatically. Local file paths, including / addresses, resolve from the Workspace root and are saved relative to the output document. Node IDs and absolute URIs are supported. Local files must exist and be readable. The default name is the file name. Remote addresses are never fetched. The returned nodeId identifies the new output. --card explicitly selects its response Card. Automatic selection requires --role matching the receiver of exactly one incomplete Card for this goal; otherwise choose --card. The receipt names the selected Card.",
     search:
       "resource is a file path from the Workspace root (for example .tent/Node/Node.md or src/file.ts) or an absolute URI. Exact resource matching preserves query/fragment identity and does not infer bare source text.",
-    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output depends on every goal ancestor. The type is goal, prompt or output; tags name form and topic, preferably from tent node tags or the presets ${NODE_TAG_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; local paths resolve from the Workspace root, including / addresses, and are saved relative to the new Node document. Card response sources /cards/<card-id>.md keep their .tent root. Bare sources are descriptive unless they match an existing Workspace file; use ./ for a file that does not exist yet. Node IDs and absolute URIs are supported. Inspect an uncertain result before retrying.`,
+    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output depends on every goal ancestor. The type is goal, prompt or output; tags name form and topic, preferably from tent node tags or the presets ${NODE_TAG_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; local paths resolve from the Workspace root, including / addresses, and are saved relative to the new Node document. Card response sources /cards/<card-id>.md keep their .tent root. Bare sources are descriptive unless they match an existing Workspace file; use ./ for a file that does not exist yet. Node IDs and absolute URIs are supported. --id <node-id> sets the new Node's id, so a retry after an unclear result cannot create a duplicate. An existing id or sibling name fails and names the existing Node. Names follow Windows file-name rules on every platform.`,
     write:
       'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"src/file.ts","sources":[{"resource":".tent/Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields and unchanged material declarations are preserved. New local material declarations in frontmatter use Workspace-root paths, as in create. A full-body output rewrite that changes its body after normalizing line endings refreshes its materials and every goal dependency. Goal/prompt saves, metadata edits, no-ops, append and write-section retain existing baselines. --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
     append:
@@ -1044,6 +1081,7 @@ function parseFlags(args: string[]): {
       ...Object.fromEntries(
         [
           "workspace",
+          "id",
           "parent",
           "limit",
           "cursor",
@@ -1106,6 +1144,33 @@ function formatReader(value: unknown): string {
   return formatWithContext(value, formatReaderContent);
 }
 
+function formatRelations(value: unknown, direction: string): string {
+  const result = value as {
+    items: Array<Record<string, unknown>>;
+    page?: { hasMore: boolean; nextCursor?: string };
+  };
+  const label = (value: unknown): string => {
+    if (!value || typeof value !== "object") return typeof value === "string" ? value : "";
+    const ref = value as Record<string, unknown>;
+    const identity = ref.nodeId ?? ref.id;
+    const name =
+      (ref.kind === "role" || ref.kind === "card") && typeof identity === "string"
+        ? `${ref.kind}s/${identity}.md`
+        : (ref.name ?? ref.path ?? ref.workspacePath ?? ref.uri ?? ref.resource);
+    return [identity, name].filter((part) => typeof part === "string").join("  ");
+  };
+  return (
+    [
+      ...result.items.map((item) => {
+        if (direction === "parent" || direction === "children")
+          return `${direction}  ${label(item)}`;
+        return `${String(item.kind ?? "link")}  ${label(direction === "incoming" ? item.from : item.target) || String(item.resource ?? item.raw ?? "")}`;
+      }),
+      ...(result.page?.hasMore ? [`Next: ${result.page.nextCursor}`] : []),
+    ].join("\n") || "(empty)"
+  );
+}
+
 function formatWithContext(value: unknown, format: (value: unknown) => string): string {
   const context = (value as { context?: string }).context;
   return format(value) + (context ? `\n\n${context}` : "");
@@ -1130,18 +1195,42 @@ function formatReaderContent(value: unknown): string {
       commit?: string;
       operation?: string;
       time?: string;
+      objectIds?: string[];
+      changes?: Array<{ before?: { path: string }; after?: { path: string } }>;
     }>;
     page?: { hasMore: boolean; nextCursor?: string; nextIndex?: number };
   };
   if (result.node) {
     const etag = result.node.etag ? `\nETag: ${result.node.etag}` : "";
     return result.node.text !== undefined
-      ? `${result.node.nodeId}  ${result.node.view}${etag}\n${formatTextPage(result.node)}`
+      ? `${[result.node.nodeId, result.node.name, result.node.view].filter(Boolean).join("  ")}${etag}\n${formatTextPage(result.node)}`
       : `${result.node.nodeId}  ${result.node.name ?? ""}${etag}\n${result.node.description ?? ""}`;
   }
   if (result.items)
     return (
-      `${result.items.map((item) => (item.text !== undefined ? `${item.nodeId}\n${formatTextPage(item)}` : [item.commit, item.time, item.operation, item.nodeId, item.name ?? item.title, item.description].filter(Boolean).join("  "))).join("\n")}${result.page?.hasMore ? `\nNext: ${result.page.nextCursor ?? result.page.nextIndex}` : ""}` ||
+      `${result.items
+        .map((item) =>
+          item.text !== undefined
+            ? `${[item.nodeId, item.name].filter(Boolean).join("  ")}\n${formatTextPage(item)}`
+            : [
+                item.commit,
+                item.time,
+                item.operation,
+                item.nodeId,
+                item.name ?? item.title,
+                item.description,
+                item.objectIds?.join(", "),
+                item.changes
+                  ?.map((change) => change.after?.path ?? change.before?.path)
+                  .filter(Boolean)
+                  .join(", "),
+              ]
+                .filter(Boolean)
+                .join("  "),
+        )
+        .join(
+          "\n",
+        )}${result.page?.hasMore ? `\nNext: ${result.page.nextCursor ?? result.page.nextIndex}` : ""}` ||
       "(empty)"
     );
   return JSON.stringify(value, null, 2);
@@ -1160,19 +1249,25 @@ function print(
 }
 
 function usage(text: string): NodeCommandResult {
-  return { exitCode: 1, stdout: "", stderr: text.trimEnd() + "\n" };
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: cliErrorText(new Error(text.trimEnd()), "tent node") + "\n",
+  };
 }
 
 function formatNode(value: unknown): string {
   const node = (value as { node?: NodeProjection }).node;
   if (!node) return JSON.stringify(value);
-  return `${node.nodeId}  ${node.type}  ${node.path}`;
+  return [node.nodeId, node.type, node.path].filter(Boolean).join("  ");
 }
 
 function formatTree(nodes: NodeProjection[]): string {
   const lines: string[] = [];
   const visit = (node: NodeProjection, depth: number) => {
-    lines.push(`${"  ".repeat(depth)}${node.nodeId}  ${node.type}  ${node.name}`);
+    lines.push(
+      `${"  ".repeat(depth)}${[node.nodeId, node.type, node.name].filter(Boolean).join("  ")}`,
+    );
     for (const child of node.children ?? []) visit(child, depth + 1);
   };
   for (const node of nodes) visit(node, 0);

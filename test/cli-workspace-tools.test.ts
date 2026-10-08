@@ -52,12 +52,27 @@ test("CLI validation errors name the command, argument and field instead of issu
     assert.equal(result.stdout, "");
     assert.doesNotMatch(result.stderr, /^\[|"code"|"path"/);
   }
-  assert.equal(search.stderr, "tent node search: Supply exactly one query or resource\n");
-  assert.match(batch.stderr, /^tent node write-many --input-json: items: Too small: .+\n$/);
   assert.equal(
-    create.stderr,
-    "tent node create: sources[0].resource: Resource must not be empty\n",
+    search.stderr.split("\n")[0],
+    "tent node search: Supply exactly one query or resource",
   );
+  assert.match(
+    batch.stderr.split("\n")[0]!,
+    /^tent node write-many --input-json: items: Too small: .+$/,
+  );
+  assert.equal(
+    create.stderr.split("\n")[0],
+    "tent node create: sources[0].resource: Resource must not be empty",
+  );
+  for (const [result, command] of [
+    [search, "search"],
+    [batch, "write-many"],
+    [create, "create"],
+  ] as const)
+    assert.match(
+      result.stderr.split("\n").slice(1).join("\n"),
+      new RegExp(`^Next: tent node ${command} --help --workspace .+\\n$`),
+    );
 });
 
 test("CLI manages Workspace objects directly and preserves CAS", async () => {

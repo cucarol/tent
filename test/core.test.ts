@@ -100,7 +100,7 @@ test("Node creation rejects occupied paths without changing identities, descenda
       name: "表达式任务书",
       type: "output",
     }),
-    /Node path already exists/,
+    /A sibling Node already uses the name "表达式任务书": node-p1/,
   );
   assert.equal(await fs.readFile(nodeNotePath("prompt/表达式任务书")), original);
   const after = await loadTent(fs);

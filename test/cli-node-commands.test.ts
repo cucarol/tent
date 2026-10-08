@@ -322,11 +322,11 @@ test("node list filters exact types and every tag across a subtree, with paging 
   ] as const) {
     const rejected = await runNodeCommand("list", [...args], { workspace: root });
     assert.equal(rejected.exitCode, 1);
-    assert.equal(rejected.stderr, message);
+    assert.equal(rejected.stderr, message + "Next: tent node --help\n");
   }
   const misplaced = await runNodeCommand("get", [evidence, "--tag", "ui"], { workspace: root });
   assert.equal(misplaced.exitCode, 1);
-  assert.equal(misplaced.stderr, "--tag is only valid for node list\n");
+  assert.equal(misplaced.stderr, "--tag is only valid for node list\nNext: tent node --help\n");
 });
 
 test("every tag node tags counts can select its Node in node list", async (t) => {
@@ -411,7 +411,11 @@ test("node tags lists tags in use with counts and preset marks; types accept exa
     workspace: root,
   });
   assert.equal(created.exitCode, 1);
-  assert.equal(created.stderr, "Node type must be goal, prompt or output.\n");
+  assert.equal(created.stderr.split("\n")[0], "Node type must be goal, prompt or output.");
+  assert.match(
+    created.stderr.split("\n").slice(1).join("\n"),
+    /^Next: tent node create --help --workspace .+  # words like decision or evidence go in --tags\n$/,
+  );
   const target = (await cli("create", ["Typed", "--type", "prompt"])).node;
   const changed = await runNodeCommand(
     "type",
@@ -419,7 +423,11 @@ test("node tags lists tags in use with counts and preset marks; types accept exa
     { workspace: root },
   );
   assert.equal(changed.exitCode, 1);
-  assert.equal(changed.stderr, "Node type must be goal, prompt or output.\n");
+  assert.equal(changed.stderr.split("\n")[0], "Node type must be goal, prompt or output.");
+  assert.match(
+    changed.stderr.split("\n").slice(1).join("\n"),
+    /^Next: tent node type --help --workspace .+  # words like decision or evidence go in --tags\n$/,
+  );
   const full = await cli("get", [target.nodeId, "--full"]);
   await cli("type", [target.nodeId, "goal", "--base-etag", full.node.etag]);
   assert.equal((await cli("get", [target.nodeId, "--full"])).node.type, "goal");

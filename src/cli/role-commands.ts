@@ -8,7 +8,7 @@ import {
   readRolePage,
 } from "../core/role-context.js";
 import { pageItems, pageText, formatTextPage } from "./reader-page.js";
-import { cliErrorText } from "./error-text.js";
+import { cliErrorText, type ErrorContext } from "./error-text.js";
 
 export type RoleCommandOptions = {
   workspace?: string;
@@ -23,6 +23,7 @@ export async function runRoleCommand(
   args: string[],
   globals: RoleCommandOptions = {},
 ): Promise<RoleCommandResult> {
+  const errorContext: ErrorContext = { workspace: globals.workspace };
   if (!sub || ["help", "--help", "-h"].includes(sub))
     return { exitCode: 0, stdout: roleHelpText(), stderr: "" };
   try {
@@ -50,6 +51,9 @@ export async function runRoleCommand(
     if (values.help) return { exitCode: 0, stdout: roleHelpText(), stderr: "" };
     const value = (key: string) => (values as Record<string, unknown>)[key] as string | undefined;
     const number = (key: string) => (value(key) === undefined ? undefined : Number(value(key)));
+    errorContext.workspace = value("workspace") ?? globals.workspace;
+    if (positionals.length === 1 && (sub === "show" || sub === "write"))
+      errorContext.target = { kind: "role", id: positionals[0]! };
     const text = async (key: string) => {
       const input = value(key);
       if (input !== "-") return input;
@@ -135,7 +139,11 @@ export async function runRoleCommand(
       stderr: "",
     };
   } catch (error) {
-    return { exitCode: 1, stdout: "", stderr: cliErrorText(error, `tent role ${sub}`) + "\n" };
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: cliErrorText(error, `tent role ${sub}`, errorContext) + "\n",
+    };
   }
 }
 
@@ -153,7 +161,9 @@ Reading never imports a Node or creates a Role. Legacy documents require explici
 }
 
 function formatRole(value: unknown, sub: string) {
-  if (sub === "show") return formatTextPage(value);
+  const identity = value as { roleId: string; path?: string; etag?: string };
+  if (sub === "show")
+    return `${identity.roleId}  ${identity.path ?? ""}\nETag: ${identity.etag}\n${formatTextPage(value)}`;
   if (sub === "list") {
     const result = value as {
       items: Array<{ roleId: string; title?: string }>;
@@ -164,5 +174,5 @@ function formatRole(value: unknown, sub: string) {
       (result.page.hasMore ? `\nNext: ${JSON.stringify(result.page.next)}` : "")
     );
   }
-  return JSON.stringify(value, null, 2);
+  return `Updated ${identity.roleId}\nETag: ${identity.etag}`;
 }

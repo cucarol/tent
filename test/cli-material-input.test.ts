@@ -282,7 +282,11 @@ test("actor validation explains all formats without exposing a validation JSON d
     { workspace: root },
   );
   assert.equal(result.exitCode, 1);
-  assert.equal(result.stderr, "--by must use human:<id>, process:<id>, or <producer>/<version>.\n");
+  assert.equal(
+    result.stderr.split("\n")[0],
+    "--by must use human:<id>, process:<id>, or <producer>/<version>.",
+  );
+  assert.match(result.stderr, /\nNext: tent node create --help[^\n]*\n$/);
   const goal = await get("node-goal");
   for (const [sub, input] of [
     ["write", { baseEtag: goal.etag, body: "Invalid", by: "agent:judge" }],
@@ -301,9 +305,10 @@ test("actor validation explains all formats without exposing a validation JSON d
       { workspace: root },
     );
     assert.equal(
-      rejected.stderr,
-      "by must use human:<id>, process:<id>, or <producer>/<version>.\n",
+      rejected.stderr.split("\n")[0],
+      "by must use human:<id>, process:<id>, or <producer>/<version>.",
     );
+    assert.match(rejected.stderr, new RegExp(`\\nNext: tent node ${sub} --help[^\\n]*\\n$`));
   }
   for (const sub of ["create", "write", "link-output", "confirm", "write-many"])
     assert.match(nodeHelpText(sub), /human:<id>, process:<id>, and <producer>\/<version>/);

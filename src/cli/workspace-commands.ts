@@ -14,7 +14,7 @@ import {
 } from "../core/context-brief.js";
 import { canonicalSha256 } from "../core/canonical-digest.js";
 import { pageItems } from "./reader-page.js";
-import { cliErrorText } from "./error-text.js";
+import { cliErrorText, type ErrorContext } from "./error-text.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
 
 export const workspaceHelpText = `tent workspace export --output <new-output-or-scratch-directory>
@@ -29,6 +29,7 @@ export async function runWorkspaceCommand(
   args: string[],
   globals: NodeCommandOptions = {},
 ): Promise<NodeCommandResult> {
+  const errorContext: ErrorContext = { workspace: globals.workspace };
   try {
     if (["help", "--help", "-h"].includes(sub))
       return { exitCode: 0, stdout: workspaceHelpText + "\n", stderr: "" };
@@ -49,6 +50,7 @@ export async function runWorkspaceCommand(
         json: { type: "boolean" },
       },
     });
+    errorContext.workspace = values.workspace ?? globals.workspace;
     if (values.help || positionals[0] === "help")
       return { exitCode: 0, stdout: workspaceHelpText + "\n", stderr: "" };
     if (positionals.length) throw new Error(workspaceHelpText);
@@ -121,7 +123,7 @@ export async function runWorkspaceCommand(
           : [
               ...result.items.map(
                 (item) =>
-                  `${item.kind}: ${"nodeId" in item ? (item.nodeId ?? "") : ""}${"address" in item ? ` ${item.address ?? ""}` : ""}`,
+                  `${item.kind === "node-ahead" ? "ahead" : "behind"}  ${item.nodeId}  ${item.path.slice(item.path.lastIndexOf("/") + 1)}  ${item.reasons.join("; ")}`,
               ),
               ...(result.page.hasMore ? [`Continue with --cursor ${result.page.nextCursor}`] : []),
               ...(inspected.synchronizationUncertain
@@ -200,7 +202,7 @@ export async function runWorkspaceCommand(
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `${cliErrorText(error, `tent workspace ${sub}`)}\n`,
+      stderr: `${cliErrorText(error, `tent workspace ${sub}`, errorContext)}\n`,
     };
   }
 }

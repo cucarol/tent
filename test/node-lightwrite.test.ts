@@ -22,7 +22,7 @@ import { runNodeCommand, nodeHelpText } from "../src/cli/node-commands.js";
 import { cli, extendTestLockWait, git } from "./helpers.js";
 
 const lockTimeoutMessage =
-  /^Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying\.\s*$/;
+  /^Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying\.\nNext: tent node get node-note --full\n$/;
 
 async function fixture(t: TestContext, body = "") {
   const scratch = path.resolve(".scratch");

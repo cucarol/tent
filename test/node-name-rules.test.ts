@@ -121,7 +121,7 @@ test("Node names follow Windows file-name rules on every platform", () => {
   assert.throws(() => validateNodeName(".."), /reserved or excluded/);
 });
 
-test("create, rename and write-many reject invalid names in one human sentence before writing", async (t) => {
+test("create, rename and write-many reject invalid names with one diagnostic and a Next command before writing", async (t) => {
   const { root, systemRoot } = await fixture(t);
   const globals = { workspace: root };
   const created = await runNodeCommand("create", ["Goal", "--type", "goal", "--json"], globals);
@@ -156,7 +156,8 @@ test("create, rename and write-many reject invalid names in one human sentence b
     for (const result of results) {
       assert.equal(result.exitCode, 1, name);
       assert.match(result.stderr, /^Node name /, name);
-      assert.equal(result.stderr.trim().split("\n").length, 1, name);
+      assert.equal(result.stderr.trim().split("\n").length, 2, name);
+      assert.match(result.stderr.trim().split("\n")[1]!, /^Next: tent node /);
       assert.doesNotMatch(result.stderr, RAW_FAILURE, name);
     }
   }
@@ -188,7 +189,8 @@ test("create, rename and write-many reject superscript COM and LPT device names 
     for (const result of results) {
       assert.equal(result.exitCode, 1, name);
       assert.match(result.stderr, /^Node name .* is a reserved Windows device name /, name);
-      assert.equal(result.stderr.trim().split("\n").length, 1, name);
+      assert.equal(result.stderr.trim().split("\n").length, 2, name);
+      assert.match(result.stderr.trim().split("\n")[1]!, /^Next: tent node /);
       assert.doesNotMatch(result.stderr, RAW_FAILURE, name);
     }
     assert.deepEqual(await snapshot(systemRoot), before, name);

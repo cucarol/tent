@@ -92,7 +92,12 @@ test("link-output, node create and card create resolve the same Workspace-root a
       globals,
     );
     assert.equal(missing.exitCode, 1);
-    assert.match(missing.stderr, new RegExp(`^Output file not found: ${literal(input)}\\. `));
+    assert.match(
+      missing.stderr,
+      new RegExp(
+        `^Output file not found: ${literal(input)} \\(local paths resolve from the Workspace root `,
+      ),
+    );
   }
 });
 
@@ -204,12 +209,16 @@ test("confirm names the missing ETag, node get shows it and role create prints o
   const paged = await runNodeCommand("get", ["node-goal"], text);
   assert.equal(paged.exitCode, 0, paged.stderr);
   assert.deepEqual(paged.stdout.split("\n").slice(0, 3), [
-    "node-goal  body",
+    "node-goal  Goal  body",
     `ETag: ${etag}`,
     "Deliver evidence.",
   ]);
   const full = await runNodeCommand("get", ["node-goal", "--full"], text);
-  assert.deepEqual(full.stdout.split("\n").slice(0, 2), ["node-goal  goal  Goal", `ETag: ${etag}`]);
+  assert.deepEqual(full.stdout.split("\n").slice(0, 3), [
+    "node-goal  Goal",
+    `ETag: ${etag}`,
+    "Deliver evidence.",
+  ]);
 
   const role = await runRoleCommand("create", ["--title", "Release"], text);
   assert.equal(role.exitCode, 0, role.stderr);

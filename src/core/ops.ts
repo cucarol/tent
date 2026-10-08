@@ -30,6 +30,7 @@ export { moveNode, type MoveNodeResult, type MovePosition } from "./move-ops.js"
 // Node 文档与结构编辑。
 
 export interface NewNodeInput extends MaterialFields {
+  id?: string;
   parentPath: string; // "" = 顶层
   name: string;
   /** Validated as goal, prompt or output. */
@@ -57,7 +58,7 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
     assertContentMutable(parent, "used as create parent");
   }
   const existing = new Set([...tent.byPath.values()].map((node) => node.id));
-  const id = makeUniqueNodeId(existing, env.rand);
+  const id = input.id ?? makeUniqueNodeId(existing, env.rand);
   if (!isNodeId(id)) throw new Error("Invalid Node id.");
   if (tent.duplicateIds.has(id)) throw new Error(`Duplicate Node id: ${id}.`);
   const path = join(input.parentPath, name);
@@ -75,7 +76,12 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
     env.clock.now(),
   );
   if (await env.fs.exists(path)) {
-    throw new Error(`Node path already exists: ${path}.`);
+    const current = tent.byPath.get(path);
+    throw new Error(
+      current
+        ? `A sibling Node already uses the name ${JSON.stringify(name)}: ${current.id}.`
+        : `Node path already exists: ${path}.`,
+    );
   }
   if (existing.has(id)) {
     throw new Error(`Node id already exists: ${id}.`);
