@@ -64,3 +64,13 @@ export const aheadKind = (reasons: readonly string[] = []) =>
   reasons.some((r) => r.startsWith("Implementation output is behind"))
     ? ("behind" as const)
     : ("empty" as const);
+
+/**
+ * Behind only because a baseline is missing or a material cannot be compared: nothing is known to have
+ * changed, and one review and confirmation settles it. Shown quieter than a known change.
+ */
+export function onlyGaps(reasons: readonly string[]) {
+  if (!reasons.length) return false;
+  const s = summarizeBehind(reasons);
+  return !s.changed.length && !s.deleted.length && !s.stale && !s.other.length;
+}

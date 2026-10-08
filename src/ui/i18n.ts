@@ -448,6 +448,15 @@ const zh = {
     doneEmpty: "这段时间没有新产出。",
     more: (n: number) => `还有 ${n} 个`,
     reviewCards: (n: number) => `${n} 张 Card 的产出要按新要求复核`,
+    laneCounts: (doing: number, waiting: number, review: number) =>
+      [`在做 ${doing}`, waiting > 0 && `待接收 ${waiting}`, review > 0 && `待复核 ${review}`]
+        .filter(Boolean)
+        .join(" · "),
+    moreDoing: (n: number) => `还有 ${n} 张在做`,
+    fewer: "收起",
+    gaps: (n: number) =>
+      `另有 ${n} 个 Node 只是缺基线或无法核对，没有已知的改动，复核后确认一次即可`,
+    gapsHide: "收起只缺基线的 Node",
     reviewOutputs: (n: number) => `${n} 个产出`,
     since: (when: string) => `上次来：${when}`,
     attention: "需要注意",
@@ -910,6 +919,19 @@ const en: Messages = {
     doneEmpty: "No new outputs in this time.",
     more: (n) => `${n} more`,
     reviewCards: (n) => `${count(n, "Card")} with output to review against a changed goal`,
+    laneCounts: (doing, waiting, review) =>
+      [
+        `${doing} in progress`,
+        waiting > 0 && `${waiting} to take`,
+        review > 0 && `${review} to review`,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    moreDoing: (n) => `${n} more in progress`,
+    fewer: "Show fewer",
+    gaps: (n) =>
+      `${count(n, "more Node", "more Nodes")} only ${n === 1 ? "lacks" : "lack"} a baseline or cannot be checked; nothing is known to have changed, so review and confirm once`,
+    gapsHide: "Hide Nodes that only lack a baseline",
     reviewOutputs: (n) => count(n, "output"),
     since: (when) => `Last visit: ${when}`,
     attention: "Needs attention",

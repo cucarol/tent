@@ -169,7 +169,7 @@ test("a goal edit is listed once on each changed goal, with the outputs it leave
   assert.match(rendered, /4 behind/);
 });
 
-test("baseline gaps under a changed goal stay listed", () => {
+test("baseline gaps under a changed goal stay out of its review count", () => {
   setLang("en", false);
   const goal = output("goal", undefined, {
     type: "goal",
@@ -189,7 +189,8 @@ test("baseline gaps under a changed goal stay listed", () => {
       },
     },
   );
-  assert.match(rendered, />o</);
+  // Not folded into the goal: the gap waits in the baseline row.
+  assert.match(rendered, /1 more Node only lacks a baseline/);
   assert.doesNotMatch(rendered, /outputs? to review/);
 });
 
@@ -267,4 +268,60 @@ test("a Card whose outputs wait for review stays in its lane", () => {
   assert.match(rendered, /1 Card with output to review/);
   assert.doesNotMatch(rendered, /Review me/);
   assert.doesNotMatch(rendered, /Idle/);
+});
+
+test("Nodes that only lack a baseline gather in one row; counts keep them", () => {
+  setLang("en", false);
+  const gap = { behind: { reasons: ["Node record unreadable; no retained baseline"] } };
+  const rendered = renderNow(
+    snapshot([output("changed"), output("gap-a"), output("gap-b"), output("stale")]),
+    {
+      changed: { behind: { reasons: ["Material changed: a.md"] } },
+      "gap-a": gap,
+      "gap-b": {
+        behind: {
+          reasons: [
+            "Remote material version is unknown; no network request was made: https://x.test",
+          ],
+        },
+      },
+      stale: { behind: { reasons: ["Content is stale on or after 2026-10-01"] } },
+    },
+  );
+  assert.match(rendered, /4 behind/);
+  assert.match(rendered, />changed</);
+  assert.match(rendered, />stale</);
+  assert.doesNotMatch(rendered, />gap-a</);
+  assert.doesNotMatch(rendered, />gap-b</);
+  assert.match(rendered, /2 more Nodes only lack a baseline/);
+});
+
+test("a lane lists three Cards in progress and folds the rest", () => {
+  setLang("en", false);
+  const s = snapshot([]);
+  s.cards = Array.from({ length: 5 }, (_, i) => ({
+    id: `card-${i}`,
+    title: `Work ${i}`,
+    state: "consumed" as const,
+    progress: "received-no-output" as const,
+    goalCount: 0,
+    totalGoalCount: 1,
+    outputNodeIds: [],
+    target: null,
+    receivedBy: null,
+    status: "stable",
+    body: "",
+    sources: [],
+    path: `cards/card-${i}.md`,
+    history: [],
+    publishedAt: null,
+    updatedAt: `2026-10-0${i + 1}T00:00:00Z`,
+  }));
+  const rendered = renderNow(s);
+  assert.match(rendered, /5 in progress/);
+  // Newest first: Work 4, 3, 2 shown; 1 and 0 folded.
+  assert.match(rendered, /Work 4/);
+  assert.match(rendered, /Work 2/);
+  assert.doesNotMatch(rendered, /Work 1/);
+  assert.match(rendered, /2 more in progress/);
 });

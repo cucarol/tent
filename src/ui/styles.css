@@ -121,11 +121,13 @@ kbd { display: inline-grid; place-items: center; min-width: 18px; height: 18px; 
 .tile.k-draft { background: var(--bg-subtle); color: var(--text-3); box-shadow: inset 0 0 0 1.5px var(--border-strong); }
 .p-goal { color: var(--goal); } .p-prompt { color: var(--prompt); } .p-output { color: var(--output); }
 /* Role avatars (components/Pet.tsx): a soft shape peeking into a tile, the face near the middle; --h is the Role's hue. */
-.pet { display: block; flex: none; clip-path: inset(0 round 26%); }
-.pet .p-bg { fill: hsl(var(--h) 55% 93%); } .pet .p-b { fill: hsl(var(--h) 62% 76%); } .pet .p-eye { fill: hsl(var(--h) 32% 17%); } .pet .p-line { fill: none; stroke: hsl(var(--h) 32% 17%); stroke-linecap: round; stroke-linejoin: round; }
-.pet .p-blush { fill: hsl(350 85% 78%); } .pet .p-shine { fill: #fff; }
-:root[data-theme="dark"] .pet .p-bg { fill: hsl(var(--h) 20% 22%); } :root[data-theme="dark"] .pet .p-b { fill: hsl(var(--h) 50% 72%); } :root[data-theme="dark"] .pet .p-eye { fill: hsl(var(--h) 30% 11%); }
-:root[data-theme="dark"] .pet .p-line { stroke: hsl(var(--h) 30% 11%); } :root[data-theme="dark"] .pet .p-blush { fill: hsl(350 80% 74%); }
+.pet { display: block; flex: none; overflow: visible; }
+.pet .p-head { fill: hsl(var(--h) 60% 75%); } .pet .p-screen { fill: #1f2127; } .pet .p-glow { fill: hsl(var(--h) 95% 82%); }
+.pet .p-glow-line { fill: none; stroke: hsl(var(--h) 95% 82%); stroke-linecap: round; stroke-linejoin: round; }
+.pet .p-dark { fill: hsl(var(--h) 32% 40%); } .pet .p-wire { fill: none; stroke: hsl(var(--h) 32% 40%); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.pet .p-accent { fill: var(--accent); }
+:root[data-theme="dark"] .pet .p-head { fill: hsl(var(--h) 45% 66%); } :root[data-theme="dark"] .pet .p-screen { fill: #111216; }
+:root[data-theme="dark"] .pet .p-dark { fill: hsl(var(--h) 28% 46%); } :root[data-theme="dark"] .pet .p-wire { stroke: hsl(var(--h) 28% 46%); }
 .pet.faint { opacity: .45; }
 .face { display: grid; flex: none; border-radius: 27%; transition: box-shadow .12s; }
 .avatars { display: flex; gap: 4px; }
@@ -416,6 +418,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .mcard.is-ahead { border: 1.5px dashed var(--new); }
 .mcard.is-behind { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); background: var(--warn-soft); box-shadow: inset 3px 0 0 var(--warn), var(--shadow-xs); }
 .mcard.is-behind:hover { border-color: var(--warn); }
+.mcard.is-behind.is-gap { border-color: var(--border); background: var(--bg); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 45%, transparent), var(--shadow-xs); }
 .mcard.is-ahead.is-behind:not(.is-selected) { border-color: var(--new); }
 .mcard.is-behind.is-dim { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 40%, transparent); }
 .mcard.is-ahead.is-selected, .mcard.is-behind.is-selected { border-color: var(--accent); }
@@ -842,6 +845,7 @@ button.now-pet:hover { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--border
 .now-label.is-review { color: var(--warn); }
 .now-toggle { display: inline-flex; align-items: center; gap: 3px; color: var(--text-2); }
 .now-toggle:hover { color: var(--text); }
+.now-toggle.is-quiet { color: var(--text-3); }
 .now-line.is-nested { padding-left: 14px; }
 .now-link { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-2); }
 .now-link .icon, .now-link svg { flex: none; }
@@ -856,6 +860,9 @@ button.now-pet:hover { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--border
 .now-sw { width: 13px; height: 10px; border-radius: 3px; box-sizing: border-box; }
 .now-sw.is-behind { background: var(--warn-soft); border: 1px solid var(--warn); box-shadow: inset 3px 0 0 var(--warn); }
 .now-sw.is-ahead { background: var(--new-soft); border: 1.5px dashed var(--new); }
+.now-sw.is-behind.is-gap { background: transparent; border-color: color-mix(in srgb, var(--warn) 50%, transparent); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 50%, transparent); }
+.now-row.is-gaps { color: var(--text-2); font-size: 12.5px; }
+.now-row.is-gaps .now-row-name { white-space: normal; }
 
 @media (max-width: 1100px) {
   .pg-grid { grid-template-columns: minmax(0, 1fr); gap: 36px; padding: 28px 28px 80px; }

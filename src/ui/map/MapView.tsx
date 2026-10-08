@@ -1,4 +1,4 @@
-import { aheadKind } from "../data/reasons.js";
+import { aheadKind, onlyGaps } from "../data/reasons.js";
 import {
   createContext,
   memo,
@@ -126,7 +126,7 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
   const p = primaryOf(n.type);
   return (
     <div
-      className={`mcard t-${p}${data.top ? " is-top" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? " is-behind" : ""}`}
+      className={`mcard t-${p}${data.top ? " is-top" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? ` is-behind${onlyGaps(flag.behind.reasons) ? " is-gap" : ""}` : ""}`}
       style={{ width: CARD.w, height: data.h }}
     >
       <Handles />

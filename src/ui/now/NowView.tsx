@@ -1,4 +1,4 @@
-import { aheadKind } from "../data/reasons.js";
+import { aheadKind, onlyGaps } from "../data/reasons.js";
 import { useState } from "react";
 import { cardTitle, primaryOf, type Graph } from "../data/store.js";
 import { isDraft } from "../data/drafts.js";
@@ -10,6 +10,8 @@ import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
 
 const DONE_SHOWN = 8;
+/** Cards listed as in progress per lane before the rest fold away. */
+const DOING_SHOWN = 3;
 /** A behind reason caused by a goal's own material changing, e.g. "Goal node-ab12cd: Material changed: /A/A.md". */
 const GOAL_CHANGE = /^Goal ([^:\s]+): Material changed: /;
 
@@ -59,7 +61,14 @@ export function NowView({
 }) {
   const since = useSince(graph.snapshot.workspace.id);
   const [allDone, setAllDone] = useState(false);
-  const [openReviews, setOpenReviews] = useState<ReadonlySet<string>>(new Set());
+  // Folded lists the viewer opened: "review:<lane>", "doing:<lane>" and "gaps".
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (key: string) =>
+    setOpen((was) => {
+      const next = new Set(was);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
   const nodes = graph.snapshot.nodes.filter((n) => !n.archived);
   const cards = graph.snapshot.cards.filter(live);
   const outputs = nodes
@@ -90,7 +99,9 @@ export function NowView({
       return {
         ...lane,
         waiting: cards.filter((c) => mine(c) && c.state === "pending"),
-        doing: cards.filter((c) => mine(c) && c.progress === "received-no-output"),
+        doing: cards
+          .filter((c) => mine(c) && c.progress === "received-no-output")
+          .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")),
         // Old Cards whose goals changed later; listed one line per lane so they do not bury current work.
         review: cards.filter((c) => mine(c) && c.progress === "needs-review"),
         last: cards
@@ -121,10 +132,15 @@ export function NowView({
     for (const goal of goals) reviewing.set(goal, (reviewing.get(goal) ?? 0) + 1);
     return true;
   };
-  const listed = [
+  const rows = [
     ...behind.filter((f) => f.flag.ahead || !folded(f.n, f.flag.behind!.reasons)),
     ...ahead.filter((f) => !f.flag.behind),
   ];
+  // Missing baselines say nothing changed; they wait for one confirmation, so they gather in one row.
+  const gaps = rows.filter((f) => !f.flag.ahead && onlyGaps(f.flag.behind!.reasons));
+  const listed = rows.filter((f) => !gaps.includes(f));
+  const total = (key: "doing" | "waiting" | "review") =>
+    lanes.reduce((sum, lane) => sum + lane[key].length, 0);
 
   const cardLink = (c: SnapshotCard) => (
     <button type="button" className="now-link" onClick={() => onPage({ kind: "card", id: c.id })}>
@@ -140,6 +156,11 @@ export function NowView({
           <section className="now-block" aria-labelledby="now-lanes">
             <h2 id="now-lanes" className="now-h">
               {t.now.lanes}
+              {lanes.length > 0 && (
+                <span className="now-n">
+                  {t.now.laneCounts(total("doing"), total("waiting"), total("review"))}
+                </span>
+              )}
             </h2>
             {lanes.length === 0 && <p className="now-empty">{t.now.lanesEmpty}</p>}
             <ul className="now-list">
@@ -174,23 +195,45 @@ export function NowView({
                         {cardLink(c)}
                       </div>
                     ))}
-                    {lane.doing.map((c) => (
-                      <div key={c.id} className="now-line">
-                        <span className="now-label">{t.now.doing}</span>
-                        {cardLink(c)}
-                        {c.totalGoalCount > 0 && (
-                          <span
-                            className="now-prog"
-                            aria-label={t.now.progress(c.goalCount, c.totalGoalCount)}
-                          >
-                            <span className="now-track">
-                              <i style={{ width: `${(100 * c.goalCount) / c.totalGoalCount}%` }} />
+                    {lane.doing
+                      .slice(0, open.has(`doing:${lane.id}`) ? undefined : DOING_SHOWN)
+                      .map((c) => (
+                        <div key={c.id} className="now-line">
+                          <span className="now-label">{t.now.doing}</span>
+                          {cardLink(c)}
+                          {c.totalGoalCount > 0 && (
+                            <span
+                              className="now-prog"
+                              aria-label={t.now.progress(c.goalCount, c.totalGoalCount)}
+                            >
+                              <span className="now-track">
+                                <i
+                                  style={{ width: `${(100 * c.goalCount) / c.totalGoalCount}%` }}
+                                />
+                              </span>
+                              {c.goalCount}/{c.totalGoalCount}
                             </span>
-                            {c.goalCount}/{c.totalGoalCount}
-                          </span>
-                        )}
+                          )}
+                        </div>
+                      ))}
+                    {lane.doing.length > DOING_SHOWN && (
+                      <div className="now-line">
+                        <button
+                          type="button"
+                          className="now-toggle is-quiet"
+                          aria-expanded={open.has(`doing:${lane.id}`)}
+                          onClick={() => toggle(`doing:${lane.id}`)}
+                        >
+                          {open.has(`doing:${lane.id}`)
+                            ? t.now.fewer
+                            : t.now.moreDoing(lane.doing.length - DOING_SHOWN)}
+                          <Icon
+                            name={open.has(`doing:${lane.id}`) ? "down" : "chevron"}
+                            size={12}
+                          />
+                        </button>
                       </div>
-                    ))}
+                    )}
                     {lane.review.length > 0 && (
                       <div className="now-line">
                         <span className="now-label is-review">
@@ -199,21 +242,18 @@ export function NowView({
                         <button
                           type="button"
                           className="now-toggle"
-                          aria-expanded={openReviews.has(lane.id)}
-                          onClick={() =>
-                            setOpenReviews((open) => {
-                              const next = new Set(open);
-                              if (!next.delete(lane.id)) next.add(lane.id);
-                              return next;
-                            })
-                          }
+                          aria-expanded={open.has(`review:${lane.id}`)}
+                          onClick={() => toggle(`review:${lane.id}`)}
                         >
                           {t.now.reviewCards(lane.review.length)}
-                          <Icon name={openReviews.has(lane.id) ? "down" : "chevron"} size={12} />
+                          <Icon
+                            name={open.has(`review:${lane.id}`) ? "down" : "chevron"}
+                            size={12}
+                          />
                         </button>
                       </div>
                     )}
-                    {openReviews.has(lane.id) &&
+                    {open.has(`review:${lane.id}`) &&
                       lane.review.map((c) => (
                         <div key={c.id} className="now-line is-nested">
                           {cardLink(c)}
@@ -299,7 +339,7 @@ export function NowView({
               </p>
             ) : (
               <ul className="now-list">
-                {listed.map(({ n, flag }) => (
+                {[...listed, ...(open.has("gaps") ? gaps : [])].map(({ n, flag }) => (
                   <li key={n.id}>
                     <button
                       type="button"
@@ -307,7 +347,7 @@ export function NowView({
                       onClick={() => onOpen({ kind: "node", id: n.id })}
                     >
                       <span
-                        className={`now-sw${flag.behind ? " is-behind" : ""}${flag.ahead ? " is-ahead" : ""}`}
+                        className={`now-sw${flag.behind ? " is-behind" : ""}${flag.ahead ? " is-ahead" : ""}${gaps.some((g) => g.n === n) ? " is-gap" : ""}`}
                       />
                       <span className="now-row-name">
                         {n.name}
@@ -334,6 +374,22 @@ export function NowView({
                     </button>
                   </li>
                 ))}
+                {gaps.length > 0 && (
+                  <li>
+                    <button
+                      type="button"
+                      className="now-row is-gaps"
+                      aria-expanded={open.has("gaps")}
+                      onClick={() => toggle("gaps")}
+                    >
+                      <span className="now-sw is-behind is-gap" />
+                      <span className="now-row-name">
+                        {open.has("gaps") ? t.now.gapsHide : t.now.gaps(gaps.length)}
+                      </span>
+                      <Icon name={open.has("gaps") ? "down" : "chevron"} size={12} />
+                    </button>
+                  </li>
+                )}
               </ul>
             )}
           </section>
