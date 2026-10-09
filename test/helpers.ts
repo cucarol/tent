@@ -4,6 +4,8 @@ import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { TestContext } from "node:test";
+import type { FsAdapter } from "../src/core/adapter.js";
+import { NODE_MOVE_PENDING_PATH } from "../src/core/node-move-recovery.js";
 import type { NodeFs } from "../src/fs/node-fs.js";
 import { withFileMutationLock } from "../src/fs/mutation-lock.js";
 
@@ -23,8 +25,9 @@ export function extendTestLockWait(t: TestContext, adapter: NodeFs, systemRoot: 
   );
 }
 
-export async function makeTent(): Promise<string> {
+export async function makeTent(t: TestContext): Promise<string> {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const box = (relativePath: string, frontmatter: string, body = "") => {
     const folderName = relativePath.split("/").pop() || relativePath;
     return fs
@@ -49,6 +52,38 @@ export async function makeTent(): Promise<string> {
   await fs.mkdir(path.join(dir, "temp"), { recursive: true });
   await box("prompt/旧站资料", "id: node-a1\ntype: prompt");
   return dir;
+}
+
+/** Wrap FsAdapter and fail on the Nth writeFile call (1-based). */
+export function injectWriteFailure(
+  inner: FsAdapter,
+  failOnWriteNumber: number,
+): {
+  fs: FsAdapter;
+  writeCount: () => number;
+} {
+  let writes = 0;
+  const fsAdapter: FsAdapter = {
+    listDir: (dir) => inner.listDir(dir),
+    readFile: (p) => inner.readFile(p),
+    writeFile: async (p, content) => {
+      if (p === NODE_MOVE_PENDING_PATH) return inner.writeFile(p, content);
+      writes += 1;
+      if (writes === failOnWriteNumber) {
+        throw new Error(`injected write failure #${failOnWriteNumber} on ${p}`);
+      }
+      return inner.writeFile(p, content);
+    },
+    readBinary: (p) => inner.readBinary(p),
+    writeBinary: (p, data) => inner.writeBinary(p, data),
+    exists: (p) => inner.exists(p),
+    mkdir: (p) => inner.mkdir(p),
+    move: (from, to) => inner.move(from, to),
+    remove: (p) => inner.remove(p),
+    removeEmptyDir: (p) => inner.removeEmptyDir(p),
+    withLock: inner.withLock?.bind(inner),
+  };
+  return { fs: fsAdapter, writeCount: () => writes };
 }
 
 export function git(dir: string, ...args: string[]): Promise<string> {

@@ -21,7 +21,7 @@ test("confirmation submits the displayed document's etag without reading a newer
   t.mock.method(api, "node", async () => {
     throw new Error("A hidden reread must not replace the displayed basis");
   });
-  const confirm = t.mock.method(api, "confirmNode", async (id: string, baseEtag: string) => ({
+  const confirm = t.mock.method(api, "confirmNode", async (id: string, _baseEtag: string) => ({
     nodeId: id,
     path: displayed.path,
     etag: "confirmed-version",
@@ -90,7 +90,9 @@ test("history follows identity across moves even when another document used the 
   };
   assert.match(render([reused, historical]), /Changed/);
   assert.doesNotMatch(render([reused, historical]), /Created/);
-  assert.doesNotMatch(render([reused]), /version-row/);
+  const foreignHistory = render([reused]);
+  assert.doesNotMatch(foreignHistory, /Created/);
+  assert.doesNotMatch(foreignHistory, />older</);
   assert.match(render([{ ...reused, ref: null }]), /Created/);
   assert.match(render([{ ...reused, ref: { kind: "node", id: "node-target" } }]), /Created/);
 });

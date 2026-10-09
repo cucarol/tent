@@ -131,7 +131,7 @@ test("atomic batches record final peer and self sections, including missing-sect
     peer = saved.results[2]!.nodeId;
   const peerSection = await readNodeSection(fs, peer, "状态"),
     selfSection = await readNodeSection(fs, self, "状态");
-  for (const [id, text] of [
+  for (const [id] of [
     [consumer, peerSection.text],
     [self, selfSection.text],
   ]) {
@@ -167,7 +167,7 @@ test("atomic batches record final peer and self sections, including missing-sect
   ]) {
     const sync = await inspectNodeSync(fs, id!);
     assert.equal(sync.state, "synced");
-    const selected = await readNodeSection(fs, materialId!, "状态");
+    await readNodeSection(fs, materialId!, "状态");
     assert.equal(
       sync.materials[0]!.recordedVersion,
       await nodeSectionDigest(fs, materialId!, "状态"),

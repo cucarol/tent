@@ -7,8 +7,9 @@ import { contentEtag } from "../src/core/etag.js";
 import { loadTent, nodeNotePath, reloadLoadedNode } from "../src/core/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
-test("Node load and reload retain the exact raw document etag", async () => {
+test("Node load and reload retain the exact raw document etag", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "tent-node-etag-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const nodeFs = new NodeFs(root);
   const nodePath = "etag-node";
   const notePath = nodeNotePath(nodePath);

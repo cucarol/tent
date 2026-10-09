@@ -879,7 +879,7 @@ test("review regression: confirming Node materials and converting LF to CRLF doe
 });
 
 test("goal material ahead time survives an output-only material declaration", async (t) => {
-  const { fs, root, env, workspace, resource, create, edit } = await fixture(t);
+  const { root, env, workspace, resource, create, edit } = await fixture(t);
   const goal = await createNode(env, { parentPath: "", name: "Goal", type: "goal", resource });
   const output = await create("Evidence", "output", "Goal");
   await writeFile(path.join(workspace, "input.txt"), "new material");

@@ -7,11 +7,7 @@ import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { deleteNode } from "../src/core/ops.js";
 import { loadTent } from "../src/core/tree.js";
 import { nodeNotePath } from "../src/core/paths.js";
-import {
-  DELETE_PENDING_PATH,
-  recoverPendingDeleteUnlocked,
-  executeDeleteUnlocked,
-} from "../src/core/delete-recovery.js";
+import { DELETE_PENDING_PATH, executeDeleteUnlocked } from "../src/core/delete-recovery.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");

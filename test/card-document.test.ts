@@ -15,7 +15,7 @@ import {
   deprecateCardDocument,
   inspectReceivedCardSourceChanges,
 } from "../src/core/card-document.js";
-import { createRoleContext, editRoleContext } from "../src/core/role-context.js";
+import { createRoleContext } from "../src/core/role-context.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { renameNode } from "../src/core/rename-ops.js";
 import { contentEtag } from "../src/core/etag.js";
@@ -538,7 +538,7 @@ test("Received Card source inspection compares live content, follows Node identi
     ],
     target: "role-a",
   });
-  const receivedPage = await takeCardDocument(adapter, received.cardId, "role-a");
+  await takeCardDocument(adapter, received.cardId, "role-a");
   const pending = await createCardDocument(adapter, {
     cardId: "card-pendingsource",
     prompt: "Read node",
@@ -994,7 +994,7 @@ test("pending Cards move with CAS and retain destinations, then freeze at recept
   assert.deepEqual(after.data.sources, original.data.sources);
   assert.equal(after.body, original.body);
   assert.equal(after.data.title, original.data.title);
-  const taken = (await takeCardDocument(adapter, card.cardId, "role-a")) as Record<string, any>;
+  await takeCardDocument(adapter, card.cardId, "role-a");
   await assert.rejects(
     () => moveCardDocument(adapter, card.cardId, { target: "role-b", expectedEtag: open.etag }),
     (error: any) =>

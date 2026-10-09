@@ -64,12 +64,12 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
   const scratch = path.resolve(".scratch");
   await mkdir(scratch, { recursive: true });
   const root = await mkdtemp(path.join(scratch, "cli-workspace-tools-"));
-  const workspace = path.join(root, "workspace");
-  await scaffoldInWorkspace(new NodeFs(workspace), {
-    name: "CLI tools",
-    nodes: [{ id: "node-fact", name: "Fact", type: "prompt", body: "Original fact" }],
-  });
   try {
+    const workspace = path.join(root, "workspace");
+    await scaffoldInWorkspace(new NodeFs(workspace), {
+      name: "CLI tools",
+      nodes: [{ id: "node-fact", name: "Fact", type: "prompt", body: "Original fact" }],
+    });
     const globals = { workspace, json: true };
     const result = (value: { exitCode: number; stdout: string; stderr: string }) => {
       assert.equal(value.exitCode, 0, value.stderr);

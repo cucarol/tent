@@ -1,4 +1,4 @@
-import { readNodeForEdit, readNode } from "../src/core/node-query.js";
+import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
 import { readWorkspaceSettings } from "../src/core/workspace-settings.js";
 import { git } from "./helpers.js";
@@ -15,12 +15,12 @@ async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "everyday-workflow-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspace = path.join(root, "graph");
   await scaffoldInWorkspace(new NodeFs(workspace), {
     name: "context",
     nodes: [{ id: "node-rule", name: "Import", type: "prompt", body: "Confirmed rule" }],
   });
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const adapter = new NodeFs(path.join(workspace, ".tent"));
   await git(path.join(workspace, ".tent"), "init");
   const { workspaceId: savedId } = await readWorkspaceSettings(adapter),
@@ -36,7 +36,7 @@ function parsed(result: { exitCode: number; stdout: string; stderr: string }) {
 }
 
 test("one CLI write saves body and references with same-revision readback, preserving metadata and CAS", async (t) => {
-  const { adapter, workspaceId, globals, edit } = await fixture(t);
+  const { adapter, globals, edit } = await fixture(t);
   await writeNodeDocument(adapter, "node-rule", {
     baseEtag: (await edit()).etag,
     frontmatter: { custom: { preserve: true } },
@@ -122,7 +122,7 @@ test("one CLI write saves body and references with same-revision readback, prese
 });
 
 test("saved readback is bounded, continues with the common reader and rejects later bytes", async (t) => {
-  const { globals, edit, adapter, workspaceId } = await fixture(t);
+  const { globals, edit, adapter } = await fixture(t);
   const body = "中文😀\r\n".repeat(5000);
   const saved = parsed(
     await runNodeCommand("write", ["node-rule", "--input-json", "-"], {

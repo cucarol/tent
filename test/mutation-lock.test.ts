@@ -111,8 +111,9 @@ test("bounded acquisition waiting never executes a timed-out action or retries a
   assert.equal(calls, 1);
 });
 
-test("mutation lock rejects a concurrent holder and releases for the next", async () => {
+test("mutation lock rejects a concurrent holder and releases for the next", async (t) => {
   const dir = await tempRoot();
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const lockPath = path.join(dir, "mutation.lock");
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
@@ -147,8 +148,9 @@ test("mutation lock rejects a concurrent holder and releases for the next", asyn
   });
 });
 
-test("mutation lock release is ownership-safe", async () => {
+test("mutation lock release is ownership-safe", async (t) => {
   const dir = await tempRoot();
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const lockPath = path.join(dir, "mutation.lock");
   await fs.writeFile(
     lockPath,
@@ -160,8 +162,9 @@ test("mutation lock release is ownership-safe", async () => {
   await assert.rejects(fs.stat(lockPath), { code: "ENOENT" });
 });
 
-test("live process blocks age-only reclaim", async () => {
+test("live process blocks age-only reclaim", async (t) => {
   const dir = await tempRoot();
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const lockPath = path.join(dir, "mutation.lock");
   await fs.writeFile(
     lockPath,
@@ -178,8 +181,9 @@ test("live process blocks age-only reclaim", async () => {
   );
 });
 
-test("dead process permits stale reclaim", async () => {
+test("dead process permits stale reclaim", async (t) => {
   const dir = await tempRoot();
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const lockPath = path.join(dir, "mutation.lock");
   await fs.writeFile(
     lockPath,

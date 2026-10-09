@@ -47,10 +47,7 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   const readme = await fs.readFile(path.join(repoRoot, "README.md"), "utf8");
   const readmeZh = await fs.readFile(path.join(repoRoot, "README.zh-CN.md"), "utf8");
   const spec = await fs.readFile(path.join(repoRoot, "docs", "SPEC.md"), "utf8");
-  const initSkill = await fs.readFile(
-    path.join(repoRoot, "skills", "tent-init", "SKILL.md"),
-    "utf8",
-  );
+  await fs.readFile(path.join(repoRoot, "skills", "tent-init", "SKILL.md"), "utf8");
   const nodeMaintenance = await fs.readFile(
     path.join(repoRoot, "skill-resources", "references", "node-maintenance.md"),
     "utf8",

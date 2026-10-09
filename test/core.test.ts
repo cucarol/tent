@@ -10,8 +10,8 @@ import { NodeFs, SystemClock } from "../src/fs/node-fs.js";
 import { makeTent } from "./helpers.js";
 import { workspaceDocumentPaths } from "../src/core/workspace-revision.js";
 
-test("Node creation rejects unindexable names before writing and allows nested system basenames", async () => {
-  const root = await makeTent();
+test("Node creation rejects unindexable names before writing and allows nested system basenames", async (t) => {
+  const root = await makeTent(t);
   const fs = new NodeFs(root);
   const env = { fs, clock: new SystemClock(), tentName: "test", tentRoot: root };
   // Initialize persistent lock bookkeeping before comparing product files.
@@ -43,8 +43,8 @@ test("Node creation rejects unindexable names before writing and allows nested s
   assert.equal((await loadTent(fs)).byId.get(id)?.path, "prompt/index.md");
 });
 
-test("Node and revision scans never enter transient mutation lock guard directories", async () => {
-  const root = await makeTent();
+test("Node and revision scans never enter transient mutation lock guard directories", async (t) => {
+  const root = await makeTent(t);
   const fs = new NodeFs(root);
   const listDir = fs.listDir.bind(fs);
   const guardNames = [
@@ -68,8 +68,8 @@ test("Node and revision scans never enter transient mutation lock guard director
   assert.ok((await workspaceDocumentPaths(fs)).includes("prompt/表达式任务书/表达式任务书.md"));
 });
 
-test("Core loads and extends the typed Node document forest", async () => {
-  const root = await makeTent();
+test("Core loads and extends the typed Node document forest", async (t) => {
+  const root = await makeTent(t);
   const fs = new NodeFs(root);
   const env = { fs, clock: new SystemClock(), tentName: "test", tentRoot: root };
   const before = await loadTent(fs);
@@ -88,8 +88,8 @@ test("Core loads and extends the typed Node document forest", async () => {
   assert.equal((await loadTent(fs)).byId.get(id)?.body, " \n\t");
 });
 
-test("Node creation rejects occupied paths without changing identities, descendants or files", async () => {
-  const root = await makeTent();
+test("Node creation rejects occupied paths without changing identities, descendants or files", async (t) => {
+  const root = await makeTent(t);
   const fs = new NodeFs(root);
   const env = { fs, clock: new SystemClock(), tentName: "test", tentRoot: root };
   const original = await fs.readFile(nodeNotePath("prompt/表达式任务书"));
@@ -126,7 +126,7 @@ test("Node creation rejects occupied paths without changing identities, descenda
 });
 
 test("Node fallback order uses deterministic code-unit tie breakers", async (t) => {
-  const root = await makeTent();
+  const root = await makeTent(t);
   const fs = new NodeFs(root);
   await fs.writeFile(
     nodeNotePath("goal/e\u0301"),

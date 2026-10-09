@@ -21,8 +21,9 @@ async function saveTags(fs: NodeFs, nodeId: string, tags: string[]) {
   return writeNodeDocument(fs, nodeId, { baseEtag: edit.etag, frontmatter: { tags } });
 }
 
-test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS)", async () => {
+test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS)", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-scaffold-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const fsa = new NodeFs(dir);
   await scaffoldTent(fsa, {
     name: "demo",
@@ -39,6 +40,7 @@ test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS
   assert.equal(parseFrontmatter(await fsa.readFile("out/out.md")).body, "");
 
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "tent-scaffold-workspace-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspaceFs = new NodeFs(workspace);
   await scaffoldInWorkspace(workspaceFs, {
     name: "workspace",
@@ -47,6 +49,7 @@ test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS
   assert.equal(parseFrontmatter(await workspaceFs.readFile(".tent/root/root.md")).body, "");
 
   const emptyDir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-scaffold-empty-"));
+  t.after(() => fs.rm(emptyDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const emptyFs = new NodeFs(emptyDir);
   await scaffoldTent(emptyFs, { name: "empty" });
   assert.deepEqual((await loadTent(emptyFs)).roots, []);
@@ -69,6 +72,9 @@ test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS
   );
 
   const invalidDir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-scaffold-invalid-"));
+  t.after(() =>
+    fs.rm(invalidDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await assert.rejects(
     () => scaffoldTent(new NodeFs(invalidDir), { name: "" }),
     /Tent name cannot be empty\./,
@@ -222,10 +228,10 @@ workspace: "C:\\\\example\\\\_code\\\\Tent"
   assert.equal(parsed.data.workspace, String.raw`C:\\example\\_code\\Tent`);
 });
 
-test("tags are derived from Node documents and unchanged edits keep the bytes", async () => {
-  const dir = await makeTent();
+test("tags are derived from Node documents and unchanged edits keep the bytes", async (t) => {
+  const dir = await makeTent(t);
   const fsa = new NodeFs(dir);
-  await fsa.writeFile("tags.json", "{legacy-user-bytes}");
+  await fsa.writeFile("tags.json", "{not-json");
   await saveTags(fsa, "node-p1", ["backend-hardening"]);
   await saveTags(fsa, "node-o1", ["backend-hardening"]);
   const note = "output/alpha仓库指针/alpha仓库指针.md";
@@ -244,11 +250,11 @@ test("tags are derived from Node documents and unchanged edits keep the bytes", 
     findNodesByTag(tent, "backend-hardening").map((node) => node.id),
     ["node-o1"],
   );
-  assert.equal(await fsa.readFile("tags.json"), "{legacy-user-bytes}");
+  assert.equal(await fsa.readFile("tags.json"), "{not-json");
 });
 
-test("Node write tags change only the document", async () => {
-  const dir = await makeTent();
+test("Node write tags change only the document", async (t) => {
+  const dir = await makeTent(t);
   const fsa = new NodeFs(dir);
   await saveTags(fsa, "node-p1", ["from-write"]);
   assert.deepEqual(collectNodeTags(await loadTent(fsa)), ["from-write"]);
@@ -257,17 +263,8 @@ test("Node write tags change only the document", async () => {
   assert.equal(await fsa.exists("tags.json"), false);
 });
 
-test("legacy tags.json bytes are ignored and preserved", async () => {
-  const dir = await makeTent();
-  const fsa = new NodeFs(dir);
-  await fsa.writeFile("tags.json", "{not-json");
-  await saveTags(fsa, "node-p1", ["fresh"]);
-  assert.deepEqual(collectNodeTags(await loadTent(fsa)), ["fresh"]);
-  assert.equal(await fsa.readFile("tags.json"), "{not-json");
-});
-
-test("corrupt order registry is backed up and reset to default order", async () => {
-  const dir = await makeTent();
+test("corrupt order registry is backed up and reset to default order", async (t) => {
+  const dir = await makeTent(t);
   const fsa = new NodeFs(dir);
   await fs.writeFile(path.join(dir, "order.json"), "{not-json", "utf8");
 

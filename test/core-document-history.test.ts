@@ -108,7 +108,7 @@ for (const kind of ["Node", "Role"] as const) {
 }
 
 test("independent Core writers share CAS, selected reads and exact Git history", async (t) => {
-  const { workspaceId, adapter, mount } = await fixture(t);
+  const { adapter, mount } = await fixture(t);
   const peer = new NodeFs(mount.systemRoot);
   extendTestLockWait(t, adapter, mount.systemRoot);
   extendTestLockWait(t, peer, mount.systemRoot);
@@ -157,7 +157,7 @@ test("independent Core writers share CAS, selected reads and exact Git history",
 
 test("public lifecycle commands require an explicit archive commit for undo", async (t) => {
   const h = await fixture(t),
-    { workspaceId, adapter, workspace } = h;
+    { adapter, workspace } = h;
   const archived = await runNodeCommand("archive", ["node-alpha"], { workspace, json: true });
   assert.equal(archived.exitCode, 0, archived.stderr);
   const result = JSON.parse(archived.stdout);
@@ -322,7 +322,7 @@ test("explicit read capture and Core saves retain only selected documents; Git d
 
 test("batch writes share a commit, Role reads capture explicitly, and Git failures never report a successful save", async (t) => {
   const h = await fixture(t),
-    { adapter, git, workspaceId } = h;
+    { adapter, git } = h;
   // New identities in one operation have one history commit.
   await withTentMutation(adapter, async () => {
     await adapter.writeFile("C/C.md", "---\nid: node-charlie\n---\nC");
@@ -551,7 +551,7 @@ for (const stage of [
 ] as const) {
   test(`material inspect preserves document and recovery files during pending ${stage}`, async (t) => {
     const h = await fixture(t),
-      { adapter, workspaceId } = h;
+      { adapter } = h;
     const write = adapter.writeFile.bind(adapter),
       move = adapter.move.bind(adapter);
     if (stage === "corrupt-order") {

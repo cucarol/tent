@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
@@ -14,8 +14,9 @@ import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { loadTent, nodeNotePath } from "../src/core/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
-async function makeSystemRoot(): Promise<{ systemFs: NodeFs }> {
+async function makeSystemRoot(t: TestContext): Promise<{ systemFs: NodeFs }> {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "tent-core-rel-ws-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspaceFs = new NodeFs(workspace);
   await scaffoldInWorkspace(workspaceFs, {
     name: "rel-core",
@@ -68,8 +69,8 @@ relations:
   assert.deepEqual(reparsed.data.relations, parsed.data.relations);
 });
 
-test("loadTent keeps legacy relations only on raw frontmatter", async () => {
-  const { systemFs } = await makeSystemRoot();
+test("loadTent keeps legacy relations only on raw frontmatter", async (t) => {
+  const { systemFs } = await makeSystemRoot(t);
   let tent = await loadTent(systemFs);
   const alpha = [...tent.byId.values()].find((node) => node.name === "Alpha")!;
   const expected = await plantLegacyRelations(systemFs, alpha.path);
@@ -80,8 +81,8 @@ test("loadTent keeps legacy relations only on raw frontmatter", async () => {
   assert.deepEqual(loaded.fm.relations, expected);
 });
 
-test("ordinary body and property writes preserve legacy relations bytes", async () => {
-  const { systemFs } = await makeSystemRoot();
+test("ordinary body and property writes preserve legacy relations bytes", async (t) => {
+  const { systemFs } = await makeSystemRoot(t);
   let tent = await loadTent(systemFs);
   const alpha = [...tent.byId.values()].find((node) => node.name === "Alpha")!;
   const expected = await plantLegacyRelations(systemFs, alpha.path);

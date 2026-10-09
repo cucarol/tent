@@ -3,27 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { test } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldTent } from "../src/core/scaffold.js";
 import { contentEtag } from "../src/core/etag.js";
 import {
   extractOutLinksDetailed as extractOutLinks,
   extractOutLinksDetailed,
 } from "../src/markdown/links.js";
-
-async function makeEnv() {
-  const scratch = path.resolve(".scratch");
-  await fs.mkdir(scratch, { recursive: true });
-  const dir = await fs.mkdtemp(path.join(scratch, "tent-md-"));
-  const fsa = new NodeFs(dir);
-  await scaffoldTent(fsa, { name: "md" });
-  const env = {
-    fs: fsa,
-    clock: { now: () => "2026-07-12T00:00:00.000Z" },
-    tentName: "md",
-    rand: () => 0.42,
-  };
-  return { dir, env, fsa };
-}
 
 test("contentEtag: stable hash slice", () => {
   assert.equal(contentEtag("abc"), contentEtag("abc"));

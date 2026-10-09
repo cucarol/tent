@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { spawn } from "node:child_process";
-import { setTimeout as delay } from "node:timers/promises";
 import { runCardCommand, cardHelpText } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
@@ -99,27 +98,36 @@ test(
     const { root, globals } = await fixture(t);
     const role = value(await runRoleCommand("create", ["--title", "Watch"], globals));
     const other = value(await runRoleCommand("create", ["--title", "Other"], globals));
+    const systemRoot = path.join(root, ".tent");
+    const initialHead = (await git(systemRoot, "rev-parse", "HEAD")).trim();
+    const beforeWatch = await fileSnapshot(systemRoot);
+    const watchBudgetMs = 25000;
+    const deadline = performance.now() + watchBudgetMs;
     const child = spawn(
       process.execPath,
       [
         "--import",
         "tsx",
+        "--import",
+        new URL("./fixtures/card-watch-observer.ts", import.meta.url).href,
         "src/cli/tent.ts",
         "card",
         "watch",
         "--role",
         role.roleId,
         "--timeout",
-        "25",
+        String(watchBudgetMs / 1000),
         "--workspace",
         root,
       ],
-      { windowsHide: true },
+      { windowsHide: true, stdio: ["pipe", "pipe", "pipe", "ipc"] },
     );
     t.after(() => child.kill());
+    assert.ok(child.stdout && child.stderr);
     let stdout = "",
       stderr = "",
-      exited = false;
+      exited = false,
+      closedAt = 0;
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
     });
@@ -130,24 +138,86 @@ test(
       child.once("error", reject);
       child.once("close", (code) => {
         exited = true;
+        closedAt = performance.now();
         resolve(code);
       });
     });
-    await delay(1000);
-    value(
+    const idleCommits = new Set<string>();
+    child.on("message", (message) => {
+      if (
+        typeof message === "object" &&
+        message !== null &&
+        "event" in message &&
+        message.event === "watch-idle" &&
+        "commit" in message &&
+        typeof message.commit === "string"
+      )
+        idleCommits.add(message.commit);
+    });
+    async function withinBudget<T>(pending: Promise<T>, description: string): Promise<T> {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          pending,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`Watch budget expired: ${description}\n${stderr || stdout}`)),
+              Math.max(0, deadline - performance.now()),
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    async function observedIdle(commit: string) {
+      if (idleCommits.has(commit)) return;
+      let onMessage: () => void;
+      const observed = new Promise<void>((resolve) => {
+        onMessage = () => {
+          if (idleCommits.has(commit)) resolve();
+        };
+        child.on("message", onMessage);
+      });
+      try {
+        await withinBudget(
+          Promise.race([
+            observed,
+            done.then((code) => {
+              throw new Error(
+                `Watch exited before observing ${commit}: ${code}\n${stderr || stdout}`,
+              );
+            }),
+          ]),
+          `idle after committed input ${commit}`,
+        );
+      } finally {
+        child.off("message", onMessage!);
+      }
+    }
+    await observedIdle(initialHead);
+    assert.deepEqual(await fileSnapshot(systemRoot), beforeWatch);
+    const unrelated = value(
       await runCardCommand("create", ["--prompt", "Other work", "--target", other.roleId], globals),
     );
-    await delay(3500);
+    const unrelatedHead = (await git(systemRoot, "rev-parse", "HEAD")).trim();
+    const afterUnrelated = await fileSnapshot(systemRoot);
+    await observedIdle(unrelatedHead);
     assert.equal(exited, false, stderr || stdout);
     assert.equal(stdout, "");
+    assert.deepEqual(await fileSnapshot(systemRoot), afterUnrelated);
     const card = value(
       await runCardCommand("create", ["--prompt", "Arrived", "--target", role.roleId], globals),
     );
     const published = performance.now();
-    assert.equal(await done, 0, stderr);
-    assert.ok(performance.now() - published < 6000, "should wake within one poll plus query time");
+    const afterPublished = await fileSnapshot(systemRoot);
+    assert.equal(await withinBudget(done, "exact Role wake"), 0, stderr);
+    assert.ok(closedAt - published < 6000, "should wake within one poll plus query time");
     assert.equal(stderr, "");
     assert.ok(stdout.includes(`tent card take ${card.cardId} --role ${role.roleId}`));
+    assert.equal(stdout.trim().split("\n").length, 1);
+    assert.equal(stdout.includes(unrelated.cardId), false);
+    assert.deepEqual(await fileSnapshot(systemRoot), afterPublished);
     assert.equal(
       (await runCardCommand("watch", ["--role", role.roleId, "--timeout", "0"], globals)).exitCode,
       0,

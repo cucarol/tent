@@ -14,9 +14,9 @@ test("material checks observe generic bytes while software/format adapters have 
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "material-boundary-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
   const materialRoot = path.join(root, "materials");
   await fs.mkdir(materialRoot);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
   assert.equal(
     (await runNodeCommand("read-image", ["node-test", "--workspace", root])).exitCode,
     1,

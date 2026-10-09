@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { withTentMutation } from "../src/core/adapter.js";
 import { createNode, moveNode, renameNode } from "../src/core/ops.js";
 import { scaffoldTent } from "../src/core/scaffold.js";
@@ -12,10 +12,11 @@ import { NODE_MOVE_PENDING_PATH } from "../src/core/node-move-recovery.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { MUTATION_LOCK_STALE_MS } from "../src/fs/mutation-lock.js";
 
-async function fixture() {
+async function fixture(t: TestContext) {
   const scratch = fileURLToPath(new URL("../.scratch/", import.meta.url));
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "tent-move-recovery-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
   const root = path.join(workspace, ".tent");
   const fsa = new NodeFs(root);
   await scaffoldTent(fsa, { name: "recovery" });
@@ -86,8 +87,7 @@ for (const [operation, points] of [
 ] as const) {
   for (const point of points)
     test(`${operation}: real process exit at ${point}, mutation restores and repeated recovery is harmless`, async (t) => {
-      const f = await fixture();
-      t.after(() => fs.rm(f.workspace, { recursive: true, force: true }));
+      const f = await fixture(t);
       await crash(f, operation, point);
       await withTentMutation(f.fsa, async () => undefined);
       await assertRestored(f);
@@ -98,8 +98,7 @@ for (const [operation, points] of [
 
 for (const point of ["hub/hub.md", "move-1", "before-clear"])
   test(`recovery interrupted at ${point} remains restartable`, async (t) => {
-    const f = await fixture();
-    t.after(() => fs.rm(f.workspace, { recursive: true, force: true }));
+    const f = await fixture(t);
     await crash(f, "move", "order.json");
     await crash(f, "recover", point);
     await withTentMutation(f.fsa, async () => undefined);
@@ -108,8 +107,7 @@ for (const point of ["hub/hub.md", "move-1", "before-clear"])
 
 for (const conflictPath of ["hub/hub.md", "order.json", "dest/child/child.md"])
   test(`external edit to ${conflictPath} blocks whole recovery without overwrites`, async (t) => {
-    const f = await fixture();
-    t.after(() => fs.rm(f.workspace, { recursive: true, force: true }));
+    const f = await fixture(t);
     await crash(f, "move", "order.json");
     await f.fsa.writeFile(conflictPath, "external edit\n");
     const paths = ["dest/child/child.md", "hub/hub.md", "order.json", NODE_MOVE_PENDING_PATH];
@@ -127,8 +125,7 @@ for (const conflictPath of ["hub/hub.md", "order.json", "dest/child/child.md"])
   });
 
 test("unsupported journal version and recreated source directory are retained", async (t) => {
-  const f = await fixture();
-  t.after(() => fs.rm(f.workspace, { recursive: true, force: true }));
+  const f = await fixture(t);
   await crash(f, "move", "move-1");
   const pending = await f.fsa.readFile(NODE_MOVE_PENDING_PATH);
   await f.fsa.writeFile(NODE_MOVE_PENDING_PATH, pending.replace('"version":1', '"version":2'));
@@ -143,8 +140,7 @@ test("unsupported journal version and recreated source directory are retained", 
 });
 
 test("ordinary successful move and rename remove their recovery records", async (t) => {
-  const f = await fixture();
-  t.after(() => fs.rm(f.workspace, { recursive: true, force: true }));
+  const f = await fixture(t);
   await moveNode(f.env, f.child, f.dest, { mode: "inside" });
   await renameNode(f.env, f.child, "renamed");
   assert.equal((await loadTent(f.fsa)).byId.get(f.child)?.path, "dest/renamed");
@@ -153,8 +149,7 @@ test("ordinary successful move and rename remove their recovery records", async 
 });
 
 test("rename recovery survives interruption after restoring the identity filename", async (t) => {
-  const f = await fixture();
-  t.after(() => fs.rm(f.workspace, { recursive: true, force: true }));
+  const f = await fixture(t);
   await crash(f, "rename", "before-clear");
   await crash(f, "recover", "move-1");
   await withTentMutation(f.fsa, async () => undefined);
@@ -162,8 +157,7 @@ test("rename recovery survives interruption after restoring the identity filenam
 });
 
 test("recovery keeps pending until restored contents have been read back", async (t) => {
-  const f = await fixture();
-  t.after(() => fs.rm(f.workspace, { recursive: true, force: true }));
+  const f = await fixture(t);
   await crash(f, "move", "order.json");
   class DroppedWriteFs extends NodeFs {
     override async writeFile(name: string, content: string) {

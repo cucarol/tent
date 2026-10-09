@@ -16,13 +16,13 @@ import { git } from "./helpers.js";
 async function fixture(t: TestContext) {
   const scratch = testScratchRoot();
   const root = await fs.mkdtemp(path.join(scratch, "graph-check-"));
-  const workspace = path.join(root, "workspace");
-  const systemRoot = path.join(workspace, ".tent");
-  await fs.mkdir(systemRoot, { recursive: true });
   t.after(async () => {
     assert.equal(path.dirname(root), path.resolve(scratch));
     await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
+  const workspace = path.join(root, "workspace");
+  const systemRoot = path.join(workspace, ".tent");
+  await fs.mkdir(systemRoot, { recursive: true });
   const adapter = new NodeFs(systemRoot);
   const write = (file: string, data: Record<string, unknown>, body = "") =>
     adapter.writeFile(file, serializeFrontmatter({ type: "prompt", ...data }, body));

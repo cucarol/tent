@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
-import { NODE_MOVE_PENDING_PATH } from "../src/core/node-move-recovery.js";
 import * as fs from "node:fs/promises";
 import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { test } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
+import { injectWriteFailure } from "./helpers.js";
 import type { FsAdapter } from "../src/core/adapter.js";
 import { createNode, renameNode } from "../src/core/ops.js";
 import { loadTent } from "../src/core/tree.js";
 import { loadOrder, saveOrder, ROOT_KEY } from "../src/core/order.js";
-import { scaffoldInWorkspace, scaffoldTent } from "../src/core/scaffold.js";
+import { scaffoldTent } from "../src/core/scaffold.js";
 import { buildNodeIndex } from "../src/core/okf.js";
 import { rewriteNodeLinks } from "../src/core/rename-ops.js";
 import {
@@ -18,8 +18,9 @@ import {
 } from "../src/markdown/links.js";
 
 for (const reference of ["stable-id", "definition"] as const) {
-  test(`renameNode: preserves resolved ${reference} references with a colliding new name`, async () => {
+  test(`renameNode: preserves resolved ${reference} references with a colliding new name`, async (t) => {
     const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-reference-"));
+    t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
     const fsa = new NodeFs(dir);
     await scaffoldTent(fsa, { name: "x" });
     const env = envFor(fsa);
@@ -68,8 +69,9 @@ function envFor(fsa: FsAdapter, name = "x") {
   };
 }
 
-test("renameNode: rejects unindexable names without moving nodes and allows nested system basenames", async () => {
+test("renameNode: rejects unindexable names without moving nodes and allows nested system basenames", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-reserved-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const fsa = new NodeFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
@@ -147,38 +149,6 @@ test("rewriteNodeLinks: moved source restyles outbound reference definitions", (
   );
   assert.equal(result.body, '[Outside][ref]\n\n[ref]: ../../outside/outside.md "Outside"\n');
 });
-
-/** Wrap FsAdapter and fail on the Nth writeFile call (1-based). */
-function injectWriteFailure(
-  inner: FsAdapter,
-  failOnWriteNumber: number,
-): {
-  fs: FsAdapter;
-  writeCount: () => number;
-} {
-  let writes = 0;
-  const fsAdapter: FsAdapter = {
-    listDir: (dir) => inner.listDir(dir),
-    readFile: (p) => inner.readFile(p),
-    writeFile: async (p, content) => {
-      if (p === NODE_MOVE_PENDING_PATH) return inner.writeFile(p, content);
-      writes += 1;
-      if (writes === failOnWriteNumber) {
-        throw new Error(`injected write failure #${failOnWriteNumber} on ${p}`);
-      }
-      return inner.writeFile(p, content);
-    },
-    readBinary: (p) => inner.readBinary(p),
-    writeBinary: (p, data) => inner.writeBinary(p, data),
-    exists: (p) => inner.exists(p),
-    mkdir: (p) => inner.mkdir(p),
-    move: (from, to) => inner.move(from, to),
-    remove: (p) => inner.remove(p),
-    removeEmptyDir: (p) => inner.removeEmptyDir(p),
-    withLock: inner.withLock?.bind(inner),
-  };
-  return { fs: fsAdapter, writeCount: () => writes };
-}
 
 test("rewriteNodeLinks: md path and untouched wiki text for rename root", () => {
   // Two concepts: unique alpha + unrelated gamma (index needed for unique name rewrite).
@@ -284,8 +254,9 @@ test("rewriteNodeLinks: leaves ambiguous unqualified wiki name unchanged", () =>
   assert.match(out.body, /\[\[branch-a\/twin\]\]/);
 });
 
-test("renameNode: leaf keeps node-, renames folder + identity note", async () => {
+test("renameNode: leaf keeps node-, renames folder + identity note", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-leaf-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const fsa = new NodeFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
@@ -303,8 +274,9 @@ test("renameNode: leaf keeps node-, renames folder + identity note", async () =>
   assert.equal(tent.byPath.has("leaf"), false);
 });
 
-test("renameNode: subtree preserves child relative paths and ids", async () => {
+test("renameNode: subtree preserves child relative paths and ids", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-sub-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const fsa = new NodeFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
@@ -335,8 +307,9 @@ test("renameNode: subtree preserves child relative paths and ids", async () => {
   assert.equal(await fsa.exists("parent"), false);
 });
 
-test("renameNode: rewrites inbound md links; order stays id-keyed", async () => {
+test("renameNode: rewrites inbound md links; order stays id-keyed", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-links-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const fsa = new NodeFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
@@ -388,8 +361,9 @@ test("renameNode keeps workspace Markdown links outside .tent", async (t) => {
   );
 });
 
-test("renameNode: duplicate display names leave unqualified wiki unchanged", async () => {
+test("renameNode: duplicate display names leave unqualified wiki unchanged", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-dup-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const fsa = new NodeFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
@@ -443,8 +417,9 @@ test("renameNode: duplicate display names leave unqualified wiki unchanged", asy
   assert.equal(await fsa.exists("branch-b/twin/twin.md"), true);
 });
 
-test("renameNode: injected write failure restores tree and every note byte-for-byte", async () => {
+test("renameNode: injected write failure restores tree and every note byte-for-byte", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-rollback-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const base = new NodeFs(dir);
   await scaffoldTent(base, { name: "x" });
   const setupEnv = envFor(base);
@@ -507,8 +482,9 @@ test("renameNode: injected write failure restores tree and every note byte-for-b
   assert.ok(injected.writeCount() >= 2);
 });
 
-test("renameNode: refuses collision and accepts an ordinary Node rename", async () => {
+test("renameNode: refuses collision and accepts an ordinary Node rename", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-guard-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const fsa = new NodeFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);

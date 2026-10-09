@@ -6,7 +6,6 @@ import {
   GitDocumentHistory,
   type CaptureMetadata,
   type DocumentChange,
-  type DocumentVersion,
   type HistoryCommit,
 } from "../src/core/git-history.js";
 import type { NodeBasisRecord } from "../src/core/node-basis-record.js";

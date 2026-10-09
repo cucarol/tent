@@ -10,6 +10,7 @@ import { listBundledSkillNames } from "./fixtures/bundled-skills.js";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const cliSource = path.join(repoRoot, "src", "cli", "tent.ts");
+const cliBuilt = path.join(repoRoot, "cli.mjs");
 const tsxImport = import.meta.resolve("tsx");
 const scratchRoot = path.join(repoRoot, ".scratch");
 const temporaryRoots: string[] = [];
@@ -156,7 +157,7 @@ test("removed legacy and migration commands are not part of the CLI", async () =
     "user",
   ];
   for (const command of removed) {
-    const result = await runCli(repoRoot, command);
+    const result = await run(process.execPath, [cliBuilt, command], repoRoot);
     assert.notEqual(result.code, 0, `${command} must not remain callable`);
     assert.match(result.stderr, new RegExp(`Unknown command: ${command}`));
   }
@@ -207,14 +208,15 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
   };
   assert.deepEqual(sourcePackage.dependencies ?? {}, expectedDependencies);
   const packDir = await temporaryDirectory("tent-pack-");
-  for (const file of ["snapshot.json", "pack-probe.map"]) {
-    const probe = path.join(repoRoot, "ui-dist", file);
-    try {
-      await fs.writeFile(probe, "Private development data must not ship", { flag: "wx" });
-      t.after(() => fs.unlink(probe));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
+  const packSource = await temporaryDirectory("tent-pack-source-");
+  const excluded = new Set([".git", ".tent", "node_modules", ".scratch", ".worktrees", "output"]);
+  for (const entry of await fs.readdir(repoRoot)) {
+    if (!excluded.has(entry))
+      await fs.cp(path.join(repoRoot, entry), path.join(packSource, entry), { recursive: true });
+  }
+  const probes = ["ui-dist/snapshot.json", `ui-dist/pack-probe-${path.basename(packSource)}.map`];
+  for (const probe of probes) {
+    await fs.writeFile(path.join(packSource, probe), "Private development data must not ship");
   }
   const packed = await runOk(
     process.execPath,
@@ -227,7 +229,7 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
       "--pack-destination",
       packDir,
     ],
-    repoRoot,
+    packSource,
   );
   const packageInfo = JSON.parse(packed.stdout)[0];
   const packedPaths = packageInfo.files.map((entry: { path: string }) => entry.path);
@@ -238,7 +240,7 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
     packedPaths.some((file: string) => file.startsWith("ui-dist/fonts/")),
     false,
   );
-  assert.equal(packedPaths.includes("ui-dist/snapshot.json"), false);
+  for (const probe of probes) assert.equal(packedPaths.includes(probe), false);
   assert.equal(
     packedPaths.some((file: string) => file.startsWith("ui-dist/") && file.endsWith(".map")),
     false,

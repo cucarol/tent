@@ -87,8 +87,9 @@ test("tag presets are suggestions counted only where documents use them", () => 
   ]);
 });
 
-test("Node loading rejects missing type and accepts exact type without registry authority", async () => {
+test("Node loading rejects missing type and accepts exact type without registry authority", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-node-type-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const adapter = new NodeFs(dir);
   await adapter.mkdir("MissingType");
   await adapter.writeFile("MissingType/MissingType.md", "---\nid: node-untyped\n---\n# Untyped\n");
@@ -106,8 +107,9 @@ test("Node loading rejects missing type and accepts exact type without registry 
   assert.equal("type" + "Registry" in tent, false);
 });
 
-test("suffixed, padded, empty or non-string Node types are invalid and repairable by path", async () => {
+test("suffixed, padded, empty or non-string Node types are invalid and repairable by path", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-node-type-invalid-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const adapter = new NodeFs(dir);
   const cases = [
     ["Suffixed", "node-suffixed", "type: output-evidence"],
@@ -137,8 +139,9 @@ test("suffixed, padded, empty or non-string Node types are invalid and repairabl
   assert.equal(tent.byPath.get("Suffixed/Child")?.invalid, true);
 });
 
-test("scaffold writes exact types and rejects former labels", async () => {
+test("scaffold writes exact types and rejects former labels", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-node-type-scaffold-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const adapter = new NodeFs(dir);
   await scaffoldTent(adapter, {
     name: "single-type",
@@ -151,6 +154,7 @@ test("scaffold writes exact types and rejects former labels", async () => {
   assert.match(await adapter.readFile("Prompt/Prompt.md"), /^type:\s*prompt$/m);
 
   const rejected = await fs.mkdtemp(path.join(testScratchRoot(), "tent-node-type-scaffold-"));
+  t.after(() => fs.rm(rejected, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await assert.rejects(
     scaffoldTent(new NodeFs(rejected), {
       name: "single-type",
