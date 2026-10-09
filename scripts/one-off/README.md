@@ -1,0 +1,9 @@
+These are one-off workspace conversion tools, not Tent product compatibility code.
+
+Run `node scripts/one-off/convert-node-records.mjs <workspace> --dry-run --report <report.json>` from a source checkout with dependencies installed, then omit `--dry-run` to append the validated records. Stop Agents, Hooks and UI writers for the entire operation. The report must be outside `.tent`.
+
+The script reads the latest declaration per live Node on the first-parent lineage, adds `v: 1` to legacy records and makes absolute `repository.commonDir` paths relative to the workspace. It validates with the actual Core schema and the writer's portability rule before appending one commit with the identical tree. Existing v1 records are skipped; missing records are listed without inventing a baseline. Any invalid record prevents the whole append. A second run appends nothing. Document bytes, Card pins, previous commits and other record fields remain unchanged.
+
+For legacy materials with a version but no fingerprintVersion, the script runs the actual v2 algorithm on material bytes retained at the record's own commit. Exact matches receive fingerprintVersion 2. Unavailable bytes or mismatches lose only that material's version, leaving its owner to confirm later. Each decision, historical commit and comparison is reported; these cases do not fail the whole conversion. Current material bytes are never used as a replacement baseline.
+
+Historical legacy trailers are retained by design; this tool does not remove absolute paths from old Git objects. After export, check only the current records at HEAD for local drive paths. Old absolute paths in historical trailers are known residue, not a conversion failure. Run the real workspace conversion after the type conversion, in judge's stopped-writer window.
