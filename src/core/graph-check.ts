@@ -12,6 +12,7 @@ import {
   materialLocator,
   localMaterialPath,
   resourceSchema,
+  isDirectoryMaterial,
   type MaterialSource,
 } from "./material.js";
 import { CARDS_DIR, ROLES_DIR, ORDER_PATH, nodeNotePath } from "./paths.js";
@@ -53,8 +54,8 @@ export type GraphCheckResult = {
   errors: { path: string; reason: string }[];
 };
 
-/** Host file inspection is injected; false means missing or not a regular file. */
-export type GraphFileExists = (absolutePath: string) => Promise<boolean>;
+/** Host inspection is injected; declarations with a slash require directories. */
+export type GraphFileExists = (absolutePath: string, directory?: boolean) => Promise<boolean>;
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -212,11 +213,12 @@ export async function checkGraph(
     pinned.map((item, index) => [JSON.stringify([item.owner, item.index]), retained[index]!]),
   );
   const fileCache = new Map<string, Promise<boolean>>();
-  function exists(filename: string) {
-    let observed = fileCache.get(filename);
+  function exists(filename: string, directory = false) {
+    const key = JSON.stringify([filename, directory]);
+    let observed = fileCache.get(key);
     if (!observed) {
-      observed = fileExists(filename);
-      fileCache.set(filename, observed);
+      observed = fileExists(filename, directory);
+      fileCache.set(key, observed);
     }
     return observed;
   }
@@ -280,11 +282,13 @@ export async function checkGraph(
       }
       let filename: string | undefined;
       let sectionResource: string | undefined;
+      let directory = false;
       try {
         const parsed = resourceSchema.safeParse(value);
         if (!parsed.success) throw new Error("Material resource must be nonempty text");
         const resource = parsed.data;
         const locator = materialLocator(resource, document.path, field === "sources");
+        directory = isDirectoryMaterial(locator);
         if (locator.kind === "unresolved") {
           // Descriptive sources stay descriptive. Warn only when today's local
           // files make a bare source look like an accidentally unanchored file.
@@ -303,7 +307,7 @@ export async function checkGraph(
             if (filename === undefined || possible.kind !== "path") continue;
             let present;
             try {
-              present = await exists(filename);
+              present = await exists(filename, isDirectoryMaterial(possible));
             } catch (cause) {
               error(document.path, `Cannot inspect ${JSON.stringify(resource)}: ${message(cause)}`);
               return;
@@ -315,12 +319,14 @@ export async function checkGraph(
             );
             const encoded = relative.split("/").map(encodeURIComponent).join("/");
             const suggestion =
-              (encoded.startsWith("../") ? encoded : `./${encoded}`) + possible.suffix;
+              (encoded.startsWith("../") ? encoded : `./${encoded}`) +
+              (isDirectoryMaterial(possible) && encoded && !encoded.endsWith("/") ? "/" : "") +
+              possible.suffix;
             result.issues.push({
               kind: "unanchored-material-file",
               ...occurrence,
               suggestion,
-              reason: `Bare source text matches an existing file but is not tracked; use ${JSON.stringify(suggestion)} relative to the declaring document`,
+              reason: `Bare source text matches an existing ${isDirectoryMaterial(possible) ? "directory" : "file"} but is not tracked; use ${JSON.stringify(suggestion)} relative to the declaring document`,
             });
             return;
           }
@@ -348,7 +354,7 @@ export async function checkGraph(
                 (material) => material.identity === syncMaterialIdentity(value, document.path),
               )?.repository
             : undefined;
-        if (!(await exists(filename)) && repository && readonlyFs.observeMaterial) {
+        if (!(await exists(filename, directory)) && repository && readonlyFs.observeMaterial) {
           try {
             const resource =
               typeof value === "string" &&
@@ -379,7 +385,7 @@ export async function checkGraph(
             if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
           }
         }
-        if (await exists(filename)) {
+        if (await exists(filename, directory)) {
           if (sectionResource !== undefined) {
             if (!readonlyFs.observeMaterial) throw new Error("Material observer is unavailable");
             try {
@@ -402,7 +408,9 @@ export async function checkGraph(
         result.issues.push({
           kind: "missing-material-file",
           ...occurrence,
-          reason: "Local material does not exist as a file",
+          reason: directory
+            ? "Local material does not exist as a directory"
+            : "Local material does not exist as a file",
         });
       } catch (cause) {
         error(document.path, `Cannot inspect ${JSON.stringify(value)}: ${message(cause)}`);

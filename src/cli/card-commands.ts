@@ -243,9 +243,10 @@ All commands accept --workspace PATH and --json. CLI output is paged; Core retur
 list prints newest first; --start N continues the same page set under --expected-revision.
 Sources keep their order. Selected Node/Role sources retain commit/path; external sources are addresses only.
 --source file paths use the Workspace root: docs/req.md, ./docs/req.md and /docs/req.md name the same file.
+End a directory source with /, for example src/; its nonignored files form the material.
 Use --source node-ID for a Node, or --source .tent/Area/Topic/Topic.md for its Workspace path. JSON resource uses the same rules.
 Git Bash rewrites arguments that start with / (such as /docs/req.md) into Windows paths; run the command with MSYS_NO_PATHCONV=1 to keep them.
-A ./, / or .tent/ source that names no existing file, Node or Role prints a warning on stderr; the Card still keeps it.
+A ./, / or .tent/ source that names no existing file, directory, Node or Role prints a warning on stderr; the Card still keeps it.
 Show is a preview; take records reception and returns an input page. A replay is not a new execution.
 Use page.next for long input. Put requirements in Nodes; a Card briefly points to them. Update Nodes when requirements change.
 Targeted Cards require their Role; untargeted Cards can be received without one.

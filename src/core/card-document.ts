@@ -13,7 +13,12 @@ import {
 import { contentEtag } from "./etag.js";
 import { documentLifecycle } from "./document-status.js";
 import { documentVersionSchema, type DocumentVersion } from "./git-history.js";
-import { materialLocator, sourcesSchema, type MaterialSource } from "./material.js";
+import {
+  materialLocator,
+  isDirectoryMaterial,
+  sourcesSchema,
+  type MaterialSource,
+} from "./material.js";
 import { isHistoryDocument } from "./document-history.js";
 import { parseRoleDocument } from "./role-document.js";
 import { boundary, ReaderError, type ReaderRange } from "./context-reader.js";
@@ -176,6 +181,7 @@ function sourceVersion(owner: string, source: MaterialSource) {
     locator = materialLocator(source.resource, owner, true);
   if (
     locator.kind !== "path" ||
+    isDirectoryMaterial(locator) ||
     locator.target !== version.path ||
     version.path === ".." ||
     version.path.startsWith("../") ||
@@ -248,7 +254,8 @@ async function captureSources(fs: FsAdapter, owner: string, sources: MaterialSou
   for (let i = 0; i < sources.length; i++) {
     const source = sources[i]!,
       locator = materialLocator(source.resource, owner, true);
-    const file = locator.kind === "path" ? locator.target : undefined;
+    const file =
+      locator.kind === "path" && !isDirectoryMaterial(locator) ? locator.target : undefined;
     const internal =
       file &&
       file !== ".." &&

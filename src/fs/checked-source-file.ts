@@ -7,7 +7,7 @@ function inside(root: string, candidate: string) {
 }
 
 /** 逐段拒绝 symlink/junction，并核对实际路径与普通文件类型。 */
-export async function checkedSourceFile(root: string, candidate: string) {
+export async function checkedSourceFile(root: string, candidate: string, directory = false) {
   if (!inside(root, candidate)) throw new Error("Source target escapes root");
   const actualRoot = await realpath(root);
   if (path.relative(actualRoot, root) !== "") throw new Error("Workspace root changed");
@@ -21,6 +21,9 @@ export async function checkedSourceFile(root: string, candidate: string) {
   if (!inside(actualRoot, actual) || path.relative(candidate, actual) !== "")
     throw new Error("Source target escapes Workspace");
   const stat = await lstat(candidate);
-  if (!stat.isFile()) throw new Error("Source target is not a regular file");
+  if (!(directory ? stat.isDirectory() : stat.isFile()))
+    throw new Error(
+      directory ? "Source target is not a directory" : "Source target is not a regular file",
+    );
   return stat;
 }

@@ -3,7 +3,9 @@ import { open, realpath, readFile, writeFile, mkdir, rename, rm } from "node:fs/
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { checkedSourceFile } from "./checked-source-file.js";
-import { materialLocator, localMaterialPath } from "../core/material.js";
+import { materialLocator, localMaterialPath, isDirectoryMaterial } from "../core/material.js";
+import { observeSourceDirectory, DirectoryObservationCache } from "./directory-observation.js";
+import type { DirectoryFile } from "../core/directory-material.js";
 import { markdownMaterialHeading, materialContent } from "../core/material-section.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { isNodeId } from "../core/id.js";
@@ -135,7 +137,14 @@ export async function observeMaterialResource(
   resource: string,
   cacheDir?: string,
   relocated?: { root: string; filename: string },
-) {
+  directoryCache?: DirectoryObservationCache,
+): Promise<{
+  canonicalPath: string;
+  observedVersion: string;
+  cacheHit: boolean;
+  blobs: { sha1: string; sha256: string };
+  directoryFiles?: DirectoryFile[];
+}> {
   const locator = materialLocator(resource, documentPath, true);
   const filename = relocated?.filename ?? localMaterialPath(locator, workspaceRoot);
   if (filename === undefined)
@@ -144,6 +153,8 @@ export async function observeMaterialResource(
   // segment from its filesystem root; relative addresses remain in this workspace.
   const root =
     relocated?.root ?? (locator.kind === "uri" ? path.parse(filename).root : workspaceRoot);
+  if (isDirectoryMaterial(locator))
+    return observeSourceDirectory(root, filename, cacheDir, directoryCache);
   const heading = markdownMaterialHeading(locator);
   return observeSourceFile(root, filename, cacheDir, {
     key: JSON.stringify([

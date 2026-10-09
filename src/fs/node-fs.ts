@@ -12,6 +12,7 @@ import { GitDocumentHistory, type CaptureMetadata } from "../core/git-history.js
 import { isHistoryDocument } from "../core/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 import { observeMaterialResource } from "./source-observation.js";
+import { DirectoryObservationCache } from "./directory-observation.js";
 import {
   observedRepositoryMaterial,
   relocatedRepositoryMaterial,
@@ -33,6 +34,7 @@ export class NodeFs implements FsAdapter {
   private historyWrites = new AsyncLocalStorage<Map<string, string | null>>();
   private historyPreimages = new AsyncLocalStorage<Map<string, string | null>>();
   private repositoryMaterials = new RepositoryMaterialCache();
+  private directoryObservations = new DirectoryObservationCache();
 
   constructor(
     root: string,
@@ -53,6 +55,8 @@ export class NodeFs implements FsAdapter {
       documentPath,
       resource,
       cacheDir,
+      undefined,
+      this.directoryObservations,
     ).catch(async (error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT" || !previous) throw error;
       const relocated = await relocatedRepositoryMaterial(
@@ -65,7 +69,7 @@ export class NodeFs implements FsAdapter {
     });
     // Synchronization reads compare observed content; repository metadata is needed when recording a basis.
     const repository =
-      this.materialPurpose === "inspect"
+      this.materialPurpose === "inspect" || observed.directoryFiles !== undefined
         ? undefined
         : await observedRepositoryMaterial(
             workspaceRoot,

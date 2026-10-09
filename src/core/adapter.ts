@@ -5,6 +5,7 @@ import { recoverPendingNodeMoveUnlocked } from "./node-move-recovery.js";
 import { recoverPendingDeleteUnlocked } from "./delete-recovery.js";
 import type { GitDocumentHistory, CaptureMetadata } from "./git-history.js";
 import type { RepositoryMaterial } from "./repository-material.js";
+import type { DirectoryFile } from "./directory-material.js";
 
 export interface FsAdapter {
   /** Observe local material content; normalize text lines and select addressed Markdown sections. */
@@ -14,6 +15,7 @@ export interface FsAdapter {
     repository?: RepositoryMaterial,
   ): Promise<{
     observedVersion: string;
+    directoryFiles?: DirectoryFile[];
     systemPath?: string;
     repository?: RepositoryMaterial;
     /** Present only when a missing declaration was read from another checkout. */

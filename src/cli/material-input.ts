@@ -5,6 +5,7 @@ import {
   materialLocator,
   localMaterialPath,
   isCardResponseSource,
+  isDirectoryMaterial,
   type MaterialSource,
 } from "../core/material.js";
 import { isNodeId } from "../core/id.js";
@@ -48,7 +49,9 @@ export async function workspaceMaterialFields(
     if (source && !explicit) {
       const filename = localMaterialPath(locator, workspaceRoot)!;
       try {
-        if (!(await stat(filename)).isFile()) return resource;
+        const present = await stat(filename);
+        if (!(isDirectoryMaterial(locator) ? present.isDirectory() : present.isFile()))
+          return resource;
       } catch (error) {
         if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""))
           return resource;
@@ -57,7 +60,11 @@ export async function workspaceMaterialFields(
     }
     const relative = path.posix.relative(path.posix.dirname(documentPath), locator.target);
     const encoded = relative.split("/").map(encodeURIComponent).join("/");
-    return (encoded.startsWith("../") ? encoded : `./${encoded}`) + locator.suffix;
+    return (
+      (encoded === ".." || encoded.startsWith("../") ? encoded : `./${encoded}`) +
+      (isDirectoryMaterial(locator) && encoded && !encoded.endsWith("/") ? "/" : "") +
+      locator.suffix
+    );
   }
   return {
     ...data,
@@ -80,6 +87,7 @@ export async function workspaceMaterialFields(
  * Convert an address serialized for `.tent/index.md` into that convention.
  */
 export function linkOutputResource(address: string): string {
+  if (address === "../") return "./";
   if (address.startsWith("../")) return address.slice(3);
   if (address.startsWith("./")) return `/${address.slice(2)}`;
   return address;
@@ -103,9 +111,19 @@ export async function missingExplicitSources(
     } catch {
       continue;
     }
-    if (filename && (await isFile(filename))) continue;
+    if (
+      filename &&
+      (await stat(filename)
+        .then((info) =>
+          isDirectoryMaterial(materialLocator(address, documentPath, true))
+            ? info.isDirectory()
+            : info.isFile(),
+        )
+        .catch(() => false))
+    )
+      continue;
     warnings.push(
-      `Warning: source ${JSON.stringify(source.resource)} names no existing Workspace file, Node or Role; the Card keeps it as ${JSON.stringify(address)}.`,
+      `Warning: source ${JSON.stringify(source.resource)} names no existing Workspace file, directory, Node or Role; the Card keeps it as ${JSON.stringify(address)}.`,
     );
   }
   return warnings;

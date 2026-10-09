@@ -2,7 +2,7 @@ import { readOnlyFs, type FsAdapter } from "./adapter.js";
 import type { CardDocumentState } from "./card-document.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { documentVersionSchema, type DocumentVersion } from "./git-history.js";
-import { materialLocator, type MaterialSource } from "./material.js";
+import { materialLocator, isDirectoryMaterial, type MaterialSource } from "./material.js";
 import { loadNodeCatalog } from "./node-catalog.js";
 import { isRequirementNode, isOutputNode } from "./node-sync-record.js";
 import { inspectNodesSync } from "./node-sync.js";
@@ -104,7 +104,11 @@ export async function readCardGoalIds(fs: FsAdapter, cards: readonly CardProgres
     const target = result.get(entry.cardId)!;
     try {
       const locator = materialLocator(entry.source.resource, cardRecordPath(entry.cardId), true);
-      if (locator.kind !== "path" || locator.target !== entry.version.path)
+      if (
+        locator.kind !== "path" ||
+        isDirectoryMaterial(locator) ||
+        locator.target !== entry.version.path
+      )
         throw new Error("Source address disagrees with its pinned version");
       const read = byVersion.get(key(entry.version))!;
       if (read instanceof Error) throw read;
@@ -188,7 +192,8 @@ export async function readCardProgress(
         for (const source of sources) {
           try {
             const locator = materialLocator(source.resource, nodeNotePath(node.path), true);
-            if (locator.kind === "path" && !locator.suffix) targets.add(locator.target);
+            if (locator.kind === "path" && !isDirectoryMaterial(locator) && !locator.suffix)
+              targets.add(locator.target);
           } catch {
             /* Invalid source addresses are not response evidence. */
           }

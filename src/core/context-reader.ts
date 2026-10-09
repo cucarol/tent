@@ -3,6 +3,7 @@ import {
   resolvedMaterialOccurrences,
   materialLocator,
   materialIdentity,
+  isDirectoryMaterial,
   resourceSchema,
   type MaterialFields,
 } from "./material.js";
@@ -525,7 +526,7 @@ export class ContextReader {
           continue;
         for (const occurrence of from.materialOccurrences) {
           const target =
-            occurrence.locator?.kind === "path"
+            occurrence.locator?.kind === "path" && !isDirectoryMaterial(occurrence.locator)
               ? documentsByPath.get(occurrence.locator.target)
               : undefined;
           if (p.direction === "incoming" && target?.nodeId !== p.nodeId) continue;

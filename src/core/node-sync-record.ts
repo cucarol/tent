@@ -7,6 +7,7 @@ import {
   materialLocator,
   materialOccurrences,
   isCardResponseSource,
+  isDirectoryMaterial,
 } from "./material.js";
 import { materialContent, markdownMaterialHeading } from "./material-section.js";
 import { recordNodeVerification } from "./node-provenance.js";
@@ -17,6 +18,7 @@ import { createHash } from "node:crypto";
 
 import type { NodeBasisRecord } from "./node-basis-record.js";
 import type { RepositoryMaterial } from "./repository-material.js";
+import type { DirectoryFile } from "./directory-material.js";
 export { nodeBasisRecordSchema, type NodeBasisRecord } from "./node-basis-record.js";
 const version = z.string().regex(/^[a-f0-9]{64}$/);
 export const retiredNodeFields = [
@@ -67,7 +69,7 @@ export function syncMaterialIdentity(
 ) {
   try {
     const locator = materialLocator(resource, documentPath);
-    if (locator.kind === "path" && nodes) {
+    if (locator.kind === "path" && !isDirectoryMaterial(locator) && nodes) {
       const node = [...nodes.values()].find((n) => nodeNotePath(n.path) === locator.target);
       if (node) return `node:${node.nodeId}${locator.suffix}`;
     }
@@ -101,7 +103,7 @@ export function nodeSemanticContent(
   const canonicalAddress = (resource: string) => {
     try {
       const locator = materialLocator(resource, documentPath, false);
-      if (locator.kind === "path") {
+      if (locator.kind === "path" && !isDirectoryMaterial(locator)) {
         const node =
           nodes && [...nodes.values()].find((n) => nodeNotePath(n.path) === locator.target);
         if (node) return `node:${node.nodeId}${locator.suffix}`;
@@ -170,13 +172,14 @@ export async function observeSyncMaterial(
   version?: string;
   reason?: string;
   repository?: RepositoryMaterial;
+  directoryFiles?: DirectoryFile[];
 }> {
   try {
     const locator = materialLocator(resource, documentPath, source);
     if (locator.kind === "unresolved") return { reason: "Source is not an explicit local address" };
     if (locator.kind === "uri" && !locator.uri.startsWith("file:"))
       return { reason: "Remote material version is unknown; no network request was made" };
-    if (locator.kind === "uri") {
+    if (locator.kind === "uri" && !isDirectoryMaterial(locator)) {
       const finalPath = fs.history?.localFileUriDocumentPath(locator.uri);
       const finalRaw = finalPath ? finalDocuments?.get(finalPath) : undefined;
       if (
@@ -203,6 +206,7 @@ export async function observeSyncMaterial(
         : resource;
     const observation = await fs.observeMaterial(explicitResource, documentPath, repository);
     const materialNode =
+      !isDirectoryMaterial(locator) &&
       observation.systemPath &&
       nodes &&
       [...nodes.values()].find((node) => nodeNotePath(node.path) === observation.systemPath);
@@ -225,6 +229,7 @@ export async function observeSyncMaterial(
       version: version.parse(observation.observedVersion),
       ...(observation.readFrom ? { reason: `从 ${observation.readFrom} 读取` } : {}),
       ...(observation.repository ? { repository: observation.repository } : {}),
+      ...(observation.directoryFiles ? { directoryFiles: observation.directoryFiles } : {}),
     };
   } catch (error) {
     return {
@@ -241,6 +246,7 @@ export async function observeNodeMaterials(
   nodes?: Map<string, CatalogNode>,
   previous?: Pick<NodeBasisRecord, "materials">,
 ) {
+  const directories = new Map<string, ReturnType<typeof observeSyncMaterial>>();
   return Promise.all(
     materialOccurrences(data)
       .filter(
@@ -256,6 +262,7 @@ export async function observeNodeMaterials(
           version?: string;
           reason?: string;
           repository?: RepositoryMaterial;
+          directoryFiles?: DirectoryFile[];
         };
         let local = true;
         try {
@@ -263,30 +270,36 @@ export async function observeNodeMaterials(
           local =
             locator.kind === "path" || (locator.kind === "uri" && locator.uri.startsWith("file:"));
           const targetNode =
-            locator.kind === "path" && nodes
+            locator.kind === "path" && !isDirectoryMaterial(locator) && nodes
               ? [...nodes.values()].find((node) => nodeNotePath(node.path) === locator.target)
               : undefined;
           const finalRaw =
-            locator.kind === "path" ? finalDocuments?.get(locator.target) : undefined;
+            locator.kind === "path" && !isDirectoryMaterial(locator)
+              ? finalDocuments?.get(locator.target)
+              : undefined;
           const nodeRaw =
             targetNode && locator.kind === "path"
               ? (finalRaw ?? (await fs.readFile(locator.target)))
               : undefined;
+          const observe = () =>
+            observeSyncMaterial(
+              fs,
+              resource,
+              documentPath,
+              field === "sources",
+              nodes,
+              finalDocuments,
+              repository,
+            );
+          if (isDirectoryMaterial(locator) && !directories.has(identity))
+            directories.set(identity, observe());
           observed =
             nodeRaw !== undefined
               ? {
                   version: nodeMaterialFingerprint(nodeRaw, locator, nodes),
                 }
               : finalRaw === undefined
-                ? await observeSyncMaterial(
-                    fs,
-                    resource,
-                    documentPath,
-                    field === "sources",
-                    nodes,
-                    finalDocuments,
-                    repository,
-                  )
+                ? await (directories.get(identity) ?? observe())
                 : {
                     version: createHash("sha256")
                       .update(materialContent(finalRaw, locator).replace(/\r\n?/g, "\n"))
@@ -349,7 +362,7 @@ export async function prepareNodeSyncSave(
   let unavailableLocalBasis = observations.some(
     (observation) => observation.local && !observation.version,
   );
-  const materials = observations.map(({ identity, version, repository }) => {
+  const materials = observations.map(({ identity, version, repository, directoryFiles }) => {
     const old = previous?.materials.find((m) => m.identity === identity);
     const useCurrent = ((options.confirm || options.acknowledge) && !!version) || !old;
     const known = useCurrent ? (version ?? old?.version) : old?.version;
@@ -364,6 +377,9 @@ export async function prepareNodeSyncSave(
       ...(known ? { version: known } : {}),
       ...(known && currentAlgorithm ? { fingerprintVersion: 2 as const } : {}),
       ...(materialRepository ? { repository: materialRepository } : {}),
+      ...((useCurrent ? directoryFiles : old?.directoryFiles)
+        ? { directoryFiles: useCurrent ? directoryFiles : old?.directoryFiles }
+        : {}),
     };
   });
   const node =
@@ -415,13 +431,14 @@ export async function prepareNodeSyncSave(
           nodeNotePath(goal.path),
           nodes,
         ),
-        materials: observations.map(({ identity, version, repository }) =>
+        materials: observations.map(({ identity, version, repository, directoryFiles }) =>
           version
             ? {
                 identity,
                 version,
                 fingerprintVersion: 2 as const,
                 ...(repository ? { repository } : {}),
+                ...(directoryFiles ? { directoryFiles } : {}),
               }
             : (previousMaterials.find((entry) => entry.identity === identity) ?? { identity }),
         ),

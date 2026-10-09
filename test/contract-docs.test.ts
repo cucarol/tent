@@ -38,7 +38,7 @@ test("material paths are defined once, in node-maintenance", async () => {
   const maintenance = flat(await read("skill-resources/references/node-maintenance.md"));
   assert.match(
     maintenance,
-    /Pass Workspace-root paths like `docs\/x\.md`; Tent stores them relative to the Node's own file/,
+    /Pass Workspace-root paths \(`docs\/x\.md`\); Tent stores them Node-relative/,
   );
   assert.match(maintenance, /`docs\/x\.md#State`/);
   const access = flat(await read("skill-resources/references/access.md"));

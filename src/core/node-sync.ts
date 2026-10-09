@@ -1,7 +1,7 @@
 import { withTentMutation, type FsAdapter } from "./adapter.js";
 import { contentEtag } from "./etag.js";
 import { parseFrontmatter } from "./frontmatter.js";
-import { materialLocator, validateMaterialAddresses } from "./material.js";
+import { materialLocator, isDirectoryMaterial, validateMaterialAddresses } from "./material.js";
 import nodePath from "node:path";
 import { loadNodeCatalog, readCatalogDocument, type CatalogNode } from "./node-catalog.js";
 import { NodeWriteError, savePreparedNodeDocumentUnlocked } from "./node-document-write.js";
@@ -29,6 +29,7 @@ import { validateNodeName } from "./scaffold.js";
 import { listCardDocuments, readCardDocument } from "./card-document.js";
 import { readCardGoalIds, type CardProgressInput } from "./card-progress.js";
 import { latestGoalAheadTimes } from "./node-ahead-history.js";
+import { changedDirectoryFiles } from "./directory-material.js";
 
 export type NodeSyncState = "synced" | "ahead" | "behind" | "unanchored";
 export type NodeSyncInspection = {
@@ -53,6 +54,8 @@ export type NodeSyncInspection = {
     currentVersion?: string;
     state: "current" | "changed" | "unavailable" | "unanchored";
     reason?: string;
+    changedFiles?: ReturnType<typeof changedDirectoryFiles>["changedFiles"];
+    changedFilesOverflow?: number;
   }[];
   reasons: string[];
 };
@@ -93,6 +96,11 @@ async function inspectCatalogNodes(
         ...(goalId ? { goalId } : {}),
         ...(recordedVersion ? { recordedVersion } : {}),
         ...(observation.version ? { currentVersion: observation.version } : {}),
+        ...(observation.directoryFiles &&
+        basis?.directoryFiles &&
+        observation.version !== recordedVersion
+          ? changedDirectoryFiles(basis.directoryFiles, observation.directoryFiles)
+          : {}),
         state: recordedVersion
           ? !observation.version
             ? "unavailable"
@@ -469,7 +477,7 @@ export function linkNodeOutput(
           if (error && typeof error === "object" && "code" in error && error.code === "ENOENT")
             throw new NodeWriteError(
               "INVALID_INPUT",
-              `Output file not found: ${input.label ?? input.resource}. Create the file first, then run link-output again.`,
+              `Output ${isDirectoryMaterial(locator) ? "directory" : "file"} not found: ${input.label ?? input.resource}. Create the ${isDirectoryMaterial(locator) ? "directory" : "file"} first, then run link-output again.`,
             );
           throw error;
         }
@@ -480,7 +488,7 @@ export function linkNodeOutput(
           : locator.kind === "uri"
             ? decodeURIComponent(nodePath.posix.basename(new URL(locator.uri).pathname))
             : "";
-      const defaultName = basename || "Output";
+      const defaultName = basename && basename !== "." && basename !== ".." ? basename : "Output";
       let name = validateNodeName(input.name ?? defaultName, goal.path);
       if (input.name === undefined)
         for (let index = 2; await fs.exists(`${goal.path}/${name}`); index++)
@@ -492,7 +500,9 @@ export function linkNodeOutput(
         );
         const encoded = relative.split("/").map(encodeURIComponent).join("/");
         descriptor.resource =
-          (encoded.startsWith("../") ? encoded : `./${encoded}`) + locator.suffix;
+          (encoded.startsWith("../") ? encoded : `./${encoded}`) +
+          (locator.directory && !encoded.endsWith("/") ? "/" : "") +
+          locator.suffix;
       }
       let cardId = input.cardId;
       if (cardId) {

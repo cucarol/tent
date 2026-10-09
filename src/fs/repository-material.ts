@@ -110,6 +110,12 @@ async function repository(root: string, cache: RepositoryMaterialCache) {
     throw error;
   }
 }
+
+/** Directory listing only needs the owning checkout, not blob relocation metadata. */
+export async function directoryRepository(root: string) {
+  const boundary = await gitBoundary(root);
+  return boundary ? { root: await realpath(boundary) } : undefined;
+}
 async function trackedFiles(repo: Repository, cache: RepositoryMaterialCache) {
   const token = await signature(path.join(repo.gitDir, "index"));
   const known = cache.tracked.get(repo.gitDir);

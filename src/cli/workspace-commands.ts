@@ -135,15 +135,20 @@ export async function runWorkspaceCommand(
       return { exitCode: 0, stdout: output + "\n", stderr: "" };
     }
     if (sub === "check") {
-      const result = await checkGraph(fs, roots.workspaceRoot, async (filename) => {
-        try {
-          return (await stat(filename)).isFile();
-        } catch (error) {
-          if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""))
-            return false;
-          throw error;
-        }
-      });
+      const result = await checkGraph(
+        fs,
+        roots.workspaceRoot,
+        async (filename, directory?: boolean) => {
+          try {
+            const info = await stat(filename);
+            return directory ? info.isDirectory() : info.isFile();
+          } catch (error) {
+            if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""))
+              return false;
+            throw error;
+          }
+        },
+      );
       const output =
         values.json || globals.json
           ? JSON.stringify(result)

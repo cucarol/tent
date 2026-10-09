@@ -49,7 +49,7 @@ export function materialOccurrences(data: Record<string, unknown>) {
 export function isCardResponseSource(resource: string, documentPath: string): boolean {
   try {
     const locator = materialLocator(resource, documentPath, true);
-    if (locator.kind !== "path") return false;
+    if (locator.kind !== "path" || isDirectoryMaterial(locator)) return false;
     const match = /^cards\/(card-[^/]+)\.md$/.exec(locator.target);
     return !!match && isCardId(match[1]!);
   } catch {
@@ -90,7 +90,13 @@ export function validateMaterialAddresses(
 }
 
 export type MaterialLocator =
-  | { kind: "path"; anchor: "bundle" | "document"; target: string; suffix: string }
+  | {
+      kind: "path";
+      anchor: "bundle" | "document";
+      target: string;
+      suffix: string;
+      directory?: true;
+    }
   | { kind: "uri"; uri: string }
   | { kind: "unresolved"; text: string };
 
@@ -115,7 +121,11 @@ export function resolvedMaterialOccurrences(
 
 export function materialIdentity(locator: MaterialLocator): string | undefined {
   return locator.kind === "path"
-    ? JSON.stringify(["path", locator.target, locator.suffix])
+    ? JSON.stringify([
+        "path",
+        locator.target + (locator.directory && !locator.target.endsWith("/") ? "/" : ""),
+        locator.suffix,
+      ])
     : locator.kind === "uri"
       ? JSON.stringify(["uri", locator.uri])
       : undefined;
@@ -148,6 +158,8 @@ export function materialLocator(
   }
   if (/^[a-z][a-z\d+.-]*:/i.test(value)) {
     const uri = new URL(value);
+    if (uri.protocol === "file:" && uri.pathname.endsWith("/") && (uri.search || uri.hash))
+      throw new Error("Directory materials cannot select a query or fragment");
     return { kind: "uri", uri: uri.href };
   }
   if (value.includes("\\")) throw new Error("Local material paths use / separators");
@@ -162,6 +174,8 @@ export function materialLocator(
   const suffix = split < 0 ? "" : value.slice(split);
   const encoded = split < 0 ? value : value.slice(0, split);
   const decoded = decodeURIComponent(encoded);
+  const directory = decoded.endsWith("/");
+  if (directory && suffix) throw new Error("Directory materials cannot select a query or fragment");
   if (!decoded || decoded.includes("\0") || decoded.includes("\\") || decoded.startsWith("//"))
     throw new Error("Invalid material path");
   const anchor = value.startsWith("/") ? "bundle" : "document";
@@ -192,7 +206,17 @@ export function materialLocator(
   // Canonicalize that alias in a synthetic Workspace, never against process.cwd.
   target = path.posix.relative("/.tent", path.posix.join("/.tent", target)) || ".";
   if (/^[a-z]:/i.test(target)) throw new Error("Absolute filesystem paths require a file: URI");
+  if (directory) return { kind: "path", anchor, target, suffix, directory: true };
   return { kind: "path", anchor, target, suffix };
+}
+
+/** A trailing slash declares recursive directory material, including file: addresses. */
+export function isDirectoryMaterial(locator: MaterialLocator): boolean {
+  return locator.kind === "path"
+    ? locator.directory === true
+    : locator.kind === "uri" &&
+        locator.uri.startsWith("file:") &&
+        new URL(locator.uri).pathname.endsWith("/");
 }
 
 /** Convert a known local locator to a host path. Other URI schemes remain references. */
@@ -286,7 +310,8 @@ export function rewriteMaterialPaths(
     address = /%[\da-f]{2}/i.test(occurrence.resource)
       ? address.split("/").map(encodeURIComponent).join("/")
       : address.replace(/[%?#]/g, (character) => encodeURIComponent(character));
-    const next = address + locator.suffix;
+    const next =
+      address + (locator.directory && !address.endsWith("/") ? "/" : "") + locator.suffix;
     if (next === occurrence.resource) continue;
     if (occurrence.field === "resource") data.resource = next;
     else {
