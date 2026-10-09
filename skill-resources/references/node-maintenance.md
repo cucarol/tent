@@ -9,7 +9,7 @@
 | Rename or move | `tent node rename <id> <name>`, `tent node move <id> --parent <id>` | the id stays |
 | Retire a subtree | `tent node archive <id>`; undo with `tent node restore <id> --archive-commit <commit>` | `commit` |
 
-A Node is behind when its material or an ancestor goal changed after it was saved or confirmed, or `stale_after` has passed; a goal is ahead while no current output sits under it.
+Behind: a Node's material or ancestor goal changed since it was saved or confirmed, or `stale_after` passed. Ahead: a goal has no undeprecated output under it, or changed since its outputs were reviewed.
 
 - On an ETag conflict, read again, merge and save with the new `etag`. A `read:` ETag from a partial read cannot replace or confirm a body.
 - `append --heading <title>` adds to the end of an existing section with that heading, or starts one.

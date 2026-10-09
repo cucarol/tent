@@ -23,7 +23,7 @@ Tent 面向一份交接笔记已经装不下的项目：同时有几个方向，
 - **Role**：一个持续的工作方向，写明目的、边界和入口。它不是正在运行的 Agent，也不是权限。
 - **Card**：一次固定的输入，包含一段提示、它的来源和可选的目标 Role。来源里的 Node 和 Role 钉在当时的 Git 版本。会话接收（take）一张 Card，Tent 记下这次接收。Card 发出后不再改变；输入要改，就发一张新 Card。
 
-把图谱和你的文件对照，会得到两种判断。Node 的材料，也就是它指向的文件或 Node，在 Tent 记录版本之后变了，它就处于**落后**。goal 下面任何位置都没有未作废的 output 时，它处于**领先**；tags 不影响这一点。goal 自己变了也会领先：它的正文或材料一变，下面的每个 output 都落后，goal 处于领先，直到这些 output 复核完。如果只是某个 output 自己的材料变了，这个 output 落后，但 goal 不会因此领先：实现已经有了，只是需要复核。Card 只把不落后的 output 算作完成；output 落后时，Card 显示 `needs-review`。
+把图谱和你的文件对照，会得到两种判断。Node 的材料，也就是它指向的文件或 Node，在 Tent 记录版本之后变了，它就处于**落后**。goal 下面任何位置都没有未作废的 output 时，它处于**领先**；tags 不影响这一点。goal 自己变了也会领先：它的正文或材料一变，下面的每个 output 都落后，goal 处于领先，直到这些 output 复核完。如果只是某个 output 自己的材料变了，这个 output 落后，但 goal 不会因此领先：实现已经有了，只是需要复核。Card 里的 goal，只要还有一个回应它的 output 没有落后，就算完成；回应它的 output 全部落后时，Card 显示 `needs-review`。
 
 作为材料传给 CLI 的文件路径，比如 `--resource` 或 Card 的 `--source`，从工作区根目录解析。替换内容的写入必须带上读到的 ETag，两个会话不会悄悄覆盖对方。精确规则见 [docs/SPEC.md](docs/SPEC.md)。
 

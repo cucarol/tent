@@ -14,7 +14,7 @@ Tent is a project's context graph. This release makes it show what is ahead, goa
 ### Ahead and behind
 
 - Saving a Node records the versions of its `resource` and `sources` in `.tent/.git`. The Markdown carries no hash fields.
-- `tent node check`, `tent workspace drift` and `tent workspace brief` report two findings. A goal with no current output under it is ahead. A Node whose material changed, or whose `stale_after` time has passed, is behind.
+- `tent node check`, `tent workspace drift` and `tent workspace brief` report two findings. Ahead: a goal has no undeprecated output under it, or changed since its outputs were reviewed. A Node whose material changed, or whose `stale_after` time has passed, is behind.
 - Behind propagates down the goal chain. Changing a goal's body or material makes every output under it behind, including through nested goals. Confirming the goal does not confirm its outputs.
 - Every current output under a goal counts as implementing it, whatever its tags.
 - `tent node confirm` records a review and refreshes the Node's versions. `tent node write --confirm` saves and confirms together. Rewriting an output's whole body also refreshes its dependencies.

@@ -64,7 +64,7 @@ Node 名称在所有平台按 Windows 文件名校验：不得含 `< > : " / \ |
 
 `node append` 不需要先读或 ETag；`--heading` 与现有同名节匹配时追加到该节末尾。`node write-section` 使用 `get-section` 返回的 `sectionEtag`，写入含标题的完整新节，其他节的编辑不冲突。替换整个正文前须完整读取（`--full`）；分页或部分读取得到的 `read:` ETag 只允许元数据修改，不能替换或确认正文。保存后保留回执中的 ETag 与 version，无需回读。ETag 冲突时重新读取、合并后用新 ETag 保存。Card 钉住的来源版本不能作为编辑基础。`node write-many` 的每个 create 条目需要本批唯一的 `ref`，`@ref` 可用于 parent、链接与材料地址。批次先校验并准备全部最终文档，在一个 Workspace 锁下写入，并把改动的文档记入一个 Tent 提交；失败的批次回滚它自己的文档、目录和顺序改动，回滚失败时报告受影响的路径与冲突并保留外部编辑。锁只串行化 Tent 写入者，不让文件写入与 Git 对外部编辑器或进程终止具有原子性。
 
-落后（behind）：已记录的材料变化或缺失、`stale_after` 到期，或任一祖先 goal 的内容或材料相对该 output 的记录发生变化。领先（ahead）：goal 子树下没有当前 output，或其 output 落后于该 goal 的内容或材料。一个 goal 可同时落后和领先。读完整 Node 和变化的材料后，判断仍成立用 `node confirm`，需要修正用 `node write --confirm`。整体重写 output 正文且规范化后的正文确有变化时，也会刷新其依赖；append、节编辑和元数据修改保留原基线。确认 goal 不会确认它的 output。Tent 在保存时把材料版本记入 Git，不需要手填哈希。
+落后（behind）：已记录的材料变化或缺失、`stale_after` 到期，或任一祖先 goal 的内容或材料相对该 output 的记录发生变化。领先（ahead）：goal 子树下没有未作废的 output，或者 goal 的内容或材料在其 output 复核之后又变了。output 只是自己的材料变了时，只有它落后，goal 不领先。一个 goal 可同时落后和领先。读完整 Node 和变化的材料后，判断仍成立用 `node confirm`，需要修正用 `node write --confirm`。整体重写 output 正文且规范化后的正文确有变化时，也会刷新其依赖；append、节编辑和元数据修改保留原基线。确认 goal 不会确认它的 output。Tent 在保存时把材料版本记入 Git，不需要手填哈希。
 
 `node link-output` 在 goal 下新建 output，名称默认取文件名，只带 `--tags` 给出的标签；文件须已在 Workspace checkout 中，候选分支或 worktree 应先集成。已跟踪材料保留仓库相对位置；本地文件缺失时，可按 SPEC「Node synchronization and outputs」的规则从同一仓库存活的检出读取，主检出当前缺少该文件且其 HEAD 历史删除过该路径时观察不可用；主检出存在该文件时，历史删除不影响读取。`status` 为 `draft`、`stable`（默认）或 `deprecated`，只作用于本文档；`node archive` 弃用子树，`node restore --archive-commit` 撤销；`node delete` 永久删除子树，只在用户要求时使用。`node rename` 与 `node move` 保持 id 并更新指向它的链接。
 
