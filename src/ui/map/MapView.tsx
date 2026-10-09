@@ -27,7 +27,8 @@ import "@xyflow/react/dist/style.css";
 import { primaryOf, type Graph, type Hand, type Primary } from "../data/store.js";
 import type { SnapshotCommit, SnapshotRef, SyncFlag, SyncFlags } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
-import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
+import { FileGlyph, Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
+import { fileOf, infoOf, useFiles } from "../data/files.js";
 import { Pet } from "../components/Pet.js";
 import {
   CARD,
@@ -145,14 +146,18 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
   const { onFold, onOutputs } = useContext(MapActions);
   const flags = useContext(MapFlags);
   const flag = flags[data.id];
+  const files = useFiles();
   const n = data.graph.nodes.get(data.id)!;
   const state = data.graph.states.get(data.id)!;
   const hands = data.graph.handedTo(data.id);
   const p = primaryOf(n.type);
   const foldBehind = data.fold?.ids.filter((id) => flags[id]?.behind).length ?? 0;
+  const file = fileOf(n);
+  const local = file?.kind === "file" ? file : null;
+  const missing = !!local && infoOf(files, local.path) === null;
   return (
     <div
-      className={`mcard t-${p}${data.top ? " is-top" : ""}${data.rel ? " is-rel" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? ` is-behind${onlyGaps(flag.behind.reasons) ? " is-gap" : ""}` : ""}`}
+      className={`mcard t-${p}${local ? " is-file" : ""}${missing ? " is-missing" : ""}${data.top ? " is-top" : ""}${data.rel ? " is-rel" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? ` is-behind${onlyGaps(flag.behind.reasons) ? " is-gap" : ""}` : ""}`}
       style={{ width: data.w, height: data.h }}
     >
       <Handles />
@@ -161,7 +166,17 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
           {data.pin}
         </span>
       )}
-      <TypeTile kind={n.type} size={data.top ? 26 : 22} />
+      {local ? (
+        <span
+          className={`tile k-${p} is-file`}
+          style={{ width: data.top ? 26 : 22, height: data.top ? 26 : 22 }}
+          title={missing ? t.file.missing : local.path}
+        >
+          <FileGlyph show={local.show} missing={missing} size={data.top ? 14 : 12} />
+        </span>
+      ) : (
+        <TypeTile kind={n.type} size={data.top ? 26 : 22} />
+      )}
       <span className="mcard-name">{n.name}</span>
       {state.recent && <i className="new-dot" title={t.node.recent} />}
       {data.src?.changed && (
@@ -178,6 +193,8 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
         <span className="mcard-rel">
           {data.rel === "cites" ? t.map.relCites : t.map.relCitedBy}
         </span>
+      ) : local?.ext ? (
+        <span className="mcard-tag is-ext">{local.ext}</span>
       ) : (
         n.tags.length > 0 && (
           <span className="mcard-tag" title={n.tags.join(", ")}>

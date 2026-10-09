@@ -23,6 +23,8 @@ import { editDraft, isDraft, useDraft } from "../data/drafts.js";
 import { cardProgressLabel } from "../data/card-progress.js";
 import { nodeDrafts as drafts } from "../data/node-drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
+import { FileView } from "./FileView.js";
+import { fileOf } from "../data/files.js";
 import { Pet, turnPet } from "../components/Pet.js";
 import { Markdown } from "../components/Markdown.js";
 import {
@@ -808,10 +810,15 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
                   onToast={onToast}
                 />
               </Suspense>
-            ) : body.trim() ? (
-              <Markdown body={body} fromPath={node.notePath} graph={graph} onOpen={onOpen} />
             ) : (
-              <p className="empty">{t.node.noBody}</p>
+              <>
+                <FileView node={node} onToast={onToast} />
+                {body.trim() ? (
+                  <Markdown body={body} fromPath={node.notePath} graph={graph} onOpen={onOpen} />
+                ) : (
+                  !fileOf(node) && <p className="empty">{t.node.noBody}</p>
+                )}
+              </>
             )}
           </div>
         }

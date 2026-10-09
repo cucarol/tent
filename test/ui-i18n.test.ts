@@ -81,6 +81,12 @@ test("behind and ahead reasons read by kind, not as file names", () => {
     ]),
     "落后：shared.ts 已删除",
   );
+  assert.equal(
+    t.map.behindWhy([
+      "ENOENT: no such file or directory, lstat 'C:\\w\\out\\gone.pdf': ../../out/gone.pdf",
+    ]),
+    "落后：gone.pdf 已删除",
+  );
   assert.equal(t.map.aheadWhy("3 小时前", "empty"), "领先（3 小时前起）：还没有产出");
   assert.equal(t.map.aheadWhy(null, "behind"), "领先：产出还没跟上");
 

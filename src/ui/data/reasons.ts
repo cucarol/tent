@@ -2,7 +2,7 @@
 export type BehindSummary = {
   /** File names of materials that changed. */
   changed: string[];
-  /** File names of materials deleted from the main checkout. */
+  /** File names of materials deleted, from the main checkout or from the workspace. */
   deleted: string[];
   /** Materials with no retained baseline: a review and one confirmation settle them. */
   baseline: number;
@@ -43,6 +43,9 @@ export function summarizeBehind(reasons: readonly string[]): BehindSummary {
       (match = /^Repository material was deleted in the main checkout: .*: (.+)$/.exec(reason))
     )
       summary.deleted.push(fileName(match[1]!));
+    // A material that could not be read because it is gone: Core writes the error, then the address.
+    else if (reason.startsWith("ENOENT:") && reason.lastIndexOf(": ") > 6)
+      summary.deleted.push(fileName(reason.slice(reason.lastIndexOf(": ") + 2)));
     else if (/no retained baseline|cannot be reconstructed/.test(reason)) summary.baseline++;
     else if ((match = /^Content is stale on or after (.+)$/.exec(reason)))
       summary.stale = match[1]!;

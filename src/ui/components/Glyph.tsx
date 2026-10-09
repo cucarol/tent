@@ -9,7 +9,12 @@ import {
   Copy,
   Ellipsis,
   File,
+  FileCode,
+  FileImage,
+  FileMusic,
   FileText,
+  FileVideoCamera,
+  FileX,
   FolderOpen,
   Globe,
   GripVertical,
@@ -42,6 +47,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { primaryOf, type Primary } from "../data/store.js";
+import { fileOf, infoOf, useFiles, type FileKind } from "../data/files.js";
+import type { SnapshotNode } from "../data/types.js";
 
 /**
  * Type icons from Lucide, so they sit with the interface icons: goal is a flag, prompt the prompt `>_`,
@@ -156,6 +163,12 @@ const icons = {
   pause: Pause,
   globe: Globe,
   file: File,
+  fileHtml: FileCode,
+  fileImage: FileImage,
+  fileVideo: FileVideoCamera,
+  fileAudio: FileMusic,
+  fileText: FileText,
+  fileMissing: FileX,
   out: ArrowUpRight,
   mail: Mail,
   working: Ellipsis,
@@ -176,4 +189,43 @@ export type IconName = keyof typeof icons;
 export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
   const Glyph = icons[name];
   return <Glyph className="icon" size={size} strokeWidth={1.75} aria-hidden="true" />;
+}
+
+const FILE_ICONS: Record<FileKind, IconName> = {
+  html: "fileHtml",
+  image: "fileImage",
+  video: "fileVideo",
+  audio: "fileAudio",
+  text: "fileText",
+  other: "file",
+};
+/** A Node's own file, drawn by what its suffix shows; a missing file is crossed out. */
+export function FileGlyph({
+  show,
+  missing,
+  size = 14,
+}: {
+  show: FileKind;
+  missing?: boolean;
+  size?: number;
+}) {
+  return (
+    <span className={`file-glyph${missing ? " is-missing" : ""}`}>
+      <Icon name={missing ? "fileMissing" : FILE_ICONS[show]} size={size} />
+    </span>
+  );
+}
+
+/** A Node's icon in lists: its file or remote address when its resource names one, otherwise its type. */
+export function NodeGlyph({ node, size = 14 }: { node: SnapshotNode; size?: number }) {
+  const files = useFiles();
+  const file = fileOf(node);
+  if (file?.kind === "uri")
+    return (
+      <span className="file-glyph is-remote">
+        <Icon name="globe" size={size} />
+      </span>
+    );
+  if (file?.kind !== "file") return <TypeGlyph type={node.type} size={size} />;
+  return <FileGlyph show={file.show} missing={infoOf(files, file.path) === null} size={size} />;
 }

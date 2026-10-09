@@ -13,14 +13,18 @@ import type {
   SnapshotRef,
   SyncFlag,
 } from "../data/types.js";
-import { CardGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
+import { CardGlyph, Icon, NodeGlyph, TypeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
 import { ago, inlineDiff, shortHash, trimSegments, when, type Segment } from "../util.js";
 import { t } from "../i18n.js";
 
 const glyphOf = (graph: Graph, target: SnapshotRef, size = 15) =>
   target.kind === "node" ? (
-    <TypeGlyph type={graph.nodes.get(target.id)?.type ?? "prompt"} size={size} />
+    graph.nodes.get(target.id) ? (
+      <NodeGlyph node={graph.nodes.get(target.id)!} size={size} />
+    ) : (
+      <TypeGlyph type="prompt" size={size} />
+    )
   ) : target.kind === "role" ? (
     <Pet id={target.id} size={14} />
   ) : (

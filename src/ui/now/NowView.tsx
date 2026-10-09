@@ -10,7 +10,7 @@ import type {
   SyncFlag,
   SyncFlags,
 } from "../data/types.js";
-import { Icon, TypeGlyph } from "../components/Glyph.js";
+import { Icon, NodeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
 import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
@@ -435,7 +435,7 @@ export function NowView({
               <StateMark kind={self.flag.behind ? "behind" : "ahead"} />
             ) : (
               <span className="ns-ico">
-                <TypeGlyph type={c.type} size={14} />
+                <NodeGlyph node={c} size={14} />
               </span>
             )}
             <span className="ns-name">{c.name}</span>
@@ -475,7 +475,7 @@ export function NowView({
       head: (
         <>
           <span className="ns-ico">
-            <TypeGlyph type={graph.nodes.get(id)!.type} size={14} />
+            <NodeGlyph node={graph.nodes.get(id)!} size={14} />
           </span>
           <span className="ns-name">{graph.nodes.get(id)!.name}</span>
           <span className="ns-count">{list.length}</span>
@@ -490,7 +490,7 @@ export function NowView({
           title={n.name}
         >
           <span className="ns-ico">
-            <TypeGlyph type={n.type} size={13} />
+            <NodeGlyph node={n} size={13} />
           </span>
           <span className="ns-text">{n.name}</span>
           <span className="ns-meta">{ago(n.outputAt)}</span>
@@ -643,7 +643,7 @@ export function NowView({
                 className="now-done-chip"
                 onClick={() => onOpen({ kind: "node", id: n.id })}
               >
-                <TypeGlyph type={n.type} size={12} />
+                <NodeGlyph node={n} size={12} />
                 <span>{n.name}</span>
                 <small>{ago(n.outputAt)}</small>
               </button>

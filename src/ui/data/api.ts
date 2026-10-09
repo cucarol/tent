@@ -225,18 +225,28 @@ export const api = {
     call<{ text: string; pathChanged: boolean }>(`/api/history/diff?from=${at(from)}&to=${at(to)}`),
 };
 
+/** What `/api/files/info` says of each path: its size and time, or null when it is not there. */
+export type FileInfo = { size: number; modifiedAt: string } | null;
+export const fileInfo = (paths: string[]) =>
+  call<{ files: Record<string, FileInfo | null> }>("/api/files/info", send("POST", { paths }));
+
+/** A workspace file's bytes; <iframe>, <video> and <audio> cannot send the token themselves. */
+export async function workspaceBlob(workspacePath: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(`/api/files?path=${encodeURIComponent(workspacePath)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal,
+  });
+  if (!response.ok) throw new ApiError(response.status, `HTTP_${response.status}`, workspacePath);
+  return response.blob();
+}
+
 const images = new Map<string, Promise<string>>();
 /** A workspace image as a blob URL; <img> cannot send the token itself. */
 export function workspaceImage(workspacePath: string): Promise<string> {
   let url = images.get(workspacePath);
   if (!url) {
     url = (async () => {
-      const response = await fetch(`/api/files?path=${encodeURIComponent(workspacePath)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok)
-        throw new ApiError(response.status, `HTTP_${response.status}`, workspacePath);
-      return URL.createObjectURL(await response.blob());
+      return URL.createObjectURL(await workspaceBlob(workspacePath));
     })();
     url.catch(() => images.delete(workspacePath));
     images.set(workspacePath, url);

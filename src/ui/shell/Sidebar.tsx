@@ -5,7 +5,8 @@ import type { SnapshotCard, SnapshotNode, SnapshotRef } from "../data/types.js";
 import { isDraft, editDraft, useDraft } from "../data/drafts.js";
 import { cardProgressLabel } from "../data/card-progress.js";
 import { hasUnsavedNodeDrafts } from "../data/node-drafts.js";
-import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
+import { Icon, NodeGlyph, TypeGlyph, TypeTile } from "../components/Glyph.js";
+import { fileOf } from "../data/files.js";
 import { Pet } from "../components/Pet.js";
 import { t, type Lang } from "../i18n.js";
 import { ago, pathTail, readStored, when, writeStored } from "../util.js";
@@ -427,6 +428,7 @@ function Tree({
             <Icon name="chevron" size={13} />
           </button>
         )}
+        {fileOf(n) && <NodeGlyph node={n} size={13} />}
         <span className="t">{n.name}</span>
         {state.recent && !marks.length && !active && (
           <i className="new-dot" title={t.node.recent} />

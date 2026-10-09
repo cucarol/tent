@@ -57,6 +57,21 @@ export type UiServer = {
 const MB = 1024 * 1024;
 const BODY_LIMIT = { document: 2 * MB };
 const FILE_LIMIT = 20 * MB;
+/** Audio and video play from a blob in the page, so they get a larger, still bounded, allowance. */
+const MEDIA_LIMIT = 200 * MB;
+const MEDIA_TYPES: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+};
+const FILE_TYPES: Record<string, string> = {
+  ...MEDIA_TYPES,
+  ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
+};
+/** How many paths one file-info request may ask about. */
+const INFO_LIMIT = 2000;
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -81,6 +96,9 @@ const PAGE_POLICY = [
   "default-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' blob: data: http: https:",
+  // Workspace HTML previews in a sandboxed frame, and audio or video, load from blobs of /api/files.
+  "frame-src blob:",
+  "media-src blob:",
   "object-src 'none'",
   "base-uri 'none'",
   "frame-ancestors 'none'",
@@ -385,6 +403,13 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       });
     }
     if (route === "GET /api/files") return file(res, url.searchParams.get("path") ?? "");
+    // A read sent as POST: the list of paths can outgrow a URL.
+    if (route === "POST /api/files/info") {
+      const paths = record(await readJson(req, BODY_LIMIT.document)).paths;
+      if (!Array.isArray(paths) || !paths.every((p) => typeof p === "string"))
+        throw new HttpError(422, "INVALID_INPUT", "paths must be a list of workspace paths");
+      return json(res, 200, await fileInfo(paths));
+    }
     throw new HttpError(404, "NOT_FOUND", `No such endpoint: ${route}`);
   }
 
@@ -438,34 +463,77 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     });
   }
 
-  /** Images inside the workspace only, after following links. */
-  async function file(res: ServerResponse, relative: string) {
-    const type = IMAGE_TYPES[path.extname(relative).toLowerCase()];
+  /**
+   * A workspace file by its workspace-relative path, after following links. Paths that leave the
+   * workspace, are absolute, or reach into a `.git` directory are refused with 403.
+   */
+  async function workspaceFile(relative: string) {
+    if (!relative) throw new HttpError(422, "INVALID_INPUT", "A workspace path is required");
     const parts = relative.split("/");
+    const outside = () =>
+      new HttpError(403, "FORBIDDEN_PATH", "Only files inside the workspace can be read");
     if (
-      !type ||
-      !relative ||
       relative.startsWith("/") ||
       /[\\\0:]/.test(relative) ||
       parts.some((p) => !p || p === "." || p === ".." || p.toLowerCase() === ".git")
     )
-      throw new HttpError(422, "INVALID_INPUT", "Only images inside the workspace can be shown");
+      throw outside();
     const root = await fsp.realpath(workspaceRoot);
     const real = await fsp.realpath(path.join(root, ...parts)).catch((error: unknown) => {
       if (!isMissing(error)) throw error;
       throw new HttpError(404, "NOT_FOUND", `No such file: ${relative}`);
     });
-    if (!real.startsWith(root + path.sep))
-      throw new HttpError(422, "INVALID_INPUT", "Only images inside the workspace can be shown");
+    if (!real.startsWith(root + path.sep)) throw outside();
+    // A link inside the workspace may still lead into a Git directory; the rule holds for where it ends.
+    if (
+      path
+        .relative(root, real)
+        .split(path.sep)
+        .some((p) => p.toLowerCase() === ".git")
+    )
+      throw outside();
     const stat = await fsp.stat(real);
     if (!stat.isFile()) throw new HttpError(404, "NOT_FOUND", `No such file: ${relative}`);
-    if (stat.size > FILE_LIMIT) throw new HttpError(413, "TOO_LARGE", "Image is larger than 20 MB");
+    return { real, stat };
+  }
+
+  /**
+   * Serves a workspace file for the page to show. Responses never run as this origin: the page fetches
+   * them with its token and shows them from blobs, and a sandbox policy covers a direct visit.
+   */
+  async function file(res: ServerResponse, relative: string) {
+    const { real, stat } = await workspaceFile(relative);
+    const ext = path.extname(relative).toLowerCase();
+    const type = IMAGE_TYPES[ext] ?? FILE_TYPES[ext] ?? "application/octet-stream";
+    const limit = MEDIA_TYPES[ext] ? MEDIA_LIMIT : FILE_LIMIT;
+    if (stat.size > limit)
+      throw new HttpError(413, "TOO_LARGE", `File is larger than ${limit / MB} MB`);
     res.writeHead(200, {
       "Content-Type": type,
       "Content-Length": stat.size,
       "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "sandbox",
     });
     res.end(await fsp.readFile(real));
+  }
+
+  /** Size and modification time of workspace files; null for a missing file or a refused path. */
+  async function fileInfo(paths: string[]) {
+    if (paths.length > INFO_LIMIT)
+      throw new HttpError(422, "INVALID_INPUT", `At most ${INFO_LIMIT} paths per request`);
+    // A Map, not an object: any file name is a key, `__proto__` included.
+    const files = new Map<string, { size: number; modifiedAt: string } | null>();
+    for (const relative of new Set(paths)) {
+      try {
+        const { stat } = await workspaceFile(relative);
+        files.set(relative, { size: stat.size, modifiedAt: stat.mtime.toISOString() });
+      } catch (error) {
+        if (!(error instanceof HttpError)) throw error;
+        files.set(relative, null);
+      }
+    }
+    return { files: Object.fromEntries(files) };
   }
 
   async function page(req: IncomingMessage, res: ServerResponse, url: URL) {

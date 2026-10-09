@@ -1010,3 +1010,42 @@ button.now-pet:hover { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--border
 .ask-wait-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-2); }
 .ask-pick { height: 28px; max-width: 132px; padding: 0 6px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 12.5px; }
 .ask-pick:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* A Node's own file (by its resource suffix): previews on the Node page, a file mark in lists and on the map. */
+.file-glyph { display: inline-grid; place-items: center; flex: none; color: var(--output); }
+.file-glyph.is-missing { color: var(--warn); }
+.file-glyph.is-remote { color: var(--text-3); }
+a.btn { text-decoration: none; }
+.row > .file-glyph { margin-right: 6px; }
+.tile.is-file { border-radius: 4px 9px 4px 4px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--output) 22%, transparent); }
+.mcard.is-file .mcard-tag.is-ext { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 5px; border-radius: 4px; background: var(--bg-muted); color: var(--text-2); }
+.mcard.is-missing { border-style: dashed; border-color: var(--warn); }
+.mcard.is-missing .mcard-name { color: var(--text-3); }
+.mcard.is-missing .mcard-tag.is-ext { background: var(--warn-soft); color: var(--warn); }
+
+.file-view { margin-bottom: 22px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg); }
+.file-bar { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg-subtle); flex-wrap: wrap; }
+.file-name { font-weight: 550; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.file-size { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.file-acts { margin-left: auto; display: inline-flex; gap: 6px; }
+.file-stage { display: grid; place-items: center; background: var(--canvas); }
+.file-frame { display: block; width: 100%; height: min(70vh, 640px); border: 0; background: #fff; }
+.file-image { display: block; max-width: 100%; max-height: 70vh; object-fit: contain; }
+.file-view.is-image .file-stage { padding: 14px; background: repeating-conic-gradient(var(--bg-muted) 0 25%, var(--bg) 0 50%) 0 0 / 16px 16px; }
+.file-media { display: block; width: 100%; max-height: 70vh; background: #000; }
+.file-view.is-audio .file-stage { padding: 18px 14px; }
+.file-view.is-audio .file-media { background: transparent; }
+.file-note { margin: 6px 0 0; font-size: 12.5px; color: var(--text-3); }
+.file-stage > .file-note { margin: 0; padding: 28px 12px; }
+.file-hint { margin: 0; padding: 6px 12px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--text-3); }
+
+.file-card { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 22px; padding: 14px 14px 14px 12px; border: 1px solid var(--border); border-radius: 10px 16px 10px 10px; background: var(--bg-subtle); }
+.file-card > .file-glyph { width: 40px; height: 40px; border-radius: 8px; background: var(--output-soft); }
+.file-card.is-missing { border-style: dashed; border-color: var(--warn); background: var(--warn-soft); }
+.file-card.is-missing > .file-glyph { background: var(--bg); }
+.file-card.is-remote > .file-glyph { background: var(--bg-muted); color: var(--text-2); }
+.file-card-main { flex: 1; min-width: 0; }
+.file-card-name { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-weight: 550; font-size: 13.5px; overflow-wrap: anywhere; }
+.file-ext { font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; text-transform: uppercase; letter-spacing: .04em; padding: 1px 5px; border-radius: 4px; background: var(--bg-muted); color: var(--text-2); }
+.file-card-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 3px; font-size: 12px; color: var(--text-3); }
+.file-card-meta .mono { overflow-wrap: anywhere; user-select: all; }

@@ -390,23 +390,88 @@ test("Cards are published with pinned sources", async (t) => {
   assert.equal((await call("POST", "/api/cards", { json: { prompt: 3 } })).status, 422);
 });
 
-test("only images inside the workspace are served", async (t) => {
-  const { call } = await fixture(t);
+test("workspace files are served by suffix; paths leaving the workspace are refused with 403", async (t) => {
+  const { call, workspace } = await fixture(t);
   const image = await call("GET", "/api/files?path=docs/shot.png");
   assert.equal(image.status, 200);
   assert.equal(image.headers["content-type"], "image/png");
+  await fs.writeFile(path.join(workspace, "docs/page.html"), "<script>parent.x = 1</script>");
+  const page = await call("GET", "/api/files?path=docs/page.html");
+  assert.equal(page.status, 200);
+  assert.match(String(page.headers["content-type"]), /^text\/html/);
+  // A direct visit could not run the page as the UI's origin.
+  assert.equal(page.headers["content-security-policy"], "sandbox");
+  assert.equal(page.headers["x-content-type-options"], "nosniff");
+  const notes = await call("GET", "/api/files?path=docs/notes.txt");
+  assert.equal(notes.status, 200);
+  assert.equal(notes.headers["content-type"], "application/octet-stream");
+
+  // A junction inside the workspace that leads out of it.
+  const outside = path.join(path.dirname(workspace), "outside");
+  await fs.mkdir(outside, { recursive: true });
+  await fs.writeFile(path.join(outside, "secret.txt"), "secret");
+  await fs.symlink(outside, path.join(workspace, "docs/out"), "junction");
+  // A junction that stays inside the workspace but leads into its Git directory.
+  await fs.symlink(
+    path.join(workspace, ".tent/.git"),
+    path.join(workspace, "docs/git"),
+    "junction",
+  );
   for (const target of [
-    "docs/notes.txt",
-    "../ws/docs/shot.png",
+    "../outside/secret.txt",
+    "docs/../../outside/secret.txt",
+    "docs/out/secret.txt",
+    "docs/git/HEAD",
     ".tent/.git/HEAD",
     "/docs/shot.png",
-  ])
-    assert.equal(
-      (await call("GET", `/api/files?path=${encodeURIComponent(target)}`)).status,
-      422,
-      target,
-    );
+    "C:/Windows/win.ini",
+    "docs\\shot.png",
+  ]) {
+    const refused = await call("GET", `/api/files?path=${encodeURIComponent(target)}`);
+    assert.equal(refused.status, 403, target);
+    assert.equal(json<{ error: { code: string } }>(refused).error.code, "FORBIDDEN_PATH");
+  }
+  const info = await call("POST", "/api/files/info", { json: { paths: ["docs/git/HEAD"] } });
+  assert.deepEqual(json<{ files: unknown }>(info).files, { "docs/git/HEAD": null });
+  assert.equal((await call("GET", "/api/files?path=")).status, 422);
   assert.equal((await call("GET", "/api/files?path=docs/missing.png")).status, 404);
+});
+
+test("file info reports sizes, and null for missing or refused paths", async (t) => {
+  const { call, workspace } = await fixture(t);
+  const info = await call("POST", "/api/files/info", {
+    json: { paths: ["docs/shot.png", "docs/missing.png", "../outside.txt", "docs/shot.png"] },
+  });
+  assert.equal(info.status, 200);
+  const files = json<{ files: Record<string, { size: number; modifiedAt: string } | null> }>(
+    info,
+  ).files;
+  assert.equal(files["docs/shot.png"]!.size, 4);
+  assert.ok(Date.parse(files["docs/shot.png"]!.modifiedAt));
+  assert.equal(files["docs/missing.png"], null);
+  assert.equal(files["../outside.txt"], null);
+
+  // Any file name is a key of its own, `__proto__` included, whether the file is there or not.
+  const named = async () =>
+    json<{ files: Record<string, unknown> }>(
+      await call("POST", "/api/files/info", { json: { paths: ["__proto__"] } }),
+    ).files;
+  await fs.writeFile(path.join(workspace, "__proto__"), "abc");
+  const present = await named();
+  assert.ok(Object.prototype.hasOwnProperty.call(present, "__proto__"));
+  assert.equal((present["__proto__"] as { size: number }).size, 3);
+  await fs.rm(path.join(workspace, "__proto__"));
+  const gone = await named();
+  assert.ok(Object.prototype.hasOwnProperty.call(gone, "__proto__"));
+  assert.equal(gone["__proto__"], null);
+  assert.equal(
+    (await call("POST", "/api/files/info", { json: { paths: "docs/shot.png" } })).status,
+    422,
+  );
+  assert.equal(
+    (await call("POST", "/api/files/info", { json: { paths: Array(2001).fill("x") } })).status,
+    422,
+  );
 });
 
 test("filesystem failures other than a missing path are not reported as 404", async (t) => {
