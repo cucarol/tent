@@ -24,6 +24,7 @@ import { NODE_MOVE_PENDING_PATH } from "../src/core/node-move-recovery.js";
 import { contentEtag } from "../src/core/etag.js";
 import { parseFrontmatter } from "../src/core/frontmatter.js";
 import { NodeWriteError, writeNodeDocument } from "../src/core/node-document-write.js";
+import { extendTestLockWait } from "./helpers.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
@@ -108,6 +109,9 @@ for (const kind of ["Node", "Role"] as const) {
 
 test("independent Core writers share CAS, selected reads and exact Git history", async (t) => {
   const { workspaceId, adapter, mount } = await fixture(t);
+  const peer = new NodeFs(mount.systemRoot);
+  extendTestLockWait(t, adapter, mount.systemRoot);
+  extendTestLockWait(t, peer, mount.systemRoot);
   const raw = await adapter.readFile("A/A.md"),
     baseEtag = contentEtag(raw);
   const read = adapter.readFile.bind(adapter);
@@ -118,7 +122,7 @@ test("independent Core writers share CAS, selected reads and exact Git history",
   };
   const results = await Promise.allSettled([
     writeNodeDocument(adapter, "node-alpha", { baseEtag, body: "Core fact" }),
-    writeNodeDocument(new NodeFs(mount.systemRoot), "node-alpha", { baseEtag, body: "other fact" }),
+    writeNodeDocument(peer, "node-alpha", { baseEtag, body: "other fact" }),
   ]);
   assert.equal(
     results.filter((result) => result.status === "fulfilled").length,
@@ -128,7 +132,8 @@ test("independent Core writers share CAS, selected reads and exact Git history",
       .join("; "),
   );
   const rejected = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
-  assert.match(String(rejected.reason), /etag conflict|already running another write operation/);
+  assert.ok(rejected.reason instanceof NodeWriteError);
+  assert.equal(rejected.reason.code, "ETAG_CONFLICT");
   assert.equal(unrelatedReads, 0);
   await assert.rejects(
     writeNodeDocument(adapter, "node-alpha", { baseEtag, body: "Stale Core fact" }),

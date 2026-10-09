@@ -19,7 +19,10 @@ import {
 } from "../src/core/node-lightwrite.js";
 import { inspectNodeSync } from "../src/core/node-sync.js";
 import { runNodeCommand, nodeHelpText } from "../src/cli/node-commands.js";
-import { cli, git } from "./helpers.js";
+import { cli, extendTestLockWait, git } from "./helpers.js";
+
+const lockTimeoutMessage =
+  /^Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying\.\s*$/;
 
 async function fixture(t: TestContext, body = "") {
   const scratch = path.resolve(".scratch");
@@ -74,7 +77,9 @@ test("append preserves CRLF and handles an empty body without a leading blank li
 });
 
 test("overlapping independent writers wait and append without losing either payload", async (t) => {
-  const { adapter, peer } = await fixture(t, "base");
+  const { adapter, peer, tentRoot } = await fixture(t, "base");
+  extendTestLockWait(t, adapter, tentRoot);
+  extendTestLockWait(t, peer, tentRoot);
   const read = adapter.readFile.bind(adapter);
   let reached!: () => void,
     release!: () => void,
@@ -300,8 +305,54 @@ test("lightweight ordinary saves retain material behind and standard material va
   );
 });
 
+test("real CLI append times out without changing bytes or history, then one caller retry writes once", async (t) => {
+  const { root, tentRoot, adapter } = await fixture(t, "start");
+  const before = await readNodeForEdit(adapter, "node-note", { capture: true });
+  const history = await git(tentRoot, "rev-list", "--all");
+  const head = (await git(tentRoot, "rev-parse", "HEAD")).trim();
+  let acquired!: () => void, release!: () => void;
+  const ready = new Promise<void>((resolve) => (acquired = resolve));
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const holder = adapter.withLock("mutation.lock", async () => {
+    acquired();
+    await held;
+  });
+  const payload = "caller retry payload";
+  try {
+    await ready;
+    const start = performance.now();
+    const rejected = await cli(root, "node", "append", "node-note", "--body", payload, "--json");
+    assert.equal(rejected.code, 1, rejected.stderr);
+    assert.match(rejected.stderr, lockTimeoutMessage);
+    assert.equal(rejected.stdout, "");
+    assert.ok(performance.now() - start >= 8_000, "the real CLI keeps its eight-second wait");
+    assert.equal(await adapter.readFile("Note/Note.md"), before.raw);
+    assert.equal((await git(tentRoot, "rev-parse", "HEAD")).trim(), head);
+    assert.equal(await git(tentRoot, "rev-list", "--all"), history);
+  } finally {
+    release();
+    await holder;
+  }
+  assert.equal(await adapter.readFile("Note/Note.md"), before.raw);
+  assert.equal(await git(tentRoot, "rev-list", "--all"), history);
+
+  // A new caller invocation, after the holder releases; the failed action is never retried inside Tent.
+  const retried = await cli(root, "node", "append", "node-note", "--body", payload, "--json");
+  assert.equal(retried.code, 0, retried.stderr);
+  const saved = JSON.parse(retried.stdout);
+  const current = await readNodeForEdit(adapter, "node-note");
+  assert.equal(current.body, `start\n\n${payload}\n`);
+  assert.equal(saved.etag, contentEtag(current.raw));
+  assert.ok(saved.version);
+  assert.equal(await adapter.history.read(saved.version), current.raw);
+  assert.equal(saved.version.commit, (await git(tentRoot, "rev-parse", "HEAD")).trim());
+  assert.equal((await git(tentRoot, "rev-list", "--count", `${head}..HEAD`)).trim(), "1");
+});
+
 test("real CLI processes queue concurrent append and section stdin edit reports captured version", async (t) => {
-  const { root, adapter } = await fixture(t, "start");
+  const { root, tentRoot, adapter } = await fixture(t, "start");
+  await readNodeForEdit(adapter, "node-note", { capture: true });
+  const head = (await git(tentRoot, "rev-parse", "HEAD")).trim();
   const payloads = ["process one", "process two"];
   const results = await Promise.all(
     payloads.map((body) => cli(root, "node", "append", "node-note", "--body", body, "--json")),
@@ -314,10 +365,7 @@ test("real CLI processes queue concurrent append and section stdin edit reports 
     let result = results[i]!;
     if (result.code !== 0) {
       assert.equal(result.code, 1, result.stderr);
-      assert.match(
-        result.stderr,
-        /^Tent is already running another write operation; try again later\.\s*$/,
-      );
+      assert.match(result.stderr, lockTimeoutMessage);
       assert.ok(!(await readNodeForEdit(adapter, "node-note")).body.includes(payloads[i]!));
       // The acquisition deadline can expire on a loaded host. Both contenders have
       // settled, so one caller retry must append the previously rejected input once.
@@ -327,9 +375,13 @@ test("real CLI processes queue concurrent append and section stdin edit reports 
     const saved = JSON.parse(result.stdout);
     assert.match(saved.etag, /^[a-f0-9]{24}$/);
     assert.ok(saved.version);
+    const captured = await adapter.history.read(saved.version);
+    assert.equal(saved.etag, contentEtag(captured));
+    assert.equal(parseFrontmatter(captured).body.split(payloads[i]!).length, 2);
   }
   const body = (await readNodeForEdit(adapter, "node-note")).body;
   for (const payload of payloads) assert.equal(body.split(payload).length, 2);
+  assert.equal((await git(tentRoot, "rev-list", "--count", `${head}..HEAD`)).trim(), "2");
   const appended = await runNodeCommand(
     "append",
     ["node-note", "--heading", "Summary", "--body", "-"],
