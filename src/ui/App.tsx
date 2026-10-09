@@ -13,6 +13,7 @@ import { buildGraph, loadSnapshot, primaryOf, type Visits } from "./data/store.j
 import { api, ApiError, changes, describe } from "./data/api.js";
 import type { Snapshot, SnapshotRef } from "./data/types.js";
 import { Icon, TypeGlyph } from "./components/Glyph.js";
+import { Loader } from "./components/Loader.js";
 import { Boundary } from "./components/Boundary.js";
 import { Sidebar, type ThemePref } from "./shell/Sidebar.js";
 import { StageBar, type StageView } from "./shell/StageBar.js";
@@ -416,12 +417,7 @@ export function App() {
         <p>{error}</p>
       </div>
     );
-  if (!graph)
-    return (
-      <div className="boot">
-        <p>{t.app.loading}</p>
-      </div>
-    );
+  if (!graph) return <Loader label={t.app.loading} />;
 
   const switchLang = (next: Lang) => {
     setLang(next);
@@ -511,13 +507,7 @@ export function App() {
                 </Boundary>
               ) : (
                 <Boundary label={t.app.map}>
-                  <Suspense
-                    fallback={
-                      <div className="boot">
-                        <p>{t.app.loading}</p>
-                      </div>
-                    }
-                  >
+                  <Suspense fallback={<Loader label={t.app.loading} />}>
                     <MapView
                       graph={graph}
                       flags={flags}

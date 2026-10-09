@@ -90,6 +90,21 @@ kbd { display: inline-grid; place-items: center; min-width: 18px; height: 18px; 
 
 /* ---------- boot ---------- */
 .boot { height: 100%; display: grid; place-content: center; justify-items: center; gap: 14px; color: var(--text-2); }
+/* Loader (components/Loader.tsx): the triangle opens round the point as if pulled taut. Each side moves out and
+   lengthens along its own edge so the corners still meet, and grows a little thinner; the triangle turns once and
+   settles back. The pieces' centres move by 0.22 of their distance from the point. */
+.loader { overflow: visible; }
+/* The mark's own colours (assets/icons), the same in both themes; the page's type colours stay its own. */
+.loader-piece.is-goal { fill: #3B534E; } .loader-piece.is-prompt { fill: #246F70; } .loader-piece.is-output { fill: #86A48E; }
+.loader-point { fill: #DF5D2A; }
+.loader-turn { transform-box: view-box; transform-origin: 524.8px 557.8px; animation: loader-turn 3s cubic-bezier(.65, 0, .35, 1) infinite; }
+.loader-piece { transform-box: fill-box; transform-origin: center; animation: 3s cubic-bezier(.65, 0, .35, 1) infinite; }
+.loader-piece.is-output { animation-name: loader-output; } .loader-piece.is-prompt { animation-name: loader-prompt; } .loader-piece.is-goal { animation-name: loader-goal; }
+@keyframes loader-turn { 0%, 22% { transform: rotate(0); } 78%, 100% { transform: rotate(360deg); } }
+@keyframes loader-output { 0%, 100% { transform: none; } 22%, 78% { transform: translate(49px, -25px) rotate(60.6deg) scale(1.22, .88) rotate(-60.6deg); } }
+@keyframes loader-prompt { 0%, 100% { transform: none; } 22%, 78% { transform: translate(-44px, -11px) rotate(116deg) scale(1.22, .88) rotate(-116deg); } }
+@keyframes loader-goal { 0%, 100% { transform: none; } 22%, 78% { transform: translate(13px, 52px) rotate(-12.2deg) scale(1.22, .88) rotate(12.2deg); } }
+@media (prefers-reduced-motion: reduce) { .loader * { animation: none !important; } }
 
 /* ---------- controls: one system for every button ---------- */
 .btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 12.5px; font-weight: 500; white-space: nowrap; box-shadow: var(--shadow-xs); transition: background .12s, border-color .12s; }
