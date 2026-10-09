@@ -7,6 +7,12 @@ import { readWorkspaceSettings } from "../core/workspace-settings.js";
 import { listHistoryChanges } from "../core/history-query.js";
 import { checkGraph } from "../core/graph-check.js";
 import {
+  scanWorkspace,
+  formatWorkspaceScan,
+  workspaceScanCommitLimit,
+} from "../core/workspace-scan.js";
+import { readWorkspaceScanRepository, scanFileKind } from "../fs/workspace-scan.js";
+import {
   inspectCurrentContext,
   makeContextBrief,
   formatContextBrief,
@@ -22,6 +28,7 @@ tent workspace changes [--from <commit>] [--to <commit>] [--limit <n>] [--cursor
 tent workspace check [--json]
 tent workspace brief [--role <roleId>] [--json]
 tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
+tent workspace scan [--commits <n>] [--json]
 Accepts --workspace <root> and --json. check reports broken links, invalid material addresses, missing local files, unavailable Markdown material sections and Node documents whose disk and Tent Git presence differ (node-git-mismatch) without editing documents or capturing history. Exit 1 means issues or inspection errors; JSON remains on stdout. brief compares current local versions and returns at most 4 KiB, with behind Nodes first, then ahead Nodes. --role filters Card inputs; Node counts remain Workspace-wide. drift reports ahead and behind Nodes. Use node confirm after reviewing a Node; Tent records hashes itself.`;
 
 export async function runWorkspaceCommand(
@@ -33,7 +40,7 @@ export async function runWorkspaceCommand(
   try {
     if (["help", "--help", "-h"].includes(sub))
       return { exitCode: 0, stdout: workspaceHelpText + "\n", stderr: "" };
-    if (!["export", "changes", "check", "brief", "drift"].includes(sub))
+    if (!["export", "changes", "check", "brief", "drift", "scan"].includes(sub))
       throw new Error(workspaceHelpText);
     const { values, positionals } = parseArgs({
       args,
@@ -45,6 +52,7 @@ export async function runWorkspaceCommand(
         limit: { type: "string" },
         cursor: { type: "string" },
         role: { type: "string" },
+        commits: { type: "string" },
         help: { type: "boolean", short: "h" },
         workspace: { type: "string" },
         json: { type: "boolean" },
@@ -56,6 +64,21 @@ export async function runWorkspaceCommand(
     if (positionals.length) throw new Error(workspaceHelpText);
     if (values.role !== undefined && sub !== "brief")
       throw new Error("--role is only valid for workspace brief");
+    if (values.commits !== undefined && sub !== "scan")
+      throw new Error("--commits is only valid for workspace scan");
+    if (
+      sub === "scan" &&
+      [values.output, values.from, values.to, values.limit, values.cursor].some(
+        (value) => value !== undefined,
+      )
+    )
+      throw new Error(workspaceHelpText);
+    const commitLimit =
+      sub === "scan"
+        ? workspaceScanCommitLimit(
+            values.commits === undefined ? undefined : Number(values.commits),
+          )
+        : undefined;
     if (
       sub === "export" &&
       (!values.output || values.from || values.to || values.limit || values.cursor)
@@ -91,6 +114,27 @@ export async function runWorkspaceCommand(
       throw new Error(
         "Tent workspace identity is missing; explicitly initialize or convert this workspace",
       );
+    if (sub === "scan") {
+      const result = await scanWorkspace(
+        fs,
+        roots.workspaceRoot,
+        await readWorkspaceScanRepository(roots.workspaceRoot, commitLimit),
+        scanFileKind,
+        commitLimit,
+      );
+      return {
+        exitCode: result.inspectionErrors.length ? 1 : 0,
+        stdout:
+          (values.json || globals.json ? JSON.stringify(result) : formatWorkspaceScan(result)) +
+          "\n",
+        stderr:
+          values.json || globals.json
+            ? ""
+            : result.inspectionErrors
+                .map((error) => `${error.node}: ${error.resource ?? "Node"}: ${error.reason}\n`)
+                .join(""),
+      };
+    }
     if (sub === "brief") {
       const brief = makeContextBrief(
         await inspectCurrentContext(fs, roots.workspaceRoot, { roleId: values.role }),

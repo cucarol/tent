@@ -29,3 +29,4 @@ export * from "./history-query.js";
 export * from "./document-diff.js";
 export * from "./workspace-revision.js";
 export * from "./workspace-relations.js";
+export * from "./workspace-scan.js";
