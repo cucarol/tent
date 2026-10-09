@@ -4,7 +4,7 @@
 
 ## 构建与安装
 
-需要 Node.js 22.19+ 和 Git。可从 [0.1.1 Release](https://github.com/cucarol/tent/releases/tag/0.1.1) 下载 `tent-plugin-0.1.1.zip`，解压到准备保留的目录。交付根目录下应同时有 `.agents/plugins/marketplace.json` 和 `plugins/tent/`；使用下方 marketplace 命令安装，无需 npm install。插件运行时只使用 JavaScript、Node 内置模块与静态资源，同一个包可在支持的 Windows、macOS 和 Linux 环境运行。
+需要 Node.js 22.19+ 和 Git。可从 [0.1.2 Release](https://github.com/cucarol/tent/releases/tag/0.1.2) 下载 `tent-plugin-0.1.2.zip`，解压到准备保留的目录。交付根目录下应同时有 `.agents/plugins/marketplace.json` 和 `plugins/tent/`；使用下方 marketplace 命令安装，无需 npm install。插件运行时只使用 JavaScript、Node 内置模块与静态资源，同一个包可在支持的 Windows、macOS 和 Linux 环境运行。
 
 从源码构建时执行：
 
@@ -24,7 +24,7 @@ codex plugin add tent@tent-local
 
 插件清单位于 `.codex-plugin/plugin.json`，Hook 定义位于 `hooks/hooks.json`。新安装或修改后的 Hook 需要宿主信任审查；不要手写信任值。安装后在实际宿主中检查发现、启用和事件投递，配置文件存在不代表已经生效。
 
-npm 包 `vibe-tent`（Release 中附为 `vibe-tent-0.1.1.tgz`）是单独的 CLI 包，用 `npm install -g vibe-tent` 安装后使用 `tent` 命令。它不是完整的 Codex 插件交付目录。
+npm 包 `vibe-tent`（Release 中附为 `vibe-tent-0.1.2.tgz`）是单独的 CLI 包，用 `npm install -g vibe-tent` 安装后使用 `tent` 命令。它不是完整的 Codex 插件交付目录。
 
 ## 按需入口
 
