@@ -94,6 +94,7 @@ test("goal get exposes bounded live context without changing document bytes or c
   // The English CLI hint adds no CJK labels of its own; this fixture's names are ASCII.
   assert.doesNotMatch(first.context, /[\p{Script=Han}\u3000-\u303f\uff00-\uffef]/u);
   assert.match(first.context, /^Context\nAncestor Scope node-scope /);
+  assert.match(first.context, /Ancestor Scope node-scope useful description/);
   // Imported outputs have no retained goal basis, so context must expose review debt.
   assert.match(first.context, /stable\/behind/);
   assert.match(first.context, /received-no-output/);
@@ -291,6 +292,9 @@ test("all Node types disclose complete live association categories and incoming 
   const first = parse(await runNodeCommand("get", ["node-subj00", "--context"], globals));
   const repeated = parse(await runNodeCommand("get", ["node-subj00", "--context"], globals));
   assert.equal(first.context, repeated.context);
+  assert.match(first.context, /^Context\nAncestor Goal node-goal00\n/);
+  assert.doesNotMatch(first.context, /node-[a-z0-9]+ —/);
+  assert.ok(first.context.includes(`${card.cardId} 0/0 [pending/—]`), first.context);
   assert.ok(Buffer.byteLength(JSON.stringify({ context: first.context })) <= 1024);
   const continuation = parse(
     await runNodeCommand(

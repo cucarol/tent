@@ -26,10 +26,10 @@ export async function goalContextText(fs: FsAdapter, nodeId: string): Promise<st
   if (!items.length) return "Context: no related items";
   const selected: GoalContextItem[] = [];
   const render = (entries: GoalContextItem[], length = 12, descriptionLength = 8) => {
-    const lines = entries.map(
-      (item) =>
-        `${labels[item.kind]}${item.kind === "child" ? `(${clip(item.type ?? "", 12)})` : ""}${item.relationKinds ? `(${item.relationKinds.join("/")})` : ""} ${clip(item.name, length)} ${item.id} ${clip(item.description, descriptionLength) || "—"}${item.state ? ` [${item.state}${item.progress !== undefined ? `/${item.progress ?? "—"}` : ""}]` : ""}${item.receiver ? ` ${clip(item.receiver, 12)}` : ""}`,
-    );
+    const lines = entries.map((item) => {
+      const description = clip(item.description, descriptionLength);
+      return `${labels[item.kind]}${item.kind === "child" ? `(${clip(item.type ?? "", 12)})` : ""}${item.relationKinds ? `(${item.relationKinds.join("/")})` : ""} ${clip(item.name, length)} ${item.id}${description ? ` ${description}` : ""}${item.state ? ` [${item.state}${item.progress !== undefined ? `/${item.progress ?? "—"}` : ""}]` : ""}${item.receiver ? ` ${clip(item.receiver, 12)}` : ""}`;
+    });
     const omitted = Object.keys(labels).flatMap((kind) => {
       const count =
         items.filter((item) => item.kind === kind).length -

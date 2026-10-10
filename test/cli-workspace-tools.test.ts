@@ -48,6 +48,31 @@ test("CLI validation errors name the command, argument and field instead of issu
     ["Bad", "--type", "prompt", "--sources-json", '[{"resource":""}]'],
     globals,
   );
+  const validItem = { op: "create", ref: "ok", name: "Valid", type: "prompt" };
+  for (const [item, field, message] of [
+    [{ op: "create", name: "Missing ref", type: "prompt" }, "ref", "ref is required"],
+    [{ op: "create", ref: "bad", type: "prompt" }, "name", "name is required"],
+    [{ op: "create", ref: "bad", name: "Missing type" }, "type", "type is required"],
+    [{ op: "update", baseEtag: "known", body: "text" }, "nodeId", "nodeId is required"],
+    [{ op: "update", nodeId: "node-existing", body: "text" }, "baseEtag", "baseEtag is required"],
+    [{ op: "create", ref: 12, name: "Wrong type", type: "prompt" }, "ref", "expected string"],
+    [{ op: "remove" }, "op", "op must be create or update"],
+    [{ name: "Missing op" }, "op", "op must be create or update"],
+  ] as const) {
+    const rejected = await runNodeCommand(
+      "write-many",
+      ["--input-json", JSON.stringify({ items: [validItem, item] })],
+      globals,
+    );
+    assert.equal(rejected.exitCode, 1);
+    assert.equal(rejected.stdout, "");
+    assert.ok(
+      rejected.stderr.startsWith(`tent node write-many --input-json: items[1].${field}: `),
+      rejected.stderr,
+    );
+    assert.ok(rejected.stderr.includes(message), rejected.stderr);
+    assert.equal(await new NodeFs(path.join(workspace, ".tent")).exists("Valid"), false);
+  }
   for (const result of [search, batch, create]) {
     assert.equal(result.exitCode, 1);
     assert.equal(result.stdout, "");

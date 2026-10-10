@@ -41,8 +41,10 @@ import {
   recordNodeVerification,
 } from "./node-provenance.js";
 
-const localRef = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*$/);
-const nodeId = z.string().refine(isNodeId, "Expected a canonical node-* id");
+const requiredString = (field: string) =>
+  z.string({ error: (issue) => (issue.input === undefined ? `${field} is required` : undefined) });
+const localRef = requiredString("ref").regex(/^[A-Za-z][A-Za-z0-9_-]*$/);
+const nodeId = requiredString("nodeId").refine(isNodeId, "Expected a canonical node-* id");
 const createItem = z.strictObject({
   op: z.literal("create"),
   ref: localRef,
@@ -50,8 +52,8 @@ const createItem = z.strictObject({
     .union([nodeId, z.string().regex(/^@[A-Za-z][A-Za-z0-9_-]*$/)])
     .nullable()
     .optional(),
-  name: z.string(),
-  type: z.string(),
+  name: requiredString("name"),
+  type: requiredString("type"),
   body: z.string().optional(),
   tags: z.array(z.string()).optional(),
   resource: resourceSchema.optional(),
@@ -62,7 +64,7 @@ const updateItem = z
   .strictObject({
     op: z.literal("update"),
     nodeId,
-    baseEtag: z.string().min(1),
+    baseEtag: requiredString("baseEtag").min(1),
     raw: z.string().optional(),
     body: z.string().optional(),
     frontmatter: z.record(z.string(), z.unknown()).optional(),
@@ -80,7 +82,13 @@ const updateItem = z
   );
 
 export const nodeWriteBatchInputSchema = z.strictObject({
-  items: z.array(z.union([createItem, updateItem])).min(1),
+  items: z
+    .array(
+      z.discriminatedUnion("op", [createItem, updateItem], {
+        error: "op must be create or update",
+      }),
+    )
+    .min(1),
 });
 export type NodeWriteBatchInput = z.infer<typeof nodeWriteBatchInputSchema>;
 export type NodeWriteBatchResult = {
