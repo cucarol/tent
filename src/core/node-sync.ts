@@ -41,6 +41,7 @@ import { listCardDocuments, readCardDocument } from "./card-document.js";
 import { readCardGoalIds, type CardProgressInput } from "./card-progress.js";
 import { latestGoalAheadTimes } from "./node-ahead-history.js";
 import { changedDirectoryFiles } from "./directory-material.js";
+import { changedStructureDependencies } from "./structure-material.js";
 
 export type NodeSyncState = "synced" | "ahead" | "behind" | "unanchored";
 export type NodeSyncInspection = {
@@ -60,6 +61,7 @@ export type NodeSyncInspection = {
   aheadSince?: string;
   materials: {
     resource: string;
+    track?: "structure";
     goalId?: string;
     recordedVersion?: string;
     currentVersion?: string;
@@ -67,6 +69,8 @@ export type NodeSyncInspection = {
     reason?: string;
     changedFiles?: ReturnType<typeof changedDirectoryFiles>["changedFiles"];
     changedFilesOverflow?: number;
+    changedDependencies?: ReturnType<typeof changedStructureDependencies>["changedDependencies"];
+    changedDependenciesOverflow?: number;
   }[];
   reasons: string[];
 };
@@ -202,6 +206,7 @@ async function inspectCatalogNodes(
       const recordedVersion = basis?.version;
       return {
         resource: observation.resource,
+        ...(observation.track ? { track: observation.track } : {}),
         ...(goalId ? { goalId } : {}),
         ...(recordedVersion ? { recordedVersion } : {}),
         ...(observation.version ? { currentVersion: observation.version } : {}),
@@ -209,6 +214,14 @@ async function inspectCatalogNodes(
         basis?.directoryFiles &&
         observation.version !== recordedVersion
           ? changedDirectoryFiles(basis.directoryFiles, observation.directoryFiles)
+          : {}),
+        ...(observation.structureDependencies &&
+        basis?.structureDependencies &&
+        observation.version !== recordedVersion
+          ? changedStructureDependencies(
+              basis.structureDependencies,
+              observation.structureDependencies,
+            )
           : {}),
         state: recordedVersion
           ? !observation.version

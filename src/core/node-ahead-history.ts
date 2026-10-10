@@ -19,9 +19,8 @@ import {
 
 /** Derive the last false → true transition from retained identity and material events. */
 export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Record<string, string>> {
-  // Version 18: any output satisfies a goal and invalid retained subtrees leave the
-  // catalog, so earlier cached transitions are stale.
-  return history.derived("goal-ahead-times", 18, async () => {
+  // Explicit structure tracking is part of a goal's semantic material declaration.
+  return history.derived("goal-ahead-times", 19, async () => {
     const events = await history.changesInRange();
     const recordEvents = await history.nodeRecordEvents();
     const versions = events.flatMap((event) =>
@@ -51,13 +50,13 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
     >();
     const rememberFileTargets = (raw: string, documentPath: string) => {
       try {
-        for (const { resource, field } of materialOccurrences(readFrontmatter(raw).data)) {
+        for (const { resource, field, track } of materialOccurrences(readFrontmatter(raw).data)) {
           const locator = materialLocator(resource, documentPath, field === "sources");
           if (locator.kind !== "uri" || !locator.uri.startsWith("file:")) continue;
           const uri = new URL(locator.uri);
           const path = history.localFileUriDocumentPath(locator.uri);
           materialTargets.set(
-            syncMaterialIdentity(resource, documentPath),
+            syncMaterialIdentity(resource, documentPath, undefined, track),
             path ? { path, suffix: uri.search + uri.hash } : null,
           );
         }

@@ -3,8 +3,14 @@ import { open, realpath, readFile, writeFile, mkdir, rename, rm } from "node:fs/
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { checkedSourceFile } from "./checked-source-file.js";
-import { materialLocator, localMaterialPath, isDirectoryMaterial } from "../core/material.js";
+import {
+  materialLocator,
+  localMaterialPath,
+  isDirectoryMaterial,
+  isPrefixMaterial,
+} from "../core/material.js";
 import { observeSourceDirectory, DirectoryObservationCache } from "./directory-observation.js";
+import { observePrefixMaterial, observeStructureMaterial } from "./structure-observation.js";
 import type { DirectoryFile } from "../core/directory-material.js";
 import { markdownMaterialHeading, materialContent } from "../core/material-section.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
@@ -138,17 +144,25 @@ export async function observeMaterialResource(
   cacheDir?: string,
   relocated?: { root: string; filename: string },
   directoryCache?: DirectoryObservationCache,
+  track?: "structure",
 ): Promise<{
   canonicalPath: string;
   observedVersion: string;
   cacheHit: boolean;
   blobs: { sha1: string; sha256: string };
   directoryFiles?: DirectoryFile[];
+  structureDependencies?: string[];
 }> {
   const locator = materialLocator(resource, documentPath, true);
   const filename = relocated?.filename ?? localMaterialPath(locator, workspaceRoot);
   if (filename === undefined)
     throw new Error("Mechanical checks require an explicit local path or file: URI");
+  if (track === "structure") {
+    if (relocated) throw new Error("Structure materials cannot be relocated between repositories");
+    return observeStructureMaterial(workspaceRoot, documentPath, resource, cacheDir);
+  }
+  if (isPrefixMaterial(locator))
+    return observePrefixMaterial(workspaceRoot, documentPath, resource, cacheDir);
   // An absolute file URI explicitly addresses another location. Check every path
   // segment from its filesystem root; relative addresses remain in this workspace.
   const root =

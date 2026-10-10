@@ -46,7 +46,12 @@ export class NodeFs implements FsAdapter {
     this.history = new GitDocumentHistory(this.root, entry);
   }
 
-  async observeMaterial(resource: string, documentPath: string, previous?: RepositoryMaterial) {
+  async observeMaterial(
+    resource: string,
+    documentPath: string,
+    previous?: RepositoryMaterial,
+    track?: "structure",
+  ) {
     const workspaceRoot = workspaceRootFromSystemRoot(this.root);
     if (!workspaceRoot) throw new Error("Material observation requires a Workspace .tent root");
     const cacheDir = (await this.exists(".git")) ? this.abs(".git/tent-material-cache") : undefined;
@@ -58,6 +63,7 @@ export class NodeFs implements FsAdapter {
       cacheDir,
       undefined,
       this.directoryObservations,
+      track,
     ).catch(async (error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT" || !previous) throw error;
       const relocated = await relocatedRepositoryMaterial(
@@ -66,11 +72,21 @@ export class NodeFs implements FsAdapter {
         this.repositoryMaterials,
       );
       readFrom = relocated.root;
-      return observeMaterialResource(workspaceRoot, documentPath, resource, cacheDir, relocated);
+      return observeMaterialResource(
+        workspaceRoot,
+        documentPath,
+        resource,
+        cacheDir,
+        relocated,
+        this.directoryObservations,
+        track,
+      );
     });
     // Synchronization reads compare observed content; repository metadata is needed when recording a basis.
     const repository =
-      this.materialPurpose === "inspect" || observed.directoryFiles !== undefined
+      this.materialPurpose === "inspect" ||
+      observed.directoryFiles !== undefined ||
+      observed.structureDependencies !== undefined
         ? undefined
         : await observedRepositoryMaterial(
             workspaceRoot,

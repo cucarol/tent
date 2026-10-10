@@ -6,6 +6,7 @@ import {
   localMaterialPath,
   isCardResponseSource,
   isDirectoryMaterial,
+  isPrefixMaterial,
   type MaterialSource,
 } from "../core/material.js";
 import { isNodeId } from "../core/id.js";
@@ -46,7 +47,7 @@ export async function workspaceMaterialFields(
       throw error;
     }
     if (locator.kind !== "path") return resource;
-    if (source && !explicit) {
+    if (source && !explicit && !isPrefixMaterial(locator)) {
       const filename = localMaterialPath(locator, workspaceRoot)!;
       try {
         const present = await stat(filename);
@@ -107,7 +108,9 @@ export async function missingExplicitSources(
     const address = stored[index]!.resource;
     let filename: string | undefined;
     try {
-      filename = localMaterialPath(materialLocator(address, documentPath, true), workspaceRoot);
+      const locator = materialLocator(address, documentPath, true);
+      if (isPrefixMaterial(locator)) continue;
+      filename = localMaterialPath(locator, workspaceRoot);
     } catch {
       continue;
     }

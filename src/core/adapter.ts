@@ -15,9 +15,11 @@ export interface FsAdapter {
     resource: string,
     documentPath: string,
     repository?: RepositoryMaterial,
+    track?: "structure",
   ): Promise<{
     observedVersion: string;
     directoryFiles?: DirectoryFile[];
+    structureDependencies?: string[];
     systemPath?: string;
     repository?: RepositoryMaterial;
     /** Present only when a missing declaration was read from another checkout. */

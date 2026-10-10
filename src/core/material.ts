@@ -7,7 +7,10 @@ import { isCardId } from "./id.js";
 export const resourceSchema = z
   .string()
   .refine((value) => value.trim().length > 0, "Resource must not be empty");
-export const sourceSchema = z.looseObject({ resource: resourceSchema });
+export const sourceSchema = z.looseObject({
+  resource: resourceSchema,
+  track: z.literal("structure").optional(),
+});
 export const sourcesSchema = z.array(sourceSchema);
 export type MaterialSource = z.infer<typeof sourceSchema>;
 export type MaterialFields = { resource?: string; sources?: MaterialSource[] };
@@ -35,12 +38,21 @@ function parseField<T>(schema: z.ZodType<T>, field: string, value: unknown): T {
 
 export function materialOccurrences(data: Record<string, unknown>) {
   const fields = materialFields(data);
-  const occurrences: Array<{ field: "resource" | "sources"; index?: number; resource: string }> =
-    [];
+  const occurrences: Array<{
+    field: "resource" | "sources";
+    index?: number;
+    resource: string;
+    track?: "structure";
+  }> = [];
   if (fields.resource !== undefined)
     occurrences.push({ field: "resource", resource: fields.resource });
   fields.sources?.forEach((source, index) =>
-    occurrences.push({ field: "sources", index, resource: source.resource }),
+    occurrences.push({
+      field: "sources",
+      index,
+      resource: source.resource,
+      ...(source.track ? { track: source.track } : {}),
+    }),
   );
   return occurrences;
 }
@@ -69,6 +81,11 @@ export function validateMaterialAddresses(
   for (const source of materialFields(previous ?? {}).sources ?? [])
     retainedSources.set(source.resource, (retainedSources.get(source.resource) ?? 0) + 1);
   for (const occurrence of materialOccurrences(data)) {
+    if (occurrence.track) {
+      const locator = materialLocator(occurrence.resource, documentPath, true);
+      if (!isDirectoryMaterial(locator) && !isPrefixMaterial(locator))
+        throw new MaterialAddressError("track: structure requires a directory or prefix material");
+    }
     if (occurrence.field === "resource" && occurrence.resource === previous?.resource) continue;
     if (occurrence.field === "sources") {
       const retained = retainedSources.get(occurrence.resource) ?? 0;
@@ -96,6 +113,7 @@ export type MaterialLocator =
       target: string;
       suffix: string;
       directory?: true;
+      prefix?: true;
     }
   | { kind: "uri"; uri: string }
   | { kind: "unresolved"; text: string };
@@ -158,8 +176,14 @@ export function materialLocator(
   }
   if (/^[a-z][a-z\d+.-]*:/i.test(value)) {
     const uri = new URL(value);
-    if (uri.protocol === "file:" && uri.pathname.endsWith("/") && (uri.search || uri.hash))
-      throw new Error("Directory materials cannot select a query or fragment");
+    if (uri.protocol === "file:") {
+      const pathname = decodeURIComponent(uri.pathname);
+      const prefix = prefixMaterialPath(pathname);
+      if (pathname.endsWith("/") && (uri.search || uri.hash))
+        throw new Error("Directory materials cannot select a query or fragment");
+      if (prefix && (uri.search || uri.hash))
+        throw new Error("Prefix materials cannot select a query or fragment");
+    }
     return { kind: "uri", uri: uri.href };
   }
   if (value.includes("\\")) throw new Error("Local material paths use / separators");
@@ -175,7 +199,9 @@ export function materialLocator(
   const encoded = split < 0 ? value : value.slice(0, split);
   const decoded = decodeURIComponent(encoded);
   const directory = decoded.endsWith("/");
+  const prefix = prefixMaterialPath(decoded);
   if (directory && suffix) throw new Error("Directory materials cannot select a query or fragment");
+  if (prefix && suffix) throw new Error("Prefix materials cannot select a query or fragment");
   if (!decoded || decoded.includes("\0") || decoded.includes("\\") || decoded.startsWith("//"))
     throw new Error("Invalid material path");
   const anchor = value.startsWith("/") ? "bundle" : "document";
@@ -207,7 +233,25 @@ export function materialLocator(
   target = path.posix.relative("/.tent", path.posix.join("/.tent", target)) || ".";
   if (/^[a-z]:/i.test(target)) throw new Error("Absolute filesystem paths require a file: URI");
   if (directory) return { kind: "path", anchor, target, suffix, directory: true };
+  if (prefix) return { kind: "path", anchor, target, suffix, prefix: true };
   return { kind: "path", anchor, target, suffix };
+}
+
+/** A prefix selector is one trailing star in the last segment, never a general glob. */
+function prefixMaterialPath(value: string): boolean {
+  const star = value.indexOf("*");
+  if (star < 0) return false;
+  if (star !== value.length - 1)
+    throw new Error("Prefix materials require one star at the end of the final path segment");
+  return true;
+}
+
+export function isPrefixMaterial(locator: MaterialLocator): boolean {
+  return locator.kind === "path"
+    ? locator.prefix === true
+    : locator.kind === "uri" &&
+        locator.uri.startsWith("file:") &&
+        prefixMaterialPath(decodeURIComponent(new URL(locator.uri).pathname));
 }
 
 /** A trailing slash declares recursive directory material, including file: addresses. */

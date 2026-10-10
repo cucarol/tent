@@ -151,6 +151,7 @@ async function plainFiles(
   root: string,
   directory: string,
   cacheDir?: string,
+  candidatesOnly = false,
 ): Promise<Array<{ filename: string; directory?: true }>> {
   const gitDir = cacheDir ? path.dirname(cacheDir) : undefined;
   if (
@@ -209,6 +210,10 @@ async function plainFiles(
     for (const entry of await readdir(folder, { withFileTypes: true })) {
       if (entry.name === ".git") continue;
       const filename = path.join(folder, entry.name);
+      if (entry.isSymbolicLink() && candidatesOnly) {
+        files.push(filename);
+        continue;
+      }
       if (entry.isSymbolicLink())
         throw new Error("Symbolic links are not supported for source files");
       if (entry.isDirectory()) await walk(filename);
@@ -217,6 +222,112 @@ async function plainFiles(
   }
   await walk(directory, false);
   return files.map((filename) => ({ filename }));
+}
+
+/** List candidate paths; callers validate member types after applying their coverage. */
+export async function sourceDirectoryPaths(
+  root: string,
+  directory: string,
+  cacheDir?: string,
+  trackedOnly = false,
+): Promise<string[]> {
+  await checkedSourceFile(root, directory, true);
+  const repo = await directoryRepository(directory);
+  if (!repo) {
+    if (trackedOnly)
+      throw new Error("Prefix material unavailable: no owning project Git repository");
+    const entries = await plainFiles(root, directory, cacheDir, true);
+    const files: string[] = [];
+    for (const entry of entries) {
+      if (entry.directory)
+        files.push(...(await sourceDirectoryPaths(root, entry.filename, cacheDir)));
+      else files.push(entry.filename);
+    }
+    return files;
+  }
+  const relative = path.relative(repo.root, directory).split(path.sep).join("/");
+  const scope = `:(literal)${relative || "."}`;
+  const listed = await git(repo.root, [
+    "ls-files",
+    "--cached",
+    ...(trackedOnly ? ["--stage"] : []),
+    ...(trackedOnly ? [] : ["--others", "--exclude-standard"]),
+    "-z",
+    "--",
+    scope,
+  ]);
+  const ignored = trackedOnly
+    ? new Set<string>()
+    : new Set(
+        names(
+          await git(repo.root, [
+            "ls-files",
+            "--cached",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+            "--",
+            scope,
+          ]),
+        ),
+      );
+  const files = new Set<string>();
+  const candidates = trackedOnly
+    ? names(listed).flatMap((entry) => {
+        const match = /^(\d+) [a-f0-9]+ \d\t([\s\S]+)$/.exec(entry);
+        if (!match) throw new Error("Invalid Git tracked material listing");
+        // Gitlinks identify repositories rather than tracked files in this checkout.
+        return match[1] === "160000" ? [] : [match[2]!];
+      })
+    : names(listed);
+  for (const name of candidates) {
+    if (ignored.has(name) || name.split("/").includes(".git")) continue;
+    const filename = path.join(repo.root, name);
+    const info = await lstat(filename).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!info) continue;
+    if (info.isSymbolicLink()) {
+      files.add(filename);
+      continue;
+    }
+    if (info.isDirectory()) {
+      if (trackedOnly) {
+        files.add(filename);
+        continue;
+      }
+      if (path.relative(directory, filename) === "") {
+        // A gitlink without nested metadata is still listed at its own scope root.
+        // Use the existing ignore engine with a nonexistent index; no content read is needed.
+        const children = await git(
+          repo.root,
+          ["ls-files", "--others", "--exclude-standard", "-z", "--", scope],
+          undefined,
+          {
+            GIT_INDEX_FILE: path.join(
+              repo.root,
+              `.tent-directory-read-${process.pid}-${Math.random().toString(36).slice(2)}.index`,
+            ),
+            GIT_OPTIONAL_LOCKS: "0",
+          },
+        );
+        for (const member of names(children)) {
+          const child = path.join(repo.root, member);
+          if (member.endsWith("/"))
+            for (const nested of await sourceDirectoryPaths(root, child, cacheDir))
+              files.add(nested);
+          else files.add(child);
+        }
+      } else {
+        for (const member of await sourceDirectoryPaths(root, filename, cacheDir))
+          files.add(member);
+      }
+    } else if (info.isFile()) files.add(filename);
+    else throw new Error("Directory member is not a readable source file");
+  }
+  await checkedSourceFile(root, directory, true);
+  return [...files].sort();
 }
 
 export async function observeSourceDirectory(

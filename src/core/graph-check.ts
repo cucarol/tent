@@ -13,6 +13,7 @@ import {
   localMaterialPath,
   resourceSchema,
   isDirectoryMaterial,
+  isPrefixMaterial,
   type MaterialSource,
 } from "./material.js";
 import { CARDS_DIR, ROLES_DIR, ORDER_PATH, nodeNotePath } from "./paths.js";
@@ -297,12 +298,18 @@ export async function checkGraph(
       let filename: string | undefined;
       let sectionResource: string | undefined;
       let directory = false;
+      let prefixResource: string | undefined;
       try {
         const parsed = resourceSchema.safeParse(value);
         if (!parsed.success) throw new Error("Material resource must be nonempty text");
         const resource = parsed.data;
         const locator = materialLocator(resource, document.path, field === "sources");
         directory = isDirectoryMaterial(locator);
+        if (isPrefixMaterial(locator))
+          prefixResource =
+            locator.kind === "path" && !/^(?:\.{1,2}\/|\/)/.test(resource.trim())
+              ? `./${resource.trim()}`
+              : resource;
         if (locator.kind === "unresolved") {
           // Descriptive sources stay descriptive. Warn only when today's local
           // files make a bare source look like an accidentally unanchored file.
@@ -362,6 +369,11 @@ export async function checkGraph(
       }
       if (filename === undefined) return;
       try {
+        if (prefixResource !== undefined) {
+          if (!readonlyFs.observeMaterial) throw new Error("Material observer is unavailable");
+          await readonlyFs.observeMaterial(prefixResource, document.path);
+          return;
+        }
         const repository =
           typeof value === "string" && document.id
             ? nodeRecords[document.id]?.materials.find(

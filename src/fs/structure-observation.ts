@@ -1,0 +1,164 @@
+import { lstat, realpath } from "node:fs/promises";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { structureMaterialCoverage, materialCoverageContains } from "../core/material-coverage.js";
+import { directoryFingerprint, type DirectoryFile } from "../core/directory-material.js";
+import { externalStructureDependencies, structureFingerprint } from "../core/structure-material.js";
+import {
+  extractRepositoryImports,
+  isImportSource,
+  isImportConfig,
+  isTestSource,
+  type RepositorySource,
+} from "../core/repository-imports.js";
+import { sourceDirectoryPaths } from "./directory-observation.js";
+import { observeSourceFile } from "./source-observation.js";
+import { checkedSourceFile } from "./checked-source-file.js";
+import { directoryRepository } from "./repository-material.js";
+
+function aggregateBlobs(value: unknown) {
+  const bytes = Buffer.from(JSON.stringify(value));
+  return {
+    sha1: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
+    sha256: createHash("sha256").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
+  };
+}
+
+/** Safely parse the same repository sources as module-map; never run filters or parsers with writes. */
+export async function observeStructureMaterial(
+  workspaceRoot: string,
+  documentPath: string,
+  resource: string,
+  cacheDir?: string,
+) {
+  const coverage = structureMaterialCoverage(resource, documentPath, workspaceRoot);
+  if (!coverage)
+    throw new Error("Structure observation requires a Workspace directory or prefix material");
+  const physical = path.resolve(
+    workspaceRoot,
+    coverage.prefix + (coverage.kind === "prefix" ? "*" : ""),
+  );
+  const directory = coverage.kind === "directory" ? physical : path.dirname(physical);
+  await checkedSourceFile(workspaceRoot, directory, true);
+  const canonicalDirectory = await realpath(directory);
+  const canonicalPath =
+    coverage.kind === "directory"
+      ? canonicalDirectory
+      : path.join(canonicalDirectory, path.basename(physical));
+  // Both aggregate kinds use nonignored live members. Tracked paths additionally
+  // let the resolver identify ignored targets without making them members.
+  const repository = await directoryRepository(workspaceRoot);
+  const livePaths = await sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir);
+  const trackedPaths = repository
+    ? await sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir, true)
+    : undefined;
+  const memberPaths = livePaths;
+  const paths = [...new Set([...livePaths, ...(trackedPaths ?? [])])].sort();
+  const memberSources = memberPaths
+    .map((filename) => path.relative(workspaceRoot, filename).split(path.sep).join("/"))
+    .filter(
+      (file) =>
+        materialCoverageContains(coverage, file) && isImportSource(file) && !isTestSource(file),
+    );
+  const neededConfig = (file: string) => {
+    if (!isImportConfig(file)) return false;
+    const configDirectory = path.posix.dirname(file);
+    return memberSources.some(
+      (member) =>
+        (/go\.mod$/.test(file) ? member.endsWith(".go") : /\.[cm]?[jt]sx?$/.test(member)) &&
+        (configDirectory === "." || member.startsWith(configDirectory + "/")),
+    );
+  };
+  const files: RepositorySource[] = [];
+  for (const filename of paths) {
+    const workspacePath = path.relative(workspaceRoot, filename).split(path.sep).join("/");
+    const file: RepositorySource = { path: workspacePath };
+    if (memberSources.includes(workspacePath) || neededConfig(workspacePath)) {
+      await observeSourceFile(workspaceRoot, filename, undefined, {
+        key: "structure-source-v1",
+        content: (bytes) => {
+          file.content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+          if (file.content.includes("\0"))
+            throw new Error(`Structure source is not valid text: ${workspacePath}`);
+          return bytes;
+        },
+      });
+    } else if ((await lstat(filename)).isDirectory()) continue;
+    files.push(file);
+  }
+  const imports = extractRepositoryImports(files);
+  const issue = imports.issues.find(
+    (issue) => isImportConfig(issue.file) || materialCoverageContains(coverage, issue.file),
+  );
+  if (issue)
+    throw new Error(
+      `Structure unavailable: ${issue.file}: ${issue.reason}${issue.specifier ? ` (${issue.specifier})` : ""}`,
+    );
+  const structureDependencies = externalStructureDependencies(
+    coverage,
+    imports.edges,
+    files.map((file) => file.path),
+    new Set(
+      memberPaths
+        .map((filename) => path.relative(workspaceRoot, filename).split(path.sep).join("/"))
+        .filter((file) => materialCoverageContains(coverage, file)),
+    ),
+  );
+  await checkedSourceFile(workspaceRoot, directory, true);
+  return {
+    canonicalPath,
+    observedVersion: structureFingerprint(structureDependencies),
+    structureDependencies,
+    cacheHit: false,
+    blobs: aggregateBlobs(structureDependencies),
+  };
+}
+
+/** Prefix content uses nonignored directory membership and ordinary text normalization. */
+export async function observePrefixMaterial(
+  workspaceRoot: string,
+  documentPath: string,
+  resource: string,
+  cacheDir?: string,
+) {
+  const coverage = structureMaterialCoverage(resource, documentPath, workspaceRoot);
+  if (coverage?.kind !== "prefix") throw new Error("Invalid prefix material");
+  const physical = path.resolve(workspaceRoot, `${coverage.prefix}*`),
+    directory = path.dirname(physical);
+  await checkedSourceFile(workspaceRoot, directory, true);
+  const canonicalPath = path.join(await realpath(directory), path.basename(physical));
+  const paths = await sourceDirectoryPaths(workspaceRoot, directory, cacheDir);
+  const directoryFiles: DirectoryFile[] = [];
+  let cacheHit = true;
+  for (const filename of paths) {
+    const workspacePath = path.relative(workspaceRoot, filename).split(path.sep).join("/");
+    if (!materialCoverageContains(coverage, workspacePath)) continue;
+    const observed = await observeSourceFile(workspaceRoot, filename, cacheDir, {
+      key: "directory-text-v1",
+      content: (bytes) => {
+        try {
+          const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+          return text.includes("\0") ? bytes : text.replace(/\r\n?/g, "\n");
+        } catch {
+          return bytes;
+        }
+      },
+    });
+    directoryFiles.push({
+      path: path.relative(directory, observed.canonicalPath).split(path.sep).join("/"),
+      version: observed.observedVersion,
+    });
+    cacheHit &&= observed.cacheHit;
+  }
+  directoryFiles.sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+  await checkedSourceFile(workspaceRoot, directory, true);
+  return {
+    canonicalPath,
+    observedVersion: directoryFingerprint(directoryFiles),
+    directoryFiles,
+    cacheHit,
+    blobs: aggregateBlobs(directoryFiles),
+  };
+}

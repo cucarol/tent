@@ -1,0 +1,401 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { syncBuiltinESMExports } from "node:module";
+import test, { type TestContext } from "node:test";
+import { testScratchRoot } from "./scratch.js";
+import { git } from "./helpers.js";
+import { observeMaterialResource } from "../src/fs/source-observation.js";
+import { NodeFs } from "../src/fs/node-fs.js";
+import {
+  changedStructureDependencies,
+  structureDependenciesSchema,
+  structureFingerprint,
+  externalStructureDependencies,
+} from "../src/core/structure-material.js";
+
+const owner = "index.md";
+async function fixture(t: TestContext, repository = true) {
+  const root = await fs.mkdtemp(path.join(testScratchRoot(), "structure-material-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  async function write(file: string, content: string | Buffer) {
+    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await fs.writeFile(path.join(root, file), content);
+  }
+  await write(".gitignore", ".tent/\n*.tmp\n");
+  await write("src/core/card-main.ts", 'import "../out/a.js";\nexport const value = 1;\n');
+  await write("src/core/card-helper.ts", "export const helper = 1;\n");
+  await write("src/core/sibling.ts", "export const sibling = 1;\n");
+  await write("src/out/a.ts", "export const a = 1;\n");
+  await write("src/other/b.ts", "export const b = 1;\n");
+  if (repository) {
+    await git(root, "init", "--quiet", "--initial-branch=main");
+    await git(root, "config", "core.autocrlf", "false");
+    await git(root, "add", ".");
+    await git(root, "commit", "--quiet", "-m", "test: structure fixture");
+  } else {
+    const original = fs.lstat;
+    const mocked = t.mock.method(fs, "lstat", (...args: Parameters<typeof original>) => {
+      const filename = String(args[0]);
+      if (path.basename(filename) === ".git" && !filename.startsWith(root + path.sep))
+        return Promise.reject(
+          Object.assign(new Error("No ancestor Git in fixture"), { code: "ENOENT" }),
+        );
+      return original(...args);
+    });
+    syncBuiltinESMExports();
+    t.after(() => {
+      mocked.mock.restore();
+      syncBuiltinESMExports();
+    });
+  }
+  const observe = (resource = "../src/core/", track: "structure" | "content" = "structure") =>
+    observeMaterialResource(
+      root,
+      owner,
+      resource,
+      undefined,
+      undefined,
+      undefined,
+      track === "structure" ? track : undefined,
+    );
+  return { root, write, observe };
+}
+
+test("structure fingerprints contain only the outgoing external dependency set", async (t) => {
+  const { root, write, observe } = await fixture(t);
+  const initial = await observe();
+  assert.deepEqual(initial.structureDependencies, ["src/out/"]);
+  assert.equal(initial.directoryFiles, undefined);
+  await write("src/core/card-main.ts", 'import "../out/a.js";\nexport const value = 99;\n');
+  await write("src/core/card-new.ts", "export const extra = true;\n");
+  await write("src/core/card-helper.ts", 'import "./card-main.js";\n');
+  await write("src/other/b.ts", 'import "../core/card-main.js";\n');
+  await write("src/core/card-main.test.ts", 'import "../other/b.js";\n');
+  await write("src/core/card-unused.test.ts", Buffer.from([0xff, 0x00]));
+  const unchanged = await observe();
+  assert.equal(unchanged.observedVersion, initial.observedVersion);
+  await fs.rename(
+    path.join(root, "src/core/card-new.ts"),
+    path.join(root, "src/core/card-renamed.ts"),
+  );
+  assert.equal((await observe()).observedVersion, initial.observedVersion);
+  await fs.rm(path.join(root, "src/core/card-renamed.ts"));
+  assert.equal((await observe()).observedVersion, initial.observedVersion);
+  await write("src/core/card-main.ts", 'import "../out/a.js"; import "../other/b.js";\n');
+  const added = await observe();
+  assert.deepEqual(added.structureDependencies, ["src/other/", "src/out/"]);
+  assert.notEqual(added.observedVersion, initial.observedVersion);
+  assert.deepEqual(
+    changedStructureDependencies(initial.structureDependencies!, added.structureDependencies!),
+    { changedDependencies: [{ target: "src/other/", state: "added" }] },
+  );
+  await write("src/core/card-main.ts", 'import "../other/b.js";\n');
+  const removed = await observe();
+  assert.deepEqual(
+    changedStructureDependencies(added.structureDependencies!, removed.structureDependencies!),
+    { changedDependencies: [{ target: "src/out/", state: "deleted" }] },
+  );
+  assert.equal(
+    (
+      await new NodeFs(path.join(root, ".tent")).observeMaterial(
+        "../src/core/",
+        owner,
+        undefined,
+        "structure",
+      )
+    ).repository,
+    undefined,
+  );
+});
+
+test("prefix structure excludes members and retains exact same-directory external files", async (t) => {
+  const { root, write, observe } = await fixture(t);
+  await write("src/core/card-main.ts", 'import "./card-helper.js"; import "./sibling.js";\n');
+  const initial = await observe("../src/core/card-*");
+  assert.deepEqual(initial.structureDependencies, ["src/core/sibling.ts"]);
+  await write("src/core/card-new.ts", 'import "../other/b.js";\n');
+  const added = await observe("../src/core/card-*");
+  assert.deepEqual(added.structureDependencies, ["src/core/sibling.ts", "src/other/"]);
+  await git(root, "add", "src/core/card-new.ts");
+  assert.equal((await observe("../src/core/card-*")).observedVersion, added.observedVersion);
+  await fs.rm(path.join(root, "src/core/card-new.ts"));
+  assert.equal((await observe("../src/core/card-*")).observedVersion, initial.observedVersion);
+});
+
+test("nested prefix members use the importing member directory and ignore unrelated unreadable sources", async (t) => {
+  const { root, write, observe } = await fixture(t);
+  await write("src/core/card-main.ts", "export const main = true;\n");
+  await write("src/core/card-nested/member.ts", 'import "../sibling.js";\n');
+  await write("src/other/b.ts", Buffer.from([0xff, 0x00]));
+  await write("src/other/tsconfig.json", "invalid unrelated config");
+  await git(root, "add", "src/core/card-nested/member.ts", "src/other/tsconfig.json");
+  assert.deepEqual((await observe("../src/core/card-*")).structureDependencies, ["src/core/"]);
+});
+
+test("prefix members resolve untracked targets and include matching targets as internal", async (t) => {
+  const { write, observe } = await fixture(t);
+  await write("src/core/card-main.ts", 'import "../untracked/target.js";\n');
+  await write("src/untracked/target.ts", "export const target = true;\n");
+  assert.deepEqual((await observe("../src/core/card-*")).structureDependencies, ["src/untracked/"]);
+  await write("src/core/card-main.ts", 'import "./card-untracked.js";\n');
+  await write("src/core/card-untracked.ts", "export const target = true;\n");
+  assert.deepEqual((await observe("../src/core/card-*")).structureDependencies, []);
+});
+
+test("unrelated symbolic paths do not affect structure or prefix content; relevant members remain unavailable", async (t) => {
+  const { root, write, observe } = await fixture(t);
+  await write("src/core/card-main.ts", "export const value = true;\n");
+  const original = fs.lstat;
+  let linked = path.join(root, "src/core/sibling.ts");
+  const mocked = t.mock.method(fs, "lstat", async (...args: Parameters<typeof original>) => {
+    const info = await original(...args);
+    return String(args[0]) === linked
+      ? new Proxy(info, {
+          get(target, key) {
+            if (key === "isSymbolicLink") return () => true;
+            const value = Reflect.get(target, key);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        })
+      : info;
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  assert.deepEqual((await observe("../src/core/card-*")).structureDependencies, []);
+  assert.ok((await observe("../src/core/card-*", "content")).directoryFiles?.length);
+  linked = path.join(root, "src/core/card-main.ts");
+  await assert.rejects(observe("../src/core/card-*"), /Symbolic links/);
+  await assert.rejects(observe("../src/core/card-*", "content"), /Symbolic links/);
+});
+
+test("directory structure resolves ignored tracked targets while preserving nonignored members", async (t) => {
+  const { write, observe } = await fixture(t);
+  await write(".gitignore", ".tent/\nsrc/out/\nsrc/core/card-helper.ts\n");
+  await write("src/core/card-helper.ts", Buffer.from([0xff]));
+  assert.deepEqual((await observe()).structureDependencies, ["src/out/"]);
+  await write("src/core/card-main.ts", 'import "./card-helper.js";\n');
+  assert.deepEqual((await observe()).structureDependencies, ["src/core/card-helper.ts"]);
+});
+
+test("prefix content retains nonignored names and normalized content, including nested prefix members", async (t) => {
+  const { root, write, observe } = await fixture(t);
+  const initial = await observe("../src/core/card-*", "content");
+  assert.deepEqual(
+    initial.directoryFiles?.map((file) => file.path),
+    ["card-helper.ts", "card-main.ts"],
+  );
+  await write("src/core/sibling.ts", "changed sibling\n");
+  assert.equal(
+    (await observe("../src/core/card-*", "content")).observedVersion,
+    initial.observedVersion,
+  );
+  await write("src/core/card-untracked.ts", "untracked\n");
+  const membership = await observe("../src/core/card-*", "content");
+  assert.notEqual(membership.observedVersion, initial.observedVersion);
+  await git(root, "add", "src/core/card-untracked.ts");
+  assert.equal(
+    (await observe("../src/core/card-*", "content")).observedVersion,
+    membership.observedVersion,
+  );
+  await write("src/core/card-sub/nested.ts", "nested\n");
+  await git(root, "add", "src/core/card-sub/nested.ts");
+  assert.ok(
+    (await observe("../src/core/card-*", "content")).directoryFiles?.some(
+      (file) => file.path === "card-sub/nested.ts",
+    ),
+  );
+  await write("src/core/card-main.ts", 'import "../out/a.js";\r\nexport const value = 1;\r\n');
+  await fs.rm(path.join(root, "src/core/card-sub"), { recursive: true });
+  assert.equal(
+    (await observe("../src/core/card-*", "content")).observedVersion,
+    membership.observedVersion,
+  );
+  const all = await observe("../src/core/*", "content");
+  assert.ok(all.directoryFiles?.some((file) => file.path === "sibling.ts"));
+  await fs.rename(
+    path.join(root, "src/core/card-untracked.ts"),
+    path.join(root, "src/core/card-renamed.ts"),
+  );
+  await git(root, "add", "--all", "src/core");
+  const renamed = await observe("../src/core/card-*", "content");
+  assert.notEqual(renamed.observedVersion, membership.observedVersion);
+  assert.ok(renamed.directoryFiles?.some((file) => file.path === "card-renamed.ts"));
+  assert.ok(!renamed.directoryFiles?.some((file) => file.path === "card-untracked.ts"));
+  await write("src/core/card-main.ts", "changed member\n");
+  assert.notEqual(
+    (await observe("../src/core/card-*", "content")).observedVersion,
+    renamed.observedVersion,
+  );
+});
+
+test("structure fails honestly for unreadable text, invalid config and unresolved local imports", async (t) => {
+  const { write, observe } = await fixture(t);
+  await write("src/core/card-main.ts", Buffer.from([0xff]));
+  await assert.rejects(observe(), /encoded data was not valid|encoding|UTF-8/i);
+  await write("src/core/card-main.ts", "export const value = 1;\n\0");
+  await assert.rejects(observe(), /not valid text/);
+  await write("src/core/card-main.ts", 'import "./missing.js";\n');
+  await assert.rejects(observe(), /absent from tracked files/);
+  await write("src/core/card-main.ts", "export const value = 1;\n");
+  await write("tsconfig.json", "{ invalid configuration }");
+  await assert.rejects(observe(), /Cannot parse TypeScript path configuration/);
+});
+
+test("prefix observation is unavailable without a trustworthy ignore interpreter", async (t) => {
+  const { observe } = await fixture(t, false);
+  await assert.rejects(observe("../src/core/card-*"), /缺少可信的忽略规则解释/);
+  await assert.rejects(observe("../src/core/card-*", "content"), /缺少可信的忽略规则解释/);
+});
+
+test("prefix and directory share nonignored membership for tracked and untracked files", async (t) => {
+  const { write, observe } = await fixture(t);
+  await write(".gitignore", ".tent/\nsrc/core/card-helper.ts\nsrc/core/card-ignored.ts\n");
+  await write("src/core/card-main.ts", "export const main = true;\n");
+  await write("src/core/card-helper.ts", 'import "../out/a.js";\n');
+  await write("src/core/card-ignored.ts", Buffer.from([0xff]));
+  await write("src/core/card-untracked.ts", 'import "../other/b.js";\n');
+  assert.deepEqual((await observe("../src/core/card-*")).structureDependencies, ["src/other/"]);
+  const content = await observe("../src/core/card-*", "content");
+  const directory = await observe("../src/core/", "content");
+  assert.deepEqual(
+    content.directoryFiles,
+    directory.directoryFiles?.filter((file) => file.path.startsWith("card-")),
+  );
+  assert.deepEqual(
+    content.directoryFiles?.map((file) => file.path),
+    ["card-main.ts", "card-untracked.ts"],
+  );
+});
+
+test("non-Git prefix uses Tent Git ignore rules and supports rule-free standalone reads", async (t) => {
+  const { root, write, observe } = await fixture(t, false);
+  await write(".gitignore", "");
+  assert.deepEqual((await observe("../src/core/card-*")).structureDependencies, ["src/out/"]);
+  assert.equal((await observe("../src/core/card-*", "content")).directoryFiles?.length, 2);
+  await write(".gitignore", ".tent/\nsrc/core/card-helper.ts\nsrc/core/card-ignored.ts\n");
+  await write("src/core/card-helper.ts", Buffer.from([0xff]));
+  await write("src/core/card-ignored.ts", Buffer.from([0xff]));
+  await write("src/core/card-new.ts", 'import "../other/b.js";\n');
+  await fs.mkdir(path.join(root, ".tent"));
+  await git(path.join(root, ".tent"), "init", "--quiet", "--initial-branch=main");
+  const adapter = new NodeFs(path.join(root, ".tent"));
+  const structure = await adapter.observeMaterial(
+    "../src/core/card-*",
+    owner,
+    undefined,
+    "structure",
+  );
+  assert.deepEqual(structure.structureDependencies, ["src/other/", "src/out/"]);
+  const content = await adapter.observeMaterial("../src/core/card-*", owner);
+  const directory = await adapter.observeMaterial("../src/core/", owner);
+  assert.deepEqual(
+    content.directoryFiles,
+    directory.directoryFiles?.filter((file) => file.path.startsWith("card-")),
+  );
+  assert.deepEqual(
+    content.directoryFiles?.map((file) => file.path),
+    ["card-main.ts", "card-new.ts"],
+  );
+});
+
+test("standalone directory structure retains safe reading with no ignore rules", async (t) => {
+  const { root, write, observe } = await fixture(t, false);
+  await write(".gitignore", "");
+  const original = fs.lstat;
+  let linked = path.join(root, "src/other/b.ts");
+  const mocked = t.mock.method(fs, "lstat", async (...args: Parameters<typeof original>) => {
+    const info = await original(...args);
+    return String(args[0]) === linked
+      ? new Proxy(info, {
+          get(target, key) {
+            if (key === "isSymbolicLink") return () => true;
+            const value = Reflect.get(target, key);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        })
+      : info;
+  });
+  const originalReaddir = fs.readdir;
+  const mockedReaddir = t.mock.method(
+    fs,
+    "readdir",
+    async (...args: Parameters<typeof originalReaddir>) => {
+      const entries = await originalReaddir(...args);
+      return entries.map((entry) =>
+        path.join(String(args[0]), String(entry.name)) === linked
+          ? new Proxy(entry, {
+              get(target, key) {
+                if (key === "isSymbolicLink") return () => true;
+                const value = Reflect.get(target, key);
+                return typeof value === "function" ? value.bind(target) : value;
+              },
+            })
+          : entry,
+      );
+    },
+  );
+  syncBuiltinESMExports();
+  t.after(() => {
+    mockedReaddir.mock.restore();
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  assert.deepEqual((await observe()).structureDependencies, ["src/out/"]);
+  linked = path.join(root, "src/core/card-main.ts");
+  await assert.rejects(observe(), /Symbolic links/);
+});
+
+test("partial Go package targets are unavailable and complete internal packages are ignored", () => {
+  const files = ["pkg/card-main.go", "pkg/card-member.go", "pkg/sibling.go", "outside/main.go"];
+  const edge = {
+    from: "pkg/card-main.go",
+    to: "pkg",
+    kind: "directory" as const,
+    specifier: "example/pkg",
+  };
+  assert.throws(
+    () =>
+      externalStructureDependencies(
+        { kind: "prefix", prefix: "pkg/card-" },
+        [edge],
+        files,
+        new Set(files.filter((file) => file.startsWith("pkg/card-"))),
+      ),
+    /partly covered/,
+  );
+  assert.deepEqual(
+    externalStructureDependencies(
+      { kind: "directory", prefix: "pkg/" },
+      [edge],
+      files,
+      new Set(files.filter((file) => file.startsWith("pkg/"))),
+    ),
+    [],
+  );
+});
+
+test("canonical dependencies validate sorted unique targets and bounded added/deleted reports", () => {
+  assert.equal(
+    structureDependenciesSchema.safeParse(["./", "src/core/file.ts", "src/out/"]).success,
+    true,
+  );
+  for (const dependencies of [
+    ["../escape/"],
+    ["src\\bad/"],
+    ["src//bad/"],
+    ["z/", "a/"],
+    ["a/", "a/"],
+  ])
+    assert.equal(structureDependenciesSchema.safeParse(dependencies).success, false);
+  assert.equal(structureFingerprint(["b/", "a/", "b/"]), structureFingerprint(["a/", "b/"]));
+  const changed = changedStructureDependencies(
+    [],
+    Array.from({ length: 23 }, (_, i) => `src/${String(i).padStart(2, "0")}/`),
+  );
+  assert.equal(changed.changedDependencies.length, 20);
+  assert.equal(changed.changedDependenciesOverflow, 3);
+});
