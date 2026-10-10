@@ -50,6 +50,7 @@ export const INTEGRATION_TEST_FILES = Object.freeze([
   "test/plugin-package.test.ts",
   "test/role-card-review.test.ts",
   "test/role-context.test.ts",
+  "test/role-delete.test.ts",
   "test/root-build-canonical.test.ts",
   "test/ui-server.test.ts",
   "test/ui-sync.test.ts",

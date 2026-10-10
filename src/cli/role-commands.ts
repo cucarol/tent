@@ -10,6 +10,7 @@ import {
   readRolePage,
 } from "../core/role-context.js";
 import { pageItems, pageText, formatTextPage } from "./reader-page.js";
+import { deleteRole } from "../core/role-delete.js";
 import { cliErrorText, type ErrorContext } from "./error-text.js";
 
 export type RoleCommandOptions = {
@@ -29,7 +30,7 @@ export async function runRoleCommand(
   if (!sub || ["help", "--help", "-h"].includes(sub))
     return { exitCode: 0, stdout: roleHelpText(), stderr: "" };
   try {
-    if (!["list", "show", "write", "create"].includes(sub))
+    if (!["list", "show", "write", "create", "delete"].includes(sub))
       throw new Error(`Unknown role subcommand: ${sub}`);
     const flags = [
       "workspace",
@@ -37,9 +38,11 @@ export async function runRoleCommand(
         ? ["start", "limit", "expected-revision"]
         : sub === "show"
           ? ["view", "start", "end", "expected-etag"]
-          : sub === "create"
-            ? ["title", "body", "id"]
-            : ["body", "raw", "base-etag", "title", "status"]),
+          : sub === "delete"
+            ? ["base-etag"]
+            : sub === "create"
+              ? ["title", "body", "id"]
+              : ["body", "raw", "base-etag", "title", "status"]),
     ];
     const { values, positionals } = parseArgs({
       args,
@@ -54,7 +57,8 @@ export async function runRoleCommand(
     const value = (key: string) => (values as Record<string, unknown>)[key] as string | undefined;
     const number = (key: string) => (value(key) === undefined ? undefined : Number(value(key)));
     errorContext.workspace = value("workspace") ?? globals.workspace;
-    if (positionals.length === 1 && (sub === "show" || sub === "write"))
+    const selected = ["show", "write", "delete"].includes(sub);
+    if (positionals.length === 1 && selected)
       errorContext.target = { kind: "role", id: positionals[0]! };
     const text = async (key: string) => {
       const input = value(key);
@@ -64,12 +68,12 @@ export async function runRoleCommand(
       for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
       return Buffer.concat(chunks).toString("utf8");
     };
-    if (positionals.length !== (sub === "show" || sub === "write" ? 1 : 0))
-      throw new Error("Expected an explicit Role id only for show/write");
+    if (positionals.length !== (selected ? 1 : 0))
+      throw new Error("Expected an explicit Role id only for show/write/delete");
     if (sub === "create" && !value("title")?.trim())
       throw new Error("Role create requires --title");
-    if (sub === "write" && !value("base-etag"))
-      throw new Error("Role write requires --base-etag from show");
+    if (["write", "delete"].includes(sub) && !value("base-etag"))
+      throw new Error(`Role ${sub} requires --base-etag from show`);
     if (sub === "show" && (value("start") === undefined) !== (value("end") === undefined))
       throw new Error("Supply both --start and --end");
     if (sub === "show" && number("start")! > 0 && !value("expected-etag"))
@@ -121,6 +125,8 @@ export async function runRoleCommand(
         title: value("title")!,
         body: await text("body"),
       });
+    else if (sub === "delete")
+      result = await deleteRole(fs, positionals[0]!, { baseEtag: value("base-etag")! });
     else {
       const frontmatter = Object.fromEntries(
         ["title", "status"]
@@ -136,7 +142,7 @@ export async function runRoleCommand(
     }
     result = workspaceReadPaths(result, workspaceRoot);
     const json = values.json === true || globals.json === true;
-    const mutation = ["create", "write"].includes(sub);
+    const mutation = ["create", "write", "delete"].includes(sub);
     return {
       exitCode: 0,
       stdout:
@@ -164,14 +170,17 @@ export function roleHelpText() {
   tent role show role-ID [--view body|raw] [--start N --end N --expected-etag HASH]
   tent role write role-ID --base-etag HASH [--raw TEXT|- | --body TEXT|-]
                   [--title TEXT] [--status draft|stable|deprecated]
+  tent role delete role-ID --base-etag HASH
 All commands accept --workspace PATH and --json. list reads headers; show captures the selected document in Tent Git.
 Use the returned page.next range and ETag to continue a long read. Writes reject stale ETags.
 Reading never imports a Node or creates a Role. Legacy documents require explicit conversion.
+Delete removes the Role document; Tent Git keeps its history and its id is never reused. Move or deprecate pending Cards that target it first.
 `;
 }
 
 function formatRole(value: unknown, sub: string) {
   const identity = value as { roleId: string; path?: string; etag?: string };
+  if (sub === "delete") return `Deleted ${identity.roleId}`;
   if (sub === "show")
     return `${identity.roleId}  ${identity.path ?? ""}\nETag: ${identity.etag}\n${formatTextPage(value)}`;
   if (sub === "list") {

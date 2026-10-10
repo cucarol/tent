@@ -2,7 +2,15 @@ import * as z from "zod/v4";
 import { createHash } from "node:crypto";
 import type { FsAdapter } from "./adapter.js";
 import { canonicalSha256 } from "./canonical-digest.js";
-import { isOperationalPath, nodeNotePath, ORDER_PATH, DELETE_PENDING_PATH } from "./paths.js";
+import {
+  isOperationalPath,
+  nodeNotePath,
+  roleDocumentPath,
+  ORDER_PATH,
+  DELETE_PENDING_PATH,
+} from "./paths.js";
+import { isRoleId } from "./id.js";
+import { parseRoleDocument } from "./role-document.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { loadTent } from "./tree.js";
 import { isHistoryDocument } from "./document-history.js";
@@ -23,7 +31,7 @@ const writeSchema = z.strictObject({
   after: z.string().nullable(),
 });
 const planSchema = z.strictObject({
-  kind: z.literal("node"),
+  kind: z.enum(["node", "role"]),
   id: z.string(),
   source: relative,
   raw: z.string(),
@@ -64,11 +72,17 @@ async function primaryDigest(fs: FsAdapter, source: string, directory: boolean):
 function validate(value: unknown): Plan {
   const plan = planSchema.parse(value);
   if (parseFrontmatter(plan.raw).data.id !== plan.id) throw conflict("identity");
-  if (!/^node-[A-Za-z0-9-]+$/.test(plan.id) || isOperationalPath(plan.source))
-    throw conflict("source");
+  if (plan.kind === "node") {
+    if (!/^node-[A-Za-z0-9-]+$/.test(plan.id) || isOperationalPath(plan.source))
+      throw conflict("source");
+  } else {
+    if (!isRoleId(plan.id) || plan.source !== roleDocumentPath(plan.id) || plan.nodeIds.length)
+      throw conflict("source");
+    parseRoleDocument(plan.id, plan.raw);
+  }
   const paths = new Set<string>();
   for (const write of plan.writes) {
-    const allowed = write.path === ORDER_PATH && write.after !== null;
+    const allowed = plan.kind === "node" && write.path === ORDER_PATH && write.after !== null;
     if (!allowed || paths.has(write.path)) throw conflict("associated write");
     paths.add(write.path);
   }
@@ -111,12 +125,15 @@ export async function recoverPendingDeleteUnlocked(fs: FsAdapter) {
   }
   // Complete history while the durable delete record still exists, including a retry
   // whose original filesystem move happened in a previous process.
-  if (plan.kind === "node" && fs.history && (await fs.exists(".git"))) {
-    const paths = (await fs.history.pathsUnder(plan.source)).filter(isHistoryDocument);
+  if (fs.history && (await fs.exists(".git"))) {
+    const paths =
+      plan.kind === "role"
+        ? [plan.source]
+        : (await fs.history.pathsUnder(plan.source)).filter(isHistoryDocument);
     if (paths.length)
       await fs.history.captureUnlocked(
         paths.map((path) => ({ path, raw: null })),
-        { operation: "node.delete" },
+        { operation: `${plan.kind}.delete` },
       );
   }
   if (await fs.exists(quarantine)) await fs.remove(quarantine);
