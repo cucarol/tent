@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { lstat, readdir, readFile, realpath, mkdir, writeFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { checkedSourceFile } from "./checked-source-file.js";
 import { observeSourceFile } from "./source-observation.js";
@@ -35,6 +36,7 @@ async function git(
   args: string[],
   input?: string,
   environment: Record<string, string> = {},
+  acceptedExitCodes: readonly number[] = [0],
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = execFile(
@@ -64,7 +66,7 @@ async function git(
         },
       },
       (error, output, diagnostic) =>
-        error
+        error && !acceptedExitCodes.includes(Number(error.code))
           ? reject(error)
           : diagnostic.length
             ? reject(new Error(diagnostic.toString("utf8").trim()))
@@ -73,8 +75,101 @@ async function git(
     child.stdin?.end(input);
   });
 }
+
+/** Read only ignore rules, using one subprocess for all uncovered local writes. */
+export async function nonignoredLocalFiles(
+  workspaceRoot: string,
+  addresses: readonly string[],
+  tentGit: string,
+): Promise<string[] | undefined> {
+  try {
+    const repository = await directoryRepository(workspaceRoot);
+    if (!repository && !(await lstat(path.join(tentGit, "HEAD"))).isFile()) return undefined;
+    const root = repository?.root ?? workspaceRoot;
+    const candidates: Array<{ address: string; relative: string }> = [];
+    for (const address of addresses) {
+      const filename = address.startsWith("file:")
+        ? fileURLToPath(address)
+        : path.resolve(workspaceRoot, address);
+      const relative = path.relative(root, filename).split(path.sep).join("/");
+      if (
+        relative &&
+        relative !== ".." &&
+        !relative.startsWith("../") &&
+        !path.isAbsolute(relative) &&
+        (await checkedSourceFile(root, filename).then(
+          () => true,
+          () => false,
+        ))
+      )
+        candidates.push({ address, relative });
+    }
+    if (!candidates.length) return [];
+    if (!repository) {
+      const present = new Set(
+        (
+          await borrowedFiles(
+            root,
+            tentGit,
+            candidates.map((file) => file.relative),
+          )
+        ).map((filename) => (process.platform === "win32" ? filename.toLowerCase() : filename)),
+      );
+      return candidates.flatMap((file) =>
+        present.has(process.platform === "win32" ? file.relative.toLowerCase() : file.relative)
+          ? [file.address]
+          : [],
+      );
+    }
+    const output = await git(
+      root,
+      ["check-ignore", "--no-index", "--verbose", "--non-matching", "-z", "--stdin"],
+      candidates.map((file) => file.relative).join("\0") + "\0",
+      { GIT_CEILING_DIRECTORIES: path.dirname(root) },
+      [0, 1],
+    );
+    // Unlike ls-files, verbose non-matches have three meaningful empty fields.
+    const fields = output.toString("utf8").split("\0");
+    if (fields.pop() !== "" || fields.length !== candidates.length * 4) return undefined;
+    return candidates.flatMap((file, index) => {
+      const [source, , pattern, filename] = fields.slice(index * 4, index * 4 + 4);
+      if (filename !== file.relative) throw new Error("Invalid Git ignore listing");
+      return !source || pattern?.startsWith("!") ? [file.address] : [];
+    });
+  } catch {
+    return undefined;
+  }
+}
 function names(bytes: Buffer) {
   return bytes.toString("utf8").split("\0").filter(Boolean);
+}
+
+/** Existing Tent Git supplies only the Workspace's per-directory ignore engine. */
+async function borrowedFiles(root: string, gitDir: string, scopes: readonly string[]) {
+  const output = await git(
+    root,
+    [
+      "--git-dir",
+      gitDir,
+      "--work-tree",
+      root,
+      "ls-files",
+      "--others",
+      "--exclude-per-directory=.gitignore",
+      "-z",
+      "--",
+      ...scopes.map((scope) => `:(literal)${scope || "."}`),
+    ],
+    undefined,
+    {
+      GIT_INDEX_FILE: path.join(
+        gitDir,
+        `tent-directory-read-${process.pid}-${Math.random().toString(36).slice(2)}.index`,
+      ),
+      GIT_OPTIONAL_LOCKS: "0",
+    },
+  );
+  return names(output);
 }
 
 type IndexStat = { ctime: bigint; mtime: bigint; size: bigint; dev: bigint; ino: bigint };
@@ -167,30 +262,7 @@ async function plainFiles(
     // The existing Tent repository supplies Git's ignore engine only. A distinct,
     // nonexistent index keeps Tent's tracked paths out of the Workspace listing.
     // --exclude-per-directory deliberately excludes Tent info/exclude and global rules.
-    const output = await git(
-      root,
-      [
-        "--git-dir",
-        gitDir,
-        "--work-tree",
-        root,
-        "ls-files",
-        "--others",
-        "--exclude-per-directory=.gitignore",
-        "-z",
-        "--",
-        `:(literal)${relative || "."}`,
-      ],
-      undefined,
-      {
-        GIT_INDEX_FILE: path.join(
-          gitDir,
-          `tent-directory-read-${process.pid}-${Math.random().toString(36).slice(2)}.index`,
-        ),
-        GIT_OPTIONAL_LOCKS: "0",
-      },
-    );
-    return names(output)
+    return (await borrowedFiles(root, gitDir, [relative]))
       .filter((name) => !name.split("/").includes(".git"))
       .map((name) => ({
         filename: path.join(root, name),

@@ -1,6 +1,6 @@
 # Tent Agent 插件
 
-插件提供四个 Skill、SessionStart 与请求异步执行的 Stop Hook，以及同包 CLI。Node、Role、Card 的读写规则在 Core；Skill 按工作需要提供操作指引。
+插件提供四个 Skill、SessionStart 与同步 Stop Hook，以及同包 CLI。Node、Role、Card 的读写规则在 Core；Skill 按工作需要提供操作指引。
 
 ## 构建与安装
 
@@ -28,12 +28,12 @@ npm 包 `vibe-tent`（Release 中附为 `vibe-tent-0.1.2.tgz`）是单独的 CLI
 
 ## 按需入口
 
-| 工作 | Skill | CLI |
-| --- | --- | --- |
-| 新建空 Tent 和独立本地 Git | tent-init | new |
-| 查找、读取、维护有用事实 | tent-node | node |
+| 工作                         | Skill     | CLI  |
+| ---------------------------- | --------- | ---- |
+| 新建空 Tent 和独立本地 Git   | tent-init | new  |
+| 查找、读取、维护有用事实     | tent-node | node |
 | 创建、读取、维护持久工作方向 | tent-role | role |
-| 记录、预览、接收一次输入 | tent-card | card |
+| 记录、预览、接收一次输入     | tent-card | card |
 
 普通工作不要求创建 Role 或 Card。Role 可以独立建立；没有 Role 的 Session 也可接收无 target 的 Card，有 target 时必须指定对应 Role。初始化不分析项目或生成首批 Node；当前 Agent 在工作中按需维护相关事实，没有额外 Return。
 
@@ -92,9 +92,15 @@ Node 正文或语义元数据变化时记录 OKF 原生 `generated: {by, at}`；
 
 ## Hook 边界
 
-SessionStart 以事实陈述注入约 300 B：`Tent Workspace`、`Tent CLI`、`workspace brief` 提示与构建身份各一行，源码 checkout 提交不一致时再加一行；不注入完整简报。Stop 从本轮已有会话记录提取确证的文件提供、读取和修改事件，在本地记录地址、轮次、时间和 Stop 时观察到的哈希；不保存文件或会话正文。随后最多用英文给出三条带候选答案的事实陈述：本轮写入的文件尚无 output Node 记录、本轮观察到的文件版本使某 Node 落后、本轮像是有新需求或决定。意图信号只认“决定、确认、改成、新增需求”等明确表述，普通“请、需要、fix”不触发；本轮已改 Node 或 Card 时不再提示意图。完整 JSON 不超过 2 KiB。重复 Stop 静默；取消保留已观察事实但不提问。配置请求异步执行，处理器不返回阻断或续作决策；实际宿主须验证该能力和输出投递，不支持时保持 Stop 禁用，使用 Start 和正常 CLI。官方契约：[Codex Hooks](https://learn.chatgpt.com/docs/hooks)。
+SessionStart 以事实陈述注入约 300 B：`Tent Workspace`、`Tent CLI`、`workspace brief` 提示与构建身份各一行，源码 checkout 提交不一致时再加一行；不注入完整简报。Stop 同步运行，只从转录尾部确定本轮写入的文件、用材料索引点名模块并检测廉价的决定正则；不收录原生 Node 编辑、不算 behind、不观察文件哈希、不写会话观察、不等 `mutation.lock`。原生编辑留到下一次正常 Tent 命令收录，落后状态由输入一侧的 brief 报告。只有本轮写入的文件被模块覆盖才续作：模块是 `sources` 中持有 `track: structure` 目录或前缀材料的有效 Node，不看标签，普通证据目录不参与。Core 统一解析成员；前缀只允许最后一段末尾的一个 `*`。每个文件只点名最具体的覆盖模块，同样具体的都保留，带祖先名字链和可打开的 Node 文件路径而不展开正文。最多五个模块、每模块八个文件，多出模块写 `+N more modules`。
 
-`workspace brief` 在 4 KiB 内用英文展示落后与领先两种同步状态计数、落后 Node、领先时长、最近输入和产出、未关联产出与输入 Card。未关联产出仅指 session 写入、但尚未被任何 output Node 记录的文件；未关联产出列表只列过去 7 天内最近 3 个 session 的观察，更早的只计数。独立 output Node 不算未记录产物。`workspace drift` 分页保留完整待检查关系。即使没有 Hook，这两个命令也会重新观察 Node 已声明的本地材料版本。保存 Node 时自动记录新材料版本，已变化或读不到的旧材料保留原基线，普通保存不能清除落后。用 `node check` 查看，复核判断后用 `node confirm`；修正正文可用 `node write --confirm` 同时确认，write-many 更新条目也支持 `confirm: true`。用 `node link-output` 在目标下新建 output Node；全部 goal 祖先都提供隐式来源，最近的 goal 只作为显示归属。目标变化会使其产物落后，更新并确认产物后解除。基线按 Node ID 与文档保存在同一 Git 提交，Markdown 不增加同步或哈希字段。已接收 Card 的 Node 来源变化会在 brief 中提示重读；取消任务用 `card deprecate`，默认列表和简报会隐藏它，显式查看或接收仍会给出警告与现行引用。细节见上文 Node 与 Card 的维护者说明；同步状态不改变 OKF `status`。
+点名采用 SPEC 的固定英文文案，合并可能的新决定。未关联产出全部交给输入一侧的 brief；Stop 不查询文件存在性或 ignore，模块点名只按声明地址，不因文件被忽略、已跟踪或不可用而过滤。意图信号只认“决定、确认、改成、新增需求”等明确表述，普通“请、需要、fix”不触发；本轮有明确 Node 或 Card 写入证据时不再提示意图。包含宿主信封的完整 JSON 不超过 2 KiB，溢出先删文件名、再删模块，保留固定文案和问题类别。Codex 用 `decision: block` 与 `reason`；Claude Code 用 `hookSpecificOutput` 的 `hookEventName: Stop` 与 `additionalContext`。`stop_hook_active: true` 立即静默，包括续作执行工具后的 Stop；取消、没有覆盖写入的轮次也静默，不自动执行 check 或 confirm。有效提问投递前，在 `.tent/temp/stop-reviews/` 以宿主、会话和轮次的 SHA-256 建独占空 claim，重复事件最多投递一次，无全局锁或重试；claim 写失败不续作，claim 后崩溃可能丢失该次投递。claim 不存转录或文件内容，也不压制不同轮次的相同文件。
+
+材料索引的派生缓存只放现有 `.tent/.git/tent-material-cache/stop-material-index.json`。每次重扫 Node 目录并读取完整当前头部字节，按路径和字节的 SHA-256 验证；同长度、mtime 不变的元数据编辑也会失效，新增、删除或损坏缓存均从当前权威重建。缓存写失败直接计算，不修改项目文件、Node/Card/Role、Git 提交或引用；缓存不代替权威字节或忽略规则。278 个 Node 的热 Stop 要满足 p50 ≤ 300 ms、最大 ≤ 1 s，启动与导入不计；持有工作区锁时也不得等待。完整续作成本另计。
+
+Codex 以原生 `turn_id` 定位轮次；Claude Code CLI 用 `--host claude-code`，以原生 `prompt_id` 对应转录的 `promptId`，没有身份的版本静默。Claude Read、Write、Edit 需匹配成功的结构化工具结果，侧链不计入。未观察到的 shell 或外部编辑器改动、取消轮次和未投递的提问都无法兜底内容保鲜；必须跟随内容变化的规则另挂具体文件或 SPEC 小节。两个实际宿主都须验证消息抵达且只续作一次；Hook 自身热耗时与完整续作成本分别记录。官方契约：[Codex Hooks](https://learn.chatgpt.com/docs/hooks)。
+
+`workspace brief` 在 4 KiB 内用英文展示落后与领先两种同步状态计数、落后 Node、领先时长、最近输入和产出、未关联产出与输入 Card。未关联产出指 session 观察到写入、检查时仍存在、未被忽略且未被任何当前可用 Node 材料覆盖的文件；普通文件、小节、目录、前缀及外部本地材料均参与覆盖，output 的 resource 已是材料，不另作排除。deprecated、归档、未知状态和无效 Node 不提供覆盖。已删除的地址不提示未关联产出，缺失材料由材料漂移报告。只对未覆盖的现存候选做一次批量 ignore 查询；项目 Git 使用现有标准忽略规则，非 Git Workspace 可借已有 Tent Git 只解释 Workspace 的 .gitignore，不采用 Tent 私有或全局 excludes；没有可信解释器时静默，不猜规则或初始化 Git。列表只列最近 3 个活跃 session，时间窗口为截至最新观察写入的含端点 7 天，更早的只计数，不用当前时钟。`workspace drift` 分页保留完整待检查关系。即使没有 Hook，这两个命令也会重新观察 Node 已声明的本地材料版本。保存 Node 时自动记录新材料版本，已变化或读不到的旧材料保留原基线，普通保存不能清除落后。用 `node check` 查看，复核判断后用 `node confirm`；修正正文可用 `node write --confirm` 同时确认，write-many 更新条目也支持 `confirm: true`。用 `node link-output` 在目标下新建 output Node；全部 goal 祖先都提供隐式来源，最近的 goal 只作为显示归属。目标变化会使其产物落后，更新并确认产物后解除。基线按 Node ID 与文档保存在同一 Git 提交，Markdown 不增加同步或哈希字段。已接收 Card 的 Node 来源变化会在 brief 中提示重读；取消任务用 `card deprecate`，默认列表和简报会隐藏它，显式查看或接收仍会给出警告与现行引用。细节见上文 Node 与 Card 的维护者说明；同步状态不改变 OKF `status`。
 
 提示可能显示在界面或后续轮次，不能证明本次交付已维护上下文。Card 接收后保持已接收；产出通过 Node 的 sources 关联 Card。Role 通过命令参数明确选择，没有隐式 Session 绑定。
 

@@ -21,6 +21,7 @@ import {
 } from "../src/core/context-brief.js";
 import type { FsAdapter } from "../src/core/adapter.js";
 import { loadNodeCatalog } from "../src/core/node-catalog.js";
+import type { StopMaterialIndex } from "../src/core/stop-material-index.js";
 
 test("brief reports native capture failure without unhandled unused Card query promises", async () => {
   const adapter = {
@@ -194,6 +195,7 @@ test("brief exposes live root entry files without drift or another catalog scan"
 
 test("without Hooks the complete requirement, output, drift, review and unanchored-decision scenario works", async (t) => {
   const f = await fixture(t);
+  await git(f.root, "init", "--quiet");
   await fs.writeFile(path.join(f.root, "requirement.md"), "Requirement version one");
   const created = await f.node("create", [
     "Requirement",
@@ -646,7 +648,22 @@ test("brief counts historical unrecorded files but only lists three recent sessi
   assert.equal(context.unlinkedOutputs.length, 5, "the full observation source remains intact");
 });
 
-test("brief's inclusive seven-day window follows the latest observed write, not the clock or reads", (t) => {
+test("brief's inclusive seven-day window follows the latest observed write, not the clock or reads", async (t) => {
+  const interpreter = {
+    nonignoredFiles: async (addresses: readonly string[]) => [...addresses],
+  } as FsAdapter;
+  const index: StopMaterialIndex = {
+    nodes: [
+      {
+        nodeId: "node-linked",
+        path: ".tent/Linked/Linked.md",
+        names: ["Linked"],
+        type: "output",
+        materials: [{ file: "latest-linked.md" }],
+        moduleCoverage: [],
+      },
+    ],
+  };
   const observedAt = "2026-02-20T00:00:00.000Z";
   const files = [
     { address: "latest-linked.md", kind: "written" as const, at: "2026-02-08T00:00:00.000Z" },
@@ -687,10 +704,12 @@ test("brief's inclusive seven-day window follows the latest observed write, not 
     changedCardSources: { items: [], diagnostics: [] },
     unlinkedOutputs: [],
   };
-  context.unlinkedOutputs = findUnlinkedOutputs(
+  context.unlinkedOutputs = await findUnlinkedOutputs(
     context.sync,
     context.observations.events,
     process.cwd(),
+    index,
+    interpreter,
   );
   t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-02-08T00:00:00.000Z") - 1000 });
   const before = makeContextBrief(context);
@@ -704,10 +723,13 @@ test("brief's inclusive seven-day window follows the latest observed write, not 
   assert.equal(JSON.stringify(after), JSON.stringify(before));
   assert.equal(formatContextBrief(after), formatContextBrief(before));
   context.sync.outputNodes = [];
-  context.unlinkedOutputs = findUnlinkedOutputs(
+  index.nodes = [];
+  context.unlinkedOutputs = await findUnlinkedOutputs(
     context.sync,
     context.observations.events,
     process.cwd(),
+    index,
+    interpreter,
   );
   assert.deepEqual(
     makeContextBrief(context).unlinkedOutputs.map((item) => item.address),
@@ -716,10 +738,12 @@ test("brief's inclusive seven-day window follows the latest observed write, not 
   context.observations.events[0]!.files = context.observations.events[0]!.files.filter(
     (file) => file.kind === "read",
   );
-  context.unlinkedOutputs = findUnlinkedOutputs(
+  context.unlinkedOutputs = await findUnlinkedOutputs(
     context.sync,
     context.observations.events,
     process.cwd(),
+    index,
+    interpreter,
   );
   assert.deepEqual(makeContextBrief(context).unlinkedOutputs, []);
   context.observations.events = [];
@@ -790,7 +814,7 @@ test("brief and drift both show a dual-status goal and leave neutral recorded ou
   );
 });
 
-test("uncertain Node associations never become a definite unlinked file claim", () => {
+test("uncertain Node associations never become a definite unlinked file claim", async () => {
   const context: CurrentContext = {
     roots: [],
     sync: {
@@ -843,7 +867,13 @@ test("uncertain Node associations never become a definite unlinked file claim", 
     unlinkedOutputs: [],
   };
   assert.deepEqual(
-    findUnlinkedOutputs(context.sync, context.observations.events, process.cwd()),
+    await findUnlinkedOutputs(
+      context.sync,
+      context.observations.events,
+      process.cwd(),
+      { nodes: [] },
+      {} as FsAdapter,
+    ),
     [],
   );
   const brief = makeContextBrief(context);

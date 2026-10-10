@@ -161,7 +161,7 @@ test(
       await fs.readFile(path.join(bundle, "hooks/hooks.json"), "utf8"),
     ).hooks;
     assert.deepEqual(Object.keys(hooks).sort(), ["SessionStart", "Stop"]);
-    assert.equal(hooks.Stop[0].hooks[0].async, true);
+    assert.equal(hooks.Stop[0].hooks[0].async, undefined);
     const hook = (event: string, extra: Record<string, unknown> = {}) =>
       new Promise<string>((resolve, reject) => {
         const child = exec(
@@ -213,30 +213,22 @@ test(
     const stopInput = { turn_id: "turn-1", transcript_path: transcript };
     const stop = await hook("Stop", stopInput);
     assert.ok(Buffer.byteLength(stop) <= 2048);
-    assert.match(JSON.parse(stop).systemMessage, /new\.svg/);
+    assert.deepEqual(JSON.parse(stop), {});
     const observationDir = path.join(workspace, ".tent", "temp", "observations");
     const entries = await fs.readdir(observationDir);
     const logs = entries.filter((name) => name.endsWith(".jsonl"));
     const baselines = entries.filter((name) => name.endsWith(".baseline.json"));
-    assert.equal(logs.length, 1);
+    assert.equal(logs.length, 0);
     assert.equal(baselines.length, 1);
     const baseline = JSON.parse(
       await fs.readFile(path.join(observationDir, baselines[0]!), "utf8"),
     );
     assert.deepEqual(Object.keys(baseline), ["historyCommit"]);
     assert.match(baseline.historyCommit, /^[a-f0-9]{40,64}$/);
-    const logPath = path.join(observationDir, logs[0]!);
-    const recorded = await fs.readFile(logPath, "utf8");
-    const observed = JSON.parse(recorded);
-    assert.equal(observed.sessionId, "fixture-session");
-    assert.equal(observed.turnId, "turn-1");
-    assert.equal(observed.files[0].address, "new.svg");
-    assert.equal(observed.files[0].kind, "written");
-    assert.equal(observed.files[0].version.state, "observed");
-    assert.equal(observed.historyCommit, baseline.historyCommit);
-    assert.doesNotMatch(recorded, /private payload/);
     assert.deepEqual(JSON.parse(await hook("Stop", stopInput)), {});
-    assert.equal(await fs.readFile(logPath, "utf8"), recorded);
+    await assert.rejects(fs.access(path.join(workspace, ".tent", "temp", "stop-reviews")), {
+      code: "ENOENT",
+    });
     await assert.rejects(fs.access(dataDir), { code: "ENOENT" });
     await assert.rejects(fs.access(trap), { code: "ENOENT" });
     // A broken CLI is not repaired with a cwd/global runtime.

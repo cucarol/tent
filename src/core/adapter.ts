@@ -10,6 +10,8 @@ import type { DirectoryFile } from "./directory-material.js";
 export interface FsAdapter {
   /** Native edits rejected at this command boundary; never persisted or used as a cache. */
   invalidNodeEdits?: ReadonlyMap<string, string>;
+  /** Existing regular files after one batch ignore lookup; undefined without a trusted interpreter. */
+  nonignoredFiles?(addresses: readonly string[]): Promise<string[] | undefined>;
   /** Observe local material content; normalize text lines and select addressed Markdown sections. */
   observeMaterial?(
     resource: string,

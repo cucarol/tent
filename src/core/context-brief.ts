@@ -10,8 +10,9 @@ import {
 } from "./card-document.js";
 import { inspectWorkspaceSync } from "./node-sync.js";
 import { readSessionObservations, type SessionObservationEvent } from "./session-observations.js";
-import { localMaterialPath, materialLocator } from "./material.js";
 import { nodeNotePath } from "./paths.js";
+import { buildStopMaterialIndex, type StopMaterialIndex } from "./stop-material-index.js";
+import { unlinkedWrittenFiles } from "./unlinked-outputs.js";
 
 export type WorkspaceSync = Awaited<ReturnType<typeof inspectWorkspaceSync>>;
 export type ObservedFile = {
@@ -31,22 +32,6 @@ const localKey = (filename: string) => {
   const value = path.resolve(filename);
   return process.platform === "win32" ? value.toLowerCase() : value;
 };
-
-/** Compare whole local files; URI fragments remain addresses, never separate fetched material. */
-export function materialAddressKey(
-  workspaceRoot: string,
-  documentPath: string,
-  resource: string,
-): string | undefined {
-  try {
-    const locator = materialLocator(resource, documentPath);
-    const filename = localMaterialPath(locator, workspaceRoot);
-    if (filename !== undefined) return `file:${localKey(filename)}`;
-    return locator.kind === "uri" ? locator.uri : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 export function observationAddressKey(workspaceRoot: string, address: string): string | undefined {
   try {
@@ -79,25 +64,20 @@ export function observedFiles(events: SessionObservationEvent[]): ObservedFile[]
   return files;
 }
 
-export function findUnlinkedOutputs(
+export async function findUnlinkedOutputs(
   sync: WorkspaceSync,
   events: SessionObservationEvent[],
   workspaceRoot: string,
-): UnlinkedOutput[] {
+  index: StopMaterialIndex,
+  fs: FsAdapter,
+): Promise<UnlinkedOutput[]> {
   // A racing Node may hold the very association we would otherwise call missing.
   if (sync.nodes.some((node) => node.uncertain)) return [];
-  const linked = new Set<string>();
-  for (const output of sync.outputNodes) {
-    if (!output.resource) continue;
-    const key = materialAddressKey(workspaceRoot, nodeNotePath(output.path), output.resource);
-    if (key) linked.add(key);
-  }
   const result: UnlinkedOutput[] = [];
   const seen = new Map<string, UnlinkedOutput>();
-  for (const file of observedFiles(events)) {
-    if (file.kind !== "written") continue;
+  for (const file of await unlinkedWrittenFiles(fs, index, observedFiles(events), workspaceRoot)) {
     const key = observationAddressKey(workspaceRoot, file.address);
-    if (!key || linked.has(key)) continue;
+    if (!key) continue;
     const existing = seen.get(key);
     if (existing) {
       if (!existing.observedAt || file.observedAt > existing.observedAt) {
@@ -157,7 +137,17 @@ export async function inspectCurrentContext(
         ]
       : [];
   });
-  const unlinkedOutputs = findUnlinkedOutputs(sync, observations.events, workspaceRoot);
+  const unlinkedOutputs = await findUnlinkedOutputs(
+    sync,
+    observations.events,
+    workspaceRoot,
+    buildStopMaterialIndex(
+      currentCatalog,
+      workspaceRoot,
+      sync.invalidNodes.map((node) => node.path),
+    ),
+    fs,
+  );
   const aheadIds = new Set(sync.nodes.filter((node) => node.ahead).map((node) => node.nodeId));
   const changedCardSources = {
     ...sourceChanges,
