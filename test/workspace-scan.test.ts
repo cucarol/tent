@@ -169,7 +169,8 @@ test("scan separates material coverage from document pointers and respects direc
   const before = await snapshot(root);
   const result = await scanWorkspace(adapter, root, repository, scanFileKind);
   assert.deepEqual(result.inspectionErrors, []);
-  assert.equal(result.coverage.coveredFiles, 6);
+  assert.equal(result.coverage.coveredFiles, 5);
+  assert.ok(result.coverage.uncoveredFiles.includes("guide/README.markdown"));
   assert.ok(result.coverage.uncoveredFiles.includes("src/core-other/c.ts"));
   assert.ok(result.coverage.uncoveredFiles.includes("docs/body.md"));
   assert.ok(!result.coverage.uncoveredFiles.includes("gone/x.ts"));
@@ -178,6 +179,7 @@ test("scan separates material coverage from document pointers and respects direc
     "docs/gone.md",
     "docs/no.md",
     "docs/quoted.md",
+    "guide/README.markdown",
   ]);
   assert.ok(!repository.markdownFiles.some((file) => file.startsWith(".tent/")));
   assert.ok(result.hotspots.some((item) => item.directory === "docs" && item.count === 2));
@@ -187,6 +189,31 @@ test("scan separates material coverage from document pointers and respects direc
     JSON.stringify(await scanWorkspace(adapter, root, repository, scanFileKind)),
     JSON.stringify(result),
   );
+});
+
+test("scan prefix coverage uses shared membership, including nested suffixes, without reading glob paths or writing", async (t) => {
+  const { root, adapter, write, node } = await fixture(t);
+  for (const file of ["src/card-a.ts", "src/card-nested/b.ts", "src/cardinal.ts", "docs/card-a.md"])
+    await write(file, file.endsWith(".md") ? "# Card" : "export {};");
+  await node("cardmap", {
+    sources: [
+      { resource: "../../src/card-*", track: "structure" },
+      { resource: "../../docs/card-*" },
+    ],
+  });
+  await git(root, "add", "src", "docs");
+  await git(root, "commit", "-m", "prefix fixture");
+  const repository = await readWorkspaceScanRepository(root);
+  const before = await snapshot(root);
+  const report = await scanWorkspace(adapter, root, repository, async (filename, heading) => {
+    assert.ok(!filename.includes("*"));
+    return scanFileKind(filename, heading);
+  });
+  assert.deepEqual(report.inspectionErrors, []);
+  assert.equal(report.coverage.coveredFiles, 3);
+  assert.deepEqual(report.coverage.uncoveredFiles, ["src/cardinal.ts"]);
+  assert.deepEqual(report.unpointedDocuments, []);
+  assert.deepEqual(await snapshot(root), before);
 });
 
 test("CLI scan summarizes facts without changing Git/Tent bytes and limits text only", async (t) => {
@@ -233,7 +260,7 @@ test("CLI scan summarizes facts without changing Git/Tent bytes and limits text 
   assert.deepEqual(await snapshot(root), before);
 });
 
-test("document pointers are direct, existing section links and include deprecated Nodes", async (t) => {
+test("document pointers are direct, existing section links and exclude deprecated Nodes", async (t) => {
   const { root, adapter, write, node } = await fixture(t);
   for (const file of [
     "README.md",
@@ -269,10 +296,11 @@ test("document pointers are direct, existing section links and include deprecate
   assert.deepEqual(result.unpointedDocuments, [
     "docs/ambiguous.md",
     "docs/broken.md",
+    "docs/deprecated.md",
     "docs/material.md",
     "docs/transitive.md",
   ]);
-  assert.deepEqual(result.unpointedDirectories, [{ directory: "docs", count: 4 }]);
+  assert.deepEqual(result.unpointedDirectories, [{ directory: "docs", count: 5 }]);
   assert.deepEqual(await snapshot(root), before);
 });
 

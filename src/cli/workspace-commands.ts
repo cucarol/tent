@@ -13,7 +13,12 @@ import {
   formatWorkspaceScan,
   workspaceScanCommitLimit,
 } from "../core/workspace-scan.js";
-import { readWorkspaceScanRepository, scanFileKind } from "../fs/workspace-scan.js";
+import {
+  readWorkspaceScanRepository,
+  readModuleMapRepository,
+  scanFileKind,
+} from "../fs/workspace-scan.js";
+import { checkWorkspaceModules, formatWorkspaceModules } from "../core/workspace-module-map.js";
 import {
   inspectCurrentContext,
   makeContextBrief,
@@ -28,10 +33,11 @@ import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
 export const workspaceHelpText = `tent workspace export --output <new-output-or-scratch-directory>
 tent workspace changes [--from <commit>] [--to <commit>] [--limit <n>] [--cursor <cursor>]
 tent workspace check [--json]
+tent workspace check-modules [--json]
 tent workspace brief [--role <roleId>] [--json]
 tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
 tent workspace scan [--commits <n>] [--json]
-Accepts --workspace <root> and --json. check reports broken links, invalid material addresses, missing local files, unavailable Markdown material sections and Node documents whose disk and Tent Git presence differ (node-git-mismatch) after collecting valid native edits; invalid files remain untouched. Exit 1 means issues or inspection errors; JSON remains on stdout. brief lists all invalid Nodes and pending Cards, then prioritizes ahead and changed sources; optional detail fits 4 KiB. --role filters Card inputs; Node counts remain Workspace-wide. drift reports ahead and behind Nodes. Use node confirm after reviewing a Node; Tent records hashes itself.`;
+Accepts --workspace <root> and --json. check reports broken links, invalid material addresses, missing local files, unavailable Markdown material sections and Node documents whose disk and Tent Git presence differ (node-git-mismatch) after collecting valid native edits; invalid files remain untouched. Exit 1 means issues or inspection errors; JSON remains on stdout. check-modules checks module coverage, size, imports and cochange without collecting edits; a clean map emits no text. brief lists all invalid Nodes and pending Cards, then prioritizes ahead and changed sources; optional detail fits 4 KiB. --role filters Card inputs; Node counts remain Workspace-wide. drift reports ahead and behind Nodes. Use node confirm after reviewing a Node; Tent records hashes itself.`;
 
 export async function runWorkspaceCommand(
   sub: string,
@@ -42,7 +48,7 @@ export async function runWorkspaceCommand(
   try {
     if (["help", "--help", "-h"].includes(sub))
       return { exitCode: 0, stdout: workspaceHelpText + "\n", stderr: "" };
-    if (!["export", "changes", "check", "brief", "drift", "scan"].includes(sub))
+    if (!["export", "changes", "check", "check-modules", "brief", "drift", "scan"].includes(sub))
       throw new Error(workspaceHelpText);
     const { values, positionals } = parseArgs({
       args,
@@ -100,7 +106,7 @@ export async function runWorkspaceCommand(
     )
       throw new Error(workspaceHelpText);
     if (
-      sub === "check" &&
+      ["check", "check-modules"].includes(sub) &&
       [values.output, values.from, values.to, values.limit, values.cursor].some(
         (value) => value !== undefined,
       )
@@ -116,6 +122,42 @@ export async function runWorkspaceCommand(
       throw new Error(
         "Tent workspace identity is missing; explicitly initialize or convert this workspace",
       );
+    if (sub === "check-modules") {
+      const result = await checkWorkspaceModules(
+        fs,
+        roots.workspaceRoot,
+        await readModuleMapRepository(roots.workspaceRoot),
+      );
+      return {
+        exitCode:
+          result.issues.length ||
+          result.inspectionErrors.length ||
+          result.importIssues.length ||
+          result.unassignedImports.length
+            ? 1
+            : 0,
+        stdout:
+          values.json || globals.json
+            ? JSON.stringify(result) + "\n"
+            : formatWorkspaceModules(result),
+        stderr:
+          values.json || globals.json
+            ? ""
+            : [
+                ...result.inspectionErrors.map(
+                  (error) => `${error.node}: ${error.resource ?? "Node"}: ${error.reason}`,
+                ),
+                ...result.importIssues.map(
+                  (error) => `${error.file}: ${error.specifier ?? "imports"}: ${error.reason}`,
+                ),
+                ...result.unassignedImports.map(
+                  (error) => `${error.from} -> ${error.to}: ${error.reason}`,
+                ),
+              ]
+                .map((line) => line + "\n")
+                .join(""),
+      };
+    }
     if (sub === "scan") {
       const result = await scanWorkspace(
         fs,

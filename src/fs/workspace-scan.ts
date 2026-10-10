@@ -9,6 +9,7 @@ import {
 import { selectSection } from "../core/markdown-section.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { readRepositorySources } from "./repository-sources.js";
+import { MODULE_MAP_THRESHOLDS } from "../core/module-map.js";
 
 async function git(root: string, args: string[]): Promise<string> {
   const env = Object.fromEntries(
@@ -58,9 +59,10 @@ export function parseScanGitLog(raw: string): ScanCommit[] {
 }
 
 /** Git queries never refresh the index or create lock, cache, hook or model state. */
-export async function readWorkspaceScanRepository(
+async function readRepository(
   workspaceRoot: string,
   commitLimit?: number,
+  firstParent = false,
 ): Promise<WorkspaceScanRepository> {
   const limit = workspaceScanCommitLimit(commitLimit);
   const root = (await git(workspaceRoot, ["rev-parse", "--show-toplevel"])).trim();
@@ -92,6 +94,7 @@ export async function readWorkspaceScanRepository(
     head
       ? git(root, [
           "log",
+          ...(firstParent ? ["--first-parent"] : []),
           `-${limit}`,
           "--format=%x00%H",
           "-z",
@@ -125,6 +128,15 @@ export async function readWorkspaceScanRepository(
       }),
     })),
   };
+}
+
+export function readWorkspaceScanRepository(workspaceRoot: string, commitLimit?: number) {
+  return readRepository(workspaceRoot, commitLimit);
+}
+
+/** Module history follows the mainline rather than counting merged branches twice. */
+export function readModuleMapRepository(workspaceRoot: string) {
+  return readRepository(workspaceRoot, MODULE_MAP_THRESHOLDS.historyCommitLimit, true);
 }
 
 export async function scanFileKind(

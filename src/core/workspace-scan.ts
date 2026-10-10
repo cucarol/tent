@@ -12,6 +12,11 @@ import { extractOutLinksDetailed } from "../markdown/links.js";
 import { markdownMaterialHeading } from "./material-section.js";
 import { repositoryFacts } from "./repository-facts.js";
 import type { RepositorySource } from "./repository-imports.js";
+import {
+  structureMaterialCoverage,
+  materialCoverageContains,
+  type MaterialCoverage,
+} from "./material-coverage.js";
 
 export const WORKSPACE_SCAN_COMMIT_LIMIT = 300;
 export const COCHANGE_BULK_FILE_LIMIT = 25;
@@ -130,6 +135,20 @@ export async function scanWorkspace(
     if (filename === undefined) return;
     const relative = path.relative(workspaceRoot, filename).split(path.sep).join("/") || ".";
     if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) return;
+    let coverage: MaterialCoverage | undefined;
+    if (isDirectoryMaterial(locator) || relative.includes("*")) {
+      const address =
+        locator.kind === "path" && !/^(?:\.{1,2}\/|\/)/.test(resource.trim())
+          ? "./" + resource.trim()
+          : resource;
+      coverage = structureMaterialCoverage(address, owner, workspaceRoot);
+      if (!coverage)
+        throw new Error(
+          "Directory or prefix material requires a local Workspace address, one trailing * for a prefix, and no query or fragment",
+        );
+      if (coverage.kind === "prefix")
+        return { relative, present: false, kind: undefined, coverage };
+    }
     const heading = markdownMaterialHeading(locator);
     const key = JSON.stringify([filename, heading]);
     let kind = kinds.get(key);
@@ -146,21 +165,20 @@ export async function scanWorkspace(
       relative,
       present: observedKind !== undefined,
       kind: isDirectoryMaterial(locator) ? ("directory" as const) : observedKind,
+      coverage,
     };
   }
   function mark(
     files: string[],
     destinations: Set<string>,
-    resolved: { relative: string; kind?: "file" | "directory" },
+    resolved: { relative: string; kind?: "file" | "directory"; coverage?: MaterialCoverage },
   ) {
     const target =
       process.platform === "win32" ? resolved.relative.toLowerCase() : resolved.relative;
     for (const file of files) {
       const candidate = process.platform === "win32" ? file.toLowerCase() : file;
       if (
-        candidate === target ||
-        (resolved.kind === "directory" &&
-          (target === "." || candidate.startsWith(`${target.replace(/\/$/, "")}/`)))
+        resolved.coverage ? materialCoverageContains(resolved.coverage, file) : candidate === target
       )
         destinations.add(file);
     }
@@ -173,6 +191,7 @@ export async function scanWorkspace(
       });
       continue;
     }
+    if (node.archived || node.status === "deprecated") continue;
     const owner = nodeNotePath(node.path);
     for (const occurrence of resolvedMaterialOccurrences(node.fm, owner)) {
       if (occurrence.error) {
@@ -188,6 +207,18 @@ export async function scanWorkspace(
         if (resolved) {
           mark(trackedFiles, covered, resolved);
           if (resolved.present) mark(markdownFiles, pointed, resolved);
+          if (resolved.coverage?.kind === "prefix")
+            for (const file of markdownFiles) {
+              if (!materialCoverageContains(resolved.coverage, file)) continue;
+              const filename = path.resolve(workspaceRoot, file);
+              const key = JSON.stringify([filename, undefined]);
+              let kind = kinds.get(key);
+              if (!kind) {
+                kind = fileKind(filename);
+                kinds.set(key, kind);
+              }
+              if ((await kind) === "file") pointed.add(file);
+            }
         }
       } catch (error) {
         inspectionErrors.push({
