@@ -11,6 +11,37 @@ import { NodeWriteError, writeNodeDocument } from "../src/core/node-document-wri
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";
+import type { FsAdapter } from "../src/core/adapter.js";
+import { observeNodeMaterials } from "../src/core/node-sync-record.js";
+
+test("query observations distinguish descriptive sources from file resources", async () => {
+  let reads = 0;
+  const adapter = {
+    observeMaterial: async () => {
+      reads++;
+      return { observedVersion: "a".repeat(64) };
+    },
+  } as unknown as FsAdapter;
+  const data = {
+    resource: "./notes.md",
+    sources: [{ resource: "notes.md" }, { resource: "./notes.md" }],
+  };
+  const expected = await observeNodeMaterials(adapter, data, "A/A.md");
+  reads = 0;
+  const actual = await observeNodeMaterials(
+    adapter,
+    data,
+    "A/A.md",
+    undefined,
+    undefined,
+    undefined,
+    new Map(),
+  );
+  assert.deepEqual(actual, expected);
+  assert.equal(actual[1]!.version, undefined);
+  assert.match(actual[1]!.reason!, /not an explicit local address/);
+  assert.equal(reads, 1);
+});
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-material-"));
@@ -149,7 +180,7 @@ test("CLI writes retain legacy addresses and read-only node check reports their 
   );
   const cli = (sub: string, args: string[]) =>
     runNodeCommand(sub, args, { workspace: root, json: true });
-  const read = JSON.parse((await cli("get", [id, "--full"])).stdout).node;
+  const read = JSON.parse((await cli("get", [id, "--full"])).stdout);
   const written = await cli("write", [id, "--body", "CLI update", "--base-etag", read.etag]);
   assert.equal(written.exitCode, 0, written.stderr);
   const live = await readNodeForEdit(adapter, id);

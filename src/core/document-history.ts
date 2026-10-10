@@ -19,6 +19,8 @@ export async function captureDocumentUnlocked(
   metadata?: CaptureMetadata,
 ): Promise<DocumentVersion | undefined> {
   if (!isHistoryDocument(path)) throw new Error(`Not a Tent identity document: ${path}`);
+  const invalid = fs.invalidNodeEdits?.get(path);
+  if (invalid) throw new Error(`Invalid Node ${path}: ${invalid}`);
   if (!fs.history || !(await fs.exists(".git"))) return undefined;
   return (await fs.history.captureUnlocked([{ path, raw }], metadata)).versions[0];
 }
@@ -44,6 +46,8 @@ export function captureReadDocuments(
   const capture = async () => {
     for (const { path } of documents)
       if (!isHistoryDocument(path)) throw new Error(`Not a Tent identity document: ${path}`);
+      else if (fs.invalidNodeEdits?.has(path))
+        throw new Error(`Invalid Node ${path}: ${fs.invalidNodeEdits.get(path)}`);
     if (!documents.length || !fs.history || !(await fs.exists(".git"))) return [];
     return (
       await fs.history.captureUnlocked(documents, { operation: "document.external-capture", entry })

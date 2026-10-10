@@ -184,10 +184,12 @@ export async function readFullNodeTree(fs: FsAdapter, options: { capture?: boole
     },
   });
   const tree = await loadTent(source);
-  const documents = [...tree.byPath.values()].map((node) => ({
-    path: nodeNotePath(node.path),
-    raw: observed.get(nodeNotePath(node.path))!,
-  }));
+  const documents = [...tree.byPath.values()]
+    .filter((node) => !node.invalid)
+    .map((node) => ({
+      path: nodeNotePath(node.path),
+      raw: observed.get(nodeNotePath(node.path))!,
+    }));
   // The loader already read exact raw bytes. Capture those bytes together, without reading the tree again.
   const versions = options.capture ? await captureReadDocuments(fs, documents) : [];
   const byPath = new Map(versions.map((version) => [version.path, version]));

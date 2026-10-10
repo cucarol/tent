@@ -35,7 +35,7 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
       "node-readera",
       "offline,PDF",
       "--base-etag",
-      (await node("get", ["node-readera", "--full"])).node.etag,
+      (await node("get", ["node-readera", "--full"])).etag,
     ]);
     const first = await node("list", ["--limit", "1"]);
     assert.equal(first.items.length, 1);
@@ -49,27 +49,26 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
     let cursor: string | undefined;
     do {
       const read = await node("get", ["node-readera", ...(cursor ? ["--cursor", cursor] : [])]);
-      assert.equal(read.node.source.kind, "live");
-      text += read.node.text;
-      cursor = read.node.page.nextCursor;
+      assert.equal("source" in read, false);
+      text += read.text;
+      cursor = read.page?.nextCursor;
     } while (cursor);
-    assert.equal(text, full.node.text);
+    assert.equal(text, full.text);
     const summary = await node("get", ["node-readera", "--view", "summary"]);
-    assert.equal("text" in summary.node, false);
-    assert.deepEqual(summary.node.tags, ["offline", "PDF"]);
+    assert.equal("text" in summary, false);
+    assert.deepEqual(summary.tags, ["offline", "PDF"]);
     const range = JSON.stringify({ unit: "utf16", start: 0, end: 2 });
     assert.equal(
-      (await node("get", ["node-readera", "--range", range, "--expected-etag", full.node.etag]))
-        .node.text,
+      (await node("get", ["node-readera", "--range", range, "--expected-etag", full.etag])).text,
       "😀",
     );
     const raw = await node("get", ["node-readera", "--view", "raw"]);
-    assert.match(raw.node.text, /^---/);
+    assert.match(raw.text, /^---/);
     await node("write", [
       "node-readera",
       "--input-json",
       JSON.stringify({
-        baseEtag: (await node("get", ["node-readera", "--full"])).node.etag,
+        baseEtag: (await node("get", ["node-readera", "--full"])).etag,
         frontmatter: { resource: "src/reader.ts" },
       }),
     ]);
@@ -118,9 +117,9 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
       "node-readera",
       "online,PDF",
       "--base-etag",
-      (await node("get", ["node-readera", "--full"])).node.etag,
+      (await node("get", ["node-readera", "--full"])).etag,
     ]);
-    assert.deepEqual((await node("get", ["node-readera", "--view", "summary"])).node.tags, [
+    assert.deepEqual((await node("get", ["node-readera", "--view", "summary"])).tags, [
       "online",
       "PDF",
     ]);
@@ -131,9 +130,15 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
       "--range",
       range,
     ]);
-    assert.equal(frozen.node.text, "😀");
-    assert.deepEqual(frozen.node.tags, ["offline", "PDF"]);
-    assert.equal(frozen.node.source.kind, "git");
+    assert.equal(frozen.text, "😀");
+    const frozenMetadata = await node("get", [
+      "node-readera",
+      "--version-json",
+      JSON.stringify(version),
+      "--view",
+      "summary",
+    ]);
+    assert.deepEqual(frozenMetadata.tags, ["offline", "PDF"]);
     for (const args of [
       ["--limit", "0"],
       ["--full", "--limit", "1"],

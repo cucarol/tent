@@ -22,13 +22,13 @@ test("NodeFs reads the exact frontmatter prefix across UTF-8 and fence boundarie
       ["eof.md", "---\nname: value\n---", "---\nname: value\n---"],
       [
         "split.md",
-        `---\nkey: ${"a".repeat(500)}\n---\nBody`,
-        `---\nkey: ${"a".repeat(500)}\n---\n`,
+        `---\nkey: ${"a".repeat(4084)}\n---\nBody`,
+        `---\nkey: ${"a".repeat(4084)}\n---\n`,
       ],
       [
         "utf8.md",
-        `---\nkey: \"${"a".repeat(501)}😀\"\n---\nBody`,
-        `---\nkey: \"${"a".repeat(501)}😀\"\n---\n`,
+        `---\nkey: \"${"a".repeat(4085)}😀\"\n---\nBody`,
+        `---\nkey: \"${"a".repeat(4085)}😀\"\n---\n`,
       ],
       ["plain.md", "# No metadata\n---\nBody", ""],
       ["unfinished.md", "---\nkey: value\nNo closing fence", "---\nkey: value\nNo closing fence"],
@@ -72,10 +72,10 @@ test("NodeFs stops reading after the closing fence or a missing opening", async 
     syncBuiltinESMExports();
 
     assert.equal(await adapter.readFrontmatter("front.md"), frontmatter);
-    assert.ok(readBytes > 0 && readBytes <= 512, `read ${readBytes} bytes for fenced document`);
+    assert.ok(readBytes > 0 && readBytes <= 4096, `read ${readBytes} bytes for fenced document`);
     readBytes = 0;
     assert.equal(await adapter.readFrontmatter("plain.md"), "");
-    assert.ok(readBytes > 0 && readBytes <= 512, `read ${readBytes} bytes for plain document`);
+    assert.ok(readBytes > 0 && readBytes <= 4096, `read ${readBytes} bytes for plain document`);
   } finally {
     fsPromises.open = originalOpen;
     syncBuiltinESMExports();

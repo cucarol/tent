@@ -62,7 +62,7 @@ function assertIncomplete(value: unknown, raw: string) {
 
 test("a partial CLI Node read cannot silently replace the complete body", async (t) => {
   const { adapter, raw, globals, cli } = await fixture(t);
-  const page = (await cli("get", ["node-alpha"])).node;
+  const page = await cli("get", ["node-alpha"]);
   assert.equal(page.partial, true);
   const write = await runNodeCommand(
     "write",
@@ -80,47 +80,46 @@ test("every partial page and explicit range remains read-only while full reads p
     t,
     `description: ${"d".repeat(20000)}\nsources: [{resource: 'customer discussion', custom: {etag: keep, expectedEtag: keep}}]\n`,
   );
-  const first = (await cli("get", ["node-alpha"])).node;
+  const first = await cli("get", ["node-alpha"]);
   assertIncomplete(first, raw);
-  assert.ok(first.metadataRead);
-  assert.deepEqual(first.sources[0].custom, { etag: "keep", expectedEtag: "keep" });
+  assert.equal("sources" in first, false, "ordinary reads omit duplicate metadata");
+  const captured = await adapter.history.captureUnlocked([{ path: "A/A.md", raw }], {
+    operation: "test.fixture",
+  });
+  const version = captured.versions[0];
   let combined = first.text;
   let current = first;
   while (current.page.hasMore) {
-    current = (
-      await cli("get", [
-        "node-alpha",
-        "--cursor",
-        current.page.nextCursor,
-        "--expected-etag",
-        current.page.next.expectedEtag,
-      ])
-    ).node;
+    current = await cli("get", [
+      "node-alpha",
+      "--cursor",
+      current.page.nextCursor,
+      "--expected-etag",
+      current.page.next.expectedEtag,
+    ]);
     assertIncomplete(current, raw);
     combined += current.text;
   }
   assert.equal(current.partial, true, "the last page is still only a fragment");
   assert.equal(combined, body);
   for (const view of ["body", "raw"]) {
-    const range = (
-      await cli("get", [
-        "node-alpha",
-        "--view",
-        view,
-        "--range",
-        JSON.stringify({ unit: "utf16", start: 0, end: 2 }),
-      ])
-    ).node;
+    const range = await cli("get", [
+      "node-alpha",
+      "--view",
+      view,
+      "--range",
+      JSON.stringify({ unit: "utf16", start: 0, end: 2 }),
+    ]);
     assert.equal(range.page.hasMore, false);
     assertIncomplete(range, raw);
   }
-  const full = (await cli("get", ["node-alpha", "--full"])).node;
+  const full = await cli("get", ["node-alpha", "--full"]);
   assert.equal(full.text, body);
   assert.equal("body" in full, false);
   assert.equal(full.etag, contentEtag(raw));
-  const fullRaw = (await cli("get", ["node-alpha", "--view", "raw", "--full"])).node;
+  const fullRaw = await cli("get", ["node-alpha", "--view", "raw", "--full"]);
   assert.equal(fullRaw.text, raw);
-  assert.equal(fullRaw.partial, false);
+  assert.deepEqual(Object.keys(fullRaw).sort(), ["etag", "nodeId", "text"]);
   assert.equal(fullRaw.etag, contentEtag(raw));
   assert.equal(
     prepareNodeDocumentWrite({ id: "node-alpha", path: "A" }, raw, {
@@ -145,26 +144,22 @@ test("every partial page and explicit range remains read-only while full reads p
   );
   assert.equal(stale.exitCode, 1);
   assert.match(stale.stderr, /changed/i);
-  const historicalFirst = (
-    await cli("get", [
-      "node-alpha",
-      "--version-json",
-      JSON.stringify(first.version),
-      "--expected-etag",
-      first.etag,
-    ])
-  ).node;
-  const frozen = (
-    await cli("get", [
-      "node-alpha",
-      "--version-json",
-      JSON.stringify(first.version),
-      "--cursor",
-      historicalFirst.page.nextCursor,
-      "--expected-etag",
-      first.etag,
-    ])
-  ).node;
+  const historicalFirst = await cli("get", [
+    "node-alpha",
+    "--version-json",
+    JSON.stringify(version),
+    "--expected-etag",
+    first.etag,
+  ]);
+  const frozen = await cli("get", [
+    "node-alpha",
+    "--version-json",
+    JSON.stringify(version),
+    "--cursor",
+    historicalFirst.page.nextCursor,
+    "--expected-etag",
+    first.etag,
+  ]);
   assertIncomplete(frozen, raw);
   assert.equal(frozen.range.start, historicalFirst.range.end);
 });
@@ -181,7 +176,7 @@ test("batch, create, read-back and excerpt outputs expose no unrestricted replac
   );
   const incoming = await cli("relations", ["node-bravo", "--direction", "incoming"]);
   assertIncomplete(incoming.items[0], raw);
-  const full = (await cli("get", ["node-alpha", "--full"])).node;
+  const full = await cli("get", ["node-alpha", "--full"]);
   const saved = await cli("write", [
     "node-alpha",
     "--body",
@@ -200,7 +195,7 @@ test("batch, create, read-back and excerpt outputs expose no unrestricted replac
 
 test("incomplete bases support metadata-only edits and retain revision conflict detection", async (t) => {
   const { adapter, raw, body, globals, cli } = await fixture(t);
-  const page = (await cli("get", ["node-alpha"])).node;
+  const page = await cli("get", ["node-alpha"]);
   const checked = await cli("check", ["node-alpha"]);
   assert.equal(checked.state, "unanchored");
   assert.equal("etag" in checked, false, "sync inspection is not a complete document read");
@@ -245,8 +240,8 @@ test("complete bounded body and raw reads retain their ordinary replacement basi
   const { adapter, cli } = await fixture(t);
   const raw = await adapter.readFile("B/B.md");
   for (const view of ["body", "raw"]) {
-    const node = (await cli("get", ["node-bravo", "--view", view])).node;
-    assert.equal(node.partial, false);
+    const node = await cli("get", ["node-bravo", "--view", view]);
+    assert.deepEqual(Object.keys(node).sort(), ["etag", "nodeId", "text"]);
     assert.equal(node.etag, contentEtag(raw));
     assert.doesNotThrow(() =>
       prepareNodeDocumentWrite({ id: "node-bravo", path: "B" }, raw, {

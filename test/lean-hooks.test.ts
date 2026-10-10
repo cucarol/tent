@@ -228,6 +228,7 @@ test("Stop exposes uncertain Node inspection and excludes its goal from intent c
     uncertain: true,
   };
   const sync: WorkspaceSync = {
+    invalidNodes: [],
     nodes: [uncertainGoal],
     counts: { synced: 0, ahead: 0, behind: 0, unanchored: 1 },
     outputNodes: [],

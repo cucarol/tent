@@ -1,3 +1,4 @@
+import { parseFrontmatter } from "../src/core/frontmatter.js";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
@@ -109,10 +110,12 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
         globals,
       ),
     ).node;
-    const saved = result(await runNodeCommand("get", [note.nodeId, "--full"], globals)).node;
+    const saved = result(await runNodeCommand("get", [note.nodeId, "--full"], globals));
     assert.equal(saved.text, "Independent Markdown\n");
     assert.deepEqual(
-      saved.sources,
+      parseFrontmatter(
+        result(await runNodeCommand("get", [note.nodeId, "--full", "--view", "raw"], globals)).text,
+      ).data.sources,
       refs.map((source) => ({ ...source, resource: "../../refs/example.pdf" })),
     );
     assert.equal(
@@ -142,8 +145,12 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
         .items,
       [],
     );
-    const readFact = async () =>
-      result(await runNodeCommand("get", ["node-fact", "--full"], globals)).node;
+    const readFact = async () => {
+      const read = result(
+        await runNodeCommand("get", ["node-fact", "--full", "--view", "raw"], globals),
+      );
+      return { ...parseFrontmatter(read.text).data, ...read };
+    };
     const observed = await readFact();
     result(
       await runNodeCommand(
@@ -190,7 +197,7 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
           globals,
         ),
       );
-      assert.deepEqual((await readFact()).tags, expected);
+      assert.deepEqual((await readFact()).tags ?? [], expected);
     }
     await git(path.join(workspace, ".tent"), "init");
     const source = { resource: "./refs/example.pdf", title: "Reference document" };
@@ -204,7 +211,11 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
     const savedInput = result(await runCardCommand("get", [input.cardId], globals));
     assert.equal(savedInput.sources[0].resource, "../Fact/Fact.md");
     assert.equal(savedInput.sources[0].version.path, "Fact/Fact.md");
-    assert.deepEqual(savedInput.sources[1], { ...source, resource: "../../refs/example.pdf" });
+    assert.deepEqual(savedInput.sources[1], {
+      ...source,
+      resource: "../../refs/example.pdf",
+      path: "refs/example.pdf",
+    });
     const invalid = await runCardCommand(
       "create",
       ["--source", JSON.stringify({ resource: "" })],

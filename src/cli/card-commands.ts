@@ -1,3 +1,5 @@
+import { workspaceReadPaths } from "./read-paths.js";
+import { captureNativeNodeEdits } from "../core/node-native-capture.js";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { NodeFs } from "../fs/node-fs.js";
@@ -133,6 +135,7 @@ export async function runCardCommand(
         stderr: "",
       };
     }
+    await captureNativeNodeEdits(fs);
     if (sub === "create") {
       let prompt = value("prompt") ?? "";
       if (prompt === "-") {
@@ -189,20 +192,30 @@ export async function runCardCommand(
         view: value("view") as "body" | "raw" | undefined,
         expectedEtag: value("expected-etag"),
       };
-      const observed = await readCardDocument(fs, id, options);
+      const observed = workspaceReadPaths(await readCardDocument(fs, id, options), workspaceRoot);
       pageText(observed, `card.${sub}:${id}`, {
         start: number("start"),
         end: number("end"),
         maxBytes: 16 * 1024 - 256,
       });
       result = pageText(
-        await readCardDocument(fs, id, { ...options, expectedEtag: observed.etag, capture: true }),
+        workspaceReadPaths(
+          await readCardDocument(fs, id, {
+            ...options,
+            expectedEtag: observed.etag,
+            capture: true,
+          }),
+          workspaceRoot,
+        ),
         `card.${sub}:${id}`,
         { start: number("start"), end: number("end") },
       );
     } else
       result = pageText(
-        { ...(await takeCardDocument(fs, id, value("role"))), workspaceRoot },
+        {
+          ...workspaceReadPaths(await takeCardDocument(fs, id, value("role")), workspaceRoot),
+          workspaceRoot,
+        },
         `card.get:${id}`,
       );
     const json = values.json === true || globals.json === true;
@@ -211,6 +224,7 @@ export async function runCardCommand(
       !json && ["show", "get", "take"].includes(sub)
         ? await cardSourceLines(fs, workspaceRoot, result as { path?: string; sources?: unknown })
         : undefined;
+    result = workspaceReadPaths(result, workspaceRoot);
     return {
       exitCode: 0,
       stdout:
@@ -266,7 +280,7 @@ async function cardSourceLines(
   card: { path?: string; sources?: unknown },
 ): Promise<string | undefined> {
   if (!card.path || !Array.isArray(card.sources) || !card.sources.length) return undefined;
-  const owner = card.path;
+  const owner = card.path.replace(/^\.tent\//, "");
   const sources = card.sources as MaterialSource[];
   const pinned = await verifyCardSourceVersions(
     fs,
@@ -308,7 +322,11 @@ async function cardSourceLines(
       else if (filename === undefined) detail = "remote address, not fetched";
       else detail = (await isFile(filename)) ? "file exists" : "file missing";
     }
-    lines.push(`  ${index + 1}. ${source.resource}  ${detail}`);
+    const readable = workspaceReadPaths({ path: owner, sources: [source] }, workspaceRoot)
+      .sources[0] as MaterialSource & { path?: string; heading?: string };
+    lines.push(
+      `  ${index + 1}. ${readable.path ?? source.resource}${readable.heading ? ` # ${readable.heading}` : ""}  ${detail}`,
+    );
   }
   return ["Sources:", ...lines].join("\n");
 }
@@ -326,7 +344,7 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
   if (sub === "create")
     return `cardId: ${identity.cardId}\ntarget: ${target ?? "public"}\nstate: ${identity.state}`;
   const header = [
-    [identity.cardId, identity.title ?? identity.path].filter(Boolean).join("  "),
+    [identity.cardId, identity.title, identity.path].filter(Boolean).join("  "),
     "target" in identity ? `Target: ${identity.target ?? target ?? "public"}` : undefined,
     identity.etag ? `ETag: ${identity.etag}` : undefined,
   ]

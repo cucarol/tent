@@ -3,9 +3,9 @@ import type { CardDocumentState } from "./card-document.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { documentVersionSchema, type DocumentVersion } from "./git-history.js";
 import { materialLocator, isDirectoryMaterial, type MaterialSource } from "./material.js";
-import { loadNodeCatalog } from "./node-catalog.js";
+import { loadNodeCatalog, type NodeCatalog } from "./node-catalog.js";
 import { isRequirementNode, isOutputNode } from "./node-sync-record.js";
-import { inspectNodesSync } from "./node-sync.js";
+import { inspectNodesSync, type NodeSyncInspection } from "./node-sync.js";
 import { documentLifecycle } from "./document-status.js";
 import { nodeVerifications, okfTimestampSchema } from "./node-provenance.js";
 import { cardRecordPath, nodeNotePath } from "./paths.js";
@@ -167,6 +167,8 @@ export async function readOutputActivity(fs: FsAdapter): Promise<Map<string, str
 export async function readCardProgress(
   fs: FsAdapter,
   cards: readonly CardProgressInput[],
+  currentInspections?: readonly NodeSyncInspection[] | Promise<readonly NodeSyncInspection[]>,
+  currentCatalog?: NodeCatalog | Promise<NodeCatalog | undefined>,
 ): Promise<Map<string, CardProgressItem>> {
   const result = new Map(cards.map((card) => [card.cardId, deriveCardProgress(card.state, 0)]));
   if (!cards.length) return result;
@@ -182,11 +184,16 @@ export async function readCardProgress(
     }
     return result;
   }
-  const catalog = await loadNodeCatalog(readOnlyFs(fs));
-  const outputs = [...catalog.byId.values()].filter((node) => isOutputNode(node) && active(node));
+  const catalog = (await currentCatalog) ?? (await loadNodeCatalog(readOnlyFs(fs)));
+  const dataOf = (node: { path: string }) => catalog.tree.byPath.get(node.path)!.fm;
+  const isActive = (node: { path: string; archived: boolean }) => {
+    const status = documentLifecycle(dataOf(node)).status;
+    return !node.archived && (status === "draft" || status === "stable");
+  };
+  const outputs = [...catalog.byId.values()].filter((node) => isOutputNode(node) && isActive(node));
   const responses = new Map(
     outputs.map((node) => {
-      const sources = parseFrontmatter(node.header).data.sources;
+      const sources = dataOf(node).sources;
       const targets = new Set<string>();
       if (Array.isArray(sources))
         for (const source of sources) {
@@ -208,7 +215,7 @@ export async function readCardProgress(
         const goal = catalog.byId.get(goalId);
         return (
           goal &&
-          active(goal) &&
+          isActive(goal) &&
           isRequirementNode({ type: goal.type }) &&
           output.path.startsWith(goal.path + "/")
         );
@@ -216,19 +223,21 @@ export async function readCardProgress(
     }),
   );
   const inspections = new Map(
-    (relatedOutputs.length
-      ? await inspectNodesSync(
-          readOnlyFs(fs),
-          relatedOutputs.map((node) => node.nodeId),
-        )
-      : []
+    (
+      (await currentInspections) ??
+      (relatedOutputs.length
+        ? await inspectNodesSync(
+            readOnlyFs(fs),
+            relatedOutputs.map((node) => node.nodeId),
+          )
+        : [])
     ).map((node) => [node.nodeId, node]),
   );
   for (const card of cards) {
     const { goalIds, diagnostics } = pinned.get(card.cardId)!;
     const currentGoalIds = [...goalIds].filter((goalId) => {
       const goal = catalog.byId.get(goalId);
-      return !goal || documentLifecycle(parseFrontmatter(goal.header).data).status !== "deprecated";
+      return !goal || documentLifecycle(dataOf(goal)).status !== "deprecated";
     });
     const completed = new Set<string>(),
       outputIds = new Set<string>(),
@@ -236,7 +245,7 @@ export async function readCardProgress(
       reviewOutputIds = new Set<string>();
     for (const goalId of currentGoalIds) {
       const goal = catalog.byId.get(goalId);
-      if (!goal || !isRequirementNode({ type: goal.type }) || !active(goal)) continue;
+      if (!goal || !isRequirementNode({ type: goal.type }) || !isActive(goal)) continue;
       const awaitingReview = new Set<string>();
       for (const output of relatedOutputs)
         if (

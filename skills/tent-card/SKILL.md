@@ -12,7 +12,7 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows; more c
 | Hand work to a Role | Save the requirements as goal Nodes, then `tent card create` as below | `cardId` |
 | Preview, or check handed-off work | `tent card show <card-id>` | `text`, `sources`; `state`, `progress`, `outputNodeIds` |
 | Start on it | `tent card take <card-id> --role <role-id>` | `replayed` (`true`: continue that work), `sources` |
-| `tent workspace brief` lists `changedCardSources` | `tent node get <node-id>` | current `text` |
+| `tent workspace brief` lists `changedCardSources` | Read each source's `path` | the current file |
 | The result file is in the Workspace checkout | `tent node link-output <goal-id> --resource <path> --card <card-id>` | `cardId` |
 | Idle as a Role, if the host wakes you after a background command | `tent card watch --role <role-id>` in the background | exit 0 prints Cards to take |
 

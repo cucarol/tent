@@ -180,6 +180,7 @@ export function rewriteMarkdownDestinations(
   map: (url: string) => string | undefined,
   range?: { start: number; end: number },
 ): string {
+  if (!body.includes("[") && !body.includes("<")) return body;
   const tree = fromMarkdown(body),
     defs = definitions(tree);
   const candidates = new Set<Link | Definition>();

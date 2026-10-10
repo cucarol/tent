@@ -54,8 +54,8 @@ test("public discovery uses only headers, omits edit tokens and keeps metadata p
     const globals = { workspace, json: true };
     const summary = await runNodeCommand("get", ["node-alpha", "--view", "summary"], globals);
     assert.equal(summary.exitCode, 0, summary.stderr);
-    assert.deepEqual(JSON.parse(summary.stdout).node.tags, ["offline", "PDF"]);
-    assert.equal("etag" in JSON.parse(summary.stdout).node, false);
+    assert.deepEqual(JSON.parse(summary.stdout).tags, ["offline", "PDF"]);
+    assert.equal("etag" in JSON.parse(summary.stdout), false);
     const children = await relatedNodes(adapter, workspaceId, {
       nodeId: "node-alpha",
       direction: "children",

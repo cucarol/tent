@@ -1,7 +1,13 @@
+import type { InvalidNativeNode } from "./node-native-capture.js";
+import type { NodeCatalog } from "./node-catalog.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FsAdapter } from "./adapter.js";
-import { listCardDocuments, inspectReceivedCardSourceChanges } from "./card-document.js";
+import {
+  listCardDocumentHeaders,
+  listCardDocuments,
+  inspectReceivedCardSourceChanges,
+} from "./card-document.js";
 import { inspectWorkspaceSync } from "./node-sync.js";
 import { readSessionObservations, type SessionObservationEvent } from "./session-observations.js";
 import { localMaterialPath, materialLocator } from "./material.js";
@@ -110,16 +116,30 @@ export function findUnlinkedOutputs(
 export async function inspectCurrentContext(
   fs: FsAdapter,
   workspaceRoot: string,
-  options: { roleId?: string } = {},
+  options: {
+    roleId?: string;
+    nodes?: Promise<{ invalidNodes: InvalidNativeNode[]; catalog?: NodeCatalog }>;
+  } = {},
 ) {
-  const cardsPromise = listCardDocuments(fs, {
-    ...(options.roleId ? { roleId: options.roleId, includeOpen: true } : {}),
-  });
+  const syncPromise = Promise.resolve(options.nodes).then((nodes) =>
+    inspectWorkspaceSync(fs, undefined, nodes?.invalidNodes, nodes?.catalog),
+  );
+  const catalog = options.nodes?.then((nodes) => nodes.catalog);
+  const inspections = syncPromise.then((sync) => sync.nodes);
+  // Card queries can finish without consuming these shared results. The main
+  // syncPromise below remains responsible for reporting capture/sync failures.
+  void catalog?.catch(() => undefined);
+  void inspections.catch(() => undefined);
+  const cardOptions = options.roleId ? { roleId: options.roleId, includeOpen: true } : {};
+  const headersPromise = listCardDocumentHeaders(fs, cardOptions);
+  const cardsPromise = headersPromise.then((headers) =>
+    listCardDocuments(fs, cardOptions, inspections, catalog, headers),
+  );
   const [sync, observations, cards, sourceChanges] = await Promise.all([
-    inspectWorkspaceSync(fs),
+    syncPromise,
     readSessionObservations(fs),
     cardsPromise,
-    cardsPromise.then((cards) => inspectReceivedCardSourceChanges(fs, options, cards)),
+    headersPromise.then((cards) => inspectReceivedCardSourceChanges(fs, options, cards, catalog)),
   ]);
   const unlinkedOutputs = findUnlinkedOutputs(sync, observations.events, workspaceRoot);
   const aheadIds = new Set(sync.nodes.filter((node) => node.ahead).map((node) => node.nodeId));
@@ -176,6 +196,8 @@ export function contextDriftItems(context: Pick<CurrentContext, "sync">) {
 type BriefItem = Record<string, string | number | boolean | undefined>;
 export type ContextBrief = {
   counts: Pick<WorkspaceSync["counts"], "ahead" | "behind">;
+  invalidNodes: InvalidNativeNode[];
+  baselineOnlyBehind: number;
   behind: BriefItem[];
   ahead: BriefItem[];
   unlinkedOutputs: BriefItem[];
@@ -221,11 +243,28 @@ export function makeContextBrief(
         recentSessions.has(output.sessionId),
     )
     .sort((a, b) => Date.parse(b.observedAt ?? "") - Date.parse(a.observedAt ?? ""));
+  const baselineOnly = (node: WorkspaceSync["nodes"][number]) => {
+    const missing = node.materials.filter(
+      (material) => material.state !== "current" && material.state !== "unanchored",
+    );
+    return (
+      !!node.behind &&
+      !node.stale &&
+      missing.length > 0 &&
+      missing.every(
+        (material) =>
+          material.state === "unavailable" &&
+          !material.recordedVersion &&
+          material.reason?.includes("no retained baseline"),
+      )
+    );
+  };
   const candidates = {
     behind: context.sync.nodes
-      .filter((node) => node.behind)
+      .filter((node) => node.behind && !baselineOnly(node))
       .map((node) => ({
         nodeId: node.nodeId,
+        path: `.tent/${nodeNotePath(node.path)}`,
         name: shorten(path.posix.basename(node.path), 56),
         reason: shorten(node.behind!.reasons.join("; "), 160),
       })),
@@ -233,6 +272,7 @@ export function makeContextBrief(
       .filter((node) => node.ahead)
       .map((node) => ({
         nodeId: node.nodeId,
+        path: `.tent/${nodeNotePath(node.path)}`,
         name: shorten(path.posix.basename(node.path), 56),
         ...(node.ahead!.since
           ? {
@@ -243,16 +283,17 @@ export function makeContextBrief(
     cardInputs: context.cards.items
       .filter(
         (card) =>
-          !card.diagnostic &&
           card.status !== "deprecated" &&
           (card.state === "pending" ||
-            Number(card.goalCount ?? 0) < Number(card.totalGoalCount ?? 0)),
+            (!card.diagnostic && Number(card.goalCount ?? 0) < Number(card.totalGoalCount ?? 0))),
       )
       .sort((a, b) => String(b.publishedAt ?? "").localeCompare(String(a.publishedAt ?? "")))
       .map((card) => ({
         cardId: String(card.cardId),
+        path: `.tent/cards/${card.cardId}.md`,
         title: shorten(String(card.title ?? card.cardId), 72),
         state: String(card.state),
+        ...(typeof card.diagnostic === "string" ? { reason: card.diagnostic } : {}),
         progress: typeof card.progress === "string" ? card.progress : undefined,
         outputCount: Array.isArray(card.outputNodeIds) ? card.outputNodeIds.length : 0,
         goalCount: Number(card.goalCount ?? 0),
@@ -266,17 +307,20 @@ export function makeContextBrief(
       .map((item) => ({
         cardId: item.cardId,
         nodeId: item.nodeId,
+        path: `.tent/${item.path ?? item.publishedVersion.path}`,
         state: item.state,
         reason: shorten(item.reason, 160),
       })),
   } satisfies Record<string, BriefItem[]>;
   const brief: ContextBrief = {
     counts: { ahead: context.sync.counts.ahead, behind: context.sync.counts.behind },
-    behind: [],
+    invalidNodes: context.sync.invalidNodes ?? [],
+    cardInputs: candidates.cardInputs.filter((item) => item.state === "pending"),
     ahead: [],
-    unlinkedOutputs: [],
-    cardInputs: [],
     changedCardSources: [],
+    unlinkedOutputs: [],
+    behind: [],
+    baselineOnlyBehind: context.sync.nodes.filter(baselineOnly).length,
     omitted: {},
     ...(context.observations.uncertain ? { observationUncertain: true } : {}),
     ...(context.changedCardSources.diagnostics.length ? { cardSourcesUncertain: true } : {}),
@@ -285,10 +329,17 @@ export function makeContextBrief(
       : {}),
     ...(options.roleId ? { roleId: options.roleId } : {}),
   };
+  candidates.cardInputs = candidates.cardInputs.filter((item) => item.state !== "pending");
   for (const [key, items] of Object.entries(candidates)) brief.omitted[key] = items.length;
   brief.omitted.unlinkedOutputs = context.unlinkedOutputs.length;
   // Keep room for every category before spending the remaining budget by priority.
-  const keys = Object.keys(candidates) as (keyof typeof candidates)[];
+  const keys: (keyof typeof candidates)[] = [
+    "ahead",
+    "changedCardSources",
+    "cardInputs",
+    "unlinkedOutputs",
+    "behind",
+  ];
   const indices = Object.fromEntries(keys.map((key) => [key, 0])) as Record<
     keyof typeof candidates,
     number
@@ -315,6 +366,10 @@ export function makeContextBrief(
 
 export function formatContextBrief(brief: ContextBrief): string {
   const lines = [`behind ${brief.counts.behind} · ahead ${brief.counts.ahead}`];
+  if (brief.invalidNodes.length) {
+    lines.push("Invalid Nodes:");
+    for (const node of brief.invalidNodes) lines.push(`- ${node.path}: ${node.reason}`);
+  }
   const sections: [
     keyof Pick<
       ContextBrief,
@@ -322,11 +377,11 @@ export function formatContextBrief(brief: ContextBrief): string {
     >,
     string,
   ][] = [
-    ["behind", "Behind"],
-    ["ahead", "Ahead"],
     ["cardInputs", "Input Cards (reception does not mean completion)"],
-    ["unlinkedOutputs", "Recent unrecorded files"],
+    ["ahead", "Ahead"],
     ["changedCardSources", "Received Card sources changed; reread current requirements"],
+    ["unlinkedOutputs", "Recent unrecorded files"],
+    ["behind", "Behind"],
   ];
   for (const [key, title] of sections) {
     if (!brief[key].length) continue;
@@ -341,10 +396,14 @@ export function formatContextBrief(brief: ContextBrief): string {
           ? `${String(item.name ?? "")}; ${item.since ? `since ${item.since}` : "start time not recorded"}`
           : String(item.reason ?? item.title ?? item.kind ?? item.at ?? item.address ?? "");
       lines.push(
-        `- ${identity}${detail && detail !== identity ? ` ${detail}` : ""}${item.progress || item.state ? ` [${item.progress || item.state}${Number(item.totalGoalCount) > 0 ? ` ${item.goalCount}/${item.totalGoalCount}` : ""}]` : ""}`,
+        `- ${identity}${item.path ? ` ${item.path}` : ""}${detail && detail !== identity ? ` ${detail}` : ""}${item.progress || item.state ? ` [${item.progress || item.state}${Number(item.totalGoalCount) > 0 ? ` ${item.goalCount}/${item.totalGoalCount}` : ""}]` : ""}`,
       );
     }
   }
+  if (brief.baselineOnlyBehind)
+    lines.push(
+      `${brief.baselineOnlyBehind} behind Nodes have no retained baseline; inspect with tent workspace drift --json.`,
+    );
   const omitted = Object.values(brief.omitted).reduce((sum, n) => sum + n, 0);
   if (omitted)
     lines.push(

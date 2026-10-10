@@ -69,7 +69,7 @@ async function fixture(t: TestContext) {
     await capture([{ path: nodeNotePath(nodePath), raw }]);
     // This helper publishes an authored Node, including its retained basis.
     const prepared = await prepareNodeSyncSave(adapter, nodeNotePath(nodePath), raw, {
-      acknowledge: true,
+      created: true,
     });
     assert.ok(prepared.record);
     records[id] = prepared.record;

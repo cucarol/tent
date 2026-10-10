@@ -35,7 +35,7 @@ test("Node CLI forwards explicit actors through content writes, confirmation and
       generated: { by: string; at: string };
       verified: { by: string; at: string }[];
     };
-  const etag = async () => (await run("get", [id, "--full"])).node.etag;
+  const etag = async () => (await run("get", [id, "--full"])).etag;
   assert.equal((await data()).generated.by, "process:import");
   await run("write", [
     id,
@@ -66,7 +66,7 @@ test("Node CLI forwards explicit actors through content writes, confirmation and
     "--heading",
     "Evidence",
     "--base-etag",
-    section.sectionEtag,
+    section.etag,
     "--body",
     "## Evidence\nRevised.\n",
     "--by",

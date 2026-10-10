@@ -76,11 +76,14 @@ test("output metadata, equivalent newlines and partial edits retain a changed de
       .map((m) => m.recordedVersion),
   );
   await edit({ body: "## Result\nRewritten after full review.\n" });
-  assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
+  assert.ok((await inspectNodeSync(fs, output)).behind);
   assert.equal((await inspectNodeSync(fs, output)).trustTier, "unverified");
+  const reviewed = await readNodeForEdit(fs, output);
+  await confirmNodeSync(fs, output, { baseEtag: reviewed.etag });
+  assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
 });
 
-test("output rewrites acknowledge final output bytes also used by ancestor goal materials", async () => {
+test("explicit output confirmation acknowledges final bytes also used by ancestor goal materials", async () => {
   const fs = new PropagationMemoryFs();
   await scaffoldTent(fs, { name: "Propagation" });
   const env = { fs, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Propagation" };
@@ -108,7 +111,11 @@ test("output rewrites acknowledge final output bytes also used by ancestor goal 
     output = batch.results[1]!.nodeId;
   assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
   const read = await readNodeForEdit(fs, output);
-  await writeNodeDocument(fs, output, { baseEtag: read.etag, body: "Updated result" });
+  await writeNodeDocument(fs, output, {
+    baseEtag: read.etag,
+    body: "Updated result",
+    confirm: true,
+  });
   assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
   assert.ok((await inspectNodeSync(fs, goal)).behind);
   const goalRead = await readNodeForEdit(fs, goal);

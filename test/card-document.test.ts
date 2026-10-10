@@ -360,9 +360,9 @@ test("behind responses retract Card completion and output activity without chang
   assert.equal(cli.exitCode, 0, cli.stderr);
   const output = JSON.parse(cli.stdout);
   assert.equal(output.cardId, card.cardId);
-  const outputPath = `${output.path}/${output.path.split("/").at(-1)}.md`;
+  const outputPath = path.join(workspace, output.path);
   await confirmNodeSync(adapter, output.nodeId, {
-    baseEtag: contentEtag(await adapter.readFile(outputPath)),
+    baseEtag: contentEtag(await fs.readFile(outputPath, "utf8")),
     by: "human:cuca",
   });
   const cardRaw = await adapter.readFile(card.path);
@@ -384,7 +384,7 @@ test("behind responses retract Card completion and output activity without chang
     /--card/,
   );
   await confirmNodeSync(adapter, output.nodeId, {
-    baseEtag: contentEtag(await adapter.readFile(outputPath)),
+    baseEtag: contentEtag(await fs.readFile(outputPath, "utf8")),
     by: "human:cuca",
   });
   assert.equal(((await readCardDocument(adapter, card.cardId)) as any).progress, "has-output");

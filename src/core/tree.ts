@@ -49,11 +49,11 @@ export async function loadTent(fs: FsAdapter): Promise<LoadedTent> {
   // directories. Final sorting below makes completion order irrelevant.
   while (pending.length) {
     await Promise.all(
-      pending.splice(0, 4).map(async ({ path, parent, target }) => {
+      pending.splice(0, 16).map(async ({ path, parent, target }) => {
         if (isOperationalPath(path)) return;
-        const node = await loadNode(fs, path, parent);
+        const [node, entries] = await Promise.all([loadNode(fs, path, parent), fs.listDir(path)]);
         if (node) target.push(node);
-        for (const entry of await fs.listDir(path)) {
+        for (const entry of entries) {
           if (!entry.isDir || OPERATIONAL_TOP_LEVEL.has(entry.name)) continue;
           pending.push({
             path: join(path, entry.name),
@@ -119,7 +119,7 @@ export async function reloadLoadedNode(
   if (!node) throw new Error(`Node not found: ${path}.`);
   const raw = await fs.readFile(nodeNotePath(path));
   const { data, body } = parseFrontmatter(raw);
-  const schemaError = canonicalIdentityError(data);
+  const schemaError = fs.invalidNodeEdits?.get(nodeNotePath(path)) ?? canonicalIdentityError(data);
   if (schemaError) throw new Error(schemaError);
   const identity = normalizeIdentity(data);
   if (identity.fm.id !== node.id) throw new Error("Incremental reload cannot change node id.");
@@ -168,7 +168,7 @@ async function loadNode(fs: FsAdapter, path: string, parent: Node | null): Promi
   }
   const { data, body } = parsed;
   const name = baseName(path);
-  const schemaError = canonicalIdentityError(data);
+  const schemaError = fs.invalidNodeEdits?.get(nodeFile) ?? canonicalIdentityError(data);
 
   const { fm, tags } = normalizeIdentity(data);
   const node: Node = {

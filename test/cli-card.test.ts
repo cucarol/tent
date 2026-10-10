@@ -5,6 +5,9 @@ import test, { type TestContext } from "node:test";
 import { spawn } from "node:child_process";
 import { runCardCommand, cardHelpText } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
+import { runNodeCommand } from "../src/cli/node-commands.js";
+import { readCardDocument } from "../src/core/card-document.js";
+import { parseFrontmatter } from "../src/core/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { git } from "./helpers.js";
@@ -71,7 +74,7 @@ test("Card watch returns only committed current pending input for the exact Role
   const first = await create("First\nline", role.roleId);
   const second = await create("Second", role.roleId);
   const systemRoot = path.join(root, ".tent");
-  const unpublished = (await fs.readFile(path.join(systemRoot, first.path), "utf8")).replaceAll(
+  const unpublished = (await fs.readFile(path.join(root, first.path), "utf8")).replaceAll(
     first.cardId,
     "card-unpublished",
   );
@@ -247,14 +250,13 @@ test("Card CLI deprecates tasks with CAS, filters them and displays a reception 
   const card = value(
     await runCardCommand("create", ["--prompt", "Read the requirements Node."], globals),
   );
-  const adapter = new NodeFs(path.join(root, ".tent"));
-  const before = await adapter.readFile(card.path);
+  const before = await fs.readFile(path.join(root, card.path), "utf8");
   assert.equal((await runCardCommand("deprecate", [card.cardId], globals)).exitCode, 1);
   assert.equal(
     (await runCardCommand("deprecate", [card.cardId, "--base-etag", "stale"], globals)).exitCode,
     1,
   );
-  assert.equal(await adapter.readFile(card.path), before);
+  assert.equal(await fs.readFile(path.join(root, card.path), "utf8"), before);
   const cancelled = value(
     await runCardCommand("deprecate", [card.cardId, "--base-etag", card.etag], globals),
   );
@@ -276,6 +278,34 @@ test("Card CLI deprecates tasks with CAS, filters them and displays a reception 
     (await runCardCommand("show", [card.cardId], { workspace: root })).stdout,
     /deprecated/,
   );
+});
+
+test("deprecated Card show and take expose readable current Node reference files", async (t) => {
+  const { root, globals } = await fixture(t);
+  const card = value(await runCardCommand("create", ["--prompt", "Cancelled task"], globals));
+  const body = `[Task](/cards/${card.cardId}.md)\n`;
+  const reference = value(
+    await runNodeCommand("create", ["Reference.md", "--type", "prompt", "--body", body], globals),
+  ).node;
+  value(await runCardCommand("deprecate", [card.cardId, "--base-etag", card.etag], globals));
+  const core = await readCardDocument(new NodeFs(path.join(root, ".tent")), card.cardId);
+  assert.ok("currentReferences" in core);
+  assert.ok("version" in core);
+  assert.deepEqual(core.currentReferences, [
+    { kind: "node", id: reference.nodeId, path: "Reference.md/Reference.md.md" },
+  ]);
+  for (const command of ["show", "take"]) {
+    const result = value(await runCardCommand(command, [card.cardId], globals));
+    assert.deepEqual(result.currentReferences, [
+      { kind: "node", id: reference.nodeId, path: reference.path },
+    ]);
+    assert.equal(
+      parseFrontmatter(await fs.readFile(path.join(root, result.currentReferences[0].path), "utf8"))
+        .body,
+      body,
+    );
+    if (command === "show") assert.deepEqual(result.version, core.version);
+  }
 });
 
 test("Card CLI supports an ordinary Session without creating a Role", async (t) => {

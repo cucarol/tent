@@ -44,7 +44,7 @@ test("CLI writes a mutually linked batch from stdin and rejects a failed mixed b
   const created = JSON.parse(create.stdout);
   assert.deepEqual(
     created.results.map((item: { path: string }) => item.path),
-    ["Parent/Child", "Parent"],
+    [".tent/Parent/Child/Child.md", ".tent/Parent/Parent.md"],
   );
   assert.ok(
     created.results.every((item: { etag: string }) => item.etag && !item.etag.startsWith("read:")),
@@ -66,7 +66,7 @@ test("CLI writes a mutually linked batch from stdin and rejects a failed mixed b
         {
           op: "update",
           nodeId: parent.nodeId,
-          baseEtag: JSON.parse(complete.stdout).node.etag,
+          baseEtag: JSON.parse(complete.stdout).etag,
           body: "would change",
         },
         { op: "create", ref: "broken", parent: "@unknown", name: "Broken", type: "prompt" },
@@ -87,7 +87,7 @@ test("CLI writes a mutually linked batch from stdin and rejects a failed mixed b
           {
             op: "update",
             nodeId: parent.nodeId,
-            baseEtag: JSON.parse(complete.stdout).node.etag,
+            baseEtag: JSON.parse(complete.stdout).etag,
             body: "updated decision",
           },
         ],

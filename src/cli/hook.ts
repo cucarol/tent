@@ -1,3 +1,4 @@
+import { captureNativeNodeEdits } from "../core/node-native-capture.js";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { NodeFs } from "../fs/node-fs.js";
@@ -48,9 +49,11 @@ export async function runHookCommand(
     if (!systemRoot) return silent;
     const workspaceRoot = workspaceRootFromSystemRoot(systemRoot);
     if (!workspaceRoot) throw new Error("Tent requires an in-workspace .tent layout");
+    const fs = new NodeFs(systemRoot);
+    await captureNativeNodeEdits(fs);
     if (sub === "start") {
       if (typeof event.session_id === "string")
-        await saveSessionHistoryBaseline(new NodeFs(systemRoot), event.session_id);
+        await saveSessionHistoryBaseline(fs, event.session_id);
       const command = `node ${JSON.stringify(path.join(options.packageRoot, "cli.mjs"))}`;
       const identity = await readBuildIdentity(options.packageRoot);
       const mismatch = await sourceBuildMismatch(workspaceRoot, identity);
@@ -60,7 +63,7 @@ export async function runHookCommand(
           JSON.stringify({
             hookSpecificOutput: {
               hookEventName: "SessionStart",
-              additionalContext: `Tent Workspace: ${workspaceRoot}\nTent CLI: ${command}\nCurrent context (at most 4 KiB): Tent CLI with workspace brief --json\nBuild: ${formatBuildIdentity(identity)}\n${mismatch ? `${mismatch}\n` : ""}`,
+              additionalContext: `Tent Workspace: ${workspaceRoot}\nTent CLI: ${command}\nCurrent context: Tent CLI with workspace brief --json\nBuild: ${formatBuildIdentity(identity)}\n${mismatch ? `${mismatch}\n` : ""}`,
             },
           }) + "\n",
       };
@@ -72,7 +75,6 @@ export async function runHookCommand(
     );
     if (typeof event.session_id !== "string" || typeof event.turn_id !== "string")
       throw new Error("Stop session and turn identities are required for observations");
-    const fs = new NodeFs(systemRoot);
     const saved = await appendSessionObservations(
       fs,
       event.session_id,

@@ -33,12 +33,7 @@ async function fixture(t: TestContext) {
     return JSON.parse(result.stdout);
   };
   const stored = async (nodePath: string) =>
-    parseFrontmatter(
-      await fs.readFile(
-        path.join(root, ".tent", nodePath, `${path.posix.basename(nodePath)}.md`),
-        "utf8",
-      ),
-    ).data;
+    parseFrontmatter(await fs.readFile(path.join(root, nodePath), "utf8")).data;
   return { root, globals, text, parse, stored };
 }
 
@@ -69,7 +64,7 @@ test("link-output, node create and card create resolve the same Workspace-root a
     ).node;
     const linkedResource = (await stored(linked.path)).resource as string;
     assert.equal(linkedResource, (await stored(created.path)).resource, input);
-    assert.equal(pathTarget(linkedResource, `${linked.path}/Linked ${index}.md`), target, input);
+    assert.equal(pathTarget(linkedResource, linked.path.replace(/^\.tent\//, "")), target, input);
   }
   const card = parse(
     await runCardCommand(
@@ -132,7 +127,7 @@ test("card create warns about explicit path sources that name nothing and stores
   const shown = parse(await runCardCommand("show", [card.cardId], globals));
   assert.deepEqual(
     (shown.sources as Array<Record<string, unknown>>).map(
-      ({ version: _version, ...source }) => source,
+      ({ version: _version, path: _path, ...source }) => source,
     ),
     [
       { resource: "../../docs/missing.md" },
@@ -174,9 +169,9 @@ test("card show and take list sources in text while JSON output keeps its fields
   const commit = (json.sources[0].version.commit as string).slice(0, 7);
   const expected = [
     "Sources:",
-    `  1. ../Goal/Goal.md  Node Goal  node-goal  @${commit}`,
-    "  2. ../../docs/req.md  file exists",
-    "  3. ../../docs/missing.md  file missing",
+    `  1. .tent/Goal/Goal.md  Node Goal  node-goal  @${commit}`,
+    "  2. docs/req.md  file exists",
+    "  3. docs/missing.md  file missing",
     "  4. customer discussion  description text",
     "  5. https://example.com/spec  remote address, not fetched",
   ].join("\n");
@@ -205,17 +200,17 @@ test("confirm names the missing ETag, node get shows it and role create prints o
   assert.match(confirm.stderr, /tent node get node-goal --json/);
   assert.match(confirm.stderr, /etag/);
 
-  const etag = parse(await runNodeCommand("get", ["node-goal"], globals)).node.etag as string;
+  const etag = parse(await runNodeCommand("get", ["node-goal"], globals)).etag as string;
   const paged = await runNodeCommand("get", ["node-goal"], text);
   assert.equal(paged.exitCode, 0, paged.stderr);
   assert.deepEqual(paged.stdout.split("\n").slice(0, 3), [
-    "node-goal  Goal  body",
+    "node-goal",
     `ETag: ${etag}`,
     "Deliver evidence.",
   ]);
   const full = await runNodeCommand("get", ["node-goal", "--full"], text);
   assert.deepEqual(full.stdout.split("\n").slice(0, 3), [
-    "node-goal  Goal",
+    "node-goal",
     `ETag: ${etag}`,
     "Deliver evidence.",
   ]);

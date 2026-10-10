@@ -169,6 +169,15 @@ test("Web Node edits retain legacy material addresses and reject changed address
   });
   assert.equal(body.status, 200, body.body);
   assert.deepEqual(parseFrontmatter(await tent.readFile(note)).data.sources, parsed.data.sources);
+  assert.equal(
+    (await tent.history.nodeRecords())["node-main"],
+    undefined,
+    "a body-only save does not establish a baseline for existing legacy declarations",
+  );
+  const confirmed = await call("POST", "/api/nodes/node-main/confirm", {
+    json: { baseEtag: (await read()).etag },
+  });
+  assert.equal(confirmed.status, 200, confirmed.body);
   const record = (await tent.history.nodeRecords())["node-main"]!;
   assert.equal(record.v, 1);
   assert.equal(record.materials.length, 2);
@@ -186,6 +195,7 @@ test("Web Node edits retain legacy material addresses and reject changed address
     },
   });
   assert.equal(raw.status, 200, raw.body);
+  assert.deepEqual((await tent.history.nodeRecords())["node-main"], record);
   const next = await read();
   const before = await tent.readFile(note);
   for (const fields of [{ resource: "/../new.md" }, { sources: [{ resource: "/../new.md" }] }]) {
@@ -198,6 +208,19 @@ test("Web Node edits retain legacy material addresses and reject changed address
     assert.match(error.message, /Invalid (resource|sources\[0\]\.resource):.*\.\.\/\.\.\/new.md/);
     assert.equal(await tent.readFile(note), before);
   }
+  const declared = await call("PUT", "/api/nodes/node-main", {
+    json: {
+      baseEtag: next.etag,
+      frontmatter: {
+        sources: [...(parsed.data.sources as object[]), { resource: "../../docs/notes.txt" }],
+      },
+    },
+  });
+  assert.equal(declared.status, 200, declared.body);
+  const observed = (await tent.history.nodeRecords())["node-main"]!;
+  assert.equal(observed.materials.length, 3);
+  assert.deepEqual(observed.materials.slice(0, 2), record.materials);
+  assert.ok(observed.materials[2]!.version, "a newly declared material is observed on save");
 });
 
 test("Node HTTP content replacement rejects incomplete read bases with 422", async (t) => {

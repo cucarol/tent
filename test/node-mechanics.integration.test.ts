@@ -129,8 +129,8 @@ test("Node Git budgets use retained history and unchanged selected bytes, with f
       args = ["node", "create", "Added", "--type", "prompt", "--tags", "decision", "--body", body];
     if (op === "append") args = ["node", "append", prompt, "--body", "Added fact."];
     if (op === "write" || op === "confirm") {
-      const selected = (await run(workspace, ["node", "get", prompt, "--full"], undefined, 1)).value
-        .node;
+      const selected = (await run(workspace, ["node", "get", prompt, "--full"], undefined, 1))
+        .value;
       args = ["node", op, prompt, "--base-etag", selected.etag];
       if (op === "write") args.push("--body", body + "Updated fact.\n");
       else await fs.appendFile(path.join(workspace, "source.md"), "Material changed.\n");
@@ -145,7 +145,7 @@ test("Node Git budgets use retained history and unchanged selected bytes, with f
         "--heading",
         "Alpha",
         "--base-etag",
-        section.sectionEtag,
+        section.etag,
         "--body",
         "## Alpha\n\nChanged fact.\n",
       ];
@@ -177,27 +177,35 @@ test("Node Git budgets use retained history and unchanged selected bytes, with f
       args.push("--view", "body", "--range", JSON.stringify({ unit: "utf16", start: 0, end: 20 }));
     if (kind === "cursor") {
       const first = (await run(workspace, ["node", "get", long, "--view", "body"], undefined, 1))
-        .value.node;
+        .value;
       assert.ok(first.page.nextCursor);
       args.push("--view", "body", "--expected-etag", first.etag, "--cursor", first.page.nextCursor);
     }
     await run(workspace, args, undefined, kind === "summary" ? 0 : 1);
   }
   await run(baseline, ["workspace", "brief"], undefined, 2);
-  const selected = (await run(baseline, ["node", "get", prompt, "--full"], undefined, 1)).value
-    .node;
+  const selected = (await run(baseline, ["node", "get", prompt, "--full"], undefined, 1)).value;
+  const history = new NodeFs(path.join(baseline, ".tent")).history;
+  const retained = await history.currentCommit();
   const note = path.join(baseline, ".tent", "Goal", "Prompt", "Prompt.md");
   await fs.appendFile(note, "Editor added these exact bytes.\n");
-  const external = (await run(baseline, ["node", "get", prompt, "--full"])).value.node;
+  const external = (await run(baseline, ["node", "get", prompt, "--full"])).value;
   assert.notEqual(external.etag, selected.etag);
-  assert.notDeepEqual(external.version, selected.version);
+  assert.equal(await history.currentCommit(), retained, "pure get must not capture native edits");
   assert.match(external.text, /Editor added these exact bytes/);
   const cold = path.join(scratch, "cold-get");
   await fs.cp(baseline, cold, { recursive: true });
   await fs.rm(path.join(cold, ".tent", ".git", "tent-history-index.json"));
-  const reread = (await run(cold, ["node", "get", prompt, "--full"])).value.node;
+  const reread = (await run(cold, ["node", "get", prompt, "--full"])).value;
   assert.equal(reread.etag, external.etag);
-  assert.deepEqual(reread.version, external.version);
+  assert.equal(reread.text, external.text);
+  await run(baseline, ["workspace", "brief"]);
+  const captured = await history.currentCommit();
+  assert.notEqual(captured, retained, "brief retains the native edit for later historical reads");
+  assert.equal(
+    await history.read({ commit: captured!, path: "Goal/Prompt/Prompt.md" }),
+    await fs.readFile(note, "utf8"),
+  );
 });
 
 test("NodeFs CLI, Core and UI wait for the owner; timeout preserves ownership and skips the action", async (t) => {

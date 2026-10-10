@@ -130,7 +130,7 @@ test(
     ]);
     const input = await json(["card", "show", card.cardId]);
     assert.equal(input.sources[0].version.path, "context/context.md");
-    const before = (await json(["node", "get", node.nodeId, "--full"])).node;
+    const before = await json(["node", "get", node.nodeId, "--full"]);
     await json([
       "node",
       "write",
@@ -147,7 +147,7 @@ test(
       "--version-json",
       JSON.stringify(input.sources[0].version),
     ]);
-    assert.equal(historical.node.text, "Original input\n");
+    assert.equal(historical.text, "Original input\n");
     const taken = await json(["card", "take", card.cardId, "--role", role.roleId]);
     assert.equal(taken.state, "consumed");
     assert.equal(taken.progress, null);

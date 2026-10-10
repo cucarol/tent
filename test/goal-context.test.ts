@@ -47,7 +47,8 @@ test("goal get exposes bounded live context without changing document bytes or c
     assert.equal(result.exitCode, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
-  const node = async (...args: string[]) => parse(await runNodeCommand("get", args, globals));
+  const node = async (...args: string[]) =>
+    parse(await runNodeCommand("get", [...args, "--context"], globals));
   const created = parse(
     await runCardCommand(
       "create",
@@ -99,25 +100,31 @@ test("goal get exposes bounded live context without changing document bytes or c
   const continuation = await node(
     "node-goal",
     "--cursor",
-    first.node.page.nextCursor,
+    first.page.nextCursor,
     "--expected-etag",
-    first.node.etag,
+    first.etag,
   );
   assert.equal(continuation.context, undefined);
   const full = await node("node-goal", "--full");
-  assert.equal(full.node.text, body);
+  assert.equal(full.text, body);
   assert.ok(full.context.includes("node-rule"));
   const raw = await node("node-goal", "--full", "--view", "raw");
-  assert.equal(raw.node.text, await fs.readFile(path.join(system, "Scope/Goal/Goal.md"), "utf8"));
-  assert.equal(raw.node.etag, full.node.etag);
-  const frozen = await node("node-goal", "--version-json", JSON.stringify(full.node.version));
+  assert.equal(raw.text, await fs.readFile(path.join(system, "Scope/Goal/Goal.md"), "utf8"));
+  assert.equal(raw.etag, full.etag);
+  const frozen = await node(
+    "node-goal",
+    "--version-json",
+    JSON.stringify({ commit: before.trim(), path: "Scope/Goal/Goal.md" }),
+  );
   assert.equal(frozen.context, undefined);
   assert.ok((await node("node-decision")).context.includes("node-goal"));
   assert.equal(
     await git(system, "show", "HEAD:Scope/Rule/Rule.md"),
     await git(system, "show", `${before.trim()}:Scope/Rule/Rule.md`),
   );
-  const text = await runNodeCommand("get", ["node-goal", "--view", "summary"], { workspace });
+  const text = await runNodeCommand("get", ["node-goal", "--view", "summary", "--context"], {
+    workspace,
+  });
   assert.equal(text.exitCode, 0, text.stderr);
   assert.match(text.stdout, /Context/);
   for (let i = 0; i < 30; i++)
@@ -281,32 +288,43 @@ test("all Node types disclose complete live association categories and incoming 
   assert.ok(
     !replacement.some((relation) => (relation.from as { cardId?: string }).cardId === card.cardId),
   );
-  const first = parse(await runNodeCommand("get", ["node-subj00"], globals));
-  const repeated = parse(await runNodeCommand("get", ["node-subj00"], globals));
+  const first = parse(await runNodeCommand("get", ["node-subj00", "--context"], globals));
+  const repeated = parse(await runNodeCommand("get", ["node-subj00", "--context"], globals));
   assert.equal(first.context, repeated.context);
   assert.ok(Buffer.byteLength(JSON.stringify({ context: first.context })) <= 1024);
   const continuation = parse(
     await runNodeCommand(
       "get",
-      ["node-subj00", "--cursor", first.node.page.nextCursor, "--expected-etag", first.node.etag],
+      ["node-subj00", "--cursor", first.page.nextCursor, "--expected-etag", first.etag],
       globals,
     ),
   );
   assert.equal(continuation.context, undefined);
-  const output = parse(await runNodeCommand("get", ["node-outp00", "--full"], globals));
+  const output = parse(
+    await runNodeCommand("get", ["node-outp00", "--full", "--context"], globals),
+  );
   assert.match(output.context, /Goal.*node-goal00/);
   assert.match(output.context, /Self.*stable\/behind/);
   const historical = parse(
     await runNodeCommand(
       "get",
-      ["node-outp00", "--version-json", JSON.stringify(output.node.version)],
+      [
+        "node-outp00",
+        "--version-json",
+        JSON.stringify({
+          commit: await adapter.history.currentCommit(),
+          path: "Goal/Output/Output.md",
+        }),
+      ],
       globals,
     ),
   );
   assert.equal(historical.context, undefined);
   for (let i = 0; i < 45; i++)
     await write(`Goal/Renamed/Extra${i}`, `node-extra${i}`, "prompt", "More");
-  const crowded = parse(await runNodeCommand("get", ["node-subj00", "--view", "summary"], globals));
+  const crowded = parse(
+    await runNodeCommand("get", ["node-subj00", "--view", "summary", "--context"], globals),
+  );
   assert.ok(Buffer.byteLength(JSON.stringify({ context: crowded.context })) <= 1024);
   assert.match(crowded.context, /Omitted.*Child\+\d+.*node relations/);
   const cardRaw = await adapter.readFile(`cards/${card.cardId}.md`);

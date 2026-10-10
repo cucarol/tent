@@ -245,6 +245,7 @@ export async function observeNodeMaterials(
   finalDocuments?: Map<string, string>,
   nodes?: Map<string, CatalogNode>,
   previous?: Pick<NodeBasisRecord, "materials">,
+  observations?: Map<string, ReturnType<typeof observeSyncMaterial>>,
 ) {
   const directories = new Map<string, ReturnType<typeof observeSyncMaterial>>();
   return Promise.all(
@@ -269,32 +270,33 @@ export async function observeNodeMaterials(
           const locator = materialLocator(resource, documentPath, field === "sources");
           local =
             locator.kind === "path" || (locator.kind === "uri" && locator.uri.startsWith("file:"));
-          const targetNode =
-            locator.kind === "path" && !isDirectoryMaterial(locator) && nodes
-              ? [...nodes.values()].find((node) => nodeNotePath(node.path) === locator.target)
-              : undefined;
-          const finalRaw =
-            locator.kind === "path" && !isDirectoryMaterial(locator)
-              ? finalDocuments?.get(locator.target)
-              : undefined;
-          const nodeRaw =
-            targetNode && locator.kind === "path"
-              ? (finalRaw ?? (await fs.readFile(locator.target)))
-              : undefined;
-          const observe = () =>
-            observeSyncMaterial(
-              fs,
-              resource,
-              documentPath,
-              field === "sources",
-              nodes,
-              finalDocuments,
-              repository,
-            );
-          if (isDirectoryMaterial(locator) && !directories.has(identity))
-            directories.set(identity, observe());
-          observed =
-            nodeRaw !== undefined
+          const key = JSON.stringify([identity, locator, repository]);
+          const observeOnce = async () => {
+            const targetNode =
+              locator.kind === "path" && !isDirectoryMaterial(locator) && nodes
+                ? [...nodes.values()].find((node) => nodeNotePath(node.path) === locator.target)
+                : undefined;
+            const finalRaw =
+              locator.kind === "path" && !isDirectoryMaterial(locator)
+                ? finalDocuments?.get(locator.target)
+                : undefined;
+            const nodeRaw =
+              targetNode && locator.kind === "path"
+                ? (finalRaw ?? (await fs.readFile(locator.target)))
+                : undefined;
+            const observe = () =>
+              observeSyncMaterial(
+                fs,
+                resource,
+                documentPath,
+                field === "sources",
+                nodes,
+                finalDocuments,
+                repository,
+              );
+            if (isDirectoryMaterial(locator) && !directories.has(identity))
+              directories.set(identity, observe());
+            return nodeRaw !== undefined
               ? {
                   version: nodeMaterialFingerprint(nodeRaw, locator, nodes),
                 }
@@ -305,6 +307,9 @@ export async function observeNodeMaterials(
                       .update(materialContent(finalRaw, locator).replace(/\r\n?/g, "\n"))
                       .digest("hex"),
                   };
+          };
+          if (observations && !observations.has(key)) observations.set(key, observeOnce());
+          observed = await (observations?.get(key) ?? observeOnce());
         } catch (error) {
           // Existing invalid or unreadable declarations remain editable, with an honest diagnostic.
           observed = { reason: error instanceof Error ? error.message : String(error) };
@@ -326,12 +331,12 @@ export async function prepareNodeSyncSave(
   raw: string,
   options: {
     confirm?: boolean;
-    acknowledge?: boolean;
     created?: boolean;
     by?: string;
     now?: string;
     nodes?: Map<string, CatalogNode>;
     previous?: NodeBasisRecord;
+    previousRaw?: string;
     records?: Record<string, NodeBasisRecord | null>;
     finalDocuments?: Map<string, string>;
     previousLocation?: { documentPath: string; nodes: Map<string, CatalogNode> };
@@ -346,10 +351,20 @@ export async function prepareNodeSyncSave(
   const id = parsed.data.id as string;
   const output = isOutputNode(parsed.data);
   const records = options.records ?? (await retainedNodeRecords(fs));
-  const previous = options.previous ?? records[id] ?? undefined;
-  if (output && !previous && !options.created && !options.confirm && !options.acknowledge)
-    return { raw };
+  let previous = options.previous ?? records[id] ?? undefined;
   const nodes = options.nodes ?? (await loadNodeCatalog(fs)).byId;
+  if (!previous && !options.created && !options.confirm) {
+    if (options.previousRaw === undefined) return { raw };
+    const oldMaterials = materialOccurrences(parseFrontmatter(options.previousRaw).data).map(
+      ({ resource }) => syncMaterialIdentity(resource, documentPath, nodes),
+    );
+    const newlyDeclared = materialOccurrences(parsed.data).some(
+      ({ resource }) => !oldMaterials.includes(syncMaterialIdentity(resource, documentPath, nodes)),
+    );
+    if (!newlyDeclared) return { raw };
+    // An imported Node's old, unknown bases stay unknown when it gains a new declaration.
+    previous = { v: 1, materials: oldMaterials.map((identity) => ({ identity })) };
+  }
   const finalDocuments = new Map([...(options.finalDocuments ?? []), [documentPath, raw]]);
   const observations = await observeNodeMaterials(
     fs,
@@ -364,7 +379,7 @@ export async function prepareNodeSyncSave(
   );
   const materials = observations.map(({ identity, version, repository, directoryFiles }) => {
     const old = previous?.materials.find((m) => m.identity === identity);
-    const useCurrent = ((options.confirm || options.acknowledge) && !!version) || !old;
+    const useCurrent = (options.confirm && !!version) || !old;
     const known = useCurrent ? (version ?? old?.version) : old?.version;
     const currentAlgorithm = (useCurrent && !!version) || old?.fingerprintVersion === 2;
     const materialRepository = useCurrent
@@ -396,10 +411,7 @@ export async function prepareNodeSyncSave(
         !ancestor.invalid &&
         isRequirementNode({ type: ancestor.type }),
     );
-  if (
-    goals.length &&
-    (options.created || options.confirm || options.acknowledge || firstGoalPlacement)
-  ) {
+  if (goals.length && (options.created || options.confirm || firstGoalPlacement)) {
     record.goals = [];
     for (const goal of goals) {
       const goalRaw =

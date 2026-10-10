@@ -44,40 +44,46 @@ test("separate CLI processes continue discovery, live and Git reads and diffs wi
     assert.notDeepEqual(second.items, first.items);
     assert.equal(second.page.hasMore, false);
   }
-  const first = (await read("get", "node-alpha")).node;
+  const adapter = new NodeFs(tent);
+  const raw = await fs.readFile(path.join(tent, "A/A.md"), "utf8");
+  const firstVersion = (
+    await adapter.history.captureUnlocked([{ path: "A/A.md", raw }], { operation: "test.fixture" })
+  ).versions[0]!;
+  const first = await read("get", "node-alpha");
   assert.ok(first.page.nextCursor);
-  const collect = async (args: string[], firstPage: any, node: boolean) => {
+  const collect = async (args: string[], firstPage: any) => {
     let text = firstPage.text,
       cursor = firstPage.page.nextCursor;
     while (cursor) {
       const result = await read(...args, "--cursor", cursor),
-        page = node ? result.node : result;
+        page = result;
       assert.equal(page.range.start, text.length);
       text += page.text;
       cursor = page.page.nextCursor;
     }
     return text;
   };
-  assert.equal(await collect(["get", "node-alpha"], first, true), body);
-  const versionArgs = ["get", "node-alpha", "--version-json", JSON.stringify(first.version)];
-  const historical = (await read(...versionArgs)).node;
-  const raw = await fs.readFile(path.join(tent, "A/A.md"), "utf8");
+  assert.equal(await collect(["get", "node-alpha"], first), body);
+  const versionArgs = ["get", "node-alpha", "--version-json", JSON.stringify(firstVersion)];
+  const historical = await read(...versionArgs);
   await fs.writeFile(path.join(tent, "A/A.md"), raw.replace(body, "NEW😀\r\n".repeat(2300)));
   await reject(["get", "node-alpha", "--cursor", first.page.nextCursor], /source changed/);
-  assert.equal(await collect(versionArgs, historical, true), body);
-  const current = (await read("get", "node-alpha")).node;
+  assert.equal(await collect(versionArgs, historical), body);
+  const current = await read("get", "node-alpha");
+  await read("check", "node-alpha");
+  const currentVersion = { commit: (await adapter.history.currentCommit())!, path: "A/A.md" };
   const diffArgs = [
     "diff",
     "--from-json",
-    JSON.stringify(first.version),
+    JSON.stringify(firstVersion),
     "--to-json",
-    JSON.stringify(current.version),
+    JSON.stringify(currentVersion),
   ];
   const diff = await read(...diffArgs);
   assert.ok(diff.page.nextCursor);
   assert.equal(
-    await collect(diffArgs, diff, false),
-    await new NodeFs(tent).history.diff(first.version, current.version),
+    await collect(diffArgs, diff),
+    await new NodeFs(tent).history.diff(firstVersion, currentVersion),
   );
   await reject(
     ["get", "node-beta", "--cursor", current.page.nextCursor],

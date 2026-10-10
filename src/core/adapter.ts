@@ -8,6 +8,8 @@ import type { RepositoryMaterial } from "./repository-material.js";
 import type { DirectoryFile } from "./directory-material.js";
 
 export interface FsAdapter {
+  /** Native edits rejected at this command boundary; never persisted or used as a cache. */
+  invalidNodeEdits?: ReadonlyMap<string, string>;
   /** Observe local material content; normalize text lines and select addressed Markdown sections. */
   observeMaterial?(
     resource: string,

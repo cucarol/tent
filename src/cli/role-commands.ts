@@ -1,3 +1,5 @@
+import { workspaceReadPaths } from "./read-paths.js";
+import { captureNativeNodeEdits } from "../core/node-native-capture.js";
 import { parseArgs } from "node:util";
 import { NodeFs } from "../fs/node-fs.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
@@ -79,6 +81,7 @@ export async function runRoleCommand(
       workspace: value("workspace") ?? globals.workspace,
     });
     const fs = new NodeFs(systemRoot, "cli");
+    await captureNativeNodeEdits(fs);
     let result: unknown;
     if (sub === "list")
       result = pageItems(await listRoleContexts(fs), "role.list", {
@@ -91,18 +94,24 @@ export async function runRoleCommand(
         view: value("view") as "body" | "raw" | undefined,
         expectedEtag: value("expected-etag"),
       };
-      const observed = await readRolePage(fs, positionals[0]!, options);
+      const observed = workspaceReadPaths(
+        await readRolePage(fs, positionals[0]!, options),
+        workspaceRoot,
+      );
       pageText(observed, `role.show:${positionals[0]}`, {
         start: number("start"),
         end: number("end"),
         maxBytes: 16 * 1024 - 256,
       });
       result = pageText(
-        await readRolePage(fs, positionals[0]!, {
-          ...options,
-          expectedEtag: observed.etag,
-          capture: true,
-        }),
+        workspaceReadPaths(
+          await readRolePage(fs, positionals[0]!, {
+            ...options,
+            expectedEtag: observed.etag,
+            capture: true,
+          }),
+          workspaceRoot,
+        ),
         `role.show:${positionals[0]}`,
         { start: number("start"), end: number("end") },
       );
@@ -125,6 +134,7 @@ export async function runRoleCommand(
         ...(Object.keys(frontmatter).length ? { frontmatter } : {}),
       });
     }
+    result = workspaceReadPaths(result, workspaceRoot);
     const json = values.json === true || globals.json === true;
     const mutation = ["create", "write"].includes(sub);
     return {

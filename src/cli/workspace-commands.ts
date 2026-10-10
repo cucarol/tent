@@ -1,3 +1,5 @@
+import { workspaceReadPaths } from "./read-paths.js";
+import { captureNativeNodeEdits } from "../core/node-native-capture.js";
 import { parseArgs } from "node:util";
 import { stat } from "node:fs/promises";
 import { NodeFs } from "../fs/node-fs.js";
@@ -29,7 +31,7 @@ tent workspace check [--json]
 tent workspace brief [--role <roleId>] [--json]
 tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
 tent workspace scan [--commits <n>] [--json]
-Accepts --workspace <root> and --json. check reports broken links, invalid material addresses, missing local files, unavailable Markdown material sections and Node documents whose disk and Tent Git presence differ (node-git-mismatch) without editing documents or capturing history. Exit 1 means issues or inspection errors; JSON remains on stdout. brief compares current local versions and returns at most 4 KiB, with behind Nodes first, then ahead Nodes. --role filters Card inputs; Node counts remain Workspace-wide. drift reports ahead and behind Nodes. Use node confirm after reviewing a Node; Tent records hashes itself.`;
+Accepts --workspace <root> and --json. check reports broken links, invalid material addresses, missing local files, unavailable Markdown material sections and Node documents whose disk and Tent Git presence differ (node-git-mismatch) after collecting valid native edits; invalid files remain untouched. Exit 1 means issues or inspection errors; JSON remains on stdout. brief lists all invalid Nodes and pending Cards, then prioritizes ahead and changed sources; optional detail fits 4 KiB. --role filters Card inputs; Node counts remain Workspace-wide. drift reports ahead and behind Nodes. Use node confirm after reviewing a Node; Tent records hashes itself.`;
 
 export async function runWorkspaceCommand(
   sub: string,
@@ -108,7 +110,7 @@ export async function runWorkspaceCommand(
       cwd: globals.cwd,
       workspace: values.workspace ?? globals.workspace,
     });
-    const fs = new NodeFs(roots.systemRoot, "cli"),
+    const fs = new NodeFs(roots.systemRoot, "cli", "inspect"),
       { workspaceId } = await readWorkspaceSettings(fs);
     if (!workspaceId)
       throw new Error(
@@ -135,9 +137,17 @@ export async function runWorkspaceCommand(
                 .join(""),
       };
     }
+    const captureFs = new NodeFs(roots.systemRoot, "cli");
+    const nodes = captureNativeNodeEdits(captureFs).then((result) => {
+      fs.invalidNodeEdits = captureFs.invalidNodeEdits;
+      return result;
+    });
     if (sub === "brief") {
       const brief = makeContextBrief(
-        await inspectCurrentContext(fs, roots.workspaceRoot, { roleId: values.role }),
+        await inspectCurrentContext(fs, roots.workspaceRoot, {
+          roleId: values.role,
+          nodes,
+        }),
         { roleId: values.role },
       );
       return {
@@ -147,11 +157,12 @@ export async function runWorkspaceCommand(
         stderr: "",
       };
     }
+    const { invalidNodes: invalidNativeNodes } = await nodes;
     if (sub === "drift") {
       const inspected = await inspectWorkspaceDrift(fs);
       const result = pageItems(
         {
-          items: inspected.items,
+          items: workspaceReadPaths(inspected.items, roots.workspaceRoot),
           revision: canonicalSha256(inspected),
           synchronizationUncertain: inspected.synchronizationUncertain,
         },
@@ -167,7 +178,7 @@ export async function runWorkspaceCommand(
           : [
               ...result.items.map(
                 (item) =>
-                  `${item.kind === "node-ahead" ? "ahead" : "behind"}  ${item.nodeId}  ${item.path.slice(item.path.lastIndexOf("/") + 1)}  ${item.reasons.join("; ")}`,
+                  `${item.kind === "node-ahead" ? "ahead" : "behind"}  ${item.nodeId}  ${item.path}  ${item.reasons.join("; ")}`,
               ),
               ...(result.page.hasMore ? [`Continue with --cursor ${result.page.nextCursor}`] : []),
               ...(inspected.synchronizationUncertain
@@ -179,7 +190,7 @@ export async function runWorkspaceCommand(
       return { exitCode: 0, stdout: output + "\n", stderr: "" };
     }
     if (sub === "check") {
-      const result = await checkGraph(
+      const checked = await checkGraph(
         fs,
         roots.workspaceRoot,
         async (filename, directory?: boolean) => {
@@ -193,6 +204,18 @@ export async function runWorkspaceCommand(
           }
         },
       );
+      const result = {
+        ...checked,
+        issues: checked.issues.map((issue) => ({ ...issue, path: `.tent/${issue.path}` })),
+        errors: checked.errors.map((error) => ({ ...error, path: `.tent/${error.path}` })),
+        notices: checked.notices.map((notice) => ({ ...notice, path: `.tent/${notice.path}` })),
+      };
+      for (const invalid of invalidNativeNodes)
+        if (!result.errors.some((error) => error.path === invalid.path))
+          result.errors.push({
+            path: invalid.path,
+            reason: invalid.reason,
+          });
       const output =
         values.json || globals.json
           ? JSON.stringify(result)

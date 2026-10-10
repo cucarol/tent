@@ -209,7 +209,12 @@ test("public standard material edits retain exact history and reject invalid sou
   );
   assert.equal(result.exitCode, 0, result.stderr);
   const saved = JSON.parse(result.stdout);
-  assert.deepEqual(saved.readBack.sources, sources);
+  assert.deepEqual(
+    saved.readBack.sources,
+    sources.map((source) =>
+      source.resource === "../B/B.md" ? { ...source, path: ".tent/B/B.md" } : source,
+    ),
+  );
   const search = await runNodeCommand("search", ["--resource", "src/main.ts"], {
     workspace: h.workspace,
     json: true,
@@ -313,7 +318,7 @@ test("explicit read capture and Core saves retain only selected documents; Git d
     { workspace: h.workspace, json: true },
   );
   assert.equal(history.exitCode, 0, history.stderr);
-  assert.equal(JSON.parse(history.stdout).node.text, original.raw);
+  assert.equal(JSON.parse(history.stdout).text, original.raw);
   await assert.rejects(
     readNode(adapter, workspaceId, { nodeId: "node-bravo", ...{ version: original.version } }),
     /another Node/,

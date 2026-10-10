@@ -183,7 +183,7 @@ test("text lists/details identify their objects, body reads preserve text, and a
   );
   await fs.writeFile(path.join(root, "input.md"), "After\n");
   const drift = ok(await workspace("drift"));
-  assert.match(drift, /behind  node-material  Material  /);
+  assert.match(drift, /behind  node-material  \.tent\/Material\/Material.md  /);
   assert.match(drift, /Material changed:/);
   ok(await workspace("brief"));
   ok(await workspace("check"));
@@ -314,7 +314,7 @@ test("recovery targets come from parsed command operands, not ID-like body or na
       await node("write", [...args, "--base-etag", oldNode]),
       /^Next: tent node get node-peer --full /,
     );
-    assert.match(recovered, /^node-peer\s+Peer/m);
+    assert.match(recovered, /^node-peer\nETag: /);
     assert.match(recovered, /Latest target body/);
     assert.doesNotMatch(recovered, /Goal body/);
   }
@@ -326,7 +326,7 @@ test("recovery targets come from parsed command operands, not ID-like body or na
       await role("write", [...args, "--base-etag", oldRole]),
       /^Next: tent role show role-target /,
     );
-    assert.match(recovered, /^role-target\s+roles\/role-target\.md$/m);
+    assert.match(recovered, /^role-target\s+\.tent\/roles\/role-target\.md$/m);
     assert.match(recovered, /Latest role body/);
     assert.doesNotMatch(recovered, /Goal body/);
   }
@@ -361,7 +361,7 @@ test("unknown subcommands preserve the command diagnosis and leave existing Card
   assert.match(ok(await card("show", ["card-existing"])), /Existing card/);
   assert.match(
     ok(await role("show", ["role-existing"])),
-    /^role-existing\s+roles\/role-existing\.md$/m,
+    /^role-existing\s+\.tent\/roles\/role-existing\.md$/m,
   );
   assert.equal(await adapter.readFile("cards/card-existing.md"), before);
   assert.equal(await adapter.readFile("roles/role-existing.md"), beforeRole);

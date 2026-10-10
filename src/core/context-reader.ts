@@ -121,12 +121,20 @@ export function boundary(text: string, end: number): number {
 const range = (start: number, end: number): ReaderRange => ({ unit: "utf16", start, end });
 export function nodeSummary(d: {
   nodeId: string;
+  path: string;
   name: string;
   type?: string;
   tags: string[];
   description?: string;
 }) {
-  return { nodeId: d.nodeId, name: d.name, type: d.type, tags: d.tags, description: d.description };
+  return {
+    nodeId: d.nodeId,
+    path: d.path,
+    name: d.name,
+    type: d.type,
+    tags: d.tags,
+    description: d.description,
+  };
 }
 
 export function readerResult<T>(
@@ -446,7 +454,15 @@ export class ContextReader {
         const node = ref.kind === "node" ? this.byId.get(ref.id) : undefined;
         return node
           ? { ...this.summary(node), kind: ref.kind, id: ref.id, archived: node.archived }
-          : { kind: ref.kind, id: ref.id, [`${ref.kind}Id`]: ref.id, name: ref.id };
+          : {
+              kind: ref.kind,
+              id: ref.id,
+              [`${ref.kind}Id`]: ref.id,
+              name: ref.id,
+              ...(ref.kind === "role" || ref.kind === "card"
+                ? { path: `${ref.kind}s/${ref.id}.md` }
+                : {}),
+            };
       };
       for (const relation of this.workspaceRelations) {
         if (

@@ -12,12 +12,93 @@ import { appendSessionObservations } from "../src/core/session-observations.js";
 import { observeSessionFile } from "../src/fs/session-observations.js";
 import { parseFrontmatter } from "../src/core/frontmatter.js";
 import {
+  inspectCurrentContext,
   makeContextBrief,
   formatContextBrief,
   findUnlinkedOutputs,
   contextDriftItems,
   type CurrentContext,
 } from "../src/core/context-brief.js";
+import type { FsAdapter } from "../src/core/adapter.js";
+
+test("brief reports native capture failure without unhandled unused Card query promises", async () => {
+  const adapter = {
+    exists: async () => false,
+    listDir: async () => [],
+  } as unknown as FsAdapter;
+  const failure = new Error("capture failed");
+  await assert.rejects(
+    inspectCurrentContext(adapter, ".", { nodes: Promise.reject(failure) }),
+    (error) => error === failure,
+  );
+  // Node's test runner reports any unhandled rejection from unused query branches.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+});
+
+test("brief never hides invalid files or pending Cards and folds only missing-baseline debt", () => {
+  const pending = Array.from({ length: 40 }, (_, i) => ({
+    cardId: `card-pending${i}`,
+    state: "pending",
+    title: "待接收的工作".repeat(8),
+    ...(i === 0 ? { diagnostic: "Source unavailable" } : {}),
+  }));
+  const invalidNodes = Array.from({ length: 10 }, (_, i) => ({
+    path: `.tent/${"很长的实际目录".repeat(30)}/${i}.md`,
+    reason: "Invalid frontmatter",
+  }));
+  const context: CurrentContext = {
+    sync: {
+      invalidNodes,
+      nodes: [
+        {
+          nodeId: "node-legacy",
+          path: "Legacy",
+          state: "behind",
+          trustTier: "unverified",
+          stale: false,
+          behind: { reasons: ["Node record missing; no retained baseline"] },
+          materials: [
+            {
+              resource: "/Legacy/Legacy.md",
+              state: "unavailable",
+              reason: "Node record missing; no retained baseline",
+            },
+          ],
+          reasons: [],
+        },
+      ],
+      counts: { synced: 0, ahead: 0, behind: 1, unanchored: 0 },
+      outputNodes: [],
+      requirementsWithoutOutputs: [],
+    },
+    observations: { events: [], uncertain: false },
+    cards: { revision: "fixture", items: pending },
+    changedCardSources: { items: [], diagnostics: [] },
+    unlinkedOutputs: [],
+  };
+  const brief = makeContextBrief(context);
+  assert.deepEqual(Object.keys(brief).slice(0, 5), [
+    "counts",
+    "invalidNodes",
+    "cardInputs",
+    "ahead",
+    "changedCardSources",
+  ]);
+  assert.equal(brief.cardInputs.length, pending.length);
+  assert.equal(brief.omitted.cardInputs, 0);
+  assert.deepEqual(brief.invalidNodes, invalidNodes);
+  assert.equal(brief.baselineOnlyBehind, 1);
+  assert.deepEqual(brief.behind, []);
+  const text = formatContextBrief(brief);
+  assert.ok(
+    Buffer.byteLength(text) > 4096,
+    "mandatory actionable information may exceed the optional detail budget",
+  );
+  assert.equal(text.split("\n")[1], "Invalid Nodes:");
+  for (const item of invalidNodes) assert.ok(text.includes(item.path));
+  for (const card of pending) assert.ok(text.includes(`.tent/cards/${card.cardId}.md`));
+  assert.match(text, /1 behind Nodes have no retained baseline.*tent workspace drift --json/);
+});
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
@@ -70,7 +151,7 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   assert.ok(linked.etag);
   assert.equal("raw" in linked, false);
   assert.notEqual(linked.nodeId, id);
-  assert.equal(linked.path, "Requirement/Implementation");
+  assert.equal(linked.path, ".tent/Requirement/Implementation/Implementation.md");
   assert.equal((await f.node("check", [id])).state, "synced");
   await fs.writeFile(path.join(f.root, "requirement.md"), "Requirement version two");
   const headBefore = await git(path.join(f.root, ".tent"), "rev-parse", "HEAD");
@@ -92,20 +173,14 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
     "read-only commands must not capture a new version",
   );
   let read = await f.node("get", [id, "--full"]);
-  await f.node("confirm", [id, "--base-etag", read.node.etag]);
+  await f.node("confirm", [id, "--base-etag", read.etag]);
   assert.equal((await f.node("check", [id])).state, "ahead");
   assert.equal((await f.node("check", [linked.nodeId])).state, "behind");
   const outputRead = await f.node("get", [linked.nodeId, "--full"]);
-  await f.node("confirm", [linked.nodeId, "--base-etag", outputRead.node.etag]);
+  await f.node("confirm", [linked.nodeId, "--base-etag", outputRead.etag]);
   assert.equal((await f.node("check", [id])).state, "synced");
   read = await f.node("get", [id, "--full"]);
-  await f.node("write", [
-    id,
-    "--body",
-    "Changed confirmed requirement",
-    "--base-etag",
-    read.node.etag,
-  ]);
+  await f.node("write", [id, "--body", "Changed confirmed requirement", "--base-etag", read.etag]);
   assert.equal((await f.node("check", [id])).state, "ahead");
   assert.equal((await f.node("check", [linked.nodeId])).state, "behind");
   drift = (await f.workspace("drift")).value;
@@ -122,7 +197,7 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
     "Updated implementation",
     "--confirm",
     "--base-etag",
-    read.node.etag,
+    read.etag,
   ]);
   assert.equal((await f.node("check", [id])).state, "synced");
   assert.equal((await f.node("check", [linked.nodeId])).state, "synced");
@@ -196,12 +271,12 @@ test("CLI rejects retired flags and confirmation still requires a full live read
   const read = await f.node("get", [id, "--full"]);
   const legacyJson = await runNodeCommand("write", [id, "--input-json", "-"], {
     ...f.options,
-    stdin: JSON.stringify({ baseEtag: read.node.etag, planned: true }),
+    stdin: JSON.stringify({ baseEtag: read.etag, planned: true }),
   });
   assert.equal(legacyJson.exitCode, 1);
   const rejected = await runNodeCommand(
     "confirm",
-    [id, "--base-etag", `read:${(await f.node("get", [id, "--full"])).node.etag}`],
+    [id, "--base-etag", `read:${(await f.node("get", [id, "--full"])).etag}`],
     f.options,
   );
   assert.equal(rejected.exitCode, 1);
@@ -249,10 +324,7 @@ test("brief shows multi-goal Card completion and only warns for changed source g
     "--card",
     published.cardId,
   ]);
-  const outputRaw = await fs.readFile(
-    path.join(f.root, ".tent", output.path, path.basename(output.path) + ".md"),
-    "utf8",
-  );
+  const outputRaw = await fs.readFile(path.join(f.root, output.path), "utf8");
   assert.equal(
     JSON.stringify(parseFrontmatter(outputRaw).data.sources ?? []).includes(published.cardId),
     true,
@@ -273,9 +345,13 @@ test("brief shows multi-goal Card completion and only warns for changed source g
   assert.equal(brief.value.changedCardSources[0].cardId, published.cardId);
   assert.equal(brief.value.changedCardSources[0].nodeId, source.node.nodeId);
   assert.equal(brief.value.changedCardSources[0].state, "changed");
-  assert.equal(await git(path.join(f.root, ".tent"), "rev-parse", "HEAD"), head);
+  assert.notEqual(
+    await git(path.join(f.root, ".tent"), "rev-parse", "HEAD"),
+    head,
+    "brief records the preceding native source edit",
+  );
   const currentOutput = await f.node("get", [output.nodeId, "--full"]);
-  await f.node("confirm", [output.nodeId, "--base-etag", currentOutput.node.etag]);
+  await f.node("confirm", [output.nodeId, "--base-etag", currentOutput.etag]);
   assert.deepEqual(
     (await f.workspace("brief")).value.changedCardSources,
     [],
@@ -303,7 +379,7 @@ test("brief shows multi-goal Card completion and only warns for changed source g
 test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts and complete identities", () => {
   const nodes = Array.from({ length: 100 }, (_, i) => ({
     nodeId: `node-${i}`,
-    path: `一个很长的名字${"非常长".repeat(200)}`,
+    path: i === 1 ? "Short" : `一个很长的名字${"非常长".repeat(200)}`,
     type: "goal",
     state: (i % 2 ? "ahead" : "behind") as "ahead" | "behind",
     trustTier: "unverified" as const,
@@ -317,6 +393,7 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
   }));
   const context: CurrentContext = {
     sync: {
+      invalidNodes: [],
       nodes,
       counts: { synced: 0, ahead: 50, behind: 50, unanchored: 9 },
       outputNodes: [],
@@ -467,6 +544,7 @@ test("brief counts historical unrecorded files but only lists three recent sessi
   }));
   const context: CurrentContext = {
     sync: {
+      invalidNodes: [],
       nodes: [],
       counts: { synced: 0, ahead: 0, behind: 0, unanchored: 0 },
       outputNodes: [],
@@ -504,6 +582,7 @@ test("brief's inclusive seven-day window follows the latest observed write, not 
   ];
   const context: CurrentContext = {
     sync: {
+      invalidNodes: [],
       nodes: [],
       counts: { synced: 0, ahead: 0, behind: 0, unanchored: 0 },
       outputNodes: [{ nodeId: "node-linked", path: "Linked", resource: "../../latest-linked.md" }],
@@ -574,6 +653,7 @@ test("brief's inclusive seven-day window follows the latest observed write, not 
 test("brief and drift both show a dual-status goal and leave neutral recorded output quiet", () => {
   const context: CurrentContext = {
     sync: {
+      invalidNodes: [],
       nodes: [
         {
           nodeId: "node-goal",
@@ -620,8 +700,8 @@ test("brief and drift both show a dual-status goal and leave neutral recorded ou
   );
   assert.equal(brief.behind[0]!.reason, "Material changed");
   const text = formatContextBrief(brief);
-  assert.match(text, /^behind 1 · ahead 1\nBehind:/);
-  assert.ok(text.indexOf("Behind:") < text.indexOf("Ahead:"));
+  assert.match(text, /^behind 1 · ahead 1\nAhead:/);
+  assert.ok(text.indexOf("Ahead:") < text.indexOf("Behind:"));
   assert.match(text, /start time not recorded/);
   assert.doesNotMatch(text, /node-quiet|Recent inputs|Recent outputs|synced/);
   assert.deepEqual(
@@ -636,6 +716,7 @@ test("brief and drift both show a dual-status goal and leave neutral recorded ou
 test("uncertain Node associations never become a definite unlinked file claim", () => {
   const context: CurrentContext = {
     sync: {
+      invalidNodes: [],
       nodes: [
         {
           nodeId: "node-racing",

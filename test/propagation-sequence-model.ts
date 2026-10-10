@@ -517,9 +517,10 @@ export class SequenceRunner {
     } else if (op.kind === "goal-confirm") await this.confirm(goal.id);
     else if (op.kind === "output-confirm" || op.kind === "output-rewrite") {
       if (!output?.active) return;
-      if (op.kind === "output-confirm") await this.confirm(output.id);
-      else await this.edit(output.id, { body: `rewritten output ${this.tick}\n` });
-      this.reset(output);
+      if (op.kind === "output-confirm") {
+        await this.confirm(output.id);
+        this.reset(output);
+      } else await this.edit(output.id, { body: `rewritten output ${this.tick}\n` });
     } else if (op.kind === "output-material") {
       if (!output?.active || !output.resource) return;
       output.resource.body = `changed output bytes ${this.tick}\n`;

@@ -1,3 +1,5 @@
+import { workspaceReadPaths } from "./read-paths.js";
+import { captureNativeNodeEdits } from "../core/node-native-capture.js";
 import { parseArgs } from "node:util";
 import { linkOutputResource, workspaceMaterialFields } from "./material-input.js";
 import { validateNodeName } from "../core/scaffold.js";
@@ -6,7 +8,7 @@ import { isNodeId } from "../core/id.js";
 // Agent-facing parsing and rendering; document semantics and locking belong to Core.
 
 import { materialFields } from "../core/material.js";
-import { normalizeOptionalNodeType, isNodeType } from "../core/node-type.js";
+import { isNodeType } from "../core/node-type.js";
 import { normalizeTagName, NODE_TAG_PRESETS, type NodeTagCount } from "../core/tags.js";
 import { nodeWriteInputSchema } from "../core/node-write.js";
 import {
@@ -135,6 +137,8 @@ export async function runNodeCommand(
       return { exitCode: 0, stdout: nodeHelpText(sub) + "\n", stderr: "" };
     }
     if (!Object.prototype.hasOwnProperty.call(NODE_COMMAND_HELP, sub)) return usage(nodeHelpText());
+    if (flags.context !== undefined && sub !== "get")
+      return usage("--context is only valid for node get");
     if (flags.id !== undefined && sub !== "create")
       return usage("--id is only valid for node create");
     if (flags.heading !== undefined && !["append", "get-section", "write-section"].includes(sub))
@@ -193,19 +197,24 @@ export async function runNodeCommand(
       workspace: flags.workspace ?? globals.workspace,
     });
     errorContext.workspaceRoot = workspaceRoot;
-    const fs = new NodeFs(systemRoot, "cli", ["get", "check"].includes(sub) ? "inspect" : "record");
+    const fs = new NodeFs(systemRoot, "cli", sub === "get" ? "inspect" : "record");
     const { workspaceId } = await readWorkspaceSettings(fs);
     if (!workspaceId)
       throw new Error(
         "Tent workspace identity is missing; explicitly initialize or convert this workspace",
       );
+    const invalidNativeNodes = sub === "get" ? [] : (await captureNativeNodeEdits(fs)).invalidNodes;
+    if (sub === "check" && invalidNativeNodes.some((node) => node.nodeId === target))
+      throw new Error(invalidNativeNodes.find((node) => node.nodeId === target)!.reason);
     const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot: systemRoot };
-    const mutationPrint = <T>(result: T, json: boolean, format: (value: T) => string) =>
-      print(
-        { ...result, workspaceRoot },
+    const mutationPrint = <T>(result: T, json: boolean, format: (value: T) => string) => {
+      const readable = workspaceReadPaths(result, workspaceRoot);
+      return print(
+        { ...readable, workspaceRoot },
         json,
-        () => `${format(result)}\nWorkspace: ${workspaceRoot}`,
+        () => `${format(readable)}\nWorkspace: ${workspaceRoot}`,
       );
+    };
 
     switch (sub) {
       case "check": {
@@ -214,7 +223,9 @@ export async function runNodeCommand(
         if (Object.keys(flags).some((key) => !["json", "workspace"].includes(key)))
           return usage(nodeHelpText("check"));
         const result = await inspectNodeSync(fs, nodeRef(target));
-        return print(result, json, (value) => JSON.stringify(value, null, 2));
+        return print(workspaceReadPaths(result, workspaceRoot), json, (value) =>
+          JSON.stringify(value, null, 2),
+        );
       }
       case "link-output": {
         const target = oneTarget(positionals, nodeHelpText(sub));
@@ -236,10 +247,10 @@ export async function runNodeCommand(
           roleId: flags.role,
           tags: parseCsv(flags.tags).map(normalizeTagName),
         });
-        return mutationPrint(result, json, () =>
+        return mutationPrint(result, json, (value) =>
           [
-            `Created ${result.nodeId}  ${result.path}  ${result.etag}${result.cardId ? `\nCard: ${result.cardId}` : ""}`,
-            ...(result.warnings ?? []),
+            `Created ${value.nodeId}  ${value.path}  ${value.etag}${value.cardId ? `\nCard: ${value.cardId}` : ""}`,
+            ...(value.warnings ?? []),
           ].join("\n"),
         );
       }
@@ -253,7 +264,7 @@ export async function runNodeCommand(
           return usage(
             [
               `node confirm needs --base-etag <etag>: the etag of a complete live read of ${target}.`,
-              `Get it with \`tent node get ${target} --json\` (node.etag); a read:<etag> from a partial page is rejected, so use --full for long Nodes.`,
+              `Get it with \`tent node get ${target} --json\` (etag); a read:<etag> from a partial page is rejected, so use --full for long Nodes.`,
               `Usage: ${NODE_COMMAND_HELP.confirm![0]}`,
             ].join("\n"),
           );
@@ -272,7 +283,7 @@ export async function runNodeCommand(
         return mutationPrint(
           result,
           json,
-          () => `${result.nodeId}  ${result.path}  ${result.etag}`,
+          (value) => `${value.nodeId}  ${value.path}  ${value.etag}`,
         );
       }
       case "write-many": {
@@ -333,8 +344,8 @@ export async function runNodeCommand(
           }
         }
         const result = await writeNodesBatch(env, input);
-        return mutationPrint(result, json, () =>
-          result.results.map((item) => `${item.nodeId}  ${item.path}  ${item.etag}`).join("\n"),
+        return mutationPrint(result, json, (value) =>
+          value.results.map((item) => `${item.nodeId}  ${item.path}  ${item.etag}`).join("\n"),
         );
       }
       case "diff": {
@@ -366,7 +377,7 @@ export async function runNodeCommand(
           `node.history:${nodeId}`,
           { limit: numberFlag(flags, "limit"), cursor: flags.cursor },
         );
-        return print(result, json, formatReader);
+        return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
       }
       case "list": {
         if (positionals.length > 0) return usage("tent node list [--full] [--json]");
@@ -379,24 +390,30 @@ export async function runNodeCommand(
         if (flags.full === "true") {
           if (Object.keys(readerFlags(flags)).length || Object.keys(filters).length)
             return usage("--full cannot be combined with reader filters or paging.");
-          const nodes = (await readFullNodeTree(fs, { capture: true })) as NodeProjection[];
+          const nodes = workspaceReadPaths(
+            (await readFullNodeTree(fs, { capture: true })) as NodeProjection[],
+            workspaceRoot,
+          );
           return print({ source: { kind: "live" }, workspaceId, nodes }, json, () =>
             formatTree(nodes),
           );
         }
         const result = pageItems(
-          await listNodes(fs, workspaceId, { ...coreReaderFlags(flags), ...filters }),
+          workspaceReadPaths(
+            await listNodes(fs, workspaceId, { ...coreReaderFlags(flags), ...filters }),
+            workspaceRoot,
+          ),
           "node.list",
           { limit: numberFlag(flags, "limit"), cursor: flags.cursor },
         );
-        return print(result, json, formatReader);
+        return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
       }
       case "get": {
         const target = oneTarget(positionals, "tent node get <nodeId> [--full] [--json]");
         if (typeof target !== "string") return target;
         const ref = nodeRef(target);
-        const withContext = async <T extends { node: { type?: string } }>(value: T) =>
-          !flags["version-json"] && !flags.cursor
+        const withContext = async <T>(value: T) =>
+          flags.context === "true" && !flags["version-json"] && !flags.cursor
             ? { ...value, context: await goalContextText(fs, ref) }
             : value;
         if (flags.full === "true") {
@@ -406,80 +423,46 @@ export async function runNodeCommand(
             (view !== undefined && view !== "body" && view !== "raw")
           )
             return usage("--full cannot be combined with reader filters or paging.");
-          if (view === "raw")
-            return print(
-              await withContext(
-                await readNode(fs, workspaceId, { nodeId: ref, view: "raw", capture: true }),
-              ),
-              json,
-              formatReader,
-            );
-          const edit = await readNodeForEdit(fs, ref, { capture: true });
-          if (edit.frontmatter.id !== undefined && edit.frontmatter.id !== edit.nodeId) {
-            throw new Error(`Node editing read returned mismatched Node id for ${ref}.`);
-          }
-          if (
-            edit.frontmatter.type !== undefined &&
-            normalizeOptionalNodeType(edit.frontmatter.type) !== edit.type
-          ) {
-            throw new Error(`Node editing read returned mismatched Node type for ${ref}.`);
-          }
+          const edit = await readNodeForEdit(fs, ref);
           return print(
             await withContext({
-              source: { kind: "live" },
-              workspaceId,
-              node: {
-                nodeId: edit.nodeId,
-                path: edit.path,
-                name: edit.name,
-                type: edit.type,
-                tags: stringList(edit.frontmatter.tags, "tags"),
-                ...materialFields(edit.frontmatter),
-                text: edit.body,
-                etag: edit.etag,
-                ...(edit.version ? { version: edit.version } : {}),
-                status: edit.status,
-                ...(edit.statusDiagnostic ? { statusDiagnostic: edit.statusDiagnostic } : {}),
-                archived: edit.archived,
-              },
+              nodeId: edit.nodeId,
+              text: view === "raw" ? edit.raw : edit.body,
+              etag: edit.etag,
             }),
             json,
-            formatReader,
+            formatNodeRead,
           );
         }
         const { nodeId, ...options } = readerReadSchema.parse({
           nodeId: ref,
           ...coreReaderFlags(flags),
         });
-        const observed = await readNode(fs, workspaceId, { nodeId, ...options });
-        const maxBytes = 16 * 1024 - 256 - (!flags["version-json"] ? 1024 : 0);
-        if (observed.node.view !== "summary")
-          pageText(observed.node, `node.get:${nodeId}`, {
-            cursor: flags.cursor,
-            maxBytes,
-          });
-        const result =
-          observed.node.view === "summary"
-            ? observed
-            : flags["version-json"]
-              ? observed
-              : await readNode(fs, workspaceId, {
-                  nodeId,
-                  ...options,
-                  expectedEtag: observed.node.etag,
-                  capture: true,
-                });
+        const { node } = await readNode(fs, workspaceId, { nodeId, ...options });
         const output =
-          result.node.view === "summary"
-            ? { ...result, node: compactItem(result.node) }
-            : {
-                ...result,
-                node: pageText(result.node, `node.get:${nodeId}`, {
+          node.view === "summary"
+            ? workspaceReadPaths(compactItem(node), workspaceRoot)
+            : (() => {
+                const paged = pageText(node, `node.get:${nodeId}`, {
                   cursor: flags.cursor,
-                  maxBytes,
-                }),
-              };
-        return print(await withContext(output), json, formatReader);
+                  maxBytes: 16 * 1024 - 1280,
+                });
+                return {
+                  nodeId: paged.nodeId,
+                  text: paged.text,
+                  etag: paged.etag,
+                  ...(paged.partial
+                    ? {
+                        view: paged.view,
+                        range: paged.range,
+                        viewLength: paged.viewLength,
+                        partial: true,
+                        page: paged.page,
+                      }
+                    : {}),
+                };
+              })();
+        return print(await withContext(output), json, formatNodeRead);
       }
       case "read-many": {
         if (flags.full === "true") return usage("read-many uses paged output");
@@ -503,7 +486,7 @@ export async function runNodeCommand(
         const planned: unknown[] = [];
         for (const nodeId of input.nodeIds.slice(start, start + 20)) {
           const entry = await prepared.read(nodeId, input.view);
-          const item = entry.item;
+          const item = workspaceReadPaths(entry.item, workspaceRoot);
           const next = start + selected.length + 1;
           const reserved = {
             ...item,
@@ -525,7 +508,7 @@ export async function runNodeCommand(
         const items = captured.map((item, index) =>
           pageText(
             {
-              ...item,
+              ...workspaceReadPaths(item, workspaceRoot),
               source: item.version
                 ? { kind: "git", workspaceId, version: item.version }
                 : item.source,
@@ -538,7 +521,7 @@ export async function runNodeCommand(
           ),
         );
         const result = make(items, start + selected.length);
-        return print(result, json, formatReader);
+        return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
       }
       case "search": {
         if (positionals.length > 1)
@@ -554,11 +537,15 @@ export async function runNodeCommand(
                 workspaceRoot,
               )),
         });
-        const result = pageItems(await searchNodes(fs, workspaceId, input), "node.search", {
-          limit: numberFlag(flags, "limit"),
-          cursor: flags.cursor,
-        });
-        return print(result, json, formatReader);
+        const result = pageItems(
+          workspaceReadPaths(await searchNodes(fs, workspaceId, input), workspaceRoot),
+          "node.search",
+          {
+            limit: numberFlag(flags, "limit"),
+            cursor: flags.cursor,
+          },
+        );
+        return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
       }
       case "relations": {
         const target = oneTarget(
@@ -571,11 +558,17 @@ export async function runNodeCommand(
           ...options,
           nodeId: target === "root" ? null : nodeRef(target),
         });
-        const result = pageItems(await relatedNodes(fs, workspaceId, input), `node.${sub}`, {
-          limit: numberFlag(flags, "limit"),
-          cursor: flags.cursor,
-        });
-        return print(result, json, (value) => formatRelations(value, input.direction));
+        const result = pageItems(
+          workspaceReadPaths(await relatedNodes(fs, workspaceId, input), workspaceRoot),
+          `node.${sub}`,
+          {
+            limit: numberFlag(flags, "limit"),
+            cursor: flags.cursor,
+          },
+        );
+        return print(workspaceReadPaths(result, workspaceRoot), json, (value) =>
+          formatRelations(value, input.direction),
+        );
       }
       case "create": {
         const materials = materialFields({
@@ -626,7 +619,10 @@ export async function runNodeCommand(
           ...(flags.by !== undefined ? { by: flags.by } : {}),
           ...(tags.length > 0 ? { tags } : {}),
         });
-        const result = await readNode(fs, workspaceId, { nodeId: created, capture: true });
+        const result = workspaceReadPaths(
+          await readNode(fs, workspaceId, { nodeId: created, capture: true }),
+          workspaceRoot,
+        );
         const output = {
           ...result,
           node:
@@ -662,8 +658,13 @@ export async function runNodeCommand(
           return usage(nodeHelpText(sub));
         const nodeId = nodeRef(target);
         if (sub === "get-section") {
-          const result = await readNodeSection(fs, nodeId, flags.heading);
-          return print(result, json, () => `${nodeId}  ${result.sectionEtag}\n${result.text}`);
+          const {
+            sectionEtag: etag,
+            path,
+            ...section
+          } = await readNodeSection(fs, nodeId, flags.heading);
+          const result = { ...section, path: `.tent/${nodeNotePath(path)}`, etag };
+          return print(result, json, formatNodeRead);
         }
         const body = flags.body === "-" ? (globals.stdin ?? (await readStdin())) : flags.body;
         const saved =
@@ -751,19 +752,22 @@ export async function runNodeCommand(
           ],
           [ref],
         ).read({ nodeId: ref });
-        const savedResult = {
-          workspaceId,
+        const savedResult = workspaceReadPaths(
+          {
+            workspaceId,
+            workspaceRoot,
+            nodeId: ref,
+            path: saved.path,
+            etag: saved.etag,
+            written: "node-document",
+            changed: saved.changed,
+            ...(saved.version ? { version: saved.version } : {}),
+          },
           workspaceRoot,
-          nodeId: ref,
-          path: saved.path,
-          etag: saved.etag,
-          written: "node-document",
-          changed: saved.changed,
-          ...(saved.version ? { version: saved.version } : {}),
-        };
+        );
         const readBack =
           input.readBack && "text" in readBackCore
-            ? pageText(readBackCore, `node.get:${ref}`, {
+            ? pageText(workspaceReadPaths(readBackCore, workspaceRoot), `node.get:${ref}`, {
                 maxBytes:
                   16 * 1024 -
                   Buffer.byteLength(
@@ -779,8 +783,8 @@ export async function runNodeCommand(
         const output = (readBack ? readBack.partial : input.body === undefined)
           ? incompleteNodeRead(result)
           : result;
-        return mutationPrint(output, json, () =>
-          input.readBack ? JSON.stringify(output, null, 2) : `Updated ${ref}`,
+        return mutationPrint(output, json, (value) =>
+          input.readBack ? JSON.stringify(value, null, 2) : `Updated ${ref}`,
         );
       }
       case "rename": {
@@ -925,7 +929,7 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
     "tent node list --full [--json]",
   ],
   get: [
-    "tent node get <nodeId> [--version-json <JSON>] [--view summary|body|raw] [--range <JSON>] [--expected-etag <etag>] [--cursor <cursor>] [--json]",
+    "tent node get <nodeId> [--version-json <JSON>] [--view summary|body|raw] [--context] [--range <JSON>] [--expected-etag <etag>] [--cursor <cursor>] [--json]",
     "tent node get <nodeId> --full [--view body|raw] [--json]",
   ],
   "read-many": ["tent node read-many <nodeId> [...] [--view body|raw] [--start <index>] [--json]"],
@@ -972,7 +976,7 @@ export function nodeHelpText(sub?: string): string {
   const commands = NODE_COMMAND_HELP;
   const notes: Record<string, string> = {
     list: "Default reads scan headers and return bounded metadata without full-document ETags. Without filters the list shows direct children; --type and repeated --tag (all must match) select matching Nodes from the whole subtree under --parent, or the Workspace. --full explicitly reads the complete tree.",
-    get: 'All body/raw reads return text, including --full; view chooses the content, never the field name. Live goal first/full reads append a separate context summary up to 1 KiB; follow its ids for full content. A page that holds the complete body returns the full ETag; read:<etag> appears only when the body was truncated and allows continuation and metadata edits only. Read with --full before replacing or confirming content. Range JSON uses {"unit":"utf16","start":0,"end":10}. Continue a cursor with the same source, expected ETag and query. --version-json reads the captured Git document even after live edits/deletion.',
+    get: 'All body/raw reads return text, including --full; view chooses the content, never the field name. Reads are read-only and return nodeId, text and etag at the top level. Use --context for a separate goal context summary up to 1 KiB. A page that holds the complete body returns the full ETag; read:<etag> appears only when the body was truncated and allows continuation and metadata edits only. Read with --full before replacing or confirming content. Range JSON uses {"unit":"utf16","start":0,"end":10}. Continue a cursor with the same source, expected ETag and query. --version-json reads the captured Git document even after live edits/deletion.',
     "read-many":
       "All items share 16 KiB. Resume the input list using page.nextIndex as --start with the same Node IDs. A partial item has its own cursor: continue with node get --version-json <item.version> --cursor <item.page.nextCursor> and the same view. Each new batch observes current live documents.",
     check:
@@ -989,9 +993,9 @@ export function nodeHelpText(sub?: string): string {
     append:
       "Append under the Workspace lock without a prior read or ETag. --heading adds a level-two Markdown heading. Existing and new content are separated by one blank line; the saved body ends with one newline. Ordinary saves retain material baselines.",
     "get-section":
-      "Match the unique Markdown document heading text outside lists and blockquotes. The complete section includes its heading and ends at the next same-level or higher-level heading. Code blocks do not define sections. sectionEtag authorizes replacing only this section.",
+      "Match the unique Markdown document heading text outside lists and blockquotes. The complete section includes its heading and ends at the next same-level or higher-level heading. Code blocks do not define sections. etag authorizes replacing only this section.",
     "write-section":
-      "Replace the selected section with complete Markdown from --body, including any replacement heading. The title may change or be removed. Other body bytes are preserved. Use sectionEtag from get-section; changes to other sections do not conflict. Ordinary saves retain material baselines.",
+      "Replace the selected section with complete Markdown from --body, including any replacement heading. The title may change or be removed. Other body bytes are preserved. Use etag from get-section; changes to other sections do not conflict. Ordinary saves retain material baselines.",
     type: "The type is what the content rests on: goal, prompt or output. Form and topic belong in tags.",
     tags: "Without arguments, list the tags of current Nodes with their counts, marking presets; --include-archived also counts deprecated Nodes. Prefer an existing tag or a preset to a new synonym. Tags add no behavior.",
     "write-many":
@@ -1053,14 +1057,6 @@ function parseCsv(value: string | undefined): string[] {
   ];
 }
 
-function stringList(value: unknown, label: string): string[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    throw new Error(`Node editing read ${label} must be a string array.`);
-  }
-  return value;
-}
-
 function parseFlags(args: string[]): {
   positionals: string[];
   flags: Record<string, string>;
@@ -1073,7 +1069,7 @@ function parseFlags(args: string[]): {
       help: { type: "boolean", short: "h" },
       tag: { type: "string", multiple: true },
       ...Object.fromEntries(
-        ["json", "full", "include-archived", "read-back", "confirm"].map((name) => [
+        ["json", "full", "context", "include-archived", "read-back", "confirm"].map((name) => [
           name,
           { type: "boolean" as const },
         ]),
@@ -1140,6 +1136,15 @@ function coreReaderFlags(flags: Record<string, string>) {
   return core;
 }
 
+function formatNodeRead(value: unknown): string {
+  return formatWithContext(value, (content) => {
+    const node = content as { nodeId: string; etag: string; text?: string };
+    return node.text === undefined
+      ? JSON.stringify(content, null, 2)
+      : `${node.nodeId}\nETag: ${node.etag}\n${formatTextPage(content)}`;
+  });
+}
+
 function formatReader(value: unknown): string {
   return formatWithContext(value, formatReaderContent);
 }
@@ -1155,8 +1160,8 @@ function formatRelations(value: unknown, direction: string): string {
     const identity = ref.nodeId ?? ref.id;
     const name =
       (ref.kind === "role" || ref.kind === "card") && typeof identity === "string"
-        ? `${ref.kind}s/${identity}.md`
-        : (ref.name ?? ref.path ?? ref.workspacePath ?? ref.uri ?? ref.resource);
+        ? `.tent/${ref.kind}s/${identity}.md`
+        : (ref.path ?? ref.workspacePath ?? ref.name ?? ref.uri ?? ref.resource);
     return [identity, name].filter((part) => typeof part === "string").join("  ");
   };
   return (
@@ -1188,6 +1193,7 @@ function formatReaderContent(value: unknown): string {
     };
     items?: Array<{
       nodeId?: string;
+      path?: string;
       name?: string;
       description?: string;
       title?: string;
@@ -1217,6 +1223,7 @@ function formatReaderContent(value: unknown): string {
                 item.time,
                 item.operation,
                 item.nodeId,
+                item.path,
                 item.name ?? item.title,
                 item.description,
                 item.objectIds?.join(", "),
@@ -1266,7 +1273,7 @@ function formatTree(nodes: NodeProjection[]): string {
   const lines: string[] = [];
   const visit = (node: NodeProjection, depth: number) => {
     lines.push(
-      `${"  ".repeat(depth)}${[node.nodeId, node.type, node.name].filter(Boolean).join("  ")}`,
+      `${"  ".repeat(depth)}${[node.nodeId, node.type, node.name, node.path].filter(Boolean).join("  ")}`,
     );
     for (const child of node.children ?? []) visit(child, depth + 1);
   };

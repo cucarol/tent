@@ -12,24 +12,25 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows.
 | When | Command | Read |
 | --- | --- | --- |
 | No pointer | `tent workspace brief` | `behind`, `ahead`, `cardInputs` |
-| A Node id | `tent node get <id>` | `text`, `etag`, `context` |
-| A topic | `tent node search "<term>"` | `items` |
+| A `path` | Read the file with your own reader | text |
+| Only a Node id | `tent node get <id>` | `text`, `etag` |
+| A topic | `tent node search "<term>"` | `items[].nodeId`, `path` |
 
 Treat each Node by its [type](../../skill-resources/references/node-types.md). More reads: [input](../../skill-resources/references/input.md).
 
 ## After working
 
-Update only the Nodes your work touched; if nothing changed, change nothing.
+Update only the Nodes your work touched; if nothing changed, change nothing. Record a failed approach and why, so no one retries it.
 
 | When | Command | Read |
 | --- | --- | --- |
-| Add text | `tent node append <id> --heading <title> --body -` | `etag` |
-| Edit a section | `tent node get-section <id> --heading <title>`, then `tent node write-section <id> --heading <title> --base-etag <sectionEtag> --body -` with the whole section, heading included | `sectionEtag`, then `etag` |
-| Rewrite, or confirm a behind Node that holds | `tent node get <id> --full --json`, then `tent node write <id> --base-etag <etag> --body -` or `tent node confirm <id> --base-etag <etag>` | `etag` |
+| Change text | Edit the file with your own editor; Tent records it on its next run | |
+| Add a section without reading | `tent node append <id> --heading <title> --body -` | `etag` |
+| A behind Node still holds | `tent node get <id> --full --json`, then `tent node confirm <id> --base-etag <etag>` | `etag` |
 | New fact | `tent node create <name> --type <type> [--parent <id>] --tags <tag> --body -` | `node.nodeId` |
 | A file implements a goal | `tent node link-output <goal-id> --resource <path> --tags asset` | `nodeId` |
 
-More: [saving](../../skill-resources/references/node-maintenance.md). After saving, run `tent workspace check --json` once and fix what it lists.
+No edit clears behind; only `confirm` does. More: [saving](../../skill-resources/references/node-maintenance.md). After saving, run `tent workspace check --json` once and fix what it lists.
 
 ## How to write
 

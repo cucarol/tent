@@ -207,7 +207,7 @@ export function latestGoalAheadTimes(history: GitDocumentHistory): Promise<Recor
       }
       Object.assign(records, nextRecords);
       // Confirmation can resample a material back to the same version, with no record delta.
-      // Only explicit confirmation and full output rewrites acknowledge unchanged receipts.
+      // Current saves acknowledge only explicit confirmation; older retained receipts stay factual.
       if (event.acknowledgedOutputIds === undefined && event.operation === "node.sync-confirm")
         for (const id of event.objectIds) acknowledgedOutputs.add(id);
       for (const id of ambiguousOutputs)

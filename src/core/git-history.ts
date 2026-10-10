@@ -505,7 +505,9 @@ export class GitDocumentHistory {
     schemaVersion: number,
     compute: (head: string | null) => Promise<T>,
   ): Promise<T> {
-    return this.derivedAtHead(name, schemaVersion, await this.retainedHead(), compute);
+    return structuredClone(
+      await this.derivedAtHead(name, schemaVersion, await this.retainedHead(), compute),
+    );
   }
 
   private async derivedAtHead<T>(
@@ -550,7 +552,8 @@ export class GitDocumentHistory {
         if (this.derivedPromises.get(key) === pending) this.derivedPromises.delete(key);
       });
     }
-    return structuredClone(await pending);
+    // Private indexes are read-only. Public methods copy the values they expose.
+    return pending;
   }
 
   private async saveCache(file: string, value: unknown) {
@@ -1188,6 +1191,45 @@ export class GitDocumentHistory {
     return (
       await runGit(this.root, ["cat-file", "blob", `${version.commit}:${version.path}`])
     ).toString("utf8");
+  }
+
+  /** Compare exact disk bytes with HEAD; read old blobs only for changed retained documents. */
+  async changedRetainedDocuments(documents: readonly { path: string; raw: string }[]) {
+    const commit = await this.retainedHead();
+    if (!commit) return [];
+    const entries = new Map(
+      await this.derivedAtHead("retained-document-blobs", 1, commit, async (head) => {
+        if (!head) return [];
+        return (await runGit(this.root, ["ls-tree", "-r", "-z", head]))
+          .toString("utf8")
+          .split("\0")
+          .flatMap((row): Array<[string, string]> => {
+            const match = /^[0-7]{6} blob ([a-f0-9]+)\t(.+)$/.exec(row);
+            return match ? [[match[2]!, match[1]!]] : [];
+          });
+      }),
+    );
+    const changed = documents.flatMap((document) => {
+      documentPath(document.path);
+      const blob = entries.get(document.path);
+      if (!blob) return [];
+      const bytes = Buffer.from(document.raw, "utf8");
+      const current = createHash(blob.length === 64 ? "sha256" : "sha1")
+        .update(`blob ${bytes.length}\0`)
+        .update(bytes)
+        .digest("hex");
+      return current === blob ? [] : [{ ...document, blob }];
+    });
+    const previous = await readBlobs(
+      this.root,
+      new Set(changed.map((entry) => entry.blob)),
+      (raw) => raw,
+    );
+    return changed.map(({ blob, ...document }) => {
+      const raw = previous.get(blob)!;
+      if (raw instanceof Error) throw raw;
+      return { ...document, previousRaw: raw };
+    });
   }
 
   /** Read a committed directory without replaying history or writing derived caches. */

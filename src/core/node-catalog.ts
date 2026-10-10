@@ -31,8 +31,13 @@ export type CatalogNode = {
 };
 
 export function documentHeader(raw: string): string {
-  const { body } = parseFrontmatter(raw);
-  return raw.slice(0, raw.length - body.length);
+  const opening = /^(\uFEFF)?---[\t ]*(\r?\n)/.exec(raw);
+  if (!opening) return "";
+  const fence = /^---[\t ]*(?:\r?\n|$)/gm;
+  fence.lastIndex = opening[0].length;
+  const closing = fence.exec(raw);
+  if (!closing) throw new Error("Unterminated frontmatter fence");
+  return raw.slice(0, closing.index + closing[0].length);
 }
 
 export async function readCatalogDocument(
@@ -100,7 +105,10 @@ export async function loadNodeCatalog(fs: FsAdapter) {
   };
 }
 
-type NodeCatalog = Awaited<ReturnType<typeof loadNodeCatalog>>;
+export type NodeCatalog = Awaited<ReturnType<typeof loadNodeCatalog>> & {
+  /** Full bytes already read at the native boundary; sync must still recheck them. */
+  observedDocuments?: ReadonlyMap<string, ReaderDocument>;
+};
 function requireCatalogNode(catalog: NodeCatalog, nodeId: string) {
   const node = catalog.byId.get(nodeId);
   if (!node) throw new ReaderError("NOT_FOUND", `Node is not readable in this source: ${nodeId}`);

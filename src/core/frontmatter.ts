@@ -36,9 +36,7 @@ export function parseFrontmatter(raw: string): ParsedFrontmatter {
   const closing = fence.exec(raw);
   if (!closing) throw invalidYaml("unterminated frontmatter fence.");
 
-  const document = readYaml(raw.slice(opening[0].length, closing.index));
-  const data = document.toJS({ maxAliasCount: 100 }) ?? {};
-  assertJsonValue(data);
+  const { document, data } = readYaml(raw.slice(opening[0].length, closing.index));
   const keyOrder = isMap(document.contents)
     ? document.contents.items.map((pair) => String((pair.key as Scalar).value))
     : [];
@@ -55,7 +53,7 @@ export function parseFrontmatter(raw: string): ParsedFrontmatter {
   return { data, body: raw.slice(end), keyOrder };
 }
 
-function readYaml(text: string): Document {
+function readYaml(text: string): { document: Document; data: Record<string, unknown> } {
   try {
     const document = parseDocument(text, {
       version: "1.2",
@@ -101,8 +99,9 @@ function readYaml(text: string): Document {
         }
       },
     });
-    assertJsonValue(document.toJS({ maxAliasCount: 100 }));
-    return document;
+    const data = document.toJS({ maxAliasCount: 100 }) ?? {};
+    assertJsonValue(data);
+    return { document, data };
   } catch (error) {
     throw invalidYaml(error instanceof Error ? error.message : String(error));
   }

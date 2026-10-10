@@ -264,6 +264,15 @@ test("one HEAD shares a single history traversal, durable hits skip replay, and 
     assert.equal(times.get(file), events[0]!.time);
     assert.deepEqual(records, {});
     assert.equal(index.events, events.length);
+    index.events = -1;
+    reads[0]!.frontmatter!.id = "node-mutated";
+    const repeatedIndex = await reader.derived("test-progress", 1, async () => {
+      throw new Error("A public result mutation must not rebuild the retained index");
+    });
+    assert.deepEqual(repeatedIndex, { events: events.length });
+    const [repeatedRead] = await reader.readVersions(first.versions);
+    assert.ok(repeatedRead && !(repeatedRead instanceof Error));
+    assert.equal(repeatedRead.frontmatter?.id, nodeId);
     return events;
   };
   assert.equal((await query(history)).length, 1);

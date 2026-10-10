@@ -199,7 +199,7 @@ test("create, rename and write-many reject superscript COM and LPT device names 
   // COM10 is not a device name and stays an ordinary Node.
   const control = await runNodeCommand("create", ["COM10", "--type", "prompt", "--json"], globals);
   assert.equal(control.exitCode, 0, control.stderr);
-  assert.equal(JSON.parse(control.stdout).node.path, "COM10");
+  assert.equal(JSON.parse(control.stdout).node.path, ".tent/COM10/COM10.md");
   assert.notEqual(await head(), headBefore);
 });
 

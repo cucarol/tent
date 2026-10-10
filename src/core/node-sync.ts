@@ -1,9 +1,20 @@
+import type { InvalidNativeNode } from "./node-native-capture.js";
 import { withTentMutation, type FsAdapter } from "./adapter.js";
 import { contentEtag } from "./etag.js";
 import { parseFrontmatter } from "./frontmatter.js";
-import { materialLocator, isDirectoryMaterial, validateMaterialAddresses } from "./material.js";
+import {
+  materialLocator,
+  materialOccurrences,
+  isDirectoryMaterial,
+  validateMaterialAddresses,
+} from "./material.js";
 import nodePath from "node:path";
-import { loadNodeCatalog, readCatalogDocument, type CatalogNode } from "./node-catalog.js";
+import {
+  loadNodeCatalog,
+  readCatalogDocument,
+  type CatalogNode,
+  type NodeCatalog,
+} from "./node-catalog.js";
 import { NodeWriteError, savePreparedNodeDocumentUnlocked } from "./node-document-write.js";
 import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "./node-read-basis.js";
 import { cardRecordPath, nodeNotePath } from "./paths.js";
@@ -60,21 +71,54 @@ export type NodeSyncInspection = {
   reasons: string[];
 };
 
-export async function inspectWorkspaceSync(fs: FsAdapter, now = new Date().toISOString()) {
-  const catalog = await loadNodeCatalog(fs);
-  return inspectCatalogNodes(fs, catalog, currentNodes(catalog), now);
+export async function inspectWorkspaceSync(
+  fs: FsAdapter,
+  now = new Date().toISOString(),
+  invalidNativeNodes: readonly InvalidNativeNode[] = [],
+  currentCatalog?: NodeCatalog,
+) {
+  const catalog = currentCatalog ?? (await loadNodeCatalog(fs));
+  return {
+    ...(await inspectCatalogNodes(
+      fs,
+      catalog,
+      currentNodes(catalog).filter(
+        (node) =>
+          !invalidNativeNodes.some(
+            (invalid) => invalid.path === `.tent/${nodeNotePath(node.path)}`,
+          ),
+      ),
+      now,
+    )),
+    invalidNodes: [
+      ...invalidNativeNodes,
+      ...[...catalog.tree.byPath.values()]
+        .filter(
+          (node) =>
+            node.invalid &&
+            !invalidNativeNodes.some(
+              (invalid) => invalid.path === `.tent/${nodeNotePath(node.path)}`,
+            ),
+        )
+        .map((node) => ({
+          path: `.tent/${nodeNotePath(node.path)}`,
+          nodeId: node.id || undefined,
+          reason: node.invalidReason ?? "Invalid Node",
+        })),
+    ],
+  };
 }
 
 function currentNodes(catalog: Awaited<ReturnType<typeof loadNodeCatalog>>) {
   return [...catalog.byId.values()].filter(
-    (n) => !n.archived && !n.invalid && parseFrontmatter(n.header).data.status !== "deprecated",
+    (n) => !n.archived && !n.invalid && catalog.tree.byPath.get(n.path)!.fm.status !== "deprecated",
   );
 }
 
 /** Selected bodies only; output checks may additionally read their implicit goal basis. */
 async function inspectCatalogNodes(
   fs: FsAdapter,
-  catalog: Awaited<ReturnType<typeof loadNodeCatalog>>,
+  catalog: NodeCatalog,
   selected: CatalogNode[],
   now: string,
   explicitNodeId?: string,
@@ -82,6 +126,71 @@ async function inspectCatalogNodes(
   const records = await retainedNodeRecords(fs);
   const hasRetainedHistory = !!fs.history && (await fs.exists(".git"));
   const goalMismatch = new Map<string, Set<string>>();
+  // One inspection observes each declaration once. Shared ancestor materials use
+  // that same observation; later inspections always start with an empty map.
+  const materialReads = new Map<string, ReturnType<typeof observeNodeMaterials>>();
+  const materialObservations: NonNullable<Parameters<typeof observeNodeMaterials>[6]> = new Map();
+  const documents = new Map<string, ReturnType<typeof readCatalogDocument>>();
+  const readDocument = (node: CatalogNode, retry: boolean) => {
+    if (retry) return readCatalogDocument(fs, node);
+    let pending = documents.get(node.path);
+    if (!pending) {
+      const observed = catalog.observedDocuments?.get(node.nodeId);
+      pending = observed ? Promise.resolve(observed) : readCatalogDocument(fs, node);
+      documents.set(node.path, pending);
+    }
+    return pending;
+  };
+  const goalsRead = new Map<string, ReturnType<typeof readGoal>>();
+  async function readGoal(goal: CatalogNode, nodeCatalog: typeof catalog, retry: boolean) {
+    const { raw } = await readDocument(goal, retry);
+    const parsed = {
+      data: nodeCatalog.tree.byPath.get(goal.path)!.fm,
+      body: raw.slice(goal.header.length),
+    };
+    return {
+      raw,
+      parsed,
+      version: nodeSemanticFingerprint(
+        parsed.data,
+        parsed.body,
+        nodeNotePath(goal.path),
+        nodeCatalog.byId,
+      ),
+    };
+  }
+  const observeMaterials = (
+    data: Record<string, unknown>,
+    documentPath: string,
+    nodeCatalog: typeof catalog,
+    previous: Parameters<typeof observeNodeMaterials>[5],
+    retry: boolean,
+  ) => {
+    const read = () =>
+      observeNodeMaterials(
+        fs,
+        data,
+        documentPath,
+        undefined,
+        nodeCatalog.byId,
+        previous,
+        retry || nodeCatalog !== catalog ? undefined : materialObservations,
+      );
+    if (retry || nodeCatalog !== catalog) return read();
+    const key = JSON.stringify([
+      documentPath,
+      materialOccurrences(data),
+      previous?.materials
+        .filter((material) => material.repository)
+        .map(({ identity, repository }) => ({ identity, repository })),
+    ]);
+    let pending = materialReads.get(key);
+    if (!pending) {
+      pending = read();
+      materialReads.set(key, pending);
+    }
+    return pending;
+  };
   const comparedMaterials = (
     observations: Awaited<ReturnType<typeof observeNodeMaterials>>,
     bases: import("./node-basis-record.js").NodeBasisRecord["materials"],
@@ -126,17 +235,16 @@ async function inspectCatalogNodes(
     let result: NodeSyncInspection | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const { raw } = await readCatalogDocument(fs, current);
-        const { data } = parseFrontmatter(raw);
+        const { raw } = await readDocument(current, attempt > 0);
+        const data = nodeCatalog.tree.byPath.get(current.path)!.fm;
         const path = nodeNotePath(current.path);
         const record = records[current.nodeId];
-        const observations = await observeNodeMaterials(
-          fs,
+        const observations = await observeMaterials(
           data,
           path,
-          undefined,
-          nodeCatalog.byId,
+          nodeCatalog,
           record ?? undefined,
+          attempt > 0,
         );
         const recordUnreadable = hasRetainedHistory && !record && isOutputNode(data);
         const materials = comparedMaterials(
@@ -155,52 +263,55 @@ async function inspectCatalogNodes(
                 ? "Node record unreadable; no retained baseline"
                 : "Node record missing; no retained baseline",
           });
-        for (const goal of goals) {
-          const { raw: goalRaw } = await readCatalogDocument(fs, goal);
-          const parsed = parseFrontmatter(goalRaw);
-          const currentVersion = nodeSemanticFingerprint(
-            parsed.data,
-            parsed.body,
-            nodeNotePath(goal.path),
-            nodeCatalog.byId,
-          );
-          const basis = record?.goals?.find((entry) => entry.nodeId === goal.nodeId);
-          const recordedVersion = basis?.version;
-          materials.push({
-            resource: `/${nodeNotePath(goal.path)}`,
-            goalId: goal.nodeId,
-            currentVersion,
-            ...(recordedVersion ? { recordedVersion } : {}),
-            state: recordedVersion
-              ? currentVersion === recordedVersion
-                ? "current"
-                : "changed"
-              : hasRetainedHistory
-                ? "unavailable"
-                : "unanchored",
-            ...(!recordedVersion && hasRetainedHistory
-              ? { reason: "Output has no retained baseline for this ancestor goal" }
-              : {}),
-          });
-          const goalMaterials = await observeNodeMaterials(
-            fs,
-            parsed.data,
-            nodeNotePath(goal.path),
-            undefined,
-            nodeCatalog.byId,
-            { materials: basis?.materials ?? [] },
-          );
-          materials.push(
-            ...comparedMaterials(
-              goalMaterials,
-              basis?.materials ?? [],
-              goal.nodeId,
-              hasRetainedHistory && !basis,
-            ),
-          );
-          if ((await fs.readFile(nodeNotePath(goal.path))) !== goalRaw)
-            throw new NodeWriteError("ETAG_CONFLICT", "Goal changed during sync inspection");
-        }
+        const goalChecks = await Promise.all(
+          goals.map(async (goal) => {
+            const checkedMaterials: NodeSyncInspection["materials"] = [];
+            if (attempt === 0 && !goalsRead.has(goal.path))
+              goalsRead.set(goal.path, readGoal(goal, nodeCatalog, false));
+            const {
+              raw: goalRaw,
+              parsed,
+              version: currentVersion,
+            } = await (attempt > 0 ? readGoal(goal, nodeCatalog, true) : goalsRead.get(goal.path)!);
+            const basis = record?.goals?.find((entry) => entry.nodeId === goal.nodeId);
+            const recordedVersion = basis?.version;
+            checkedMaterials.push({
+              resource: `/${nodeNotePath(goal.path)}`,
+              goalId: goal.nodeId,
+              currentVersion,
+              ...(recordedVersion ? { recordedVersion } : {}),
+              state: recordedVersion
+                ? currentVersion === recordedVersion
+                  ? "current"
+                  : "changed"
+                : hasRetainedHistory
+                  ? "unavailable"
+                  : "unanchored",
+              ...(!recordedVersion && hasRetainedHistory
+                ? { reason: "Output has no retained baseline for this ancestor goal" }
+                : {}),
+            });
+            const goalMaterials = await observeMaterials(
+              parsed.data,
+              nodeNotePath(goal.path),
+              nodeCatalog,
+              { materials: basis?.materials ?? [] },
+              attempt > 0,
+            );
+            checkedMaterials.push(
+              ...comparedMaterials(
+                goalMaterials,
+                basis?.materials ?? [],
+                goal.nodeId,
+                hasRetainedHistory && !basis,
+              ),
+            );
+            if ((await fs.readFile(nodeNotePath(goal.path))) !== goalRaw)
+              throw new NodeWriteError("ETAG_CONFLICT", "Goal changed during sync inspection");
+            return checkedMaterials;
+          }),
+        );
+        materials.push(...goalChecks.flat());
         if ((await fs.readFile(path)) !== raw)
           throw new NodeWriteError("ETAG_CONFLICT", "Node changed during sync inspection");
         const stale = nodeIsStale(data, now);
@@ -280,7 +391,7 @@ async function inspectCatalogNodes(
   const nodes: NodeSyncInspection[] = new Array(selected.length);
   let next = 0;
   await Promise.all(
-    Array.from({ length: Math.min(4, selected.length) }, async () => {
+    Array.from({ length: Math.min(32, selected.length) }, async () => {
       for (;;) {
         const index = next++;
         if (index >= selected.length) return;
@@ -297,6 +408,7 @@ async function inspectCatalogNodes(
       ...(n.goalId ? { goalId: n.goalId } : {}),
     }));
   const requirementsWithoutOutputs: string[] = [];
+  let aheadTimes: Promise<Record<string, string>> | undefined;
   for (const goal of nodes.filter((n) => isRequirementNode({ type: n.type }))) {
     if (goal.uncertain) continue;
     const subtreeOutputs = nodes.filter(
@@ -316,8 +428,8 @@ async function inspectCatalogNodes(
           : "Goal subtree has no current output Node",
       ];
       goal.reasons.push(...reasons);
-      if (fs.history && (await fs.exists(".git")))
-        goal.aheadSince = (await latestGoalAheadTimes(fs.history))[goal.nodeId];
+      if (fs.history && hasRetainedHistory)
+        goal.aheadSince = (await (aheadTimes ??= latestGoalAheadTimes(fs.history)))[goal.nodeId];
       goal.ahead = { ...(goal.aheadSince ? { since: goal.aheadSince } : {}), reasons };
     } else if (
       !goal.behind &&

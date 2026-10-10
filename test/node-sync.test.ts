@@ -70,9 +70,10 @@ for (const method of ["single", "batch", "whole-body"] as const) {
       });
     else await edit(output, { body: "reviewed complete output\n" });
     const acknowledged = new NodeFs(root);
-    assert.deepEqual((await acknowledged.history.changesInRange()).at(-1)!.acknowledgedOutputIds, [
-      output,
-    ]);
+    assert.deepEqual(
+      (await acknowledged.history.changesInRange()).at(-1)!.acknowledgedOutputIds,
+      method === "whole-body" ? [] : [output],
+    );
     assert.deepEqual((await acknowledged.history.nodeRecords())[output]?.goals, record.goals);
     const stillUnavailable = await inspectNodeSync(acknowledged, output);
     assert.ok(stillUnavailable.behind);
@@ -336,10 +337,10 @@ for (const method of ["single", "batch"] as const) {
           },
         ],
       });
-    assert.equal((await inspectNodeSync(new NodeFs(root), output)).behind, undefined);
+    assert.ok((await inspectNodeSync(new NodeFs(root), output)).behind);
     assert.deepEqual(
       (await new NodeFs(root).history.changesInRange()).at(-1)!.acknowledgedOutputIds,
-      [output],
+      [],
     );
     await edit(goal, { body: "requirement C\n" });
     const again = await readNodeForEdit(fs, output);
@@ -541,7 +542,8 @@ for (const mode of ["neutral", "independent", "meaningful"] as const) {
       serializeFrontmatter(old.frontmatter, `[target](${target})\n`),
     );
     await readNodeForEdit(fs, output);
-    if (mode === "meaningful") await edit(output, { body: `[target](${target})\nreviewed\n` });
+    if (mode === "meaningful")
+      await edit(output, { body: `[target](${target})\nreviewed\n`, confirm: true });
     else await edit(output, { frontmatter: { tags: ["neutral"] } });
     const marker = (await new NodeFs(root).history.changesInRange()).at(-1)!.acknowledgedOutputIds;
     assert.deepEqual(marker, mode === "meaningful" ? [output] : []);
@@ -747,7 +749,7 @@ test("goal and hierarchical output follow the two-stage production and confirmat
   assert.equal(behind.goalId, goal);
   assert.equal(behind.materials[0]!.resource, "/Goal/Goal.md");
   await edit(bodyOutput, { body: "updated implementation\n" });
-  assert.equal((await inspectNodeSync(fs, bodyOutput)).state, "synced");
+  assert.equal((await inspectNodeSync(fs, bodyOutput)).state, "behind");
   await edit(bodyOutput, { confirm: true, by: "human:cuca" });
   await edit(output.nodeId, { confirm: true });
   assert.equal((await inspectNodeSync(fs, bodyOutput)).state, "synced");
@@ -1238,7 +1240,7 @@ test("metadata, append and section output writes explicitly acknowledge no outpu
   assert.ok(
     retainedBaseline.changes.some((change) => change.objectId === upstream && change.after),
   );
-  await edit(output, { body: "## Plan\n\nfirst\n" });
+  await edit(output, { body: "## Plan\n\nfirst\n", confirm: true });
   const acknowledged = new NodeFs(root);
   const baseline = (await acknowledged.history.nodeRecords())[output];
   assert.ok(baseline);

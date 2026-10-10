@@ -54,7 +54,7 @@ test("Node, Role, Card and batch reads use text for body and raw content without
   for (const view of ["body", "raw"]) {
     for (const full of [[], ["--full"]])
       assertText(
-        (await cli("get", ["node-parent", "--view", view, ...full])).node,
+        await cli("get", ["node-parent", "--view", view, ...full]),
         "parent",
         view === "raw",
       );
@@ -108,11 +108,14 @@ test("direct Node CLI creates standard materials and uses observed CAS for metad
     )
   ).node;
   const id = created.nodeId;
-  const old = (await cli("get", [id, "--full"])).node;
-  assert.equal(old.path, "Parent/Child");
+  const old = await cli("get", [id, "--full"]);
+  assert.equal(created.path, ".tent/Parent/Child/Child.md");
   assert.equal(old.text, "exact body\n");
   assert.equal("body" in old, false);
-  assert.deepEqual(old.sources, [{ ...sources[0], resource: "../../../spec.md" }, sources[1]]);
+  assert.deepEqual(parseFrontmatter(await tent.readFile("Parent/Child/Child.md")).data.sources, [
+    { ...sources[0], resource: "../../../spec.md" },
+    sources[1],
+  ]);
   const saved = await cli(
     "write",
     [id, "--input-json", "-"],
@@ -124,6 +127,12 @@ test("direct Node CLI creates standard materials and uses observed CAS for metad
     }),
   );
   assert.equal(saved.readBack.text, "external update");
+  assert.equal(saved.path, created.path);
+  assert.equal(saved.readBack.path, created.path);
+  assert.equal(
+    parseFrontmatter(await fs.readFile(path.join(root, saved.path), "utf8")).body,
+    saved.readBack.text,
+  );
   for (const [sub, args] of [
     ["write", [id, "--body", "stale", "--base-etag", old.etag]],
     ["type", [id, "prompt", "--base-etag", old.etag]],
@@ -138,13 +147,20 @@ test("direct Node CLI creates standard materials and uses observed CAS for metad
     [3, 2, 1],
   );
   await cli("tags", ["add", id, "kept", "--base-etag", saved.etag]);
-  assert.deepEqual((await cli("get", [id, "--full"])).node.tags, ["kept", "proof", "scope"]);
+  assert.deepEqual((await cli("get", [id, "--view", "summary"])).tags, ["kept", "proof", "scope"]);
   const tree = await cli("list", ["--full"]);
   assert.equal(
     tree.nodes.find((n: { nodeId: string }) => n.nodeId === "node-parent").children[0].text,
     "external update",
   );
-  await cli("rename", [id, "Renamed"]);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const renamed = await cli("rename", [id, "Renamed"]);
+    assert.equal(renamed.path, ".tent/Parent/Renamed/Renamed.md");
+    assert.equal(
+      parseFrontmatter(await fs.readFile(path.join(root, renamed.path), "utf8")).body,
+      "external update",
+    );
+  }
   const env = {
     fs: tent,
     clock: new SystemClock(),
@@ -152,8 +168,15 @@ test("direct Node CLI creates standard materials and uses observed CAS for metad
     tentRoot: path.join(root, ".tent"),
   };
   await assert.rejects(moveNode(env, id, null, { mode: "inside" }, "Parent/Child"), /path changed/);
-  await cli("move", [id, "--parent", "root"]);
-  assert.equal((await cli("get", [id, "--full"])).node.path, "Renamed");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const moved = await cli("move", [id, "--parent", "root"]);
+    assert.equal(moved.path, ".tent/Renamed/Renamed.md");
+    assert.equal(
+      parseFrontmatter(await fs.readFile(path.join(root, moved.path), "utf8")).body,
+      "external update",
+    );
+  }
+  assert.equal((await cli("get", [id, "--view", "summary"])).path, ".tent/Renamed/Renamed.md");
   await cli("delete", [id]);
   assert.equal(await tent.exists("Renamed"), false);
   for (const args of [["--attach-only"], ["--service-entry", "unused"], ["--data-dir", "unused"]]) {
@@ -233,22 +256,28 @@ test("separate direct CLI processes retain Git versions and reject a stale edit 
       child.on("error", reject);
       child.on("close", (code) => resolve({ exitCode: code ?? 1, stdout, stderr }));
     });
-  const before = parse(await cli("get", ["node-parent", "--full"])).node;
-  assert.ok(before.version.commit);
+  const before = parse(await cli("get", ["node-parent", "--full"]));
+  const beforeVersion = (
+    await tent.history.captureUnlocked(
+      [{ path: "Parent/Parent.md", raw: await tent.readFile("Parent/Parent.md") }],
+      { operation: "test.fixture" },
+    )
+  ).versions[0];
+  assert.equal("version" in before, false);
   const saved = parse(
     await cli("write", ["node-parent", "--body", "next", "--base-etag", before.etag]),
   );
   assert.ok(saved.version.commit);
-  assert.notEqual(saved.version.commit, before.version.commit);
+  assert.notEqual(saved.version.commit, beforeVersion!.commit);
   const history = parse(await cli("history", ["node-parent"]));
   assert.ok(history.items.some((item: { changes: unknown[] }) => item.changes.length > 0));
   const stale = await cli("write", ["node-parent", "--body", "lost", "--base-etag", before.etag]);
   assert.equal(stale.exitCode, 1);
   assert.match(stale.stderr, /conflict/i);
   const prior = parse(
-    await cli("get", ["node-parent", "--version-json", JSON.stringify(before.version)]),
+    await cli("get", ["node-parent", "--version-json", JSON.stringify(beforeVersion)]),
   );
-  assert.equal(prior.node.text, "parent");
+  assert.equal(prior.text, "parent");
   const archive = parse(await cli("archive", ["node-parent"]));
   assert.equal(parseFrontmatter(await tent.readFile("Parent/Parent.md")).data.status, "deprecated");
   parse(await cli("restore", ["node-parent", "--archive-commit", archive.commit]));
@@ -280,7 +309,7 @@ test("node list filters exact types and every tag across a subtree, with paging 
   await cli(
     "write",
     [old, "--input-json", "-"],
-    JSON.stringify({ baseEtag: read.node.etag, frontmatter: { status: "deprecated" } }),
+    JSON.stringify({ baseEtag: read.etag, frontmatter: { status: "deprecated" } }),
   );
   const ids = async (...args: string[]) =>
     (await cli("list", args)).items.map((item: { nodeId: string }) => item.nodeId);
@@ -365,7 +394,7 @@ test("node tags lists tags in use with counts and preset marks; types accept exa
   await cli(
     "write",
     [old, "--input-json", "-"],
-    JSON.stringify({ baseEtag: read.node.etag, frontmatter: { status: "deprecated" } }),
+    JSON.stringify({ baseEtag: read.etag, frontmatter: { status: "deprecated" } }),
   );
   const presets = [
     "direction",
@@ -429,15 +458,15 @@ test("node tags lists tags in use with counts and preset marks; types accept exa
     /^Next: tent node type --help --workspace .+  # words like decision or evidence go in --tags\n$/,
   );
   const full = await cli("get", [target.nodeId, "--full"]);
-  await cli("type", [target.nodeId, "goal", "--base-etag", full.node.etag]);
-  assert.equal((await cli("get", [target.nodeId, "--full"])).node.type, "goal");
+  await cli("type", [target.nodeId, "goal", "--base-etag", full.etag]);
+  assert.equal((await cli("get", [target.nodeId, "--view", "summary"])).type, "goal");
 });
 
 test("link-output creates a plain output and adds only the tags it is given", async (t) => {
   const { root, cli } = await fixture(t, "link-output-tags-");
   await fs.writeFile(path.join(root, "page.html"), "<p>done</p>");
   const plain = await cli("link-output", ["node-parent", "--resource", "page.html"]);
-  const plainNode = (await cli("get", [plain.nodeId, "--full"])).node;
+  const plainNode = await cli("get", [plain.nodeId, "--view", "summary"]);
   assert.equal(plainNode.type, "output");
   assert.deepEqual(plainNode.tags, []);
   const tagged = await cli("link-output", [
@@ -449,7 +478,7 @@ test("link-output creates a plain output and adds only the tags it is given", as
     "--tags",
     "asset,ui",
   ]);
-  const taggedNode = (await cli("get", [tagged.nodeId, "--full"])).node;
+  const taggedNode = await cli("get", [tagged.nodeId, "--view", "summary"]);
   assert.equal(taggedNode.type, "output");
   assert.deepEqual(taggedNode.tags, ["asset", "ui"]);
   assert.deepEqual(

@@ -14,12 +14,7 @@ import { assertStatusEdit } from "./document-status.js";
 import { ReaderError } from "./context-reader.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "./node-read-basis.js";
-import {
-  assertNodeRecordFields,
-  isOutputNode,
-  nodeSemanticFingerprint,
-  prepareNodeSyncSave,
-} from "./node-sync-record.js";
+import { assertNodeRecordFields, isOutputNode, prepareNodeSyncSave } from "./node-sync-record.js";
 import { prepareNodeProvenanceSave, assertNodeProvenanceEdit } from "./node-provenance.js";
 
 export class NodeWriteError extends Error {
@@ -110,33 +105,15 @@ export async function savePreparedNodeDocumentUnlocked(
   const now = new Date().toISOString();
   const parsed = parseFrontmatter(preparedRaw);
   const output = isOutputNode(parsed.data);
-  let acknowledge = false;
-  if (
-    operation === "node.write" &&
-    output &&
-    (input.body !== undefined || input.raw !== undefined)
-  ) {
-    const path = nodeNotePath(node.path);
-    const nodes = (await loadNodeCatalog(fs)).byId;
-    const beforeBody = await canonicalDocumentReferences(
-      fs,
-      path,
-      {},
-      parseFrontmatter(diskRaw).body,
-    );
-    acknowledge =
-      nodeSemanticFingerprint({}, parsed.body, path, nodes) !==
-      nodeSemanticFingerprint({}, beforeBody, path, nodes);
-  }
   const { raw, record } = await prepareNodeSyncSave(
     fs,
     nodeNotePath(node.path),
     prepareNodeProvenanceSave(preparedRaw, diskRaw, input.by, now),
     {
       now,
+      previousRaw: diskRaw,
       confirm: input.confirm,
       by: input.by,
-      acknowledge,
     },
   );
   const changed = raw !== diskRaw;
@@ -160,7 +137,7 @@ export async function savePreparedNodeDocumentUnlocked(
     version = await captureDocumentUnlocked(fs, path, raw, {
       operation,
       ...(record ? { nodeRecords: { [nodeId]: record } } : {}),
-      ...(output && (input.confirm || acknowledge) ? { acknowledgedOutputIds: [nodeId] } : {}),
+      ...(output && input.confirm ? { acknowledgedOutputIds: [nodeId] } : {}),
     });
   } catch (error) {
     if (changed && (await fs.readFile(path)) === raw) await fs.writeFile(path, diskRaw);

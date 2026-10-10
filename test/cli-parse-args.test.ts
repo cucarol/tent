@@ -91,16 +91,16 @@ test("full CLI preserves text, stdin, repeated options and terminators through d
     ]);
     const nodeId = created.node.nodeId;
     const read = await success("node", "get", [nodeId, "--full"]);
-    assert.equal(read.node.name, "--named-node");
-    assert.equal(read.node.text, text);
+    assert.equal(created.node.name, "--named-node");
+    assert.equal(read.text, text);
     await success(
       "node",
       "write",
-      [nodeId, "--body", "-", `--base-etag=${read.node.etag}`],
+      [nodeId, "--body", "-", `--base-etag=${read.etag}`],
       text + "stdin\n",
     );
     const written = await success("node", "get", [nodeId, "--full", "--json"]);
-    assert.equal(written.node.text, text + "stdin\n");
+    assert.equal(written.text, text + "stdin\n");
 
     const card = await success("card", "create", [
       "--prompt=discard",
@@ -127,7 +127,7 @@ test("full CLI preserves text, stdin, repeated options and terminators through d
       assert.equal(rejected.code, 1);
       assert.match(rejected.stderr, /argument|Unknown option/);
     }
-    assert.equal((await success("node", "get", [nodeId, "--full"])).node.text, text + "stdin\n");
+    assert.equal((await success("node", "get", [nodeId, "--full"])).text, text + "stdin\n");
   } finally {
     await assert.rejects(fs.stat(dataDir), { code: "ENOENT" });
   }

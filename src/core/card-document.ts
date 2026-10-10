@@ -24,7 +24,12 @@ import { parseRoleDocument } from "./role-document.js";
 import { boundary, ReaderError, type ReaderRange } from "./context-reader.js";
 import { canonicalSha256 } from "./canonical-digest.js";
 import { canonicalDocumentReferences } from "./document-links.js";
-import { loadNodeCatalog, readCatalogDocument } from "./node-catalog.js";
+import {
+  documentHeader,
+  loadNodeCatalog,
+  readCatalogDocument,
+  type NodeCatalog,
+} from "./node-catalog.js";
 import { listWorkspaceRelations, type DocumentRef } from "./workspace-relations.js";
 import { cardSourceIdentityError, readCardProgress } from "./card-progress.js";
 
@@ -72,10 +77,21 @@ function cardPath(id: string) {
   return cardRecordPath(id);
 }
 export function parseCardDocument(id: string, raw: string): CardDocument {
-  const path = cardPath(id);
   let parsed: ReturnType<typeof parseFrontmatter>;
   try {
     parsed = parseFrontmatter(raw);
+  } catch (error) {
+    invalid(`Invalid Card metadata: ${String(error)}`);
+  }
+  return cardFromParsed(id, raw, parsed);
+}
+function cardFromParsed(
+  id: string,
+  raw: string,
+  parsed: ReturnType<typeof parseFrontmatter>,
+): CardDocument {
+  const path = cardPath(id);
+  try {
     sourcesSchema.parse(parsed.data.sources);
   } catch (error) {
     invalid(`Invalid Card metadata: ${String(error)}`);
@@ -238,7 +254,7 @@ export async function verifyCardSourceVersions(
     const value = retained[index++]!;
     if (value instanceof Error) return value;
     try {
-      validateSource(value.version.path, value.raw);
+      validateSource(value.version.path, value.raw, value.frontmatter);
       return value;
     } catch (error) {
       return error instanceof Error ? error : new Error(String(error));
@@ -265,6 +281,8 @@ async function captureSources(fs: FsAdapter, owner: string, sources: MaterialSou
     if (source.version !== undefined) {
       await verifyCardSourceVersion(fs, owner, source);
     } else if (internal) {
+      if (fs.invalidNodeEdits?.has(file))
+        invalid(`Invalid Node source: ${file}: ${fs.invalidNodeEdits.get(file)}`);
       const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
         await fs.readBinary(file),
       );
@@ -280,8 +298,8 @@ async function captureSources(fs: FsAdapter, owner: string, sources: MaterialSou
     paths.has(i) ? { ...source, version: versions.find((v) => v.path === paths.get(i))! } : source,
   );
 }
-function validateSource(file: string, raw: string) {
-  const error = cardSourceIdentityError(file, raw, parseFrontmatter(raw).data);
+function validateSource(file: string, raw: string, data = parseFrontmatter(raw).data) {
+  const error = cardSourceIdentityError(file, raw, data);
   if (error) invalid(error);
 }
 
@@ -735,7 +753,7 @@ export async function watchCardDocuments(
   }
 }
 
-export async function listCardDocuments(
+export async function listCardDocumentHeaders(
   fs: FsAdapter,
   options: {
     cardIds?: readonly string[];
@@ -750,45 +768,55 @@ export async function listCardDocuments(
   const items: Array<Record<string, unknown>> = [];
   const selected: Array<Record<string, unknown> & { path: string }> = [];
   const sourceSets = new Map<string, MaterialSource[]>();
-  for (const entry of (await fs.exists(CARDS_DIR))
+  const entries = (await fs.exists(CARDS_DIR))
     ? (await fs.listDir(CARDS_DIR)).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-    : []) {
-    const id = entry.name.slice(0, -3);
-    if (entry.isDir || !entry.name.endsWith(".md") || !isCardId(id)) continue;
-    if (cardIds && !cardIds.has(id)) continue;
-    const path = cardPath(id);
-    try {
-      const raw = fs.readFrontmatter ? await fs.readFrontmatter(path) : await fs.readFile(path),
-        data = parseFrontmatter(raw).data;
-      if (data.id !== id || data.type !== "card" || data.schemaVersion !== 3)
-        invalid("Card header identity mismatch");
-      const state = data.state;
-      if (state !== "pending" && state !== "consumed") invalid("Invalid Card state");
-      if (!options.includeDeprecated && documentLifecycle(data).status === "deprecated") continue;
-      if (options.state && state !== options.state) continue;
-      if (
-        options.roleId &&
-        (state === "pending"
-          ? data.target !== options.roleId && !(options.includeOpen && data.target === undefined)
-          : data.receivedBy !== options.roleId)
-      )
-        continue;
-      const item = {
-        cardId: id,
-        path,
-        title: data.title,
-        state,
-        target: data.target,
-        receivedBy: data.receivedBy,
-        ...documentLifecycle(data),
-      };
-      items.push(item);
-      selected.push(item);
-      sourceSets.set(id, Array.isArray(data.sources) ? (data.sources as MaterialSource[]) : []);
-    } catch {
-      items.push({ cardId: id, path, diagnostic: "Card header unavailable; inspect raw" });
-    }
-  }
+    : [];
+  let nextHeader = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(16, entries.length) }, async () => {
+      for (;;) {
+        const entry = entries[nextHeader++];
+        if (!entry) return;
+        const id = entry.name.slice(0, -3);
+        if (entry.isDir || !entry.name.endsWith(".md") || !isCardId(id)) continue;
+        if (cardIds && !cardIds.has(id)) continue;
+        const path = cardPath(id);
+        try {
+          const raw = fs.readFrontmatter ? await fs.readFrontmatter(path) : await fs.readFile(path),
+            data = parseFrontmatter(raw).data;
+          if (data.id !== id || data.type !== "card" || data.schemaVersion !== 3)
+            invalid("Card header identity mismatch");
+          const state = data.state;
+          if (state !== "pending" && state !== "consumed") invalid("Invalid Card state");
+          if (!options.includeDeprecated && documentLifecycle(data).status === "deprecated")
+            continue;
+          if (options.state && state !== options.state) continue;
+          if (
+            options.roleId &&
+            (state === "pending"
+              ? data.target !== options.roleId &&
+                !(options.includeOpen && data.target === undefined)
+              : data.receivedBy !== options.roleId)
+          )
+            continue;
+          const item = {
+            cardId: id,
+            path,
+            title: data.title,
+            state,
+            target: data.target,
+            receivedBy: data.receivedBy,
+            ...documentLifecycle(data),
+          };
+          items.push(item);
+          selected.push(item);
+          sourceSets.set(id, Array.isArray(data.sources) ? (data.sources as MaterialSource[]) : []);
+        } catch {
+          items.push({ cardId: id, path, diagnostic: "Card header unavailable; inspect raw" });
+        }
+      }
+    }),
+  );
   if (selected.length && fs.history && (await fs.history.available())) {
     try {
       const times = await fs.history.firstCommitTimes(selected.map((item) => item.path));
@@ -809,6 +837,26 @@ export async function listCardDocuments(
     item.publishedAt ??= null;
     return item.publishedAt !== null;
   });
+  visible.sort((a, b) => {
+    const aTime = String(a.publishedAt ?? ""),
+      bTime = String(b.publishedAt ?? "");
+    if (aTime !== bTime) return aTime > bTime ? -1 : 1;
+    const aId = String(a.cardId),
+      bId = String(b.cardId);
+    return aId < bId ? -1 : aId > bId ? 1 : 0;
+  });
+  return { items: visible, sourceSets };
+}
+
+export async function listCardDocuments(
+  fs: FsAdapter,
+  options: Parameters<typeof listCardDocumentHeaders>[1] = {},
+  currentInspections?: Promise<readonly import("./node-sync.js").NodeSyncInspection[]>,
+  currentCatalog?: NodeCatalog | Promise<NodeCatalog | undefined>,
+  currentHeaders?: Awaited<ReturnType<typeof listCardDocumentHeaders>>,
+) {
+  const { items: visible, sourceSets } =
+    currentHeaders ?? (await listCardDocumentHeaders(fs, options));
   if (visible.some((item) => !item.diagnostic)) {
     const progress = await readCardProgress(
       fs,
@@ -819,18 +867,12 @@ export async function listCardDocuments(
           state: item.state as CardDocumentState,
           sources: sourceSets.get(String(item.cardId)) ?? [],
         })),
+      currentInspections,
+      currentCatalog,
     );
     for (const item of visible)
       if (!item.diagnostic) Object.assign(item, progress.get(String(item.cardId)));
   }
-  visible.sort((a, b) => {
-    const aTime = String(a.publishedAt ?? ""),
-      bTime = String(b.publishedAt ?? "");
-    if (aTime !== bTime) return aTime > bTime ? -1 : 1;
-    const aId = String(a.cardId),
-      bId = String(b.cardId);
-    return aId < bId ? -1 : aId > bId ? 1 : 0;
-  });
   return { revision: canonicalSha256(visible), items: visible };
 }
 
@@ -857,7 +899,8 @@ export type ReceivedCardSourceDiagnostic = {
 export async function inspectReceivedCardSourceChanges(
   fs: FsAdapter,
   options: { roleId?: string } = {},
-  listedCards?: Awaited<ReturnType<typeof listCardDocuments>>,
+  listedCards?: Pick<Awaited<ReturnType<typeof listCardDocuments>>, "items">,
+  currentCatalog?: NodeCatalog | Promise<NodeCatalog | undefined>,
 ) {
   const items: ReceivedCardSourceChange[] = [];
   const diagnostics: ReceivedCardSourceDiagnostic[] = [];
@@ -872,6 +915,25 @@ export async function inspectReceivedCardSourceChanges(
     }
     const candidates = listed.items.filter((item) => !item.diagnostic && item.state === "consumed");
     if (!candidates.length) return { items, diagnostics };
+    const live = new Map<string, string | Error>();
+    let nextRead = 0;
+    const liveReads = Promise.all(
+      Array.from({ length: Math.min(16, candidates.length) }, async () => {
+        for (;;) {
+          const item = candidates[nextRead++];
+          if (!item) return;
+          const id = String(item.cardId);
+          try {
+            const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+              await readonly.readBinary(cardPath(id)),
+            );
+            live.set(id, raw);
+          } catch (error) {
+            live.set(id, error instanceof Error ? error : new Error(String(error)));
+          }
+        }
+      }),
+    );
     const history = await historyOf(readonly);
     // One identity/history scan and two source batches serve the whole query.
     const identities = await history.derived("identity-versions", 1, async () => {
@@ -895,7 +957,15 @@ export async function inspectReceivedCardSourceChanges(
         current = latest.get(id);
       return published && current ? [published, current] : [];
     });
-    const retained = await history.readVersions(requested);
+    const [retained] = await Promise.all([history.readVersions(requested), liveReads]);
+    const retainedCard = (id: string, value: Exclude<(typeof retained)[number], Error>) =>
+      value.frontmatter
+        ? cardFromParsed(id, value.raw, {
+            data: value.frontmatter,
+            body: value.raw.slice(documentHeader(value.raw).length),
+            keyOrder: [],
+          })
+        : parseCardDocument(id, value.raw);
     type SelectedSource = { card: CardDocument; owner: string; source: MaterialSource };
     const retainedById = new Map<string, typeof retained>();
     let offset = 0;
@@ -916,12 +986,11 @@ export async function inspectReceivedCardSourceChanges(
           previous = versions[1]!;
         if (published instanceof Error) throw published;
         if (previous instanceof Error) throw previous;
-        const current = await liveCard(readonly, id);
-        validateRetainedCard(
-          current,
-          parseCardDocument(id, published.raw),
-          parseCardDocument(id, previous.raw),
-        );
+        const raw = live.get(id)!;
+        if (raw instanceof Error) throw raw;
+        const previousCard = retainedCard(id, previous);
+        const current = raw === previous.raw ? previousCard : parseCardDocument(id, raw);
+        validateRetainedCard(current, retainedCard(id, published), previousCard);
         if (
           documentLifecycle(current.data).status === "deprecated" ||
           current.data.state === "pending" ||
@@ -945,7 +1014,7 @@ export async function inspectReceivedCardSourceChanges(
     const checked: Awaited<ReturnType<typeof validateCard>>[] = new Array(candidates.length);
     let next = 0;
     await Promise.all(
-      Array.from({ length: Math.min(4, candidates.length) }, async () => {
+      Array.from({ length: Math.min(16, candidates.length) }, async () => {
         for (;;) {
           const index = next++;
           if (index >= candidates.length) return;
@@ -957,15 +1026,41 @@ export async function inspectReceivedCardSourceChanges(
     for (const entry of checked) if (entry.diagnostic) diagnostics.push(entry.diagnostic);
     if (!selected.length) return { items, diagnostics };
     const sources = await verifyCardSourceVersions(readonly, selected);
-    const catalog = await loadNodeCatalog(readonly);
+    const catalog = (await currentCatalog) ?? (await loadNodeCatalog(readonly));
     const observed = new Map<string, Awaited<ReturnType<typeof readCatalogDocument>> | Error>();
+    const liveNodes = [
+      ...new Set(
+        sources
+          .filter((source) => !(source instanceof Error))
+          .map((source) => {
+            if (source instanceof Error) throw source;
+            return String((source.frontmatter ?? parseFrontmatter(source.raw).data).id);
+          }),
+      ),
+    ];
+    let nextLive = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(16, liveNodes.length) }, async () => {
+        for (;;) {
+          const id = liveNodes[nextLive++];
+          if (!id) return;
+          const node = catalog.byId.get(id);
+          if (!node) continue;
+          try {
+            observed.set(id, await readCatalogDocument(readonly, node));
+          } catch (error) {
+            observed.set(id, error instanceof Error ? error : new Error(String(error)));
+          }
+        }
+      }),
+    );
     for (const [index, entry] of selected.entries()) {
       const { card, source } = entry;
       let nodeId: string | undefined;
       try {
         const pinned = sources[index]!;
         if (pinned instanceof Error) throw pinned;
-        nodeId = String(parseFrontmatter(pinned.raw).data.id);
+        nodeId = String((pinned.frontmatter ?? parseFrontmatter(pinned.raw).data).id);
         const node = catalog.byId.get(nodeId);
         const base = {
           cardId: card.data.id,

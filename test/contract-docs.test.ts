@@ -55,7 +55,7 @@ test("PLUGIN.md matches SPEC goal ancestry and brief counts", async () => {
   const spec = flat(await read("docs/SPEC.md"));
   const plugin = await read("docs/PLUGIN.md");
   assert.match(spec, /An output depends on every goal ancestor/);
-  assert.match(spec, /Its first line reports only behind and ahead counts/);
+  assert.match(spec, /`workspace brief \[--role <id>\]` reports behind and ahead counts/);
   assert.match(plugin, /全部 goal 祖先都提供隐式来源/);
   assert.doesNotMatch(plugin, /最近的 goal 祖先提供隐式来源/);
   assert.match(plugin, /落后与领先两种同步状态计数/);
@@ -89,7 +89,7 @@ test("type guidance names exactly three types and the preset tags", async () => 
     "issue",
   ])
     assert.match(types, new RegExp(`^\\| \`${tag}\` \\|`, "m"), tag);
-  assert.match(flat(types), /Every current `output` under a goal counts as its result/);
+  assert.match(flat(types), /Any undeprecated `output` under a goal counts as its result/);
   assert.match(flat(types), /from `tent node tags`/);
   assert.doesNotMatch(types, formerTypes);
   assert.doesNotMatch(types, /an `output` counts as implementing it/);

@@ -73,6 +73,11 @@ test("material checks observe generic bytes while software/format adapters have 
     observeSourceFile(materialRoot, path.join(materialRoot, "linked/value")),
     /Symbolic/,
   );
+  await assert.rejects(
+    observeSourceFile(materialRoot, path.join(materialRoot, "linked/missing")),
+    /Symbolic/,
+    "a missing leaf must not hide an ancestor junction behind ENOENT",
+  );
 });
 
 test("Markdown materials select literal headings, nested sections and Setext through the shared AST", async (t) => {

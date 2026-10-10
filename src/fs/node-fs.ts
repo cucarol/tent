@@ -30,6 +30,7 @@ import { loadNodeCatalog } from "../core/node-catalog.js";
 
 export class NodeFs implements FsAdapter {
   private root: string;
+  invalidNodeEdits?: ReadonlyMap<string, string>;
   readonly history: GitDocumentHistory;
   private historyWrites = new AsyncLocalStorage<Map<string, string | null>>();
   private historyPreimages = new AsyncLocalStorage<Map<string, string | null>>();
@@ -117,7 +118,7 @@ export class NodeFs implements FsAdapter {
   async readFrontmatter(path: string): Promise<string> {
     const handle = await fs.open(this.abs(path), "r");
     const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
-    const chunk = Buffer.alloc(512);
+    const chunk = Buffer.alloc(4096);
     const opening = /^(\uFEFF)?---[\t ]*(\r?\n)/;
     const fence = /^---[\t ]*(?:\r?\n|$)/gm;
     let raw = "";
@@ -387,6 +388,10 @@ export class NodeFs implements FsAdapter {
   }
 
   private async beforeHistoryChange(paths: string[]) {
+    for (const path of paths) {
+      const invalid = this.invalidNodeEdits?.get(path);
+      if (invalid) throw new Error(`Invalid Node ${path}: ${invalid}`);
+    }
     const tracked = this.historyWrites.getStore();
     if (!tracked) return;
     const before = [];

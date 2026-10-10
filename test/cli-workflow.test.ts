@@ -142,7 +142,7 @@ test("saved readback is bounded, continues with the common reader and rejects la
         globals,
       ),
     );
-    page = result.node;
+    page = result;
     joined += page.text;
   }
   const complete = await edit();

@@ -79,7 +79,7 @@ test("CLI read-many returns a bounded page in machine mode", async (t) => {
     { workspace, json: true },
   );
   assert.equal(continued.exitCode, 0, continued.stderr);
-  const continuation = JSON.parse(continued.stdout).node;
+  const continuation = JSON.parse(continued.stdout);
   assert.equal(continuation.range.start, first.items[0].range.end);
   assert.ok(/^A+$/.test(continuation.text));
   const second = await runNodeCommand("read-many", ["node-alpha", "node-bravo", "--start", "1"], {
@@ -114,7 +114,7 @@ test("CLI summaries and creation responses stay bounded for large documents", as
   });
   assert.equal(summary.exitCode, 0, summary.stderr);
   assert.ok(Buffer.byteLength(summary.stdout) <= 16 * 1024 + 1);
-  const metadata = JSON.parse(summary.stdout).node;
+  const metadata = JSON.parse(summary.stdout);
   assert.equal(metadata.descriptionTruncated, true);
   assert.equal(metadata.metadataRead.nodeId, "node-alpha");
   const created = await runNodeCommand(

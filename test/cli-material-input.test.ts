@@ -43,7 +43,10 @@ async function fixture(t: TestContext) {
   };
   const cli = async (sub: string, args: string[]) =>
     parse(await runNodeCommand(sub, args, globals));
-  const get = async (id: string) => (await cli("get", [id, "--full"])).node;
+  const get = async (id: string) => {
+    const read = await cli("get", [id, "--full", "--view", "raw"]);
+    return { ...parseFrontmatter(read.text).data, ...read };
+  };
   return { root, globals, parse, cli, get };
 }
 
@@ -190,7 +193,7 @@ test("structured writes convert new material paths and preserve descriptors read
   ]);
   assert.equal(batch.workspaceRoot, root);
   const child = await get(batch.results[0].nodeId);
-  assert.equal(child.path, "Batch Parent/Batch Child");
+  assert.equal(batch.results[0].path, ".tent/Batch Parent/Batch Child/Batch Child.md");
   assert.equal(child.resource, "../../../docs/proof.txt");
   assert.deepEqual(child.sources, [
     { resource: "../../../docs/req.md" },
@@ -241,17 +244,24 @@ test("Card CLI file sources use the Workspace root while Node sources retain the
     ),
   );
   const shown = parse(await runCardCommand("show", [card.cardId], globals));
-  assert.deepEqual(shown.sources.slice(0, 4), [
-    { resource: "../../docs/req.md" },
-    { resource: "../../docs/req.md" },
-    { resource: "../../docs/req.md" },
-    { resource: "../../docs/req.md", title: "Requirements", custom: true },
-  ]);
+  assert.deepEqual(
+    shown.sources
+      .slice(0, 4)
+      .map(({ path: _path, ...source }: { path?: string; [key: string]: unknown }) => source),
+    [
+      { resource: "../../docs/req.md" },
+      { resource: "../../docs/req.md" },
+      { resource: "../../docs/req.md" },
+      { resource: "../../docs/req.md", title: "Requirements", custom: true },
+    ],
+  );
   for (const source of shown.sources.slice(4)) {
     assert.equal(source.resource, "../Goal/Goal.md");
     assert.equal(source.version.path, "Goal/Goal.md");
     assert.match(source.version.commit, /^[a-f0-9]{40}$/);
   }
+  assert.equal(shown.sources[0].path, "docs/req.md");
+  assert.equal(shown.sources[4].path, ".tent/Goal/Goal.md");
   const retained = shown.sources[4].version;
   const selected = parse(
     await runCardCommand(
@@ -420,9 +430,7 @@ test("ordinary link-output confirmation preserves completion time and the home p
     assert.equal(after.nodes.find((node) => node.id === linked.nodeId)!.outputAt, at);
     assert.doesNotMatch(render(after), /Linked proof/);
   }
-  const saved = parseFrontmatter(
-    await fs.readFile(path.join(root, ".tent", linked.path, "Linked proof.md"), "utf8"),
-  ).data;
+  const saved = parseFrontmatter(await fs.readFile(path.join(root, linked.path), "utf8")).data;
   assert.equal(
     (saved.verified as unknown[]).length,
     1,

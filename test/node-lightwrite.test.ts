@@ -401,7 +401,7 @@ test("real CLI processes queue concurrent append and section stdin edit reports 
   const section = JSON.parse(selected.stdout);
   const changed = await runNodeCommand(
     "write-section",
-    ["node-note", "--heading", "Summary", "--base-etag", section.sectionEtag, "--body", "-"],
+    ["node-note", "--heading", "Summary", "--base-etag", section.etag, "--body", "-"],
     { workspace: root, json: true, stdin: "## New summary\nreplaced\n" },
   );
   assert.equal(changed.exitCode, 0, changed.stderr);
@@ -414,7 +414,7 @@ test("real CLI processes queue concurrent append and section stdin edit reports 
     "--heading",
     "New summary",
     "--base-etag",
-    section.sectionEtag,
+    section.etag,
     "--body",
     "overwrite",
     "--json",
