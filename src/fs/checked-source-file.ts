@@ -18,7 +18,12 @@ export async function checkedSourceFile(root: string, candidate: string, directo
       throw new Error("Symbolic links are not supported for source files");
   }
   const actual = await realpath(candidate);
-  if (!inside(actualRoot, actual) || path.relative(candidate, actual) !== "")
+  // Case-insensitive filesystems may retain an older spelling in Git's index.
+  // Every lexical component above must still be free of symlinks.
+  if (
+    !inside(actualRoot, actual) ||
+    (path.relative(candidate, actual) !== "" && candidate.toLowerCase() !== actual.toLowerCase())
+  )
     throw new Error("Source target escapes Workspace");
   const stat = await lstat(candidate);
   if (!(directory ? stat.isDirectory() : stat.isFile()))

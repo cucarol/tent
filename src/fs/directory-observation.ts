@@ -267,28 +267,29 @@ export async function observeSourceDirectory(
       .split(path.sep)
       .join("/");
   const cachedWorking = async (filename: string, oid?: string) => {
+    // A deleted indexed subtree has no live parent to validate.
+    const before = await lstat(filename).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (before?.isSymbolicLink())
+      throw new Error("Symbolic links are not supported for source files");
+    if (!before?.isFile()) return;
     const parent = path.dirname(filename);
     if (!checkedDirectories.has(parent))
       checkedDirectories.set(
         parent,
         checkedSourceFile(root, parent, true).then(async (info) => {
-          if (process.platform === "win32") {
-            const names = await readdir(parent);
-            physicalDirectories.set(parent, {
-              path: await realpath(parent),
-              names: new Set(names),
-              folded: new Map(names.map((name) => [name.toLowerCase(), name])),
-            });
-          }
+          const names = await readdir(parent);
+          physicalDirectories.set(parent, {
+            path: await realpath(parent),
+            names: new Set(names),
+            folded: new Map(names.map((name) => [name.toLowerCase(), name])),
+          });
           return info;
         }),
       );
     await checkedDirectories.get(parent);
-    const before = await lstat(filename).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
-    if (!before?.isFile()) return;
     const physical = physicalDirectories.get(parent),
       basename = path.basename(filename);
     if (physical)
