@@ -11,7 +11,7 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows.
 
 | When | Command | Read |
 | --- | --- | --- |
-| No pointer | `tent workspace brief` | `behind`, `ahead`, `cardInputs` |
+| No pointer | `tent workspace brief` | `behind`, `ahead`, `cardInputs`, then `roots` |
 | A `path` | Read the file with your own reader | text |
 | Only a Node id | `tent node get <id>` | `text`, `etag` |
 | A topic | `tent node search "<term>"` | `items[].nodeId`, `path` |

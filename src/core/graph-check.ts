@@ -234,14 +234,28 @@ export async function checkGraph(
     const document = byPath.get(normalized) ?? byPath.get(`${normalized}.md`);
     if (document) return document.valid ? undefined : "Target document is invalid";
     let filename: string | undefined;
+    let locator: ReturnType<typeof materialLocator>;
     try {
-      const locator = materialLocator(target, owner);
+      locator = materialLocator(target, owner);
       filename = localMaterialPath(locator, workspaceRoot);
     } catch (cause) {
       return message(cause);
     }
     try {
       if (filename !== undefined && (await exists(filename))) return;
+      if (
+        target.startsWith("/") &&
+        locator.kind === "path" &&
+        locator.anchor === "bundle" &&
+        (await exists(path.resolve(workspaceRoot, locator.target)))
+      ) {
+        const relative = path.posix.relative(
+          path.posix.join(".tent", path.posix.dirname(owner)),
+          locator.target,
+        );
+        const address = relative.split("/").map(encodeURIComponent).join("/") + locator.suffix;
+        return `Local link target does not exist as a file; leading / resolves from .tent; write ${JSON.stringify(address)} relative to this document`;
+      }
       return "Local link target does not exist as a file";
     } catch (cause) {
       error(owner, `Cannot inspect ${JSON.stringify(target)}: ${message(cause)}`);

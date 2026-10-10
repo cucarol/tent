@@ -1,5 +1,5 @@
 import type { InvalidNativeNode } from "./node-native-capture.js";
-import type { NodeCatalog } from "./node-catalog.js";
+import { loadNodeCatalog, type NodeCatalog } from "./node-catalog.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FsAdapter } from "./adapter.js";
@@ -121,26 +121,42 @@ export async function inspectCurrentContext(
     nodes?: Promise<{ invalidNodes: InvalidNativeNode[]; catalog?: NodeCatalog }>;
   } = {},
 ) {
-  const syncPromise = Promise.resolve(options.nodes).then((nodes) =>
-    inspectWorkspaceSync(fs, undefined, nodes?.invalidNodes, nodes?.catalog),
+  const nativeNodes = Promise.resolve(options.nodes);
+  const catalog = nativeNodes.then((nodes) => nodes?.catalog ?? loadNodeCatalog(fs));
+  const syncPromise = Promise.all([nativeNodes, catalog]).then(([nodes, currentCatalog]) =>
+    inspectWorkspaceSync(fs, undefined, nodes?.invalidNodes, currentCatalog),
   );
-  const catalog = options.nodes?.then((nodes) => nodes.catalog);
   const inspections = syncPromise.then((sync) => sync.nodes);
   // Card queries can finish without consuming these shared results. The main
   // syncPromise below remains responsible for reporting capture/sync failures.
-  void catalog?.catch(() => undefined);
+  void catalog.catch(() => undefined);
   void inspections.catch(() => undefined);
   const cardOptions = options.roleId ? { roleId: options.roleId, includeOpen: true } : {};
   const headersPromise = listCardDocumentHeaders(fs, cardOptions);
   const cardsPromise = headersPromise.then((headers) =>
     listCardDocuments(fs, cardOptions, inspections, catalog, headers),
   );
-  const [sync, observations, cards, sourceChanges] = await Promise.all([
+  const [sync, observations, cards, sourceChanges, currentCatalog] = await Promise.all([
     syncPromise,
     readSessionObservations(fs),
     cardsPromise,
     headersPromise.then((cards) => inspectReceivedCardSourceChanges(fs, options, cards, catalog)),
+    catalog,
   ]);
+  const currentIds = new Set(sync.nodes.map((node) => node.nodeId));
+  const roots = currentCatalog.rootNodeIds.flatMap((nodeId) => {
+    const node = currentCatalog.byId.get(nodeId);
+    return node && currentIds.has(nodeId)
+      ? [
+          {
+            nodeId,
+            name: node.name,
+            type: node.type ?? null,
+            path: `.tent/${nodeNotePath(node.path)}`,
+          },
+        ]
+      : [];
+  });
   const unlinkedOutputs = findUnlinkedOutputs(sync, observations.events, workspaceRoot);
   const aheadIds = new Set(sync.nodes.filter((node) => node.ahead).map((node) => node.nodeId));
   const changedCardSources = {
@@ -153,6 +169,7 @@ export async function inspectCurrentContext(
     cards,
     changedCardSources,
     unlinkedOutputs,
+    roots,
   };
 }
 
@@ -203,6 +220,7 @@ export type ContextBrief = {
   unlinkedOutputs: BriefItem[];
   cardInputs: BriefItem[];
   changedCardSources: BriefItem[];
+  roots: CurrentContext["roots"];
   omitted: Record<string, number>;
   observationUncertain?: true;
   synchronizationUncertain?: true;
@@ -320,8 +338,9 @@ export function makeContextBrief(
     changedCardSources: [],
     unlinkedOutputs: [],
     behind: [],
+    roots: [],
     baselineOnlyBehind: context.sync.nodes.filter(baselineOnly).length,
-    omitted: {},
+    omitted: { roots: 0 },
     ...(context.observations.uncertain ? { observationUncertain: true } : {}),
     ...(context.changedCardSources.diagnostics.length ? { cardSourcesUncertain: true } : {}),
     ...(context.sync.nodes.some((node) => node.uncertain)
@@ -361,6 +380,9 @@ export function makeContextBrief(
   };
   for (const key of keys) append(key);
   for (const key of keys) while (indices[key] < candidates[key].length) append(key);
+  // Root navigation is appended after actionable detail has received its budget.
+  brief.roots = context.roots.slice(0, 12);
+  brief.omitted.roots = Math.max(0, context.roots.length - brief.roots.length);
   return brief;
 }
 
@@ -404,7 +426,9 @@ export function formatContextBrief(brief: ContextBrief): string {
     lines.push(
       `${brief.baselineOnlyBehind} behind Nodes have no retained baseline; inspect with tent workspace drift --json.`,
     );
-  const omitted = Object.values(brief.omitted).reduce((sum, n) => sum + n, 0);
+  const omitted = Object.entries(brief.omitted)
+    .filter(([key]) => key !== "roots")
+    .reduce((sum, [, n]) => sum + n, 0);
   if (omitted)
     lines.push(
       `${omitted} items omitted; use node check, workspace drift or the referenced address.`,
@@ -421,5 +445,11 @@ export function formatContextBrief(brief: ContextBrief): string {
     );
   if (brief.roleId)
     lines.push(`Card filter: ${brief.roleId}; synchronization counts cover the whole Workspace.`);
+  if (brief.roots.length) {
+    lines.push("Root Nodes:");
+    for (const node of brief.roots)
+      lines.push(`- ${node.name} [${node.type ?? "untyped"}] ${node.path}`);
+  }
+  if (brief.omitted.roots) lines.push(`+${brief.omitted.roots} more · tent node list`);
   return lines.join("\n");
 }

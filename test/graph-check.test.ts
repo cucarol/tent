@@ -81,6 +81,43 @@ test("bare descriptive sources matching existing files warn with document-relati
   assert.deepEqual(await bytes(root), before);
 });
 
+test("leading slash body links suggest existing Workspace files without changing their anchor", async (t) => {
+  const { root, workspace, adapter, write, fileExists } = await fixture(t);
+  await fs.writeFile(path.join(workspace, "README.md"), "Read me");
+  await fs.mkdir(path.join(workspace, "docs"));
+  await fs.writeFile(path.join(workspace, "docs/guide name.md"), "# Start");
+  await fs.writeFile(path.join(workspace, "existing.md"), "Workspace copy");
+  await adapter.writeFile("existing.md", "Tent copy");
+  await write("Map/Map.md", { id: "node-map" });
+  await write(
+    "Map/Core/Core.md",
+    { id: "node-core" },
+    [
+      "[readme](/README.md)",
+      "[guide](/docs/guide%20name.md?view=plain#Start)",
+      "[missing](/missing.md)",
+      "[existing](/existing.md)",
+      "[external](//example.invalid/README.md)",
+      "[relative](../../../README.md)",
+    ].join("\n"),
+  );
+  const before = await bytes(root);
+  const result = await checkGraph(adapter, workspace, fileExists);
+  assert.deepEqual(result.errors, []);
+  const links = result.issues.filter((issue) => issue.kind === "unresolved-link");
+  assert.equal(links.length, 3);
+  assert.match(
+    links[0].reason,
+    /leading \/ resolves from \.tent; write "\.\.\/\.\.\/\.\.\/README.md"/,
+  );
+  assert.match(
+    links[1].reason,
+    /write "\.\.\/\.\.\/\.\.\/docs\/guide%20name.md\?view=plain#Start"/,
+  );
+  assert.equal(links[2].reason, "Local link target does not exist as a file");
+  assert.deepEqual(await bytes(root), before);
+});
+
 test("whole graph inspection reports the three categories across Nodes, Roles and Cards", async (t) => {
   const { root, workspace, adapter, write, fileExists } = await fixture(t);
   await fs.writeFile(path.join(workspace, "source file.txt"), "material");

@@ -20,6 +20,7 @@ import {
   type CurrentContext,
 } from "../src/core/context-brief.js";
 import type { FsAdapter } from "../src/core/adapter.js";
+import { loadNodeCatalog } from "../src/core/node-catalog.js";
 
 test("brief reports native capture failure without unhandled unused Card query promises", async () => {
   const adapter = {
@@ -47,6 +48,12 @@ test("brief never hides invalid files or pending Cards and folds only missing-ba
     reason: "Invalid frontmatter",
   }));
   const context: CurrentContext = {
+    roots: Array.from({ length: 13 }, (_, i) => ({
+      nodeId: `node-root${i}`,
+      name: `Root ${i}`,
+      type: "prompt",
+      path: `.tent/Root ${i}/Root ${i}.md`,
+    })),
     sync: {
       invalidNodes,
       nodes: [
@@ -77,6 +84,12 @@ test("brief never hides invalid files or pending Cards and folds only missing-ba
     unlinkedOutputs: [],
   };
   const brief = makeContextBrief(context);
+  const withoutRoots = makeContextBrief({ ...context, roots: [] });
+  assert.deepEqual(brief.cardInputs, withoutRoots.cardInputs);
+  assert.deepEqual(brief.ahead, withoutRoots.ahead);
+  assert.deepEqual(brief.behind, withoutRoots.behind);
+  assert.equal(brief.roots.length, 12);
+  assert.equal(brief.omitted.roots, 1);
   assert.deepEqual(Object.keys(brief).slice(0, 5), [
     "counts",
     "invalidNodes",
@@ -90,6 +103,8 @@ test("brief never hides invalid files or pending Cards and folds only missing-ba
   assert.equal(brief.baselineOnlyBehind, 1);
   assert.deepEqual(brief.behind, []);
   const text = formatContextBrief(brief);
+  assert.ok(text.indexOf("Root Nodes:") > text.indexOf("Input Cards"));
+  assert.match(text, /\+1 more · tent node list$/);
   assert.ok(
     Buffer.byteLength(text) > 4096,
     "mandatory actionable information may exceed the optional detail budget",
@@ -123,6 +138,59 @@ async function fixture(t: TestContext) {
   };
   return { root, options, node, workspace };
 }
+
+test("brief exposes live root entry files without drift or another catalog scan", async (t) => {
+  const f = await fixture(t);
+  const created = await f.node("write-many", ["--input-json", "-"], {
+    items: [
+      { op: "create", ref: "map", name: "Map", type: "prompt", body: "Module map" },
+      {
+        op: "create",
+        ref: "core",
+        parent: "@map",
+        name: "Core",
+        type: "prompt",
+        body: "Core module",
+      },
+      { op: "create", ref: "other", name: "Other", type: "prompt", body: "Other entry" },
+      { op: "create", ref: "archived", name: "Archived", type: "prompt", body: "Old entry" },
+    ],
+  });
+  await f.node("archive", [created.results[3].nodeId]);
+  const adapter = new NodeFs(path.join(f.root, ".tent"));
+  const catalog = await loadNodeCatalog(adapter);
+  const observed = new Proxy(adapter, {
+    get(target, key) {
+      if (key === "readFrontmatter")
+        return () => {
+          throw new Error("Root navigation must reuse the current catalog");
+        };
+      const value: unknown = Reflect.get(target, key);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const context = await inspectCurrentContext(observed, f.root, {
+    nodes: Promise.resolve({ catalog, invalidNodes: [] }),
+  });
+  const brief = makeContextBrief(context);
+  assert.deepEqual(brief.counts, { ahead: 0, behind: 0 });
+  assert.deepEqual(
+    brief.roots,
+    [0, 2].map((index) => ({
+      nodeId: created.results[index].nodeId,
+      name: index === 0 ? "Map" : "Other",
+      type: "prompt",
+      path: created.results[index].path,
+    })),
+  );
+  for (const root of brief.roots) assert.ok((await fs.stat(path.join(f.root, root.path))).isFile());
+  const cli = await f.workspace("brief");
+  assert.deepEqual(cli.value.roots, brief.roots);
+  const text = await runWorkspaceCommand("brief", [], { workspace: f.root });
+  assert.equal(text.exitCode, 0, text.stderr);
+  assert.match(text.stdout, /Map \[prompt\] \.tent\/Map\/Map.md/);
+  assert.doesNotMatch(text.stdout, /Archived|Core\/Core.md/);
+});
 
 test("without Hooks the complete requirement, output, drift, review and unanchored-decision scenario works", async (t) => {
   const f = await fixture(t);
@@ -246,10 +314,15 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   assert.equal("unanchored" in brief.value.counts, false);
   assert.equal("synced" in brief.value.counts, false);
   assert.equal(
-    Object.values(brief.value)
+    Object.entries(brief.value)
+      .filter(([key]) => key !== "roots")
+      .map(([, value]) => value)
       .flat()
       .some((item: any) => item?.nodeId === decision.node.nodeId),
     false,
+  );
+  assert.ok(
+    brief.value.roots.some((item: { nodeId: string }) => item.nodeId === decision.node.nodeId),
   );
 });
 
@@ -392,6 +465,7 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
     reasons: ["材料变化".repeat(100)],
   }));
   const context: CurrentContext = {
+    roots: [],
     sync: {
       invalidNodes: [],
       nodes,
@@ -543,6 +617,7 @@ test("brief counts historical unrecorded files but only lists three recent sessi
     uncertain: false,
   }));
   const context: CurrentContext = {
+    roots: [],
     sync: {
       invalidNodes: [],
       nodes: [],
@@ -581,6 +656,7 @@ test("brief's inclusive seven-day window follows the latest observed write, not 
     { address: "latest-read.md", kind: "read" as const, at: observedAt },
   ];
   const context: CurrentContext = {
+    roots: [],
     sync: {
       invalidNodes: [],
       nodes: [],
@@ -652,6 +728,7 @@ test("brief's inclusive seven-day window follows the latest observed write, not 
 
 test("brief and drift both show a dual-status goal and leave neutral recorded output quiet", () => {
   const context: CurrentContext = {
+    roots: [],
     sync: {
       invalidNodes: [],
       nodes: [
@@ -715,6 +792,7 @@ test("brief and drift both show a dual-status goal and leave neutral recorded ou
 
 test("uncertain Node associations never become a definite unlinked file claim", () => {
   const context: CurrentContext = {
+    roots: [],
     sync: {
       invalidNodes: [],
       nodes: [
