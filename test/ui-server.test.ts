@@ -932,3 +932,47 @@ test("the page renames, archives, restores and deletes Nodes, archives Roles and
   assert.equal(withdrawn.status, 200, withdrawn.body);
   assert.equal((await snapshot()).cards.find((c) => c.id === card.cardId)?.status, "deprecated");
 });
+
+test("the page deletes a Role only once no pending Card waits for it", async (t) => {
+  const { tent, call } = await fixture(t);
+  const snapshot = async () => json<Snapshot>(await call("GET", "/api/snapshot?fresh=1"));
+  await createRoleContext(tent, { roleId: "role-review", title: "Review", body: "Review" });
+  const etag = json<{ etag: string }>(await call("GET", "/api/roles/role-review")).etag;
+  const make = async (prompt: string) =>
+    json<{ cardId: string; etag: string }>(
+      await call("POST", "/api/cards", { json: { prompt, target: "role-review" } }),
+    );
+  const done = await make("Already received");
+  await takeCardDocument(tent, done.cardId, "role-review");
+  const waiting = [await make("Still waiting"), await make("Also waiting")];
+
+  // Every pending Card is named so the page can list them.
+  const blocked = await call("DELETE", "/api/roles/role-review", { json: { baseEtag: etag } });
+  assert.equal(blocked.status, 409, blocked.body);
+  const error = json<{ error: { code: string; details: { cardIds: string[] } } }>(blocked).error;
+  assert.equal(error.code, "PENDING_CARDS");
+  assert.deepEqual(error.details.cardIds, waiting.map((c) => c.cardId).sort());
+
+  // One moves to the public area, the other is withdrawn; then the Role can go.
+  const moved = await call("POST", `/api/cards/${waiting[0]!.cardId}/move`, {
+    json: { baseEtag: waiting[0]!.etag, target: null },
+  });
+  assert.equal(moved.status, 200, moved.body);
+  const withdrawn = await call("POST", `/api/cards/${waiting[1]!.cardId}/deprecate`, {
+    json: { baseEtag: waiting[1]!.etag },
+  });
+  assert.equal(withdrawn.status, 200, withdrawn.body);
+  const missing = await call("DELETE", "/api/roles/role-review", { json: {} });
+  assert.equal(missing.status, 422, missing.body);
+  const deleted = await call("DELETE", "/api/roles/role-review", { json: { baseEtag: etag } });
+  assert.equal(deleted.status, 200, deleted.body);
+
+  const after = await snapshot();
+  assert.equal(after.roles.length, 0);
+  // What it received stays a fact of the Card.
+  assert.equal(after.cards.find((c) => c.id === done.cardId)?.receivedBy, "role-review");
+  assert.equal(
+    (await call("DELETE", "/api/roles/role-review", { json: { baseEtag: etag } })).status,
+    404,
+  );
+});

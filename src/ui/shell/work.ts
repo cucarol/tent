@@ -101,8 +101,11 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     },
     [graph, laneOf, openDraft],
   );
+  // A Role deleted since keeps its id on the Cards it received, marked as gone.
   const laneName = (lane: string) =>
-    lane === PUBLIC ? t.work.public : (graph?.roles.get(lane)?.title ?? lane);
+    lane === PUBLIC
+      ? t.work.public
+      : (graph?.roles.get(lane)?.title ?? (graph ? t.work.goneRole(lane) : lane));
   const resourceOf = (nodeId: string) => `/${graph!.nodes.get(nodeId)!.notePath}`;
 
   const newCard = async (target: string | null, nodeIds: string[] = []) => {

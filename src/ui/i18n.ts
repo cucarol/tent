@@ -278,6 +278,7 @@ const zh = {
   work: {
     title: "分工",
     public: "公共区",
+    goneRole: (id: string) => `${id}（已删除）`,
     newTip: "写一张 Card，先放在公共区",
     untitled: "还没写要做什么",
     draft: "草稿",
@@ -489,6 +490,17 @@ const zh = {
     deleteArchiveHint: "只是不想再看到它？归档可以随时恢复。",
     deleted: (name: string) => `已删除「${name}」`,
     roleArchiveNote: "归档后它不再出现在现在页和分工里，已有的 Card 不变。",
+    roleDeleteTitle: (name: string) => `删除 Role「${name}」？`,
+    archiveInstead: "改为归档",
+    roleWaiting: (n: number) => `还有 ${n} 张 Card 等它接收。先转给别人或撤销，才能删除。`,
+    moveTo: "转给…",
+    withdrawShort: "撤销",
+    withdrawSure: "确认撤销",
+    roleDeleteFinal: "删除后不能在页面上恢复。",
+    roleDeleteReceived: (n: number) => `它接收过的 ${n} 张 Card 和接收记录保持不变。`,
+    roleDeleteLinks: (n: number) => `别处有 ${n} 处链接指向它，删除后会失效，不会自动改写。`,
+    roleDeleteKeeps: "Tent 的版本历史里仍能读到它；它的 id 以后不会再用。",
+    roleArchiveHint: "以后可能还用得上？归档可以随时恢复。",
     withdraw: "撤销 Card",
     withdrawTitle: "撤销这张 Card？",
     withdrawNote: "撤销后它不再算作待办，也不计入进度；正文、来源和接收记录都保留。",
@@ -768,6 +780,7 @@ const en: Messages = {
   work: {
     title: "Assignments",
     public: "Public",
+    goneRole: (id) => `${id} (deleted)`,
     newTip: "Write a Card; it starts in the public area",
     untitled: "Nothing written yet",
     draft: "Draft",
@@ -992,6 +1005,21 @@ const en: Messages = {
     deleteArchiveHint: "Only want it out of sight? Archiving can be undone.",
     deleted: (name) => `Deleted “${name}”`,
     roleArchiveNote: "Archived Roles leave Now and the Roles list; their Cards stay as they are.",
+    roleDeleteTitle: (name) => `Delete the Role “${name}”?`,
+    archiveInstead: "Archive instead",
+    roleWaiting: (n) =>
+      n === 1
+        ? "1 Card still waits for it. Hand it to someone else or withdraw it first."
+        : `${n} Cards still wait for it. Hand them to someone else or withdraw them first.`,
+    moveTo: "Hand to…",
+    withdrawShort: "Withdraw",
+    withdrawSure: "Confirm",
+    roleDeleteFinal: "This can't be undone from the page.",
+    roleDeleteReceived: (n) => `The ${count(n, "Card")} it received keep their records.`,
+    roleDeleteLinks: (n) =>
+      `${count(n, "link")} from elsewhere ${n === 1 ? "points" : "point"} to it and will break; they are not rewritten.`,
+    roleDeleteKeeps: "Tent's history still has it, and its id is never reused.",
+    roleArchiveHint: "Might need it later? Archiving can be undone anytime.",
     withdraw: "Withdraw Card",
     withdrawTitle: "Withdraw this Card?",
     withdrawNote:

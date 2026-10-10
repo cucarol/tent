@@ -23,6 +23,7 @@ import { confirmNodeSync } from "../core/node-sync.js";
 import { archiveNode, restoreNode } from "../core/node-lifecycle.js";
 import { deleteNode, renameNode } from "../core/ops.js";
 import { editRoleContext } from "../core/role-context.js";
+import { deleteRole, RoleDeleteError } from "../core/role-delete.js";
 import { readRoleDocument } from "../core/role-document.js";
 import { readNodeForEdit } from "../core/node-query.js";
 import { TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/paths.js";
@@ -301,6 +302,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
           etag: doc.etag,
           body: doc.body,
         });
+      }
+      // Deleting needs the ETag the page read; pending Cards for the Role refuse it with their ids.
+      if (method === "DELETE" && !roleRoute[2]) {
+        const input = record(await readJson(req, BODY_LIMIT.document));
+        const baseEtag = requiredString(input.baseEtag, "baseEtag");
+        return json(res, 200, await serial(() => managed(deleteRole(fs, id, { baseEtag }))));
       }
       // Archiving a Role is its lifecycle status; restoring removes the field (omitted means stable).
       if (method === "POST" && roleRoute[2]) {
@@ -597,6 +604,8 @@ async function managed<T>(work: Promise<T>): Promise<T> {
     return await work;
   } catch (error) {
     if (error instanceof HttpError) throw error;
+    if (error instanceof RoleDeleteError)
+      throw new HttpError(409, error.code, error.message, error.details);
     const message = error instanceof Error ? error.message : String(error);
     if (/already running another write operation/.test(message)) throw error;
     if (/not found/i.test(message)) throw new HttpError(404, "NOT_FOUND", message);

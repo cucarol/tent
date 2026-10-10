@@ -997,3 +997,16 @@ button.now-pet:hover { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--border
 .ask-field input { height: 34px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: inherit; font-size: 14px; outline: none; }
 .ask-field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+/* Role delete: the Cards still waiting for it, each with its way out. */
+.ask-actions .ask-aside { margin-right: auto; }
+/* A dialog never runs past the window: only the waiting list gives up height, and scrolls. */
+.ask { max-height: calc(100% - 18vh - 16px); }
+.ask > * { flex-shrink: 0; }
+.ask > .ask-wait { flex-shrink: 1; min-height: 112px; }
+.ask-wait { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--bg-subtle); border: 1px solid var(--border); }
+.ask-wait-head { flex-shrink: 0; margin: 0; font-size: 13px; line-height: 1.5; color: var(--text); font-weight: 500; }
+.ask-wait ul { display: flex; flex-direction: column; gap: 6px; min-height: 0; margin: -3px; padding: 3px; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
+.ask-wait-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ask-wait-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-2); }
+.ask-pick { height: 28px; max-width: 132px; padding: 0 6px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 12.5px; }
+.ask-pick:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }

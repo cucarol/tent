@@ -3,6 +3,7 @@ import { api, describe } from "../data/api.js";
 import type { Graph } from "../data/store.js";
 import type { SnapshotCard, SnapshotNode, SnapshotRole } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
+import { PUBLIC, type Work } from "../shell/work.js";
 import { Icon } from "../components/Glyph.js";
 import { t } from "../i18n.js";
 
@@ -75,6 +76,7 @@ function Ask({
   danger,
   busy,
   disabled,
+  instead,
   onConfirm,
   onCancel,
 }: {
@@ -84,14 +86,19 @@ function Ask({
   danger?: boolean;
   busy: boolean;
   disabled?: boolean;
+  /** The answer we recommend over the asked one; it takes the default focus. */
+  instead?: { label: string; run: () => void };
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  // A destructive answer is never the default: Enter on the opened dialog cancels it.
+  // A destructive answer is never the default: Enter on the opened dialog cancels it, or takes the
+  // recommended alternative when there is one.
   const go = useRef<HTMLButtonElement>(null);
   const back = useRef<HTMLButtonElement>(null);
+  const alt = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (!document.querySelector(".ask input")) (danger ? back : go).current?.focus();
+    if (!document.querySelector(".ask input"))
+      (instead ? alt : danger ? back : go).current?.focus();
     const key = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.stopPropagation();
@@ -119,17 +126,40 @@ function Ask({
         <h2 className="ask-title">{title}</h2>
         {children}
         <div className="ask-actions">
+          {/* With a recommended answer, the asked one steps aside to the left. */}
+          {instead && (
+            <button
+              ref={go}
+              type="submit"
+              className={`btn ${danger ? "danger" : "primary"} ask-aside`}
+              disabled={busy || disabled}
+            >
+              {confirm}
+            </button>
+          )}
           <button ref={back} type="button" className="btn plain" onClick={onCancel} disabled={busy}>
             {t.app.cancel}
           </button>
-          <button
-            ref={go}
-            type="submit"
-            className={`btn ${danger ? "danger" : "primary"}`}
-            disabled={busy || disabled}
-          >
-            {busy ? t.manage.working : confirm}
-          </button>
+          {instead ? (
+            <button
+              ref={alt}
+              type="button"
+              className="btn primary"
+              onClick={instead.run}
+              disabled={busy}
+            >
+              {busy ? t.manage.working : instead.label}
+            </button>
+          ) : (
+            <button
+              ref={go}
+              type="submit"
+              className={`btn ${danger ? "danger" : "primary"}`}
+              disabled={busy || disabled}
+            >
+              {busy ? t.manage.working : confirm}
+            </button>
+          )}
         </div>
       </form>
     </div>
@@ -292,28 +322,158 @@ export function NodeMenu({
   );
 }
 
-export function RoleMenu({ role, onToast }: Common & { role: SnapshotRole }) {
+/**
+ * Pending Cards still addressed to this Role: Core refuses to delete it until each moves elsewhere or
+ * is withdrawn. A Card moving right now already counts in its new lane.
+ */
+export function waitingFor(work: Pick<Work, "laneCards">, role: SnapshotRole): SnapshotCard[] {
+  return work.laneCards(role.id).filter((c) => !isDraft(c));
+}
+
+export function RoleMenu({
+  graph,
+  work,
+  role,
+  onGone,
+  onToast,
+}: Common & { graph: Graph; work: Work; role: SnapshotRole; onGone: () => void }) {
   const [busy, run] = useRun(onToast);
+  // The ETag read when the dialog opened: deleting removes the version the user looked at.
+  const [asking, setAsking] = useState<{ etag: string } | null>(null);
   const archived = role.status === "deprecated";
   const flip = () =>
-    void run(
+    run(
       async () => api.setRoleArchived(role.id, (await api.role(role.id)).etag, !archived),
       archived ? t.manage.restored(role.title) : t.manage.archived(role.title),
     );
+  const ask = async () => {
+    try {
+      setAsking({ etag: (await api.role(role.id)).etag });
+    } catch (error) {
+      onToast(describe(error));
+    }
+  };
+  const waiting = waitingFor(work, role);
+  const received = graph.snapshot.cards.filter((c) => c.receivedBy === role.id).length;
+  const links = role.incoming.filter((i) => i.from.kind !== "card").length;
   return (
-    <MoreMenu
-      items={
-        busy
-          ? []
-          : [
-              {
-                label: archived ? t.manage.restore : t.manage.archive,
-                note: archived ? undefined : t.manage.roleArchiveNote,
-                run: flip,
-              },
-            ]
-      }
-    />
+    <>
+      <MoreMenu
+        items={
+          busy
+            ? []
+            : [
+                {
+                  label: archived ? t.manage.restore : t.manage.archive,
+                  note: archived ? undefined : t.manage.roleArchiveNote,
+                  run: () => void flip(),
+                },
+                { label: t.manage.delete, danger: true, run: () => void ask() },
+              ]
+        }
+      />
+      {asking && (
+        <Ask
+          title={t.manage.roleDeleteTitle(role.title)}
+          confirm={t.manage.delete}
+          danger
+          busy={busy}
+          disabled={waiting.length > 0}
+          instead={
+            archived
+              ? undefined
+              : {
+                  label: t.manage.archiveInstead,
+                  run: async () => {
+                    if (await flip()) setAsking(null);
+                  },
+                }
+          }
+          onCancel={() => setAsking(null)}
+          onConfirm={async () => {
+            const gone = await run(
+              () => api.deleteRole(role.id, asking.etag),
+              t.manage.deleted(role.title),
+            );
+            if (gone) {
+              setAsking(null);
+              onGone();
+            }
+          }}
+        >
+          {waiting.length > 0 && (
+            <div className="ask-wait">
+              <p className="ask-wait-head">{t.manage.roleWaiting(waiting.length)}</p>
+              <ul>
+                {waiting.map((card) => (
+                  <Waiting key={card.id} card={card} role={role} work={work} onToast={onToast} />
+                ))}
+              </ul>
+            </div>
+          )}
+          <ul className="ask-list">
+            <li className="is-strong">{t.manage.roleDeleteFinal}</li>
+            {received > 0 && <li>{t.manage.roleDeleteReceived(received)}</li>}
+            {links > 0 && <li>{t.manage.roleDeleteLinks(links)}</li>}
+            <li>{t.manage.roleDeleteKeeps}</li>
+          </ul>
+          {!archived && <p className="ask-note">{t.manage.roleArchiveHint}</p>}
+        </Ask>
+      )}
+    </>
+  );
+}
+
+/** The public lane is "", which a select cannot tell from its placeholder. */
+const PUBLIC_KEY = "@public";
+
+/** One Card holding up the delete: hand it to another lane or withdraw it, right here. */
+function Waiting({
+  card,
+  role,
+  work,
+  onToast,
+}: Common & { card: SnapshotCard; role: SnapshotRole; work: Work }) {
+  const [busy, run] = useRun(onToast);
+  const [sure, setSure] = useState(false);
+  const lanes = work.lanes.filter((lane) => lane !== role.id);
+  return (
+    <li className="ask-wait-row">
+      <span className="ask-wait-title">{work.title(card)}</span>
+      <select
+        className="ask-pick"
+        aria-label={t.manage.moveTo}
+        value=""
+        disabled={busy || work.publishing === card.id}
+        onChange={(e) =>
+          void work.move(card.id, e.target.value === PUBLIC_KEY ? PUBLIC : e.target.value)
+        }
+      >
+        <option value="" disabled>
+          {t.manage.moveTo}
+        </option>
+        {lanes.map((lane) => (
+          <option key={lane || PUBLIC_KEY} value={lane || PUBLIC_KEY}>
+            {work.laneName(lane)}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className={`btn ${sure ? "danger" : "plain"}`}
+        disabled={busy}
+        onClick={() => {
+          if (!sure) return setSure(true);
+          void run(
+            async () => api.deprecateCard(card.id, (await api.card(card.id)).etag),
+            t.manage.withdrawn,
+          );
+        }}
+        onBlur={() => setSure(false)}
+      >
+        {sure ? t.manage.withdrawSure : t.manage.withdrawShort}
+      </button>
+    </li>
   );
 }
 

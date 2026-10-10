@@ -199,6 +199,9 @@ export const api = {
     wrote(
       call(`/api/roles/${encodeURIComponent(id)}/status`, send("POST", { baseEtag, archived })),
     ),
+  /** Removes the Role document for good; pending Cards targeted to it refuse with PENDING_CARDS. */
+  deleteRole: (id: string, baseEtag: string) =>
+    wrote(call(`/api/roles/${encodeURIComponent(id)}`, send("DELETE", { baseEtag }))),
   /** Withdraws a published Card through its lifecycle status; input and reception stay. */
   deprecateCard: (id: string, baseEtag: string) =>
     wrote(call(`/api/cards/${encodeURIComponent(id)}/deprecate`, send("POST", { baseEtag }))),

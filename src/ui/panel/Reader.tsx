@@ -896,7 +896,13 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
                 {narrow ? t.side.newCard : t.page.writeFor(role.title)}
               </button>
             )}
-            <RoleMenu role={role} onToast={onToast} />
+            <RoleMenu
+              graph={graph}
+              work={work}
+              role={role}
+              onGone={props.onClose}
+              onToast={onToast}
+            />
           </>
         }
       />
