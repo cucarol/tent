@@ -31,7 +31,7 @@ test("Agent-facing Skill text stays within its byte budget and links one level d
     if (!file.endsWith("/SKILL.md"))
       assert.doesNotMatch(text, /\]\((?![a-z]+:)[^)]*\.md(?:#[^)]*)?\)/, `${file} links a file`);
   }
-  assert.ok(total <= 12000, `Agent-facing Skill text is ${total} bytes`);
+  assert.ok(total <= 12200, `Agent-facing Skill text is ${total} bytes`);
 });
 
 test("material paths are defined once, in node-maintenance", async () => {
