@@ -8,6 +8,7 @@ import {
 } from "../core/workspace-scan.js";
 import { selectSection } from "../core/markdown-section.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
+import { readRepositorySources } from "./repository-sources.js";
 
 async function git(root: string, args: string[]): Promise<string> {
   const env = Object.fromEntries(
@@ -110,6 +111,7 @@ export async function readWorkspaceScanRepository(
   return {
     head,
     trackedFiles,
+    sources: await readRepositorySources(workspaceRoot, trackedFiles),
     markdownFiles: [...new Set([...trackedFiles, ...list(others)])].filter(
       (file) =>
         /\.(md|markdown)$/i.test(file) &&

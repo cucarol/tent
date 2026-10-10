@@ -10,6 +10,8 @@ import {
 } from "./material.js";
 import { extractOutLinksDetailed } from "../markdown/links.js";
 import { markdownMaterialHeading } from "./material-section.js";
+import { repositoryFacts } from "./repository-facts.js";
+import type { RepositorySource } from "./repository-imports.js";
 
 export const WORKSPACE_SCAN_COMMIT_LIMIT = 300;
 export const COCHANGE_BULK_FILE_LIMIT = 25;
@@ -21,6 +23,7 @@ export type WorkspaceScanRepository = {
   trackedFiles: string[];
   markdownFiles: string[];
   commits: ScanCommit[];
+  sources: { files: RepositorySource[]; errors: Array<{ file: string; reason: string }> };
 };
 export type ScanFileKind = (
   filename: string,
@@ -118,7 +121,8 @@ export async function scanWorkspace(
   const markdownFiles = ordered(repository.markdownFiles);
   const covered = new Set<string>();
   const pointed = new Set<string>();
-  const inspectionErrors: Array<{ node: string; resource?: string; reason: string }> = [];
+  const inspectionErrors: Array<{ node: string; resource?: string; reason: string }> =
+    repository.sources.errors.map((error) => ({ node: error.file, reason: error.reason }));
   const kinds = new Map<string, Promise<"file" | "directory" | undefined>>();
   async function target(resource: string, owner: string, source = false) {
     const locator = materialLocator(resource, owner, source);
@@ -239,12 +243,13 @@ export async function scanWorkspace(
       file.includes("/") ? file.split("/")[0]! : ".",
     ),
     inspectionErrors,
+    ...repositoryFacts(repository.sources.files),
   };
 }
 
 export type WorkspaceScanResult = Awaited<ReturnType<typeof scanWorkspace>>;
 
-/** Blank lines separate the four segments; every nonblank line is an item. */
+/** A bounded overview; complete facts and file lists are available in JSON. */
 export function formatWorkspaceScan(result: WorkspaceScanResult): string {
   const shown = (file: string) =>
     /[\r\n\t\u2028\u2029]/.test(file)
@@ -252,28 +257,68 @@ export function formatWorkspaceScan(result: WorkspaceScanResult): string {
           .replace(/\u2028/g, "\\u2028")
           .replace(/\u2029/g, "\\u2029")
       : file;
-  return [
-    result.coverage.directories
-      .slice(0, 15)
-      .map((item) => `uncovered ${item.count} ${shown(item.directory)}`)
-      .join("\n"),
-    [
-      ...result.cochange.groups
-        .slice(0, 10)
-        .map((group) => `cochange ${group.count} ${group.files.map(shown).join(" + ")}`),
-      ...result.cochange.hubs.map((hub) => `hub ${hub.count} ${shown(hub.file)}`),
-    ].join("\n"),
-    result.hotspots
-      .slice(0, 10)
-      .map((item) => `hotspot ${item.count} ${shown(item.directory)}`)
-      .join("\n"),
-    [
-      `unpointed-total ${result.unpointedDocuments.length}`,
-      ...result.unpointedDirectories.map(
-        (item) => `unpointed-directory ${item.count} ${shown(item.directory)}`,
-      ),
-      ...result.unpointedDocuments.slice(0, 20).map((file) => `unpointed ${shown(file)}`),
-      "unpointed-all tent workspace scan --json",
-    ].join("\n"),
-  ].join("\n\n");
+  const sample = (items: string[], limit: number) =>
+    items.slice(0, limit).join("; ") +
+    (items.length > limit ? `; +${items.length - limit} more` : "");
+  const graph = result.dependencies[1]!;
+  const lines = [
+    `coverage ${result.coverage.coveredFiles}/${result.coverage.trackedFiles}; uncovered ${result.coverage.uncoveredFiles.length}`,
+    ...result.coverage.directories
+      .slice(0, 3)
+      .map((item) => `uncovered ${item.count} ${shown(item.directory)}`),
+    `cochange-groups ${result.cochange.groups.length}; hubs ${result.cochange.hubs.length}`,
+    ...result.cochange.groups
+      .slice(0, 3)
+      .map((group) => `cochange ${group.count} ${sample(group.files.map(shown), 3)}`),
+    `hotspots ${
+      sample(
+        result.hotspots.map((item) => `${shown(item.directory)} (${item.count})`),
+        3,
+      ) || "none"
+    }`,
+    `dependencies depth=2; ${graph.edges.length} edges; ${result.imports.issues.length} unresolved/config issues`,
+    `entries ${sample(graph.entries.map(shown), 5) || "none"}`,
+    `cycles ${
+      sample(
+        graph.cycles.map((cycle) => cycle.map(shown).join(" <-> ")),
+        2,
+      ) || "none"
+    }`,
+    `layers ${
+      sample(
+        [...new Set(graph.layers.map((item) => item.layer))].map(
+          (layer) =>
+            `${layer}: ${sample(
+              graph.layers
+                .filter((item) => item.layer === layer)
+                .map((item) => shown(item.directory)),
+              4,
+            )}`,
+        ),
+        4,
+      ) || "none"
+    }`,
+    `guidance ${sample(result.guidanceFiles.map(shown), 5) || "none"}`,
+    `generated ${
+      sample(
+        result.generatedDirectories.map(
+          (item) => `${shown(item.directory)}/ (${item.files.length})`,
+        ),
+        3,
+      ) || "none"
+    }; keep with its source`,
+    ...result.flatDirectories.slice(0, 3).map(
+      (item) =>
+        `flat ${shown(item.directory)}/ ${item.codeFiles} code files; ${
+          sample(
+            item.groups.map((group) => `${shown(group.prefix)}* (${group.count})`),
+            4,
+          ) || "no repeated prefixes"
+        }`,
+    ),
+    `unpointed-total ${result.unpointedDocuments.length}`,
+    ...result.unpointedDocuments.slice(0, 2).map((file) => `unpointed ${shown(file)}`),
+    "all-facts tent workspace scan --json",
+  ];
+  return lines.join("\n");
 }

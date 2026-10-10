@@ -21,6 +21,7 @@ import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { serializeFrontmatter } from "../src/core/frontmatter.js";
 import { git } from "./helpers.js";
 import { testScratchRoot } from "./scratch.js";
+import { repositoryFacts } from "../src/core/repository-facts.js";
 
 async function fixture(t: TestContext, initializeGit = true) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "workspace-scan-"));
@@ -104,8 +105,9 @@ test("cochange closes shared groups, excludes hubs/bulk, retains stronger subset
     unpointedDocuments: ["docs/line\nbreak.md", "docs/paragraph\u2029.md"],
     unpointedDirectories: [{ directory: "docs", count: 2 }],
     inspectionErrors: [],
+    ...repositoryFacts([]),
   });
-  assert.equal(resultText.split("\n").filter((line) => line.startsWith("cochange ")).length, 10);
+  assert.equal(resultText.split("\n").filter((line) => line.startsWith("cochange ")).length, 3);
   assert.equal(resultText.split("\n").filter((line) => line.startsWith("unpointed ")).length, 2);
   assert.match(resultText, /line\\nbreak\.md/);
   assert.match(resultText, /paragraph\\u2029\.md/);
@@ -187,7 +189,7 @@ test("scan separates material coverage from document pointers and respects direc
   );
 });
 
-test("CLI scan reads all four segments without changing Git/Tent bytes and limits text only", async (t) => {
+test("CLI scan summarizes facts without changing Git/Tent bytes and limits text only", async (t) => {
   const { root, write, node } = await fixture(t);
   for (let i = 0; i < 28; i++) await write(`dir${String(i).padStart(2, "0")}/doc.md`);
   await node("pointer", { resource: "../../dir00/" });
@@ -203,16 +205,14 @@ test("CLI scan reads all four segments without changing Git/Tent bytes and limit
   const second = await runWorkspaceCommand("scan", [], { workspace: root });
   assert.equal(first.exitCode, 0, first.stderr);
   assert.equal(first.stdout, second.stdout);
-  const sections = first.stdout.trimEnd().split("\n\n");
-  assert.equal(sections.length, 4);
-  assert.equal(sections[0]!.split("\n").length, 15);
-  assert.ok(sections[2]!.split("\n").every((line) => line.startsWith("hotspot ")));
-  assert.equal(sections[2]!.split("\n").length, 10);
-  assert.match(sections[3]!, /unpointed new.markdown/);
-  assert.match(sections[3]!, /^unpointed-total 28\n/);
-  assert.match(sections[3]!, /unpointed-directory 1 dir01/);
-  assert.match(sections[3]!, /unpointed-all tent workspace scan --json$/);
-  assert.equal(sections[3]!.split("\n").filter((line) => line.startsWith("unpointed ")).length, 20);
+  const lines = first.stdout.trimEnd().split("\n");
+  assert.ok(lines.length <= 24);
+  assert.equal(lines.filter((line) => line.startsWith("uncovered ")).length, 3);
+  assert.match(first.stdout, /hotspots dir01 \(2\)/);
+  assert.match(first.stdout, /unpointed new.markdown/);
+  assert.match(first.stdout, /unpointed-total 28\n/);
+  assert.match(first.stdout, /all-facts tent workspace scan --json\n$/);
+  assert.equal(lines.filter((line) => line.startsWith("unpointed ")).length, 2);
   const json = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
   assert.equal(json.exitCode, 0, json.stderr);
   const report = JSON.parse(json.stdout);
@@ -276,6 +276,55 @@ test("document pointers are direct, existing section links and include deprecate
   assert.deepEqual(await snapshot(root), before);
 });
 
+test("scan reports source facts with no writes and never follows tracked source symlinks", async (t) => {
+  const { root, write } = await fixture(t);
+  await write("src/app/main.ts", "import '../core/value.js';\n");
+  await write("src/core/value.ts", "export const value = 1;\n");
+  await write("AGENTS.md", "Project instructions\n");
+  await git(root, "add", ".");
+  await git(root, "commit", "-m", "sources");
+  const before = await snapshot(root);
+  const first = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
+  assert.equal(first.exitCode, 0, first.stderr);
+  const report = JSON.parse(first.stdout);
+  assert.deepEqual(report.imports.edges, [
+    {
+      from: "src/app/main.ts",
+      to: "src/core/value.ts",
+      kind: "file",
+      specifier: "../core/value.js",
+    },
+  ]);
+  assert.deepEqual(report.guidanceFiles, ["AGENTS.md"]);
+  assert.deepEqual(await snapshot(root), before);
+  assert.equal(
+    (await runWorkspaceCommand("scan", ["--json"], { workspace: root })).stdout,
+    first.stdout,
+  );
+  // A junction is available without symlink privilege on Windows. The source reader must
+  // stop at that directory, not read another workspace through a tracked file path.
+  const other = await fs.mkdtemp(path.join(testScratchRoot(), "scan-source-target-"));
+  t.after(() => fs.rm(other, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  await fs.writeFile(path.join(other, "value.ts"), "export const secret = 'outside';");
+  await fs.rename(path.join(root, "src/core"), path.join(root, "src/original-core"));
+  await fs.symlink(
+    other,
+    path.join(root, "src/core"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const blocked = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
+  assert.equal(blocked.exitCode, 1);
+  const blockedReport = JSON.parse(blocked.stdout);
+  assert.ok(
+    blockedReport.inspectionErrors.some(
+      (error: { node: string; reason: string }) =>
+        error.node === "src/core/value.ts" && /plain directory/.test(error.reason),
+    ),
+  );
+  assert.ok(!blocked.stdout.includes("outside"));
+  await fs.unlink(path.join(root, "src/core"));
+});
+
 test("scan never executes a configured Git clean filter for uncommitted Markdown", async (t) => {
   const { root, adapter, write } = await fixture(t);
   await write("doc.md", "before\n");
@@ -323,6 +372,30 @@ test("scan supports unborn Git, nested workspaces, spaces and newline-safe log p
     commit(sha, ["\nleading.md", next]),
     commit(next, []),
   ]);
+});
+
+test("scan JSON preserves repository facts and a diagnostic for invalid TypeScript paths", async (t) => {
+  const { root, write } = await fixture(t);
+  await write("tsconfig.json", '{"compilerOptions":{"paths":{"@app/*":42}}}');
+  await write("src/main.ts", 'import "@app/helper"; import "./helper";\n');
+  await write("src/helper.ts", "export {};\n");
+  await git(root, "add", "tsconfig.json", "src");
+  await git(root, "commit", "-m", "invalid path configuration");
+  const before = await snapshot(root);
+  const result = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.coverage.trackedFiles, 3);
+  assert.equal(report.commitsScanned, 1);
+  assert.equal(report.imports.scannedFiles, 2);
+  assert.deepEqual(report.imports.edges, [
+    { from: "src/main.ts", to: "src/helper.ts", kind: "file", specifier: "./helper" },
+  ]);
+  assert.deepEqual(report.imports.issues, [
+    { file: "tsconfig.json", reason: "Invalid TypeScript path configuration" },
+  ]);
+  assert.deepEqual(await snapshot(root), before);
 });
 
 test("scan rejects invalid commit counts and incompatible options before reading workspaces", async () => {
