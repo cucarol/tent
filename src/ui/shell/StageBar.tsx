@@ -7,7 +7,7 @@ import { t } from "../i18n.js";
 
 export type StageView = "now" | "map";
 
-/** The bar over the stage: the Now and map tabs, where the selection sits on the map, and the Roles at work. */
+/** The bar over the stage: the Now and map tabs, and where the selection sits on the map. */
 export function StageBar({
   graph,
   selected,
@@ -84,21 +84,6 @@ export function StageBar({
       </nav>
       <div className="stage-meta">
         {view === "map" && !selected && <span>{t.bar.nodes(graph.snapshot.nodes.length)}</span>}
-        <span className="avatars">
-          {graph.snapshot.roles.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              className={`stage-pet${selected?.id === r.id ? " is-active" : ""}`}
-              onClick={() => onOpen({ kind: "role", id: r.id })}
-              aria-label={t.bar.role(r.title)}
-              data-tip={t.bar.role(r.title)}
-              data-tip-end=""
-            >
-              <Pet id={r.id} size={28} />
-            </button>
-          ))}
-        </span>
       </div>
     </header>
   );

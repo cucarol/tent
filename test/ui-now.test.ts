@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { buildGraph } from "../src/ui/data/store.js";
 import { UNREAD } from "../src/ui/data/flags.js";
 import type { Snapshot, SnapshotCard, SnapshotNode } from "../src/ui/data/types.js";
-import { NowView } from "../src/ui/now/NowView.js";
+import { allot, NowView } from "../src/ui/now/NowView.js";
 import { setLang } from "../src/ui/i18n.js";
 
 const snapshot = (nodes: SnapshotNode[]): Snapshot => ({
@@ -74,7 +74,7 @@ test("finished since last visit includes attachment and confirmation evidence, n
         : Reflect.deleteProperty(globalThis, name),
     );
   }
-  const rendered = renderNow(
+  const page = renderNow(
     snapshot([
       output("old-edited-output", "2026-10-01T00:00:00Z"),
       output("new-attached-output", "2026-10-06T00:00:00Z"),
@@ -84,6 +84,8 @@ test("finished since last visit includes attachment and confirmation evidence, n
       output("uncaptured-output"),
     ]),
   );
+  // What was finished is read from the strip along the bottom.
+  const rendered = page.slice(page.indexOf('class="now-done"'));
   assert.match(rendered, /Finished since your last visit/);
   assert.match(rendered, /new-attached-output/);
   assert.match(rendered, /new-confirmed-output/);
@@ -97,145 +99,12 @@ test("finished since last visit includes attachment and confirmation evidence, n
   assert.ok(rendered.indexOf("new-attached-output") < rendered.indexOf("new-confirmed-output"));
 });
 
-test("attention shows checking until sync is read, and all in sync only for a known empty result", () => {
-  setLang("en", false);
-  const s = snapshot([]);
-  assert.match(renderNow(s, UNREAD), /Checking against the materials/);
-  assert.doesNotMatch(renderNow(s, UNREAD), /All in sync/);
-  assert.match(renderNow(s), /All in sync/);
-});
-
-test("attention counts dual flags in both categories while listing each Node once", () => {
-  setLang("en", false);
-  const rendered = renderNow(
-    snapshot([output("both"), output("only-ahead"), output("only-behind")]),
-    {
-      both: { ahead: { reasons: [] }, behind: { reasons: ["source.md"] } },
-      "only-ahead": { ahead: { reasons: [] } },
-      "only-behind": { behind: { reasons: ["source.md"] } },
-    },
-  );
-  assert.match(rendered, /2 behind/);
-  assert.match(rendered, /2 ahead/);
-  assert.equal((rendered.match(/>both</g) ?? []).length, 1);
-  assert.equal((rendered.match(/>only-ahead</g) ?? []).length, 1);
-  assert.equal((rendered.match(/>only-behind</g) ?? []).length, 1);
-});
-
 test("the Now page only observes: a draft Node gets no approval control", () => {
   setLang("en", false);
   const html = renderNow(
     snapshot([output("node-draft", undefined, { type: "prompt", status: "draft" })]),
   );
   assert.doesNotMatch(html, /Approve|btn primary/);
-});
-
-test("a goal edit is listed once on each changed goal, with the outputs it leaves to review", () => {
-  setLang("en", false);
-  const goal = output("goal", undefined, {
-    type: "goal",
-    notePath: "Goal/Goal.md",
-    childIds: ["sub", "o1", "o3"],
-  });
-  const sub = output("sub", undefined, {
-    type: "goal",
-    parentId: "goal",
-    notePath: "Goal/sub/sub.md",
-    childIds: ["o2"],
-  });
-  const under = (id: string, parentId = "goal") =>
-    output(id, undefined, { parentId, notePath: `Goal/${id}/${id}.md` });
-  const changed = (goal: string, at: string) => `Goal ${goal}: Material changed: ${at}`;
-  const rendered = renderNow(
-    snapshot([goal, sub, under("o1"), under("o2", "sub"), under("o3"), under("o4", "sub")]),
-    {
-      goal: { ahead: { reasons: [] } },
-      o1: { behind: { reasons: [changed("goal", "/Goal/Goal.md")] } },
-      // An ancestor goal changed: the output folds into that goal, not its nearest one.
-      o2: { behind: { reasons: [changed("goal", "/Goal/Goal.md")] } },
-      o3: {
-        behind: { reasons: [changed("goal", "/Goal/Goal.md"), "Material changed: /src/a.ts"] },
-      },
-      // The goal named by the reason is not ahead, so nothing explains it away.
-      o4: { behind: { reasons: [changed("sub", "/Goal/sub/sub.md")] } },
-    },
-  );
-  assert.match(rendered, /2 outputs to review/);
-  assert.doesNotMatch(rendered, />o1</);
-  assert.doesNotMatch(rendered, />o2</);
-  // Also behind for its own material, so it still needs its own line.
-  assert.equal((rendered.match(/>o3</g) ?? []).length, 1);
-  assert.equal((rendered.match(/>o4</g) ?? []).length, 1);
-  assert.match(rendered, /4 behind/);
-});
-
-test("baseline gaps under a changed goal stay out of its review count", () => {
-  setLang("en", false);
-  const goal = output("goal", undefined, {
-    type: "goal",
-    notePath: "Goal/Goal.md",
-    childIds: ["o"],
-  });
-  const rendered = renderNow(
-    snapshot([goal, output("o", undefined, { parentId: "goal", notePath: "Goal/o/o.md" })]),
-    {
-      goal: { ahead: { reasons: [] } },
-      o: {
-        behind: {
-          reasons: [
-            "Goal goal: Output has no retained baseline for this ancestor goal: /Goal/Goal.md",
-          ],
-        },
-      },
-    },
-  );
-  // Not folded into the goal: the gap waits in the baseline row.
-  assert.match(rendered, /1 more Node only lacks a baseline/);
-  assert.doesNotMatch(rendered, /outputs? to review/);
-});
-
-test("attention keeps same-named external materials and unknown causes visible", () => {
-  setLang("en", false);
-  const goal = output("goal", undefined, {
-    type: "goal",
-    notePath: "Goal/Goal.md",
-    childIds: ["same-name", "unknown"],
-  });
-  const under = (id: string) =>
-    output(id, undefined, { parentId: "goal", notePath: `Goal/${id}/${id}.md` });
-  const rendered = renderNow(snapshot([goal, under("same-name"), under("unknown")]), {
-    goal: { ahead: { reasons: [] } },
-    "same-name": { behind: { reasons: ["Material changed: /Other/Goal.md"] } },
-    unknown: { behind: { reasons: [] } },
-  });
-  assert.match(rendered, />same-name</);
-  assert.match(rendered, />unknown</);
-  assert.doesNotMatch(rendered, /outputs? to review/);
-});
-
-test("a goal's material warning and folded output review both remain visible", () => {
-  setLang("en", false);
-  const goal = output("goal", undefined, {
-    type: "goal",
-    notePath: "Goal/Goal.md",
-    childIds: ["result"],
-  });
-  const result = output("result", undefined, {
-    parentId: "goal",
-    notePath: "Goal/result/result.md",
-  });
-  const rendered = renderNow(snapshot([goal, result]), {
-    goal: {
-      ahead: { reasons: [] },
-      behind: { reasons: ["Material changed: ../requirements.md"] },
-    },
-    result: { behind: { reasons: ["Goal goal: Material changed: /Goal/Goal.md"] } },
-  });
-  assert.match(rendered, /requirements.md/);
-  assert.match(rendered, /1 output to review/);
-  assert.doesNotMatch(rendered, />result</);
-  assert.match(rendered, /2 behind/);
-  assert.match(rendered, /1 ahead/);
 });
 
 test("a Card whose outputs wait for review stays in its lane", () => {
@@ -263,40 +132,12 @@ test("a Card whose outputs wait for review stays in its lane", () => {
   };
   s.cards = [review];
   const rendered = renderNow(s);
-  // Folded to one line per lane until opened, so old Cards do not bury current work.
-  assert.match(rendered, /Needs review/);
-  assert.match(rendered, /1 Card with output to review/);
-  assert.doesNotMatch(rendered, /Review me/);
+  assert.match(rendered, /ns-state is-review.*?Review me.*?Needs review · 1 output/);
+  assert.match(rendered, /0 in progress · 1 to review/);
   assert.doesNotMatch(rendered, /Idle/);
 });
 
-test("Nodes that only lack a baseline gather in one row; counts keep them", () => {
-  setLang("en", false);
-  const gap = { behind: { reasons: ["Node record unreadable; no retained baseline"] } };
-  const rendered = renderNow(
-    snapshot([output("changed"), output("gap-a"), output("gap-b"), output("stale")]),
-    {
-      changed: { behind: { reasons: ["Material changed: a.md"] } },
-      "gap-a": gap,
-      "gap-b": {
-        behind: {
-          reasons: [
-            "Remote material version is unknown; no network request was made: https://x.test",
-          ],
-        },
-      },
-      stale: { behind: { reasons: ["Content is stale on or after 2026-10-01"] } },
-    },
-  );
-  assert.match(rendered, /4 behind/);
-  assert.match(rendered, />changed</);
-  assert.match(rendered, />stale</);
-  assert.doesNotMatch(rendered, />gap-a</);
-  assert.doesNotMatch(rendered, />gap-b</);
-  assert.match(rendered, /2 more Nodes only lack a baseline/);
-});
-
-test("a lane lists three Cards in progress and folds the rest", () => {
+test("a lane lists its Cards newest first, under its counts", () => {
   setLang("en", false);
   const s = snapshot([]);
   s.cards = Array.from({ length: 5 }, (_, i) => ({
@@ -319,9 +160,253 @@ test("a lane lists three Cards in progress and folds the rest", () => {
   }));
   const rendered = renderNow(s);
   assert.match(rendered, /5 in progress/);
-  // Newest first: Work 4, 3, 2 shown; 1 and 0 folded.
-  assert.match(rendered, /Work 4/);
-  assert.match(rendered, /Work 2/);
-  assert.doesNotMatch(rendered, /Work 1/);
-  assert.match(rendered, /2 more in progress/);
+  const at = (n: number) => rendered.indexOf(`Work ${n}`);
+  assert.ok(at(4) > 0 && at(4) < at(3) && at(3) < at(0));
+});
+
+test("rows go round the groups from the top until the next does not fit", () => {
+  // Heading 38; rows 32 each with 6 under the last; a 1px hairline between groups.
+  assert.deepEqual(allot([2, 1], 1000), [2, 1]);
+  assert.deepEqual(allot([50, 3], 200), [2, 1]);
+  // Seventy above three: the big group gets the first row, and the small one's would not fit.
+  assert.deepEqual(allot([50, 3], 130), [1, 0]);
+  // Not even the headings fit: groups are left off the end, behind a line naming them.
+  assert.deepEqual(allot([50, 3, 4], 80), [0]);
+});
+
+test("the top line counts behind and ahead once the materials are read, leaving baseline gaps out", () => {
+  setLang("en", false);
+  const s = snapshot([output("both"), output("only-ahead"), output("only-behind"), output("gap")]);
+  assert.match(renderNow(s, UNREAD), /Checking against the materials/);
+  const rendered = renderNow(s, {
+    both: { ahead: { reasons: [] }, behind: { reasons: ["Material changed: ../source.md"] } },
+    "only-ahead": { ahead: { reasons: [] } },
+    "only-behind": { behind: { reasons: ["Material changed: ../source.md"] } },
+    gap: { behind: { reasons: ["Material ../old.md has no retained baseline"] } },
+  });
+  assert.match(rendered, /2 behind/);
+  assert.match(rendered, /2 ahead/);
+});
+
+test("each top-level Node of any type is a group listing what under it is behind or ahead", () => {
+  setLang("en", false);
+  const nodes = [
+    output("results", undefined, { type: "output", childIds: ["r1"] }),
+    output("r1", undefined, { parentId: "results" }),
+    output("spec", undefined, { type: "prompt", childIds: ["g"] }),
+    output("g", undefined, { type: "goal", parentId: "spec" }),
+    output("calm", undefined, { type: "prompt" }),
+  ];
+  const rendered = renderNow(snapshot(nodes), {
+    r1: { behind: { reasons: ["Material changed: ../source.md"] } },
+    g: { ahead: { reasons: [] } },
+  });
+  const right = rendered.slice(rendered.indexOf("To look at"));
+  assert.equal((right.match(/class="ns-group"/g) ?? []).length, 2);
+  assert.match(right, /ns-pill is-behind.{0,40}ns-text">r1</);
+  assert.match(right, /ns-pill is-ahead.{0,40}ns-text">g</);
+  assert.doesNotMatch(right, />calm</);
+});
+
+// The right side, "To look at": one group per top-level Node, one row per Node under it.
+const attention = (html: string) => html.slice(html.indexOf("To look at"));
+const rowsNamed = (html: string, name: string) =>
+  (attention(html).match(new RegExp(`ns-text">${name}<`, "g")) ?? []).length;
+const plan = (childIds: string[]) => output("plan", undefined, { type: "prompt", childIds });
+
+test("attention says checking until sync is read, and all in sync only for a known empty result", () => {
+  setLang("en", false);
+  const s = snapshot([]);
+  assert.match(renderNow(s, UNREAD), /Checking against the materials/);
+  assert.doesNotMatch(renderNow(s, UNREAD), /All in sync/);
+  assert.match(renderNow(s), /All in sync/);
+});
+
+test("a Node both behind and ahead is one row, counted under both", () => {
+  setLang("en", false);
+  const under = (id: string) => output(id, undefined, { parentId: "plan" });
+  const rendered = renderNow(
+    snapshot([
+      plan(["both", "only-ahead", "only-behind"]),
+      under("both"),
+      under("only-ahead"),
+      under("only-behind"),
+    ]),
+    {
+      both: { ahead: { reasons: [] }, behind: { reasons: ["Material changed: ../source.md"] } },
+      "only-ahead": { ahead: { reasons: [] } },
+      "only-behind": { behind: { reasons: ["Material changed: ../source.md"] } },
+    },
+  );
+  assert.match(rendered, /2 behind/);
+  assert.match(rendered, /2 ahead/);
+  for (const name of ["both", "only-ahead", "only-behind"])
+    assert.equal(rowsNamed(rendered, name), 1);
+});
+
+// A goal under the top-level "plan", so its row and the reason on it are on the first screen.
+const goalTree = (
+  outputs: [id: string, parent: string][],
+  goalExtra: Partial<SnapshotNode> = {},
+) => {
+  const kidsOf = (p: string) => outputs.filter(([, parent]) => parent === p).map(([id]) => id);
+  return [
+    plan(["goal"]),
+    output("goal", undefined, {
+      type: "goal",
+      parentId: "plan",
+      notePath: "Plan/Goal/Goal.md",
+      childIds: kidsOf("goal"),
+      ...goalExtra,
+    }),
+    ...outputs.map(([id, parent]) =>
+      output(id, undefined, {
+        parentId: parent,
+        notePath: `Plan/Goal/${id}/${id}.md`,
+        ...(id === "sub" ? { type: "goal" as const, childIds: kidsOf("sub") } : {}),
+      }),
+    ),
+  ];
+};
+const goalChanged = (goal: string) => `Goal ${goal}: Material changed: /Plan/Goal/Goal.md`;
+
+test("a goal edit shows once on the changed goal, with the outputs it leaves to review", () => {
+  setLang("en", false);
+  const rendered = renderNow(
+    snapshot(
+      goalTree([
+        ["sub", "goal"],
+        ["o1", "goal"],
+        ["o2", "sub"],
+        ["o3", "goal"],
+        ["o4", "sub"],
+      ]),
+    ),
+    {
+      goal: { ahead: { reasons: [] } },
+      o1: { behind: { reasons: [goalChanged("goal")] } },
+      // An ancestor goal changed: the output folds into that goal, not its nearest one.
+      o2: { behind: { reasons: [goalChanged("goal")] } },
+      // Also behind for its own material, so it keeps its own row.
+      o3: { behind: { reasons: [goalChanged("goal"), "Material changed: /src/a.ts"] } },
+      // The goal named by the reason is not ahead, so nothing explains it away.
+      o4: { behind: { reasons: [goalChanged("sub")] } },
+    },
+  );
+  assert.match(
+    attention(rendered),
+    /ns-text">goal<\/span><span class="ns-meta is-long">[^<]*2 outputs to review/,
+  );
+  assert.equal(rowsNamed(rendered, "o1"), 0);
+  assert.equal(rowsNamed(rendered, "o2"), 0);
+  assert.equal(rowsNamed(rendered, "o3"), 1);
+  assert.equal(rowsNamed(rendered, "o4"), 1);
+  // The top line still counts every output that is behind.
+  assert.match(rendered, /now-key is-behind"><i><\/i>4 behind/);
+});
+
+test("a goal's own material warning and the outputs folded into it both show on its row", () => {
+  setLang("en", false);
+  const rendered = renderNow(snapshot(goalTree([["result", "goal"]])), {
+    goal: { ahead: { reasons: [] }, behind: { reasons: ["Material changed: ../requirements.md"] } },
+    result: { behind: { reasons: [goalChanged("goal")] } },
+  });
+  assert.match(
+    attention(rendered),
+    /ns-text">goal<\/span><span class="ns-meta is-long">[^<]*requirements\.md[^<]*1 output to review/,
+  );
+  assert.equal(rowsNamed(rendered, "result"), 0);
+  assert.match(rendered, /2 behind/);
+  assert.match(rendered, /1 ahead/);
+});
+
+test("a baseline gap under a changed goal is not folded into its review count", () => {
+  setLang("en", false);
+  const rendered = renderNow(snapshot(goalTree([["o", "goal"]])), {
+    goal: { ahead: { reasons: [] } },
+    o: {
+      behind: {
+        reasons: [
+          "Goal goal: Output has no retained baseline for this ancestor goal: /Plan/Goal/Goal.md",
+        ],
+      },
+    },
+  });
+  // It waits with the other gaps instead.
+  assert.match(rendered, /1 more only lack a baseline/);
+  assert.equal(rowsNamed(rendered, "o"), 0);
+  assert.doesNotMatch(rendered, /outputs? to review/);
+});
+
+test("same-named outside materials and unknown causes keep their own rows under a changed goal", () => {
+  setLang("en", false);
+  const rendered = renderNow(
+    snapshot(
+      goalTree([
+        ["same-name", "goal"],
+        ["unknown", "goal"],
+      ]),
+    ),
+    {
+      goal: { ahead: { reasons: [] } },
+      "same-name": { behind: { reasons: ["Material changed: /Other/Goal.md"] } },
+      unknown: { behind: { reasons: [] } },
+    },
+  );
+  assert.equal(rowsNamed(rendered, "same-name"), 1);
+  assert.equal(rowsNamed(rendered, "unknown"), 1);
+  assert.doesNotMatch(rendered, /outputs? to review/);
+});
+
+test("Nodes that only lack a baseline are counted apart; stale content and real changes stay rows", () => {
+  setLang("en", false);
+  const under = (id: string) => output(id, undefined, { parentId: "plan" });
+  const rendered = renderNow(
+    snapshot([
+      plan(["changed", "gap-a", "gap-b", "stale"]),
+      under("changed"),
+      under("gap-a"),
+      under("gap-b"),
+      under("stale"),
+    ]),
+    {
+      changed: { behind: { reasons: ["Material changed: a.md"] } },
+      "gap-a": { behind: { reasons: ["Node record unreadable; no retained baseline"] } },
+      "gap-b": {
+        behind: {
+          reasons: [
+            "Remote material version is unknown; no network request was made: https://x.test",
+          ],
+        },
+      },
+      stale: { behind: { reasons: ["Content is stale on or after 2026-10-01"] } },
+    },
+  );
+  assert.match(rendered, /now-key is-behind"><i><\/i>2 behind/);
+  assert.equal(rowsNamed(rendered, "changed"), 1);
+  assert.equal(rowsNamed(rendered, "stale"), 1);
+  assert.equal(rowsNamed(rendered, "gap-a"), 0);
+  assert.equal(rowsNamed(rendered, "gap-b"), 0);
+  assert.match(rendered, /2 more only lack a baseline/);
+});
+
+test("idle Roles are not reported as no Roles at all", () => {
+  setLang("en", false);
+  const s = snapshot([]);
+  assert.match(renderNow(s), /No Roles yet/);
+  s.roles = [
+    {
+      id: "role-ui",
+      title: "UI",
+      status: "stable",
+      path: "roles/role-ui.md",
+      body: "",
+      links: [],
+      incoming: [],
+      history: [],
+    },
+  ];
+  const rendered = renderNow(s);
+  assert.doesNotMatch(rendered, /No Roles yet/);
+  assert.match(rendered, /Idle/);
 });

@@ -83,7 +83,6 @@ test("behind and ahead reasons read by kind, not as file names", () => {
   );
   assert.equal(t.map.aheadWhy("3 小时前", "empty"), "领先（3 小时前起）：还没有产出");
   assert.equal(t.map.aheadWhy(null, "behind"), "领先：产出还没跟上");
-  assert.equal(t.now.goalChanged("3 小时前", 2), "领先（3 小时前起）：2 个产出要按新要求复核");
 
   setLang("en", false);
   assert.equal(

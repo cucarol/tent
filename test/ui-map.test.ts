@@ -9,7 +9,7 @@ import type {
   SnapshotNode,
   SnapshotRole,
 } from "../src/ui/data/types.js";
-import { lensLayout, treeLayout, type Layout, type Rect } from "../src/ui/map/layout.js";
+import { CARD, lensLayout, treeLayout, type Layout, type Rect } from "../src/ui/map/layout.js";
 import { nearest, refPath } from "../src/ui/map/geometry.js";
 import { routeLinks, type Pt } from "../src/ui/map/route.js";
 import { ago, relativeHref, resolveHref, workspaceImagePath } from "../src/ui/util.js";
@@ -376,6 +376,24 @@ test("top-level branches sit further apart than siblings", () => {
   assert.ok(branches > siblings, `branch gap ${branches} should exceed sibling gap ${siblings}`);
 });
 
+test("the tree folds result outputs into a count on their parent until it is opened", () => {
+  const graph = graphOf([
+    node("g", null, "goal"),
+    node("o1", "g", "output"),
+    node("o2", "g", "output"),
+    node("p", "g"),
+    node("o3", "p", "output"),
+    node("o4", "o3", "output"),
+  ]);
+  const folded = treeLayout(graph, new Set());
+  assert.deepEqual(folded.folds?.get("g"), ["o1", "o2"]);
+  assert.ok(!folded.placed.has("o1") && folded.placed.has("p"));
+  // An output with outputs under it is structure, so it stays a card.
+  assert.ok(folded.placed.has("o3") && !folded.placed.has("o4"));
+  const opened = treeLayout(graph, new Set(), new Set(["g"]));
+  assert.ok(opened.placed.has("o1") && !opened.folds?.has("g"));
+});
+
 test("the lens puts what a Node hangs from and what cites it on the left, what it holds and cites on the right", () => {
   const graph = graphOf([
     node("p", null),
@@ -388,7 +406,7 @@ test("the lens puts what a Node hangs from and what cites it on the left, what i
     node("i", null),
   ]);
   const lens = lensLayout(graph, "f", () => true);
-  assert.deepEqual(at(lens, "f"), { id: "f", x: 0, y: 0, h: 36 });
+  assert.deepEqual(at(lens, "f"), { id: "f", x: 0, y: 0, h: CARD.h, w: CARD.w });
   for (const id of ["p", "i"]) assert.ok(at(lens, id).x < 0, `${id} is on the left`);
   for (const id of ["c", "o"]) assert.ok(at(lens, id).x > 0, `${id} is on the right`);
   // A child that is also linked appears once, as a child; Cards citing the Node are not cards on the map.
@@ -504,10 +522,10 @@ test("a reference within one column goes round on the side it asks for", () => {
 test("arrow keys move to the closest card in that direction, preferring cards in line", () => {
   const view: Layout = {
     placed: new Map([
-      ["here", { id: "here", x: 0, y: 0, h: 36 }],
-      ["above", { id: "above", x: 0, y: -68, h: 36 }],
-      ["right", { id: "right", x: 300, y: -10, h: 36 }],
-      ["far", { id: "far", x: 300, y: 200, h: 36 }],
+      ["here", { id: "here", x: 0, y: 0, h: 36, w: 248 }],
+      ["above", { id: "above", x: 0, y: -68, h: 36, w: 248 }],
+      ["right", { id: "right", x: 300, y: -10, h: 36, w: 248 }],
+      ["far", { id: "far", x: 300, y: 200, h: 36, w: 248 }],
     ]),
     labels: [],
   };

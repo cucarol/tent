@@ -8,24 +8,29 @@ import { userInfo } from "node:os";
 import * as path from "node:path";
 import {
   createCardDocument,
+  deprecateCardDocument,
   moveCardDocument,
   readCardDocument,
   CardDocumentError,
 } from "../core/card-document.js";
 import { ReaderError } from "../core/context-reader.js";
 import { readDocumentDiff, readDocumentVersion } from "../core/document-diff.js";
-import { parseFrontmatter } from "../core/frontmatter.js";
+import { parseFrontmatter, serializeFrontmatter } from "../core/frontmatter.js";
 import { documentVersionSchema } from "../core/git-history.js";
 import { NodeWriteError, writeNodeDocument } from "../core/node-document-write.js";
 import { nodeTrustTier } from "../core/node-provenance.js";
 import { confirmNodeSync } from "../core/node-sync.js";
+import { archiveNode, restoreNode } from "../core/node-lifecycle.js";
+import { deleteNode, renameNode } from "../core/ops.js";
+import { editRoleContext } from "../core/role-context.js";
+import { readRoleDocument } from "../core/role-document.js";
 import { readNodeForEdit } from "../core/node-query.js";
 import { TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/paths.js";
 import { findTentSystemRoot } from "../core/status.js";
 import { readWorkspaceRevision } from "../core/workspace-revision.js";
 import { readWorkspaceSettings } from "../core/workspace-settings.js";
 import { validationIssueText } from "../core/validation-message.js";
-import { NodeFs } from "../fs/node-fs.js";
+import { NodeFs, SystemClock } from "../fs/node-fs.js";
 import type { Snapshot } from "../ui/data/types.js";
 import { buildSnapshot } from "./snapshot.js";
 import { shareInFlightReads } from "./shared-reads.js";
@@ -105,6 +110,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   const staticDir = path.resolve(options.staticDir);
   const fs = new NodeFs(tentRoot, "ui");
   const queryFs = shareInFlightReads(fs);
+  const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot };
   const { workspaceId } = await readWorkspaceSettings(fs);
   if (!workspaceId) throw new Error(`Workspace has no workspaceId: ${tentRoot}`);
   const workspace = { id: workspaceId, name: path.basename(workspaceRoot) };
@@ -165,7 +171,9 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     const route = `${method} ${url.pathname}`;
     const nodeId = /^\/api\/nodes\/([^/]+)$/.exec(url.pathname)?.[1];
     const nodeConfirmId = /^\/api\/nodes\/([^/]+)\/confirm$/.exec(url.pathname)?.[1];
-    const cardRoute = /^\/api\/cards\/([^/]+)(?:\/(move))?$/.exec(url.pathname);
+    const cardRoute = /^\/api\/cards\/([^/]+)(?:\/(move|deprecate))?$/.exec(url.pathname);
+    const nodeAction = /^\/api\/nodes\/([^/]+)\/(archive|restore|rename)$/.exec(url.pathname);
+    const roleRoute = /^\/api\/roles\/([^/]+)(?:\/(status))?$/.exec(url.pathname);
 
     if (route === "GET /api/revision")
       return json(res, 200, { revision: await readWorkspaceRevision(queryFs) });
@@ -259,10 +267,74 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         throw error;
       }
     }
+    // Removing or archiving a whole subtree, or renaming a Node, goes through Core's structural writes.
+    if (nodeId && method === "DELETE")
+      return json(
+        res,
+        200,
+        await serial(() => managed(deleteNode(env, decodeURIComponent(nodeId)))),
+      );
+    if (nodeAction && method === "POST") {
+      const id = decodeURIComponent(nodeAction[1]!);
+      const input = record(await readJson(req, BODY_LIMIT.document));
+      return json(
+        res,
+        200,
+        await serial(() =>
+          managed<unknown>(
+            nodeAction[2] === "archive"
+              ? archiveNode(env, id)
+              : nodeAction[2] === "restore"
+                ? restoreNode(env, id, requiredString(input.archiveCommit, "archiveCommit"))
+                : renameNode(env, id, requiredString(input.name, "name")),
+          ),
+        ),
+      );
+    }
+    if (roleRoute) {
+      const id = decodeURIComponent(roleRoute[1]!);
+      if (method === "GET" && !roleRoute[2]) {
+        const doc = await managed(readRoleDocument(fs, id));
+        return json(res, 200, {
+          roleId: doc.roleId,
+          path: doc.path,
+          etag: doc.etag,
+          body: doc.body,
+        });
+      }
+      // Archiving a Role is its lifecycle status; restoring removes the field (omitted means stable).
+      if (method === "POST" && roleRoute[2]) {
+        const input = record(await readJson(req, BODY_LIMIT.document));
+        const baseEtag = requiredString(input.baseEtag, "baseEtag");
+        const archived = input.archived === true;
+        return json(
+          res,
+          200,
+          await serial(() =>
+            managed(
+              (async () => {
+                const current = await readRoleDocument(fs, id);
+                const { data, body, keyOrder } = parseFrontmatter(current.raw);
+                const { status: _, ...rest } = data;
+                const raw = archived
+                  ? serializeFrontmatter({ ...data, status: "deprecated" }, body, keyOrder)
+                  : serializeFrontmatter(rest, body, keyOrder);
+                return editRoleContext(fs, id, { baseEtag, raw });
+              })(),
+            ),
+          ),
+        );
+      }
+    }
     if (cardRoute) {
       const id = decodeURIComponent(cardRoute[1]!);
       const action = cardRoute[2];
       if (method === "GET" && !action) return json(res, 200, await readCardDocument(fs, id));
+      if (method === "POST" && action === "deprecate") {
+        const input = record(await readJson(req, BODY_LIMIT.document));
+        const expectedEtag = requiredString(input.baseEtag, "baseEtag");
+        return json(res, 200, await serial(() => deprecateCardDocument(fs, id, expectedEtag)));
+      }
       if (method === "POST" && action) {
         const input = record(await readJson(req, BODY_LIMIT.document));
         return json(
@@ -514,6 +586,23 @@ function listen(server: ReturnType<typeof createServer>, port: number) {
 /** Only a missing path is "not found"; other filesystem failures reach httpError. */
 function isMissing(error: unknown): boolean {
   return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException)?.code ?? "");
+}
+
+/**
+ * Core's structural and Role writes reject with plain errors: an unknown object is 404, a refusal
+ * (a name collision, an unsupported status, a stale ETag) is 409 with Core's own message.
+ */
+async function managed<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    if (/already running another write operation/.test(message)) throw error;
+    if (/not found/i.test(message)) throw new HttpError(404, "NOT_FOUND", message);
+    if ((error as Error)?.name === "ZodError") throw error;
+    throw new HttpError(409, "REJECTED", message);
+  }
 }
 
 function httpError(error: unknown): HttpError {

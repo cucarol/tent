@@ -877,3 +877,58 @@ test("the page can switch to another workspace, served by the same process", asy
   await first.close();
   await assert.rejects(ask(second, "GET", "/api/revision"));
 });
+
+test("the page renames, archives, restores and deletes Nodes, archives Roles and withdraws Cards", async (t) => {
+  const { tent, call } = await fixture(t);
+  const snapshot = async () => json<Snapshot>(await call("GET", "/api/snapshot?fresh=1"));
+  const node = async (id: string) => (await snapshot()).nodes.find((n) => n.id === id);
+
+  const renamed = await call("POST", "/api/nodes/node-other/rename", { json: { name: "Goal" } });
+  assert.equal(renamed.status, 200, renamed.body);
+  assert.equal((await node("node-other"))?.name, "Goal");
+  assert.match(await tent.readFile("Main/Main.md"), /\.\.\/Goal\/Goal\.md/);
+  const clash = await call("POST", "/api/nodes/node-other/rename", { json: { name: "Main" } });
+  assert.equal(clash.status, 409, clash.body);
+
+  const archived = await call("POST", "/api/nodes/node-other/archive", { json: {} });
+  assert.equal(archived.status, 200, archived.body);
+  const commit = json<{ commit: string }>(archived).commit;
+  assert.equal((await node("node-other"))?.status, "deprecated");
+  const restored = await call("POST", "/api/nodes/node-other/restore", {
+    json: { archiveCommit: commit },
+  });
+  assert.equal(restored.status, 200, restored.body);
+  assert.equal((await node("node-other"))?.status, "stable");
+
+  const deleted = await call("DELETE", "/api/nodes/node-other", { json: {} });
+  assert.equal(deleted.status, 200, deleted.body);
+  assert.equal(await node("node-other"), undefined);
+  assert.equal((await call("DELETE", "/api/nodes/node-other", { json: {} })).status, 404);
+
+  await createRoleContext(tent, { roleId: "role-review", title: "Review", body: "Review" });
+  const role = json<{ etag: string }>(await call("GET", "/api/roles/role-review"));
+  const off = await call("POST", "/api/roles/role-review/status", {
+    json: { baseEtag: role.etag, archived: true },
+  });
+  assert.equal(off.status, 200, off.body);
+  assert.equal((await snapshot()).roles[0]?.status, "deprecated");
+  const stale = await call("POST", "/api/roles/role-review/status", {
+    json: { baseEtag: role.etag, archived: false },
+  });
+  assert.equal(stale.status, 409, stale.body);
+  const on = await call("POST", "/api/roles/role-review/status", {
+    json: { baseEtag: json<{ etag: string }>(await call("GET", "/api/roles/role-review")).etag },
+  });
+  assert.equal(on.status, 200, on.body);
+  assert.equal((await snapshot()).roles[0]?.status, "stable");
+  assert.doesNotMatch(await tent.readFile("roles/role-review.md"), /^status:/m);
+
+  const card = json<{ cardId: string; etag: string }>(
+    await call("POST", "/api/cards", { json: { prompt: "Check it", target: "role-review" } }),
+  );
+  const withdrawn = await call("POST", `/api/cards/${card.cardId}/deprecate`, {
+    json: { baseEtag: card.etag },
+  });
+  assert.equal(withdrawn.status, 200, withdrawn.body);
+  assert.equal((await snapshot()).cards.find((c) => c.id === card.cardId)?.status, "deprecated");
+});

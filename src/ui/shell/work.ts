@@ -81,13 +81,14 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     (card: SnapshotCard) => card.receivedBy ?? moved.get(card.id) ?? card.target ?? PUBLIC,
     [moved],
   );
-  /** Cards still moving between lanes: drafts first, then the newest published ones. */
+  /** Cards still moving between lanes (withdrawn ones are done with): drafts first, then the newest published ones. */
   const laneCards = useCallback(
     (lane: string) => {
       if (!graph) return [];
       const cards = graph.snapshot.cards;
       const here = cards.filter(
-        (c) => c.state === "pending" && !c.receivedBy && laneOf(c) === lane,
+        (c) =>
+          c.state === "pending" && !c.receivedBy && c.status !== "deprecated" && laneOf(c) === lane,
       );
       // The draft being written leads, so it stays put when the workspace catches up.
       return [
@@ -201,8 +202,23 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     }
   };
 
+  // An archived Role takes no new Cards; its lane stays only while a pending Card still waits there.
   const lanes = useMemo(
-    () => (graph ? [PUBLIC, ...graph.snapshot.roles.map((r) => r.id)] : [PUBLIC]),
+    () =>
+      graph
+        ? [
+            PUBLIC,
+            ...graph.snapshot.roles
+              .filter(
+                (r) =>
+                  r.status !== "deprecated" ||
+                  graph.snapshot.cards.some(
+                    (c) => c.target === r.id && c.state === "pending" && c.status !== "deprecated",
+                  ),
+              )
+              .map((r) => r.id),
+          ]
+        : [PUBLIC],
     [graph],
   );
 

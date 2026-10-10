@@ -181,6 +181,27 @@ export const api = {
         send("POST", { baseEtag, by: actorBy() }),
       ),
     ),
+  /** Removes the Node and everything under it; referenced files and links pointing at it stay. */
+  deleteNode: (id: string) =>
+    wrote(call<{ nodeId: string }>(`/api/nodes/${encodeURIComponent(id)}`, send("DELETE", {}))),
+  /** Marks the subtree deprecated; the returned commit is what restoring undoes. */
+  archiveNode: (id: string) =>
+    wrote(
+      call<{ commit?: string }>(`/api/nodes/${encodeURIComponent(id)}/archive`, send("POST", {})),
+    ),
+  restoreNode: (id: string, archiveCommit: string) =>
+    wrote(call(`/api/nodes/${encodeURIComponent(id)}/restore`, send("POST", { archiveCommit }))),
+  renameNode: (id: string, name: string) =>
+    wrote(call(`/api/nodes/${encodeURIComponent(id)}/rename`, send("POST", { name }))),
+  role: (id: string) => call<{ etag: string }>(`/api/roles/${encodeURIComponent(id)}`),
+  /** A Role's lifecycle: archived is `status: deprecated`, restored drops the field. */
+  setRoleArchived: (id: string, baseEtag: string, archived: boolean) =>
+    wrote(
+      call(`/api/roles/${encodeURIComponent(id)}/status`, send("POST", { baseEtag, archived })),
+    ),
+  /** Withdraws a published Card through its lifecycle status; input and reception stay. */
+  deprecateCard: (id: string, baseEtag: string) =>
+    wrote(call(`/api/cards/${encodeURIComponent(id)}/deprecate`, send("POST", { baseEtag }))),
   card: (id: string) => call<CardDocument>(`/api/cards/${encodeURIComponent(id)}`),
   createCard: (input: CardInput) => wrote(call<SavedCard>("/api/cards", send("POST", input))),
   /** A published Card changes lane until a Role receives it; null returns it to the public area. */

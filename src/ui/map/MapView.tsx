@@ -29,16 +29,28 @@ import type { SnapshotCommit, SnapshotRef, SyncFlag, SyncFlags } from "../data/t
 import { isDraft } from "../data/drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
-import { CARD, GAP, lensLayout, rectOf, treeLayout, type Layout, type Rect } from "./layout.js";
+import {
+  CARD,
+  GAP,
+  lensLayout,
+  rectOf,
+  treeLayout,
+  isResult,
+  type Layout,
+  type Rect,
+} from "./layout.js";
 import { PUBLIC } from "../shell/work.js";
 import { nearest, refPath } from "./geometry.js";
 import { routeLinks, type Route } from "./route.js";
 import { Timeline } from "./Timeline.js";
 import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
-const ZOOM = { min: 0.25, max: 2 };
+// Below the minimum even top-level names stop reading as words; the map pans instead.
+const ZOOM = { min: 0.4, max: 2 };
 // Below this, card names get too small to read at a glance; views the map picks by itself stay above it.
 const READABLE = 0.9;
+// A selected card this close to an edge, or under a floating panel, is brought further in.
+const COMFORT = 56;
 // Room kept clear around fitted cards; the bottom leaves space for the toolbar.
 const PAD = { top: 40, right: 48, bottom: 84, left: 48 };
 // Matches the card glide in styles.css (cubic-bezier(.215, .61, .355, 1), .42s), so a pinned card holds still.
@@ -52,6 +64,11 @@ type CardData = {
   graph: Graph;
   id: string;
   h: number;
+  w: number;
+  /** In the tree, this card's result outputs: folded into a count, or opened as children. */
+  fold: { ids: string[]; open: boolean } | null;
+  /** Its reference to or from the selected Node. */
+  rel: "cites" | "citedBy" | null;
   dim: boolean;
   selected: boolean;
   top: boolean;
@@ -79,8 +96,15 @@ type Actions = {
   activeRole: string | null;
   onRole: (id: string) => void;
   onFold: (id: string) => void;
+  /** Opens a card's folded result outputs as children, or folds them again. */
+  onOutputs: (id: string) => void;
 };
-const MapActions = createContext<Actions>({ activeRole: null, onRole: () => {}, onFold: () => {} });
+const MapActions = createContext<Actions>({
+  activeRole: null,
+  onRole: () => {},
+  onFold: () => {},
+  onOutputs: () => {},
+});
 /** Ahead and behind Nodes; every other card stays quiet. */
 const MapFlags = createContext<SyncFlags>({});
 
@@ -118,16 +142,18 @@ function Handles() {
  * and the lanes it went to in Cards.
  */
 const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
-  const { onFold } = useContext(MapActions);
-  const flag = useContext(MapFlags)[data.id];
+  const { onFold, onOutputs } = useContext(MapActions);
+  const flags = useContext(MapFlags);
+  const flag = flags[data.id];
   const n = data.graph.nodes.get(data.id)!;
   const state = data.graph.states.get(data.id)!;
   const hands = data.graph.handedTo(data.id);
   const p = primaryOf(n.type);
+  const foldBehind = data.fold?.ids.filter((id) => flags[id]?.behind).length ?? 0;
   return (
     <div
-      className={`mcard t-${p}${data.top ? " is-top" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? ` is-behind${onlyGaps(flag.behind.reasons) ? " is-gap" : ""}` : ""}`}
-      style={{ width: CARD.w, height: data.h }}
+      className={`mcard t-${p}${data.top ? " is-top" : ""}${data.rel ? " is-rel" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? ` is-behind${onlyGaps(flag.behind.reasons) ? " is-gap" : ""}` : ""}`}
+      style={{ width: data.w, height: data.h }}
     >
       <Handles />
       {data.pin > 0 && (
@@ -148,12 +174,41 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
           {data.src.n}
         </span>
       )}
-      {n.tags.length > 0 && (
-        <span className="mcard-tag" title={n.tags.join(", ")}>
-          {n.tags[0]}
+      {data.rel ? (
+        <span className="mcard-rel">
+          {data.rel === "cites" ? t.map.relCites : t.map.relCitedBy}
         </span>
+      ) : (
+        n.tags.length > 0 && (
+          <span className="mcard-tag" title={n.tags.join(", ")}>
+            {n.tags[0]}
+          </span>
+        )
       )}
       {hands.length > 0 && <Faces graph={data.graph} hands={hands} />}
+      {data.fold && (
+        <button
+          type="button"
+          className={`mcard-outputs nopan nodrag${data.fold.open ? " is-open" : ""}${foldBehind ? " is-behind" : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOutputs(data.id);
+          }}
+          aria-label={
+            data.fold.open
+              ? t.map.foldOutputs
+              : t.map.foldedOutputs(data.fold.ids.length, foldBehind)
+          }
+          data-tip={
+            data.fold.open
+              ? t.map.foldOutputs
+              : t.map.foldedOutputs(data.fold.ids.length, foldBehind)
+          }
+        >
+          <TypeGlyph type="output" size={11} />
+          {data.fold.ids.length}
+        </button>
+      )}
       {n.childIds.length > 0 && (
         <button
           type="button"
@@ -377,7 +432,7 @@ const KEYS: Record<string, [number, number]> = {
   ArrowDown: [0, 1],
 };
 
-type Filters = { types: Record<Primary, boolean>; allRefs: boolean };
+type Filters = { types: Record<Primary, boolean> };
 
 type MapProps = {
   graph: Graph;
@@ -422,7 +477,6 @@ function MapContent({
     const stored = readStored<Partial<Filters>>("tent-map-filters-v2", {});
     return {
       types: { goal: true, prompt: true, output: true, ...stored.types },
-      allRefs: !!stored.allRefs,
     };
   });
   const [hover, setHover] = useState<string | null>(null);
@@ -540,7 +594,24 @@ function MapContent({
     if (selected?.kind !== "node") setLens(false);
   }, [selected?.kind]);
 
-  const base = useMemo(() => treeLayout(graph, collapsed), [graph, collapsed]);
+  const [openOutputs, setOpenOutputs] = useState<ReadonlySet<string>>(() => new Set());
+  const base = useMemo(
+    () => treeLayout(graph, collapsed, openOutputs),
+    [graph, collapsed, openOutputs],
+  );
+  // The selected Node's references, marked on the cards at either end instead of drawn as lines.
+  const rel = useMemo(() => {
+    const n = focus ? graph.nodes.get(focus) : undefined;
+    const out = new Map<string, "cites" | "citedBy">();
+    if (!n) return out;
+    for (const i of n.incoming) if (i.from.kind === "node") out.set(i.from.id, "citedBy");
+    for (const l of n.links)
+      if (l.ref?.kind === "node" && l.ref.id !== n.parentId && !n.childIds.includes(l.ref.id))
+        out.set(l.ref.id, "cites");
+    for (const m of n.materials) if (m.kind === "node" && m.id) out.set(m.id, "cites");
+    out.delete(n.id);
+    return out;
+  }, [graph, focus]);
   const lensView = useMemo(
     () => (lensId ? lensLayout(graph, lensId, visible) : null),
     [graph, lensId, visible],
@@ -552,7 +623,7 @@ function MapContent({
     for (const id of new Set([...base.placed.keys(), ...view.placed.keys()])) {
       if (!visible(id)) continue;
       const at = view.placed.get(id) ?? base.placed.get(id)!;
-      const n = graph.nodes.get(id)!;
+      const fold = lensView ? undefined : base.folds?.get(id);
       out.push({
         // Top-left position computed here: an origin offset would wait for measurement and move the card twice.
         id,
@@ -565,7 +636,17 @@ function MapContent({
           graph,
           id,
           h: at.h,
-          top: !n.parentId,
+          w: at.w,
+          top: at.h >= CARD.top - 2,
+          fold: fold
+            ? { ids: fold, open: false }
+            : !lensView && openOutputs.has(id)
+              ? {
+                  ids: graph.childrenOf(id).flatMap((c) => (isResult(graph, c.id) ? [c.id] : [])),
+                  open: true,
+                }
+              : null,
+          rel: lensView ? null : (rel.get(id) ?? null),
           selected: selected?.id === id,
           touched: touched.has(id),
           dim: !lensView && !!lit && id !== focus && !lit.has(id),
@@ -590,6 +671,8 @@ function MapContent({
     base,
     view,
     lensView,
+    openOutputs,
+    rel,
     visible,
     exists,
     touched,
@@ -622,11 +705,10 @@ function MapContent({
         !exists(target)
       )
         return;
-      // The lens shows only the focused Node's own lines.
-      if (lensId && source !== lensId && target !== lensId) return;
+      // The lens shows only the focused Node's own lines. Elsewhere references are marks on the cards, not
+      // lines; the tree keeps its own.
+      if (lensId ? source !== lensId && target !== lensId : kind === "ref") return;
       const hot = !!lensId || [focus, hover].some((id) => id && (source === id || target === id));
-      // References stay out of the way until a card is selected or hovered, unless asked for.
-      if (kind === "ref" && !hot && !filters.allRefs) return;
       seen.add(key);
       out.push({
         id: key,
@@ -671,7 +753,7 @@ function MapContent({
     for (const e of refs) e.data!.route = routed.current.routes.get(e.id);
     // Lines that matter now draw last, above the rest.
     return out.sort((x, y) => Number(x.data!.hot) - Number(y.data!.hot));
-  }, [graph, view, lensId, visible, exists, filters.allRefs, focus, lit, hover]);
+  }, [graph, view, lensId, visible, exists, focus, lit, hover]);
 
   // ---------- viewport ----------
   /** Width the map can actually show: on narrow screens the details panel floats over its right side. */
@@ -686,15 +768,15 @@ function MapContent({
     return el.clientWidth - over;
   }, []);
   const inView = useCallback(
-    (r: Rect) => {
+    (r: Rect, margin = 12) => {
       const el = box.current;
       if (!el) return true;
       const v = flow.getViewport();
       return (
-        r.x * v.zoom + v.x >= 12 &&
-        r.y * v.zoom + v.y >= 12 &&
-        (r.x + r.w) * v.zoom + v.x <= clearWidth() - 12 &&
-        (r.y + r.h) * v.zoom + v.y <= el.clientHeight - PAD.bottom + 24
+        r.x * v.zoom + v.x >= margin &&
+        r.y * v.zoom + v.y >= margin &&
+        (r.x + r.w) * v.zoom + v.x <= clearWidth() - margin &&
+        (r.y + r.h) * v.zoom + v.y <= el.clientHeight - PAD.bottom + 36 - margin
       );
     },
     [flow, clearWidth],
@@ -819,7 +901,7 @@ function MapContent({
         const n = graph.nodes.get(selected.id);
         // Bring the card in with what it hangs from and what hangs from it, or at least its parent,
         // centred in the part of the map that no floating panel covers.
-        if (p && n && !inView(rectOf(p))) {
+        if (p && n && !inView(rectOf(p), COMFORT)) {
           const rectsOf = (ids: (string | null)[]) =>
             ids.flatMap((id) => {
               const q = id ? base.placed.get(id) : undefined;
@@ -836,7 +918,7 @@ function MapContent({
           };
           const family = rectsOf([n.parentId, selected.id, ...n.childIds]);
           const rects = fits(family) >= 0.7 ? family : rectsOf([n.parentId, selected.id]);
-          fitRects(rects, Math.max(flow.getZoom(), READABLE), { duration: 350 });
+          fitRects(rects, Math.max(flow.getZoom(), READABLE), { duration: 350 }, READABLE);
         }
       }
     }, 140);
@@ -1038,6 +1120,14 @@ function MapContent({
         foldAnchor.current = id;
         onFold(id);
       },
+      onOutputs: (id) => {
+        foldAnchor.current = id;
+        setOpenOutputs((open) => {
+          const next = new Set(open);
+          if (!next.delete(id)) next.add(id);
+          return next;
+        });
+      },
     }),
     [hotLane, selected, onSelect, onFold],
   );
@@ -1187,17 +1277,6 @@ function MapContent({
         <span className="tool-sep" />
         <button
           type="button"
-          className="tool"
-          aria-pressed={filters.allRefs}
-          onClick={() => setFilters((f) => ({ ...f, allRefs: !f.allRefs }))}
-          aria-label={t.map.refs}
-          data-tip={t.map.refsTitle}
-        >
-          <Icon name="refs" size={15} />
-          <span className="lbl">{t.map.refs}</span>
-        </button>
-        <button
-          type="button"
           className="tool tool-lens"
           aria-pressed={!!lensId}
           disabled={selected?.kind !== "node"}
@@ -1324,12 +1403,6 @@ function MapKey({ graph }: { graph: Graph }) {
           <span className="key-line" />
         </dt>
         <dd>{t.map.keyTree}</dd>
-      </div>
-      <div>
-        <dt>
-          <span className="key-line ref" />
-        </dt>
-        <dd>{t.map.keyRef}</dd>
       </div>
       <div className="mapkey-keys">
         <dt>

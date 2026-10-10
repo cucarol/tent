@@ -36,6 +36,7 @@ import {
   ReviewRow,
 } from "./Details.js";
 import { useFlags } from "../data/flags.js";
+import { CardMenu, NodeMenu, RoleMenu } from "./Manage.js";
 import { Letter, saveState } from "../shell/Sidebar.js";
 import { beginDrag, useDragState } from "../shell/drag.js";
 import { draftTitle, PUBLIC, sourceIds, type Work } from "../shell/work.js";
@@ -503,7 +504,8 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
       (error) => {
         if (!live) return;
         setRead(null);
-        onToast(describe(error));
+        // Deleted meanwhile: the next snapshot closes the page, so there is nothing to report.
+        if (!(error instanceof ApiError && error.status === 404)) onToast(describe(error));
       },
     );
     return () => {
@@ -677,6 +679,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
         <Icon name={at >= 0 ? "check" : "addToCard"} size={15} />
         {at < 0 ? t.side.attach : narrow ? t.page.inDraftShort(at + 1) : t.page.inDraft(at + 1)}
       </button>
+      <NodeMenu graph={graph} node={node} onGone={props.onClose} onToast={onToast} />
     </>
   );
   const carriedSection = (
@@ -851,6 +854,16 @@ function splitLede(body: string): [string, string] {
   return [first.replace(/\s*\n\s*/g, " "), end < 0 ? "" : trimmed.slice(end)];
 }
 
+/** The name a deleted Node or Role had, from the end of its pinned document path. */
+function goneName(resource: string): string {
+  const last = resource.split("/").pop() ?? resource;
+  try {
+    return decodeURIComponent(last).replace(/\.md$/, "");
+  } catch {
+    return last;
+  }
+}
+
 function RolePage(props: PageProps & { role: SnapshotRole }) {
   const { graph, role, work, narrow, onOpen, onToast } = props;
   const drag = useDragState();
@@ -869,16 +882,22 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
         glyph={<Pet id={role.id} size={16} />}
         crumbs={[<Crumb key="role">Role</Crumb>, <Crumb key="name">{role.title}</Crumb>]}
         actions={
-          <button
-            type="button"
-            className="btn accent"
-            onClick={() => void work.newCard(role.id)}
-            data-tip={narrow ? t.page.writeFor(role.title) : undefined}
-            data-tip-end=""
-          >
-            <Icon name="addToCard" size={15} />
-            {narrow ? t.side.newCard : t.page.writeFor(role.title)}
-          </button>
+          <>
+            {/* An archived Role takes no new Cards. */}
+            {role.status !== "deprecated" && (
+              <button
+                type="button"
+                className="btn accent"
+                onClick={() => void work.newCard(role.id)}
+                data-tip={narrow ? t.page.writeFor(role.title) : undefined}
+                data-tip-end=""
+              >
+                <Icon name="addToCard" size={15} />
+                {narrow ? t.side.newCard : t.page.writeFor(role.title)}
+              </button>
+            )}
+            <RoleMenu role={role} onToast={onToast} />
+          </>
         }
       />
       <PageBody
@@ -904,6 +923,9 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
                   <b>Role</b>
                   <span className="dot-sep">·</span>
                   <span>{t.page.roleKind}</span>
+                  {role.status !== "stable" && (
+                    <span className="pill">{t.node.status(role.status)}</span>
+                  )}
                 </>
               }
               title={role.title}
@@ -1026,6 +1048,9 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
           </Crumb>,
           <Crumb key="title">{title}</Crumb>,
         ]}
+        actions={
+          card.status === "deprecated" ? undefined : <CardMenu card={card} onToast={onToast} />
+        }
       />
       <PageBody
         narrow={narrow}
@@ -1054,6 +1079,9 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
                   >
                     {status}
                   </span>
+                  {card.status === "deprecated" && (
+                    <span className="pill">{t.manage.withdrawnPill}</span>
+                  )}
                 </>
               }
               title={title}
@@ -1162,6 +1190,8 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
               {card.sources.map((s, i) => {
                 const node = s.id ? graph.nodes.get(s.id) : undefined;
                 const role = s.id ? graph.roles.get(s.id) : undefined;
+                // A Node or Role deleted since: its pinned name, not the encoded path to where it was.
+                const gone = !!s.id && !node && !role && (s.kind === "node" || s.kind === "role");
                 return (
                   <li key={i}>
                     <span className="num ref">{i + 1}</span>
@@ -1179,12 +1209,16 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
                         )}
                         <span>{node?.name ?? role!.title}</span>
                       </button>
+                    ) : gone ? (
+                      <span className="t is-gone">{s.title ?? goneName(s.resource)}</span>
                     ) : (
                       <span className="t">
                         <MaterialName material={s} />
                       </span>
                     )}
-                    {s.changedSince && s.version ? (
+                    {gone ? (
+                      <span className="same">{t.page.sourceGone}</span>
+                    ) : s.changedSince && s.version ? (
                       <button
                         type="button"
                         className={`chg${since === i ? " is-open" : ""}`}
