@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { FsAdapter } from "./adapter.js";
-import { isHistoryDocument } from "./document-history.js";
+import { isHistoryFile } from "./document-history.js";
 import {
   CARDS_DIR,
   ROLES_DIR,
@@ -26,7 +26,7 @@ export async function workspaceDocumentPaths(fs: FsAdapter): Promise<string[]> {
           continue;
         if (dir === ROLES_DIR || dir === CARDS_DIR) continue;
         await visit(file);
-      } else if (isHistoryDocument(file)) files.push(file);
+      } else if (isHistoryFile(file)) files.push(file);
     }
   }
   await visit("");

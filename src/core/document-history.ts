@@ -1,6 +1,11 @@
 import type { FsAdapter } from "./adapter.js";
 import type { CaptureMetadata, DocumentVersion } from "./git-history.js";
-import { isOperationalPath, nodeNotePath, MUTATION_LOCK_PATH } from "./paths.js";
+import { isOperationalPath, nodeNotePath, MUTATION_LOCK_PATH, CANVAS_PATH } from "./paths.js";
+
+/** Retained files also include the canvas, which has no Node/Role/Card identity. */
+export function isHistoryFile(file: string): boolean {
+  return file === CANVAS_PATH || isHistoryDocument(file);
+}
 
 /** Identity documents participate; operational caches do not. */
 export function isHistoryDocument(file: string): boolean {

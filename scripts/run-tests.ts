@@ -26,6 +26,7 @@ export const INTEGRATION_TEST_FILES = Object.freeze([
   "test/cli-workspace-tools.test.ts",
   "test/cli-ui.test.ts",
   "test/context-phase1.integration.test.ts",
+  "test/core-canvas.test.ts",
   "test/core-document-history.test.ts",
   "test/core-workspace-ui.test.ts",
   "test/direct-workspace-export.test.ts",

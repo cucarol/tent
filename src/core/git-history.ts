@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import * as z from "zod/v4";
 import { parseFrontmatter } from "./frontmatter.js";
 import { isCardId, isNodeId, isRoleId } from "./id.js";
-import { isHistoryDocument } from "./document-history.js";
+import { isHistoryDocument, isHistoryFile } from "./document-history.js";
 import { isDeepStrictEqual } from "node:util";
 import { nodeBasisRecordSchema, type NodeBasisRecord } from "./node-basis-record.js";
 import { SYSTEM_REGISTRY_FILES, TEMP_DIR, ATTACHMENTS_DIR, TENT_SYSTEM_DIR } from "./paths.js";
@@ -616,7 +616,7 @@ export class GitDocumentHistory {
         const frontmatters: Record<string, Record<string, unknown>> = { ...base?.frontmatters };
         for (const record of records)
           for (const entry of record.files) {
-            if (!isHistoryDocument(entry.path) || entry.status === "T") continue;
+            if (!isHistoryFile(entry.path) || entry.status === "T") continue;
             if (entry.beforeBlob && !(entry.beforeBlob in blobs)) objects.add(entry.beforeBlob);
             if (entry.afterBlob && !(entry.afterBlob in blobs)) objects.add(entry.afterBlob);
           }
@@ -686,7 +686,7 @@ export class GitDocumentHistory {
     for (const record of snapshot.records)
       for (const entry of record.files) {
         documentPath(entry.path);
-        if (!isHistoryDocument(entry.path) || entry.status === "T") continue;
+        if (!isHistoryFile(entry.path) || entry.status === "T") continue;
         if (entry.beforeBlob && !(entry.beforeBlob in snapshot.blobs)) return false;
         if (entry.afterBlob && !(entry.afterBlob in snapshot.blobs)) return false;
       }
@@ -1051,6 +1051,7 @@ export class GitDocumentHistory {
       ...(metadata.acknowledgedOutputIds ?? []),
     ]);
     for (const change of changes) {
+      if (!isHistoryDocument(change.path)) continue;
       if (this.knownEntries.get(change.path) === expected.get(change.path)) continue;
       if (change.raw !== null) {
         const id = identity(change.raw);
@@ -1313,7 +1314,7 @@ export class GitDocumentHistory {
       else if (blob in snapshot.blobs) {
         rawByVersion.set(key, snapshot.blobs[blob]!);
         const data = snapshot.frontmatters[blob];
-        if (data) dataByVersion.set(key, data);
+        if (data && isHistoryDocument(version.path)) dataByVersion.set(key, data);
       } else missing.add(key);
       const group = requests.get(version.commit) ?? [];
       group.push(version);
@@ -1478,7 +1479,7 @@ export class GitDocumentHistory {
   /** Changes from an exclusive ancestor to an inclusive descendant, oldest first. */
   async changesInRange(range: { from?: string; to?: string } = {}): Promise<HistoryCommit[]> {
     if (!range.from && !range.to)
-      return this.derived("identity-events", 3, () => this.buildChangesInRange(range));
+      return this.derived("identity-events", 4, () => this.buildChangesInRange(range));
     return this.buildChangesInRange(range);
   }
 
@@ -1521,7 +1522,7 @@ export class GitDocumentHistory {
         if (!row) continue;
         const separator = row.indexOf("\t"),
           file = documentPath(row.slice(separator + 1));
-        if (!isHistoryDocument(file)) continue;
+        if (!isHistoryFile(file)) continue;
         const [, type, object] = row.slice(0, separator).split(" ");
         if (type !== "blob") throw new Error(`Git history document is not a blob: ${file}`);
         const blob = oid(object!);
@@ -1531,7 +1532,7 @@ export class GitDocumentHistory {
     }
     for (const record of records)
       for (const file of record.files) {
-        if (!isHistoryDocument(file.path) || file.status === "T") continue;
+        if (!isHistoryFile(file.path) || file.status === "T") continue;
         if (file.beforeBlob) objects.add(file.beforeBlob);
         if (file.afterBlob) objects.add(file.afterBlob);
       }
@@ -1543,6 +1544,7 @@ export class GitDocumentHistory {
     const result: HistoryCommit[] = [];
     const live = new Map<string, string>();
     for (const file of initial) {
+      if (!isHistoryDocument(file.path)) continue;
       const id = identities.get(file.blob);
       if (id) live.set(file.path, id);
     }
@@ -1565,11 +1567,13 @@ export class GitDocumentHistory {
       const changes: HistoryChange[] = [];
       const byId = new Map<string, HistoryChange>();
       for (const { path: file, status, beforeBlob, afterBlob } of files) {
-        if (!isHistoryDocument(file) || status === "T") continue;
+        if (!isHistoryFile(file) || status === "T") continue;
         const before = parent && beforeBlob ? { commit: parent, path: file } : undefined;
         const after = afterBlob ? { commit, path: file } : undefined;
-        const beforeId = beforeBlob ? identities.get(beforeBlob) : undefined;
-        const afterId = afterBlob ? identities.get(afterBlob) : undefined;
+        // Blob bytes can be shared by a Node and a corrupt canvas; only the path has identity.
+        const hasIdentity = isHistoryDocument(file);
+        const beforeId = hasIdentity && beforeBlob ? identities.get(beforeBlob) : undefined;
+        const afterId = hasIdentity && afterBlob ? identities.get(afterBlob) : undefined;
         live.delete(file);
         if (afterId) live.set(file, afterId);
         if (beforeId && afterId && beforeId !== afterId) {

@@ -14,6 +14,12 @@ import {
   CardDocumentError,
 } from "../core/card-document.js";
 import { ReaderError } from "../core/context-reader.js";
+import {
+  CANVAS_LIMIT,
+  CanvasError,
+  readCanvasDocument,
+  writeCanvasDocument,
+} from "../core/canvas.js";
 import { readDocumentDiff, readDocumentVersion } from "../core/document-diff.js";
 import { parseFrontmatter, serializeFrontmatter } from "../core/frontmatter.js";
 import { documentVersionSchema } from "../core/git-history.js";
@@ -141,7 +147,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   let port = 0;
   let cached: Snapshot | undefined;
   let building: { revision: string; fresh: boolean; snapshot: Promise<Snapshot> } | undefined;
-  // Tent's lock turns a second writer away instead of waiting, so writes from this service queue up.
+  // Queue writes from this service before entering Tent's bounded cross-process lock wait.
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T>(write: () => Promise<T>): Promise<T> => {
     const run = queue.then(write, write);
@@ -196,6 +202,21 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
 
     if (route === "GET /api/revision")
       return json(res, 200, { revision: await readWorkspaceRevision(queryFs) });
+    if (route === "GET /api/canvas") return json(res, 200, await readCanvasDocument(fs));
+    if (route === "PUT /api/canvas") {
+      // Allow the CAS envelope as well as a canvas at the file-size limit.
+      const input = record(await readJson(req, CANVAS_LIMIT + 1024));
+      return json(
+        res,
+        200,
+        await serial(() =>
+          writeCanvasDocument(fs, {
+            baseEtag: input.baseEtag,
+            canvas: input.canvas,
+          }),
+        ),
+      );
+    }
     if (route === "GET /api/sync") {
       // The initial UI read runs beside the snapshot; keep its starting document revision.
       const revision = await readWorkspaceRevision(queryFs);
@@ -684,6 +705,13 @@ async function managed<T>(work: Promise<T>): Promise<T> {
 
 function httpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
+  if (error instanceof CanvasError)
+    return new HttpError(
+      error.code === "ETAG_CONFLICT" ? 409 : 422,
+      error.code,
+      error.message,
+      error.details,
+    );
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof NodeWriteError) {
     const status = error.code === "ETAG_CONFLICT" ? 409 : error.code === "NOT_FOUND" ? 404 : 422;
@@ -703,7 +731,7 @@ function httpError(error: unknown): HttpError {
   if (error instanceof Error && error.name === "ZodError")
     return new HttpError(422, "INVALID_INPUT", validationIssueText(error) ?? message);
   // Another Tent writer (the CLI, say) holds the lock; nothing was written, so the page retries.
-  if (/already running another write operation/.test(message))
+  if (/already running another write operation|Tent mutation lock is still busy/.test(message))
     return new HttpError(503, "BUSY", message);
   if ((error as NodeJS.ErrnoException)?.code === "ENOENT")
     return new HttpError(404, "NOT_FOUND", message);

@@ -94,6 +94,105 @@ async function fixture(t: TestContext) {
 
 const json = <T>(reply: Reply) => JSON.parse(reply.body) as T;
 
+test("canvas API queues CAS writes and exposes current state, history and security errors", async (t) => {
+  const { tent, call } = await fixture(t);
+  const target = "/api/canvas";
+  const canvas = { version: 1, forms: {}, positions: {}, drawings: [] };
+  assert.deepEqual(json(await call("GET", target)), { etag: null, canvas: null });
+  assert.equal(await tent.exists("canvas.json"), false);
+  assert.equal((await call("GET", target, { token: null })).status, 401);
+  assert.equal(
+    (
+      await call("PUT", target, {
+        json: { baseEtag: null, canvas },
+        headers: { Origin: "https://other.invalid" },
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await call("PUT", target, {
+        json: { baseEtag: null, canvas },
+        headers: { Host: "other.invalid" },
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await call("PUT", target, {
+        json: { baseEtag: null, canvas },
+        headers: { "Content-Type": "text/plain" },
+      })
+    ).status,
+    415,
+  );
+  const before = json<{ revision: string }>(await call("GET", "/api/revision"));
+  const concurrent = await Promise.all([
+    call("PUT", target, { json: { baseEtag: null, canvas } }),
+    call("PUT", target, { json: { baseEtag: null, canvas } }),
+  ]);
+  assert.deepEqual(concurrent.map((r) => r.status).sort(), [200, 409]);
+  const saved = json<{ etag: string; version: { commit: string; path: string } }>(
+    concurrent.find((r) => r.status === 200)!,
+  );
+  const current = json(await call("GET", target));
+  assert.deepEqual(current, { etag: saved.etag, canvas });
+  assert.deepEqual(
+    json<{ error: { code: string; details: { current: unknown } } }>(
+      concurrent.find((r) => r.status === 409)!,
+    ).error,
+    {
+      code: "ETAG_CONFLICT",
+      message: "Canvas changed; reread before saving",
+      details: { current },
+    },
+  );
+  assert.notEqual(
+    json<{ revision: string }>(await call("GET", "/api/revision")).revision,
+    before.revision,
+  );
+  const historical = await call(
+    "GET",
+    `/api/history/document?at=${saved.version.commit}:canvas.json`,
+  );
+  assert.equal(historical.status, 200);
+  assert.deepEqual(JSON.parse(json<{ raw: string }>(historical).raw), canvas);
+  for (const input of [{ canvas }, { baseEtag: saved.etag, canvas: {} }]) {
+    const invalid = await call("PUT", target, { json: input });
+    assert.equal(invalid.status, 422);
+    assert.equal(json<{ error: { code: string } }>(invalid).error.code, "INVALID_INPUT");
+  }
+  const huge = await call("PUT", target, {
+    json: {
+      baseEtag: saved.etag,
+      canvas: {
+        ...canvas,
+        drawings: [{ id: "x", kind: "text", node: null, text: "x".repeat(5 * 1024 * 1024 + 1024) }],
+      },
+    },
+  });
+  assert.equal(huge.status, 413);
+  assert.deepEqual(json(await call("GET", target)), current);
+  await tent.writeFile("canvas.json", "broken");
+  assert.equal((await call("GET", target)).status, 422);
+  assert.equal((await call("PUT", target, { json: { baseEtag: saved.etag, canvas } })).status, 422);
+  assert.equal(await tent.readFile("canvas.json"), "broken");
+});
+
+test("canvas API reports a busy workspace lock without writing", async (t) => {
+  const { tent, call } = await fixture(t);
+  await tent.withLock("mutation.lock", async () => {
+    const reply = await call("PUT", "/api/canvas", {
+      json: { baseEtag: null, canvas: { version: 1, forms: {}, positions: {}, drawings: [] } },
+    });
+    assert.equal(reply.status, 503);
+    assert.equal(json<{ error: { code: string } }>(reply).error.code, "BUSY");
+    assert.equal(await tent.exists("canvas.json"), false);
+  });
+});
+
 test("Web confirmation records the local human or explicit actor with full-document CAS", async (t) => {
   const { tent, call } = await fixture(t);
   const target = "/api/nodes/node-main";

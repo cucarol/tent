@@ -9,7 +9,7 @@ import { checkedSourceFile } from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { GitDocumentHistory, type CaptureMetadata } from "../core/git-history.js";
-import { isHistoryDocument } from "../core/document-history.js";
+import { isHistoryDocument, isHistoryFile } from "../core/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 import { observeMaterialResource } from "./source-observation.js";
 import { DirectoryObservationCache } from "./directory-observation.js";
@@ -178,7 +178,7 @@ export class NodeFs implements FsAdapter {
     const tracked = await this.beforeHistoryChange([path]);
     await fs.mkdir(nodePath.dirname(abs), { recursive: true });
     await this.atomicReplace(abs, content, "utf8");
-    if (tracked && isHistoryDocument(path)) tracked.set(path, content);
+    if (tracked && isHistoryFile(path)) tracked.set(path, content);
   }
 
   async readBinary(path: string): Promise<Uint8Array> {
@@ -217,7 +217,7 @@ export class NodeFs implements FsAdapter {
     await fs.mkdir(nodePath.dirname(abs), { recursive: true });
     const payload = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     await this.atomicReplace(abs, payload);
-    if (tracked && isHistoryDocument(path))
+    if (tracked && isHistoryFile(path))
       tracked.set(path, new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(payload));
   }
 
@@ -257,9 +257,8 @@ export class NodeFs implements FsAdapter {
     await fs.rename(this.abs(from), this.abs(to));
     if (tracked)
       for (let i = 0; i < files.length; i++) {
-        if (isHistoryDocument(files[i]!)) tracked.set(files[i]!, null);
-        if (isHistoryDocument(targets[i]!))
-          tracked.set(targets[i]!, await this.readFile(targets[i]!));
+        if (isHistoryFile(files[i]!)) tracked.set(files[i]!, null);
+        if (isHistoryFile(targets[i]!)) tracked.set(targets[i]!, await this.readFile(targets[i]!));
       }
   }
 
@@ -267,7 +266,7 @@ export class NodeFs implements FsAdapter {
     const files = this.historyWrites.getStore() ? await this.filesUnder(path) : [];
     const tracked = await this.beforeHistoryChange(files);
     await fs.rm(this.abs(path), { recursive: true, force: true });
-    if (tracked) for (const file of files) if (isHistoryDocument(file)) tracked.set(file, null);
+    if (tracked) for (const file of files) if (isHistoryFile(file)) tracked.set(file, null);
   }
 
   async removeEmptyDir(path: string): Promise<void> {
@@ -396,7 +395,7 @@ export class NodeFs implements FsAdapter {
     if (!tracked) return;
     const before = [];
     const expected = new Map<string, string | null>();
-    for (const path of new Set(paths.filter(isHistoryDocument))) {
+    for (const path of new Set(paths.filter(isHistoryFile))) {
       const raw = await this.readFile(path).catch((error) => {
         if (error.code === "ENOENT") return null;
         throw error;
