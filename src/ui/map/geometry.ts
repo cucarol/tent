@@ -2,8 +2,8 @@ import type { Layout, Placed, Rect } from "./layout.js";
 
 /** References run between card sides and end in an arrow, so they read as "this cites that". */
 export function refPath(a: Rect, b: Rect) {
-  const ay = a.y + a.h / 2,
-    by = b.y + b.h / 2;
+  const ay = a.y + (a.head ?? a.h) / 2,
+    by = b.y + (b.head ?? b.h) / 2;
   let sx: number, tx: number, out: number, arrive: number;
   if (b.x >= a.x + a.w + 24) {
     sx = a.x + a.w;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fileKind, fileOf, filePaths, fileSize, infoOf } from "../src/ui/data/files.js";
+import { fileKind, fileOf, filePaths, fileSize, infoOf, previewOf } from "../src/ui/data/files.js";
 import type { Snapshot, SnapshotMaterial, SnapshotNode } from "../src/ui/data/types.js";
 
 const node = (id: string, type: string, materials: SnapshotMaterial[]) =>
@@ -21,7 +21,7 @@ test("a file is shown by its suffix", () => {
     ["src/core/x.mjs", "text"],
     ["docs/SPEC.md#Reception", "text"],
     ["data/model.bin", "other"],
-    ["slides/deck.pdf", "other"],
+    ["slides/deck.pdf", "pdf"],
     ["Makefile", "other"],
   ];
   for (const [resource, kind] of cases) assert.equal(fileKind(resource), kind, resource);
@@ -72,4 +72,23 @@ test("file info is read from the map's own keys", () => {
   const files = JSON.parse('{"__proto__":null,"a.png":{"size":3,"modifiedAt":"x"}}');
   assert.equal(infoOf(files, "__proto__"), null, "missing");
   assert.equal(infoOf(files, "a.png")!.size, 3);
+});
+
+test("a card offers a preview of any file a note could embed, when it is there and small enough", () => {
+  const own = (path: string) =>
+    node("node-a", "output", [
+      { kind: "file", resource: `../../${path}`, workspacePath: path, field: "resource" },
+    ]);
+  const files = {
+    "out/deck.pdf": { size: 2048, modifiedAt: "2026-10-13T00:00:00Z" },
+    "out/note.wav": { size: 2048, modifiedAt: "2026-10-13T00:00:00Z" },
+    "out/model.bin": { size: 2048, modifiedAt: "2026-10-13T00:00:00Z" },
+    "out/huge.png": { size: 21 * 1024 * 1024, modifiedAt: "2026-10-13T00:00:00Z" },
+    "out/gone.png": null,
+  };
+  assert.equal(previewOf(own("out/deck.pdf"), files)?.show, "pdf");
+  // Audio plays in the browser's own player under the card.
+  assert.equal(previewOf(own("out/note.wav"), files)?.show, "audio");
+  for (const path of ["out/model.bin", "out/huge.png", "out/gone.png", "out/unknown.png"])
+    assert.equal(previewOf(own(path), files), null, path);
 });

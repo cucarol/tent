@@ -28,7 +28,9 @@ import { primaryOf, type Graph, type Hand, type Primary } from "../data/store.js
 import type { SnapshotCommit, SnapshotRef, SyncFlag, SyncFlags } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
 import { FileGlyph, Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
-import { fileOf, infoOf, useFiles } from "../data/files.js";
+import { fileOf, infoOf, previewOf, useFiles } from "../data/files.js";
+import type { LocalFile } from "../panel/FileView.js";
+import { CardPreview, previewHeight } from "./CardPreview.js";
 import { Pet } from "../components/Pet.js";
 import {
   CARD,
@@ -66,6 +68,8 @@ type CardData = {
   id: string;
   h: number;
   w: number;
+  /** Its file, when the card can open a preview of it, and whether that preview is open. */
+  preview: { file: LocalFile; open: boolean } | null;
   /** In the tree, this card's result outputs: folded into a count, or opened as children. */
   fold: { ids: string[]; open: boolean } | null;
   /** Its reference to or from the selected Node. */
@@ -99,12 +103,15 @@ type Actions = {
   onFold: (id: string) => void;
   /** Opens a card's folded result outputs as children, or folds them again. */
   onOutputs: (id: string) => void;
+  /** Opens a preview of the card's file under it, or closes it. */
+  onPreview: (id: string) => void;
 };
 const MapActions = createContext<Actions>({
   activeRole: null,
   onRole: () => {},
   onFold: () => {},
   onOutputs: () => {},
+  onPreview: () => {},
 });
 /** Ahead and behind Nodes; every other card stays quiet. */
 const MapFlags = createContext<SyncFlags>({});
@@ -143,7 +150,7 @@ function Handles() {
  * and the lanes it went to in Cards.
  */
 const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
-  const { onFold, onOutputs } = useContext(MapActions);
+  const { onFold, onOutputs, onPreview } = useContext(MapActions);
   const flags = useContext(MapFlags);
   const flag = flags[data.id];
   const files = useFiles();
@@ -155,10 +162,15 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
   const file = fileOf(n);
   const local = file?.kind === "file" ? file : null;
   const missing = !!local && infoOf(files, local.path) === null;
-  return (
+  const open = !!data.preview?.open;
+  const tileSize = data.top ? 26 : 22;
+  const glyph = local && (
+    <FileGlyph show={local.show} missing={missing} size={data.top ? 14 : 12} />
+  );
+  const card = (
     <div
       className={`mcard t-${p}${local ? " is-file" : ""}${missing ? " is-missing" : ""}${data.top ? " is-top" : ""}${data.rel ? " is-rel" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? ` is-behind${onlyGaps(flag.behind.reasons) ? " is-gap" : ""}` : ""}`}
-      style={{ width: data.w, height: data.h }}
+      style={{ width: data.w, height: open ? (data.top ? CARD.top : CARD.h) : data.h }}
     >
       <Handles />
       {data.pin > 0 && (
@@ -166,13 +178,32 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
           {data.pin}
         </span>
       )}
-      {local ? (
+      {local && data.preview ? (
+        // The file's tile opens a look at the file under the card, as a note embeds it.
+        <button
+          type="button"
+          className={`tile k-${p} is-file mcard-preview nopan nodrag${open ? " is-open" : ""}`}
+          style={{ width: tileSize, height: tileSize }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPreview(data.id);
+          }}
+          aria-label={open ? t.map.closePreview : t.map.openPreview}
+          aria-pressed={open}
+          data-tip={open ? t.map.closePreview : t.map.openPreview}
+        >
+          {glyph}
+          <span className="mcard-preview-eye">
+            <Icon name={open ? "unpreview" : "preview"} size={data.top ? 14 : 12} />
+          </span>
+        </button>
+      ) : local ? (
         <span
           className={`tile k-${p} is-file`}
-          style={{ width: data.top ? 26 : 22, height: data.top ? 26 : 22 }}
+          style={{ width: tileSize, height: tileSize }}
           title={missing ? t.file.missing : local.path}
         >
-          <FileGlyph show={local.show} missing={missing} size={data.top ? 14 : 12} />
+          {glyph}
         </span>
       ) : (
         <TypeTile kind={n.type} size={data.top ? 26 : 22} />
@@ -244,6 +275,15 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
       )}
     </div>
   );
+  // A preview hangs under its card; the card stays the title row that links meet.
+  if (open && data.preview)
+    return (
+      <div className="mstack" style={{ width: data.w, height: data.h }}>
+        {card}
+        <CardPreview file={data.preview.file} graph={data.graph} />
+      </div>
+    );
+  return card;
 });
 
 /**
@@ -612,9 +652,30 @@ function MapContent({
   }, [selected?.kind]);
 
   const [openOutputs, setOpenOutputs] = useState<ReadonlySet<string>>(() => new Set());
+  // Cards showing a preview of their file: kept in this browser only, like what is folded.
+  const files = useFiles();
+  const previewKey = `tent-map-previews:${graph.snapshot.workspace.id}`;
+  const [previews, setPreviews] = useState<ReadonlySet<string>>(
+    () => new Set(readStored<string[]>(previewKey, [])),
+  );
+  useEffect(() => setPreviews(new Set(readStored<string[]>(previewKey, []))), [previewKey]);
+  const previewFile = useCallback(
+    (id: string) => {
+      const n = graph.nodes.get(id);
+      return n ? previewOf(n, files) : null;
+    },
+    [graph, files],
+  );
+  const grown = useCallback(
+    (id: string) => {
+      const file = previews.has(id) ? previewFile(id) : null;
+      return file ? previewHeight(file) : 0;
+    },
+    [previews, previewFile],
+  );
   const base = useMemo(
-    () => treeLayout(graph, collapsed, openOutputs),
-    [graph, collapsed, openOutputs],
+    () => treeLayout(graph, collapsed, openOutputs, grown),
+    [graph, collapsed, openOutputs, grown],
   );
   // The selected Node's references, marked on the cards at either end instead of drawn as lines.
   const rel = useMemo(() => {
@@ -645,7 +706,7 @@ function MapContent({
         // Top-left position computed here: an origin offset would wait for measurement and move the card twice.
         id,
         type: "node",
-        position: { x: at.x, y: at.y - at.h / 2 },
+        position: { x: at.x, y: rectOf(at).y },
         draggable: false,
         // Cards outside the lens, or not yet written at the chosen time, keep their place invisibly.
         className: view.placed.has(id) && exists(id) ? undefined : "is-away",
@@ -654,7 +715,11 @@ function MapContent({
           id,
           h: at.h,
           w: at.w,
-          top: at.h >= CARD.top - 2,
+          preview: (() => {
+            const file = lensView ? null : previewFile(id);
+            return file ? { file, open: previews.has(id) && !!at.head } : null;
+          })(),
+          top: (at.head ?? at.h) >= CARD.top - 2,
           fold: fold
             ? { ids: fold, open: false }
             : !lensView && openOutputs.has(id)
@@ -1145,8 +1210,17 @@ function MapContent({
           return next;
         });
       },
+      onPreview: (id) => {
+        foldAnchor.current = id;
+        setPreviews((open) => {
+          const next = new Set(open);
+          if (!next.delete(id)) next.add(id);
+          writeStored(previewKey, [...next]);
+          return next;
+        });
+      },
     }),
-    [hotLane, selected, onSelect, onFold],
+    [hotLane, selected, onSelect, onFold, previewKey],
   );
   const lensName = lensId ? graph.nodes.get(lensId)?.name : undefined;
   // What a commit did to Nodes.
@@ -1420,6 +1494,14 @@ function MapKey({ graph }: { graph: Graph }) {
           <span className="key-line" />
         </dt>
         <dd>{t.map.keyTree}</dd>
+      </div>
+      <div>
+        <dt>
+          <span className="key-preview">
+            <Icon name="preview" size={13} />
+          </span>
+        </dt>
+        <dd>{t.map.keyPreview}</dd>
       </div>
       <div className="mapkey-keys">
         <dt>

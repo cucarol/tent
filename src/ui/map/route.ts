@@ -51,7 +51,8 @@ function sidesOf(a: Rect, b: Rect, loop: -1 | 1) {
 /** How far from the middle of a side references attach, and how far apart. */
 const OFF = 8;
 
-const cy = (r: Rect) => r.y + r.h / 2;
+// A card showing a preview is met at its title row, not halfway down the preview.
+const cy = (r: Rect) => r.y + (r.head ?? r.h) / 2;
 const round = (v: number) => Math.round(v * 2) / 2;
 
 export function routeLinks(obstacles: Rect[], links: RefLink[]): Map<string, Route> {
@@ -63,13 +64,21 @@ export function routeLinks(obstacles: Rect[], links: RefLink[]): Map<string, Rou
   for (const link of links) {
     const s = sidesOf(link.from, link.to, link.loop ?? 1);
     const { from, to } = link;
-    ends.push({ link, start: true, x: s.sx, y: cy(from), h: from.h, dir: s.out, far: cy(to) });
+    ends.push({
+      link,
+      start: true,
+      x: s.sx,
+      y: cy(from),
+      h: from.head ?? from.h,
+      dir: s.out,
+      far: cy(to),
+    });
     ends.push({
       link,
       start: false,
       x: s.tx,
       y: cy(to),
-      h: to.h,
+      h: to.head ?? to.h,
       dir: -s.arrive as 1 | -1,
       far: cy(from),
     });

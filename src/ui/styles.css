@@ -449,6 +449,43 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .mcard.is-behind.is-dim { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 40%, transparent); }
 .mcard.is-ahead.is-selected, .mcard.is-behind.is-selected { border-color: var(--accent); }
 .mcard.is-behind.is-selected { box-shadow: inset 3px 0 0 var(--warn), 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+/* A card's file preview hangs under it, as a Markdown note embeds a file. */
+.mstack { display: flex; flex-direction: column; border-radius: 9px; box-shadow: var(--shadow-xs); }
+.mstack > .mcard { flex: none; border-bottom-left-radius: 0; border-bottom-right-radius: 0; box-shadow: none; }
+.mstack > .mcard.is-top { border-top-left-radius: 11px; border-top-right-radius: 11px; }
+.mstack:hover > .mcard { box-shadow: none; }
+.mstack > .mcard.is-selected { box-shadow: 0 0 0 1px var(--accent); }
+.mcard-preview { position: relative; padding: 0; border: 0; color: inherit; cursor: pointer; }
+.mcard-preview-eye { position: absolute; inset: 0; display: none; place-items: center; color: var(--output); }
+.mcard-preview:is(:hover, :focus-visible) > .mcard-preview-eye { display: grid; }
+.mcard-preview:is(:hover, :focus-visible) > .file-glyph { visibility: hidden; }
+.mcard-preview.is-open { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--output) 55%, transparent); }
+.mcard-preview:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-soft), inset 0 0 0 1.5px var(--accent); }
+.mpreview { position: relative; flex: none; overflow: hidden; border: 1px solid var(--border); border-top-color: color-mix(in srgb, var(--border) 60%, transparent); border-radius: 0 0 9px 9px; margin-top: -1px; background: var(--bg-subtle); cursor: pointer; }
+.mpreview > * { pointer-events: none; user-select: none; }
+.mstack:has(> .mcard.is-selected) > .mpreview { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); clip-path: inset(0 -2px -2px -2px); }
+.mstack:has(> .mcard.is-dim) { box-shadow: none; }
+.mstack:has(> .mcard.is-dim) > .mpreview { opacity: .38; }
+.mpreview.is-image { background: repeating-conic-gradient(var(--bg-muted) 0 25%, var(--bg) 0 50%) 0 0 / 12px 12px; }
+.mpreview.is-video { background: #111; }
+.mpreview-media { display: block; width: 100%; height: 100%; object-fit: contain; }
+.mpreview-page { display: block; width: 200%; height: 200%; border: 0; transform: scale(.5); transform-origin: 0 0; background: #fff; }
+.mpreview-pdf { display: block; width: 100%; height: 100%; border: 0; background: var(--bg-muted); }
+.mpreview-play { position: absolute; left: 50%; top: 50%; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 0, .45); color: #fff; }
+.mpreview-text { height: 100%; margin: 0; padding: 8px 12px; overflow: hidden; background: var(--bg); color: var(--text-2); font: 11px/1.5 var(--font-mono); white-space: pre; mask-image: linear-gradient(to bottom, #000 72%, transparent); }
+.mpreview-note { display: grid; place-items: center; height: 100%; margin: 0; font-size: 12px; color: var(--text-3); }
+/* Audio keeps the browser's own player, the one part of a preview that takes the pointer. */
+.mpreview.is-audio { display: flex; align-items: center; padding: 0 8px; background: var(--bg); cursor: default; }
+.mpreview.is-audio > .mpreview-audio { pointer-events: auto; width: 100%; height: 34px; }
+/* Markdown reads as the page renders it, at a card's size. */
+.mpreview-md { height: 100%; padding: 8px 12px; overflow: hidden; background: var(--bg); color: var(--text-2); font-size: 11.5px; line-height: 1.5; mask-image: linear-gradient(to bottom, #000 72%, transparent); }
+.mpreview .mpreview-md .doc { max-width: none; font-size: 11.5px; line-height: 1.5; }
+.mpreview .mpreview-md .doc :is(h1, h2, h3, h4, h5, h6) { margin: 4px 0; font-size: 12.5px; line-height: 1.35; color: var(--text); }
+.mpreview .mpreview-md .doc :is(p, ul, ol, pre, table, blockquote) { margin: 0 0 6px; }
+.mpreview .mpreview-md :is(ul, ol) { padding-left: 16px; }
+.mpreview .mpreview-md :is(pre, code, table) { font-size: 10.5px; }
+.mpreview .mpreview-md img { max-width: 100%; }
+.key-preview { display: inline-grid; place-items: center; color: var(--output); }
 /* The lanes it went to in Cards, overlapping a little. Waiting to be received: a blue ring and an envelope;
    amber when the waiting Card pinned an older version. */
 .mcard-faces { display: flex; flex: none; align-items: center; }

@@ -9,7 +9,14 @@ import type {
   SnapshotNode,
   SnapshotRole,
 } from "../src/ui/data/types.js";
-import { CARD, lensLayout, treeLayout, type Layout, type Rect } from "../src/ui/map/layout.js";
+import {
+  CARD,
+  lensLayout,
+  rectOf,
+  treeLayout,
+  type Layout,
+  type Rect,
+} from "../src/ui/map/layout.js";
 import { nearest, refPath } from "../src/ui/map/geometry.js";
 import { routeLinks, type Pt } from "../src/ui/map/route.js";
 import { ago, relativeHref, resolveHref, workspaceImagePath } from "../src/ui/util.js";
@@ -87,6 +94,7 @@ function graphOf(nodes: SnapshotNode[], roles: SnapshotRole[] = [], cards: Snaps
   return buildGraph(snapshot);
 }
 
+const rectOfPlaced = (layout: Layout, id: string) => rectOf(at(layout, id));
 const at = (layout: Layout, id: string) => {
   const p = layout.placed.get(id);
   assert.ok(p, `${id} is placed`);
@@ -357,6 +365,31 @@ test("folding a Node leaves its branch off the map and keeps everything else", (
   const graph = graphOf([node("a", null), node("a1", "a"), node("a2", "a"), node("b", null)]);
   assert.deepEqual([...treeLayout(graph, new Set()).placed.keys()].sort(), ["a", "a1", "a2", "b"]);
   assert.deepEqual([...treeLayout(graph, new Set(["a"])).placed.keys()].sort(), ["a", "b"]);
+});
+
+test("a preview hangs below its card: the title keeps its row and only the cards under it make room", () => {
+  const graph = graphOf([
+    node("a", null),
+    node("a1", "a"),
+    node("a2", "a"),
+    node("a3", "a"),
+    node("b", null),
+    node("b1", "b"),
+  ]);
+  const before = treeLayout(graph, new Set());
+  const after = treeLayout(graph, new Set(), new Set(), (id) => (id === "a2" ? 150 : 0));
+  const step = (l: Layout, x: string, y: string) => at(l, y).y - at(l, x).y;
+  // The cards above keep their gap; the card below steps down by the preview's height.
+  assert.equal(step(after, "a1", "a2"), step(before, "a1", "a2"));
+  assert.equal(step(after, "a2", "a3"), step(before, "a2", "a3") + 150);
+  const grown = rectOfPlaced(after, "a2");
+  // Links meet the title row, and the card reaches down over its preview without touching the next card.
+  assert.equal(at(after, "a2").head, CARD.h);
+  assert.equal(grown.y + CARD.h / 2, at(after, "a2").y);
+  assert.ok(grown.y + grown.h < rectOfPlaced(after, "a3").y);
+  // A reference leaving it starts from the middle of the title row, not of the preview.
+  const start = /^M[-\d.]+,([-\d.]+)/.exec(refPath(grown, rectOfPlaced(after, "b1")).path);
+  assert.equal(Number(start?.[1]), at(after, "a2").y);
 });
 
 test("top-level branches sit further apart than siblings", () => {

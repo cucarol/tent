@@ -11,8 +11,11 @@ const COLUMN = CARD.w + GAP;
 // Rows leave a gap wide enough for a reference line to pass between two cards.
 const ROW = CARD.h + 14;
 
-/** Position of a card's left-centre point, its height and width. */
-export type Placed = { id: string; x: number; y: number; h: number; w: number };
+/**
+ * Position of a card's left-centre point, its height and width. A card showing a preview has a `head`,
+ * its title row: `y` is the middle of that row, links meet it there, and the preview hangs below.
+ */
+export type Placed = { id: string; x: number; y: number; h: number; w: number; head?: number };
 export type Label = { id: string; text: string; x: number; y: number };
 export type Layout = {
   placed: Map<string, Placed>;
@@ -20,9 +23,12 @@ export type Layout = {
   /** In the tree, the result outputs folded into each card's count. */
   folds?: Map<string, string[]>;
 };
-export type Rect = { x: number; y: number; w: number; h: number };
+export type Rect = { x: number; y: number; w: number; h: number; head?: number };
 
-export const rectOf = (p: Placed): Rect => ({ x: p.x, y: p.y - p.h / 2, w: p.w, h: p.h });
+export const rectOf = (p: Placed): Rect =>
+  p.head === undefined
+    ? { x: p.x, y: p.y - p.h / 2, w: p.w, h: p.h }
+    : { x: p.x, y: p.y - p.head / 2, w: p.w, h: p.h, head: p.head };
 
 /** An output with nothing under it is a result rather than structure. */
 export const isResult = (graph: Graph, id: string) => {
@@ -34,12 +40,14 @@ type TreeDatum = { id: string; children: TreeDatum[] };
 
 /**
  * The folder hierarchy read left to right. Top-level branches get extra room so each reads as one group.
- * A card's result outputs fold into a count on it unless its id is in `open`.
+ * A card's result outputs fold into a count on it unless its id is in `open`. A card showing a preview of
+ * its file is `grown` that much taller below its title row, and the card under it makes room.
  */
 export function treeLayout(
   graph: Graph,
   collapsed: ReadonlySet<string>,
   open: ReadonlySet<string> = new Set(),
+  grown: (id: string) => number = () => 0,
 ): Layout {
   const folds = new Map<string, string[]>();
   const build = (parentId: string | null): TreeDatum[] => {
@@ -57,20 +65,33 @@ export function treeLayout(
   };
   const root = hierarchy<TreeDatum>({ id: "__root", children: build(null) }, (d) => d.children);
   const branch = (d: HierarchyNode<TreeDatum>) => d.ancestors().at(-2)?.data.id;
+  // A grown card keeps its title on its row and hangs its preview below, so only the card under it in the
+  // same column makes room. Of two cards in one column, the upper one comes first in reading order.
+  const order = new Map<HierarchyNode<TreeDatum>, number>();
+  root.eachBefore((d) => order.set(d, order.size));
+  const upper = (a: HierarchyNode<TreeDatum>, b: HierarchyNode<TreeDatum>) =>
+    order.get(a)! < order.get(b)! ? a : b;
   tree<TreeDatum>()
     .nodeSize([ROW, COLUMN])
-    .separation((a, b) => (a.parent === b.parent ? 1 : branch(a) === branch(b) ? 1.25 : 1.6))(root);
+    .separation(
+      (a, b) =>
+        (a.parent === b.parent ? 1 : branch(a) === branch(b) ? 1.25 : 1.6) +
+        grown(upper(a, b).data.id) / ROW,
+    )(root);
 
   const placed = new Map<string, Placed>();
   root.each((d) => {
-    if (d.data.id !== "__root")
-      placed.set(d.data.id, {
-        id: d.data.id,
-        x: (d.y ?? 0) - COLUMN,
-        y: d.x ?? 0,
-        h: d.depth === 1 ? CARD.top : CARD.h,
-        w: CARD.w,
-      });
+    if (d.data.id === "__root") return;
+    const head = d.depth === 1 ? CARD.top : CARD.h;
+    const more = grown(d.data.id);
+    placed.set(d.data.id, {
+      id: d.data.id,
+      x: (d.y ?? 0) - COLUMN,
+      y: d.x ?? 0,
+      h: head + more,
+      w: CARD.w,
+      ...(more > 0 ? { head } : {}),
+    });
   });
   for (const id of [...folds.keys()]) if (!placed.has(id) || collapsed.has(id)) folds.delete(id);
   return { placed, labels: [], folds };

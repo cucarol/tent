@@ -6,11 +6,12 @@ import type { Snapshot, SnapshotNode, SyncFlags } from "./types.js";
  * How the page shows a Node's own file: by the suffix of its `resource`, never by its type or tags. A
  * Node is not a kind of file; a file is what its resource points at.
  */
-export type FileKind = "html" | "image" | "video" | "audio" | "text" | "other";
+export type FileKind = "html" | "image" | "pdf" | "video" | "audio" | "text" | "other";
 
 const KINDS: [RegExp, FileKind][] = [
   [/\.html?$/i, "html"],
   [/\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)$/i, "image"],
+  [/\.pdf$/i, "pdf"],
   [/\.(mp4|webm)$/i, "video"],
   [/\.(mp3|wav)$/i, "audio"],
   // Markdown and code keep the page as it was: the Node's own text, with the path among its properties.
@@ -83,6 +84,28 @@ export function useFileInfo(snapshot: Snapshot | null, flags: SyncFlags): Files 
   }, [key, snapshot?.workspace.revision, flags]);
   return files;
 }
+
+/** Larger files are listed, not loaded into the page; the service holds the same limits. */
+const MB = 1024 * 1024;
+export const fileLimit = (show: FileKind) =>
+  show === "video" || show === "audio" ? 200 * MB : 20 * MB;
+
+/**
+ * What a card can open under itself, as a Markdown note embeds it: a local file that is there and small
+ * enough, of any kind but the ones the browser cannot show.
+ */
+export function previewOf(
+  node: SnapshotNode,
+  files: Files,
+): Extract<NodeFile, { kind: "file" }> | null {
+  const file = fileOf(node);
+  if (file?.kind !== "file" || file.show === "other") return null;
+  const info = infoOf(files, file.path);
+  return info && info.size <= fileLimit(file.show) ? file : null;
+}
+
+/** Markdown is shown as the page reads it; other text as it is written. */
+export const isMarkdown = (file: { ext: string }) => /^(md|markdown|mdx)$/.test(file.ext);
 
 export function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

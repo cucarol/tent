@@ -1,20 +1,17 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { workspaceBlob, type FileInfo } from "../data/api.js";
-import { fileOf, fileSize, infoOf, useFiles, type NodeFile } from "../data/files.js";
+import { fileLimit, fileOf, fileSize, infoOf, useFiles, type NodeFile } from "../data/files.js";
 import type { SnapshotNode } from "../data/types.js";
 import { FileGlyph, Icon } from "../components/Glyph.js";
 import { t } from "../i18n.js";
 
-type LocalFile = Extract<NodeFile, { kind: "file" }>;
+export type LocalFile = Extract<NodeFile, { kind: "file" }>;
 
-/** Larger files are listed, not loaded into the page; the service holds the same limits. */
-const MB = 1024 * 1024;
-const limitOf = (file: LocalFile) =>
-  file.show === "video" || file.show === "audio" ? 200 * MB : 20 * MB;
+const limitOf = (file: LocalFile) => fileLimit(file.show);
 
 /**
  * A Node's own file, shown by its suffix above the Node's text: HTML in a sandboxed frame, images,
- * audio and video in place, other files as a file card. Markdown and code keep the page as it was.
+ * PDF in the browser's own viewer, audio and video in place, other files as a file card. Markdown and code keep the page as it was.
  * A remote address is shown and linked, never fetched.
  */
 export function FileView({
@@ -36,8 +33,11 @@ export function FileView({
   return <Preview file={file} info={info} onToast={onToast} />;
 }
 
-/** Fetches a file with the page's token into a blob URL, released when the view goes away. */
-function useBlobUrl(path: string, stamp: string | undefined) {
+/**
+ * Fetches a file with the page's token into a blob URL, released when the view goes away. A PDF is
+ * retyped, so whatever the file holds the browser only ever opens it in its PDF viewer.
+ */
+export function useBlobUrl(path: string, stamp: string | undefined, pdf = false) {
   const [state, setState] = useState<{ url?: string; failed?: boolean }>({});
   useEffect(() => {
     const abort = new AbortController();
@@ -45,7 +45,7 @@ function useBlobUrl(path: string, stamp: string | undefined) {
     setState({});
     workspaceBlob(path, abort.signal).then(
       (blob) => {
-        url = URL.createObjectURL(blob);
+        url = URL.createObjectURL(pdf ? new Blob([blob], { type: "application/pdf" }) : blob);
         setState({ url });
       },
       () => !abort.signal.aborted && setState({ failed: true }),
@@ -54,7 +54,7 @@ function useBlobUrl(path: string, stamp: string | undefined) {
       abort.abort();
       if (url) URL.revokeObjectURL(url);
     };
-  }, [path, stamp]);
+  }, [path, stamp, pdf]);
   return state;
 }
 
@@ -67,7 +67,7 @@ function Preview({
   info: FileInfo | undefined;
   onToast: (text: string) => void;
 }) {
-  const { url, failed } = useBlobUrl(file.path, info?.modifiedAt);
+  const { url, failed } = useBlobUrl(file.path, info?.modifiedAt, file.show === "pdf");
   const name = t.file.preview(file.name);
   const body = failed ? (
     <p className="file-note">{t.file.failed}</p>
@@ -76,6 +76,9 @@ function Preview({
   ) : file.show === "html" ? (
     // No allow-scripts or allow-same-origin: the page cannot run code or reach this one.
     <iframe className="file-frame" sandbox="" src={url} title={name} />
+  ) : file.show === "pdf" ? (
+    // The browser's PDF viewer refuses a sandboxed frame; the blob is typed as PDF instead.
+    <iframe className="file-frame" src={url} title={name} />
   ) : file.show === "image" ? (
     <img className="file-image" src={url} alt={name} />
   ) : file.show === "video" ? (
