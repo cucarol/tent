@@ -243,33 +243,39 @@ export async function sourceDirectoryPaths(
   const relative = path.relative(repo.root, directory).split(path.sep).join("/");
   const scope = `:(literal)${relative || "."}`;
   const workspace = path.relative(repo.root, root).split(path.sep).join("/");
-  const excludeTent = `:(exclude,${process.platform === "win32" ? "icase," : ""}literal)${workspace ? workspace + "/" : ""}.tent`;
-  const listed = await git(repo.root, [
-    "ls-files",
-    "--cached",
-    ...(trackedOnly ? ["--stage"] : []),
-    ...(trackedOnly ? [] : ["--others", "--exclude-standard"]),
-    "-z",
-    "--",
-    scope,
-    excludeTent,
+  // A nested repository cannot accept a pathspec for its enclosing Workspace.
+  // The per-file boundary below still excludes that Workspace's Tent state.
+  const excludeTent =
+    workspace === ".." || workspace.startsWith("../") || path.isAbsolute(workspace)
+      ? []
+      : [
+          `:(exclude,${process.platform === "win32" ? "icase," : ""}literal)${workspace ? workspace + "/" : ""}.tent`,
+        ];
+  const [listed, excluded] = await Promise.all([
+    git(repo.root, [
+      "ls-files",
+      "--cached",
+      ...(trackedOnly ? ["--stage"] : []),
+      ...(trackedOnly ? [] : ["--others", "--exclude-standard"]),
+      "-z",
+      "--",
+      scope,
+      ...excludeTent,
+    ]),
+    trackedOnly
+      ? Promise.resolve(Buffer.alloc(0))
+      : git(repo.root, [
+          "ls-files",
+          "--cached",
+          "--ignored",
+          "--exclude-standard",
+          "-z",
+          "--",
+          scope,
+          ...excludeTent,
+        ]),
   ]);
-  const ignored = trackedOnly
-    ? new Set<string>()
-    : new Set(
-        names(
-          await git(repo.root, [
-            "ls-files",
-            "--cached",
-            "--ignored",
-            "--exclude-standard",
-            "-z",
-            "--",
-            scope,
-            excludeTent,
-          ]),
-        ),
-      );
+  const ignored = new Set(names(excluded));
   const files = new Set<string>();
   const candidates = trackedOnly
     ? names(listed).flatMap((entry) => {
@@ -279,53 +285,62 @@ export async function sourceDirectoryPaths(
         return match[1] === "160000" ? [] : [match[2]!];
       })
     : names(listed);
-  for (const name of candidates) {
-    if (ignored.has(name) || name.split("/").includes(".git")) continue;
-    const filename = path.join(repo.root, name);
-    if (isTentWorkspacePath(path.relative(root, filename).split(path.sep).join("/"))) continue;
-    const info = await lstat(filename).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
-    if (!info) continue;
-    if (info.isSymbolicLink()) {
-      files.add(filename);
-      continue;
-    }
-    if (info.isDirectory()) {
-      if (trackedOnly) {
+  for (let start = 0; start < candidates.length; start += 32) {
+    const observed = await Promise.all(
+      candidates.slice(start, start + 32).map(async (name) => {
+        if (ignored.has(name) || name.split("/").includes(".git")) return undefined;
+        const filename = path.join(repo.root, name);
+        if (isTentWorkspacePath(path.relative(root, filename).split(path.sep).join("/")))
+          return undefined;
+        const info = await lstat(filename).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return undefined;
+          throw error;
+        });
+        return info ? { filename, info } : undefined;
+      }),
+    );
+    for (const entry of observed) {
+      if (!entry) continue;
+      const { filename, info } = entry;
+      if (info.isSymbolicLink()) {
         files.add(filename);
         continue;
       }
-      if (path.relative(directory, filename) === "") {
-        // A gitlink without nested metadata is still listed at its own scope root.
-        // Use the existing ignore engine with a nonexistent index; no content read is needed.
-        const children = await git(
-          repo.root,
-          ["ls-files", "--others", "--exclude-standard", "-z", "--", scope, excludeTent],
-          undefined,
-          {
-            GIT_INDEX_FILE: path.join(
-              repo.root,
-              `.tent-directory-read-${process.pid}-${Math.random().toString(36).slice(2)}.index`,
-            ),
-            GIT_OPTIONAL_LOCKS: "0",
-          },
-        );
-        for (const member of names(children)) {
-          const child = path.join(repo.root, member);
-          if (isTentWorkspacePath(path.relative(root, child).split(path.sep).join("/"))) continue;
-          if (member.endsWith("/"))
-            for (const nested of await sourceDirectoryPaths(root, child, cacheDir))
-              files.add(nested);
-          else files.add(child);
+      if (info.isDirectory()) {
+        if (trackedOnly) {
+          files.add(filename);
+          continue;
         }
-      } else {
-        for (const member of await sourceDirectoryPaths(root, filename, cacheDir))
-          files.add(member);
-      }
-    } else if (info.isFile()) files.add(filename);
-    else throw new Error("Directory member is not a readable source file");
+        if (path.relative(directory, filename) === "") {
+          // A gitlink without nested metadata is still listed at its own scope root.
+          // Use the existing ignore engine with a nonexistent index; no content read is needed.
+          const children = await git(
+            repo.root,
+            ["ls-files", "--others", "--exclude-standard", "-z", "--", scope, ...excludeTent],
+            undefined,
+            {
+              GIT_INDEX_FILE: path.join(
+                repo.root,
+                `.tent-directory-read-${process.pid}-${Math.random().toString(36).slice(2)}.index`,
+              ),
+              GIT_OPTIONAL_LOCKS: "0",
+            },
+          );
+          for (const member of names(children)) {
+            const child = path.join(repo.root, member);
+            if (isTentWorkspacePath(path.relative(root, child).split(path.sep).join("/"))) continue;
+            if (member.endsWith("/"))
+              for (const nested of await sourceDirectoryPaths(root, child, cacheDir))
+                files.add(nested);
+            else files.add(child);
+          }
+        } else {
+          for (const member of await sourceDirectoryPaths(root, filename, cacheDir))
+            files.add(member);
+        }
+      } else if (info.isFile()) files.add(filename);
+      else throw new Error("Directory member is not a readable source file");
+    }
   }
   await checkedSourceFile(root, directory, true);
   return [...files].sort();

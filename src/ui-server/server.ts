@@ -36,8 +36,12 @@ import { TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/paths.js";
 import { findTentSystemRoot } from "../core/status.js";
 import { readWorkspaceRevision } from "../core/workspace-revision.js";
 import { readWorkspaceSettings } from "../core/workspace-settings.js";
+import { readModuleDependencies } from "../core/module-dependencies.js";
+import { createModuleDependencyQuery } from "../core/module-dependency-query.js";
 import { validationIssueText } from "../core/validation-message.js";
 import { NodeFs, SystemClock } from "../fs/node-fs.js";
+import { createModuleDependencyRepositoryReader } from "../fs/module-dependencies.js";
+import { createModuleDependencyWatch } from "../fs/module-dependency-watch.js";
 import type { Snapshot } from "../ui/data/types.js";
 import { buildSnapshot } from "./snapshot.js";
 import { shareInFlightReads } from "./shared-reads.js";
@@ -136,6 +140,14 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   const fs = new NodeFs(tentRoot, "ui");
   const queryFs = shareInFlightReads(fs);
   const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot };
+  const dependencyRepository = createModuleDependencyRepositoryReader(workspaceRoot);
+  const dependencyQuery = createModuleDependencyQuery({
+    compute: () => readModuleDependencies(queryFs, workspaceRoot, dependencyRepository()),
+    watch: (changed, unavailable) =>
+      createModuleDependencyWatch(workspaceRoot, changed, unavailable),
+    reportMode: (mode, reason) =>
+      console.error(`Tent module dependencies: ${mode}${reason ? ` (${reason})` : ""}`),
+  });
   const { workspaceId } = await readWorkspaceSettings(fs);
   if (!workspaceId) throw new Error(`Workspace has no workspaceId: ${tentRoot}`);
   const workspace = { id: workspaceId, name: path.basename(workspaceRoot) };
@@ -217,6 +229,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         ),
       );
     }
+    if (route === "GET /api/modules/deps") return json(res, 200, await dependencyQuery.read());
     if (route === "GET /api/sync") {
       // The initial UI read runs beside the snapshot; keep its starting document revision.
       const revision = await readWorkspaceRevision(queryFs);
@@ -641,6 +654,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         });
         await Promise.all([
           stopped,
+          dependencyQuery.close(),
           ...[...opened].map(async (starting) => {
             const other = await starting.catch(() => undefined);
             await other?.close();

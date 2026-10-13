@@ -33,3 +33,4 @@ export * from "./canvas.js";
 export * from "./workspace-revision.js";
 export * from "./workspace-relations.js";
 export * from "./workspace-scan.js";
+export * from "./module-dependencies.js";

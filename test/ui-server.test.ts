@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import nodeFs from "node:fs";
 import http from "node:http";
 import { userInfo } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
@@ -24,6 +25,9 @@ import { testScratchRoot } from "./scratch.js";
 import { incompleteNodeReadEtag } from "../src/core/node-read-basis.js";
 import { contentEtag } from "../src/core/etag.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
+import { readWorkspaceRevision } from "../src/core/workspace-revision.js";
+import type { ModuleDependencyResponse } from "../src/core/module-dependency-query.js";
+import { git } from "./helpers.js";
 
 type Reply = { status: number; headers: http.IncomingHttpHeaders; body: string };
 type Call = (
@@ -191,6 +195,127 @@ test("canvas API reports a busy workspace lock without writing", async (t) => {
     assert.equal(json<{ error: { code: string } }>(reply).error.code, "BUSY");
     assert.equal(await tent.exists("canvas.json"), false);
   });
+});
+
+test("module dependency endpoint is protected, read-only and refreshes while the repository stays dirty", async (t) => {
+  const { call, tent, workspace } = await fixture(t);
+  await git(workspace, "init", "-b", "main");
+  await fs.writeFile(path.join(workspace, ".gitignore"), ".tent/\nignored/\n");
+  for (const dir of ["a", "b", "ignored"]) await fs.mkdir(path.join(workspace, dir));
+  await fs.writeFile(path.join(workspace, "a/main.ts"), 'import "../b/lib.js";');
+  await fs.writeFile(path.join(workspace, "b/lib.ts"), "export const n = 1;");
+  await fs.writeFile(path.join(workspace, "ignored/hidden.ts"), 'import "../a/main.js";');
+  for (const name of ["a", "b"])
+    await tent.writeFile(
+      `${name}/${name}.md`,
+      serializeFrontmatter(
+        {
+          id: `node-${name}`,
+          type: "prompt",
+          sources: [{ resource: `../../${name}/`, track: "structure" }],
+        },
+        "Rules.",
+      ),
+    );
+  await git(workspace, "add", ".");
+  await git(workspace, "commit", "-m", "fixture");
+  const head = (await git(workspace, "rev-parse", "HEAD")).trim();
+  const revision = await readWorkspaceRevision(tent);
+  const index = await fs.readFile(path.join(workspace, ".git/index"));
+  const endpoint = "/api/modules/deps";
+  const current = async (matches: (result: ModuleDependencyResponse) => boolean) => {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const reply = await call("GET", endpoint);
+      assert.equal(reply.status, 200, reply.body);
+      const value = json<ModuleDependencyResponse>(reply);
+      assert.equal(value.mode, "watch");
+      if (value.fresh && matches(value)) return value;
+      assert.ok(Date.now() < deadline, "dependency change was not observed");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+  assert.equal((await call("GET", endpoint, { token: null })).status, 401);
+  assert.equal(
+    (await call("GET", endpoint, { headers: { Origin: "https://foreign.example" } })).status,
+    403,
+  );
+  assert.equal((await call("POST", endpoint, { json: {} })).status, 404);
+  const first = await call("GET", endpoint);
+  assert.equal(first.status, 200, first.body);
+  const result = json<ModuleDependencyResponse>(first);
+  assert.equal(result.mode, "watch");
+  assert.equal(result.fresh, true);
+  assert.ok(!Number.isNaN(Date.parse(result.computedAt)));
+  assert.deepEqual(json(await call("GET", endpoint)), result);
+  assert.deepEqual(result.basis, { head, dirty: false });
+  assert.deepEqual(result.modules, [
+    { nodeId: "node-a", files: 1 },
+    { nodeId: "node-b", files: 1 },
+  ]);
+  assert.deepEqual(result.edges, [{ from: "node-a", to: "node-b", imports: 1 }]);
+  assert.equal(await readWorkspaceRevision(tent), revision);
+  assert.deepEqual(await fs.readFile(path.join(workspace, ".git/index")), index);
+  assert.equal((await git(workspace, "rev-parse", "HEAD")).trim(), head);
+
+  await fs.writeFile(path.join(workspace, "a/main.ts"), 'import "../missing.js";');
+  const missing = await current((value) => value.unresolved === 1);
+  assert.deepEqual(missing.basis, { head, dirty: true });
+  assert.deepEqual(missing.edges, []);
+  assert.equal(missing.unresolved, 1);
+  await fs.writeFile(path.join(workspace, "a/main.ts"), 'import "../b/lib.js"; // still dirty');
+  const changedAgain = await current((value) => value.unresolved === 0);
+  assert.deepEqual(changedAgain.basis, missing.basis);
+  assert.deepEqual(changedAgain.edges, result.edges);
+  assert.equal(changedAgain.unresolved, 0);
+  await tent.writeFile(
+    "b/b.md",
+    serializeFrontmatter({ id: "node-b", type: "prompt" }, "No module now."),
+  );
+  const changedNode = await current((value) => value.modules.length === 1);
+  assert.deepEqual(changedNode.modules, [{ nodeId: "node-a", files: 1 }]);
+  assert.equal(changedNode.uncovered, 1);
+  await fs.writeFile(path.join(workspace, "tsconfig.json"), "{ broken");
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const failed = await call("GET", endpoint);
+    if (failed.status === 422) break;
+    assert.equal(failed.status, 200, failed.body);
+    assert.ok(Date.now() < deadline, "invalid configuration must not leave a cached graph");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+});
+
+test("module dependency HTTP requests verify current inputs when notifications cannot start", async (t) => {
+  const { call, workspace } = await fixture(t);
+  await git(workspace, "init", "-b", "main");
+  await fs.writeFile(path.join(workspace, ".gitignore"), ".tent/\n");
+  const original = nodeFs.watch;
+  let first: Reply;
+  nodeFs.watch = (() => {
+    throw new Error("watch unavailable for test");
+  }) as typeof nodeFs.watch;
+  syncBuiltinESMExports();
+  try {
+    first = await call("GET", "/api/modules/deps");
+  } finally {
+    nodeFs.watch = original;
+    syncBuiltinESMExports();
+  }
+  assert.equal(first.status, 200, first.body);
+  const result = json<ModuleDependencyResponse>(first);
+  assert.equal(result.mode, "verify");
+  assert.match(result.reason!, /watch unavailable for test/);
+  assert.equal(result.fresh, true);
+  await fs.writeFile(path.join(workspace, "entry.ts"), 'import "./missing.js";');
+  const updated = json<ModuleDependencyResponse>(await call("GET", "/api/modules/deps"));
+  assert.equal(updated.mode, "verify");
+  assert.equal(updated.unresolved, 1);
+  await fs.writeFile(path.join(workspace, "entry.ts"), "export const n = 1;");
+  assert.equal(
+    json<ModuleDependencyResponse>(await call("GET", "/api/modules/deps")).unresolved,
+    0,
+  );
 });
 
 test("Web confirmation records the local human or explicit actor with full-document CAS", async (t) => {
