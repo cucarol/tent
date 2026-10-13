@@ -184,6 +184,42 @@ test("card show and take list sources in text while JSON output keeps its fields
   assert.deepEqual(shownAgain.sources, json.sources);
 });
 
+test("incoming and outgoing Node relations expose directly readable identity files", async (t) => {
+  const { root, globals, parse } = await fixture(t);
+  const result = parse(
+    await runNodeCommand(
+      "create",
+      ["Result.md", "--type", "output", "--parent", "node-goal", "--body", "Result evidence."],
+      globals,
+    ),
+  ).node;
+  parse(
+    await runNodeCommand("append", ["node-goal", "--body", `[Result](${result.nodeId})`], globals),
+  );
+  for (const [nodeId, direction] of [
+    ["node-goal", "outgoing"],
+    [result.nodeId, "incoming"],
+  ]) {
+    const relations = parse(
+      await runNodeCommand("relations", [nodeId, "--direction", direction], globals),
+    );
+    const relation = relations.items.find(
+      (item: { from: { nodeId?: string }; target: { nodeId?: string } }) =>
+        item.from.nodeId === "node-goal" && item.target.nodeId === result.nodeId,
+    );
+    assert.ok(relation, direction);
+    for (const [endpoint, expectedPath, expectedId] of [
+      [relation.from, ".tent/Goal/Goal.md", "node-goal"],
+      [relation.target, ".tent/Goal/Result.md/Result.md.md", result.nodeId],
+    ] as const) {
+      assert.equal(endpoint.kind, "node");
+      assert.equal(endpoint.path, expectedPath);
+      const raw = await fs.readFile(path.join(root, endpoint.path), "utf8");
+      assert.equal(parseFrontmatter(raw).data.id, expectedId);
+    }
+  }
+});
+
 test("help explains Git Bash path conversion where paths are described", () => {
   assert.match(cardHelpText(), /MSYS_NO_PATHCONV=1/);
   assert.match(nodeHelpText(), /MSYS_NO_PATHCONV=1/);

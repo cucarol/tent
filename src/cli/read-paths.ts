@@ -11,10 +11,10 @@ export function workspaceReadPaths<T>(value: T, workspaceRoot: string): T {
   const item = { ...value } as Record<string, unknown>;
   const originalPath = typeof item.path === "string" ? item.path : undefined;
   const owner = originalPath?.replace(/^\.tent\//, "");
+  // Node summaries carry nodeId and a directory; bare DocumentRefs already name a file.
   const nodeDirectory =
-    item.kind !== "node" &&
-    (typeof item.nodeId === "string" ||
-      (typeof item.id === "string" && item.id.startsWith("node-")));
+    typeof item.nodeId === "string" ||
+    (item.kind !== "node" && typeof item.id === "string" && item.id.startsWith("node-"));
   const nodeOwner = nodeDirectory || item.kind === "node";
   const document =
     owner && nodeDirectory && !originalPath?.startsWith(".tent/") ? nodeNotePath(owner) : owner;
