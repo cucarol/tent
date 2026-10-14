@@ -607,6 +607,28 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .key-line { display: block; width: 28px; border-top: 1.5px solid var(--line); }
 .mapkey div.mapkey-keys { margin-top: 4px; padding-top: 9px; border-top: 1px solid var(--border); }
 
+/* Drawings: pencil marks over the cards, for looking at only. They never take the pointer; while drawing
+   is on, the pad above the map does. */
+.map .react-flow__viewport-portal { z-index: 1001; pointer-events: none; }
+.ink-layer { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.ink-line { fill: none; stroke: var(--text-2); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* A halo in the map colour keeps a note readable where it crosses a line or a card edge. */
+.ink-note { fill: var(--text-2); font-family: var(--font-sans); font-weight: 500; white-space: pre; paint-order: stroke; stroke: var(--canvas); stroke-width: 3px; stroke-linejoin: round; }
+.ink-pick { fill: none; stroke: var(--accent); stroke-width: 1.25; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.ink-pad { position: absolute; inset: 0; z-index: 4; touch-action: none; cursor: default; }
+.ink-pad.is-pen { cursor: crosshair; }
+.ink-pad.is-text { cursor: text; }
+.ink-pad.is-grabbing { cursor: grabbing; }
+.ink-editor { position: absolute; z-index: 4; margin: -3px 0 0 -5px; padding: 2px 4px; border: 1px dashed var(--accent-line); border-radius: 4px; background: color-mix(in srgb, var(--canvas) 85%, transparent); color: var(--text-2); font-family: var(--font-sans); font-weight: 500; resize: none; overflow: hidden; outline: none; pointer-events: auto; transform-origin: 0 0; }
+.ink-editor::placeholder { color: var(--text-3); }
+.inktools { left: 50%; bottom: 64px; transform: translateX(-50%); display: flex; align-items: center; gap: 2px; height: 40px; padding: 0 5px; white-space: nowrap; animation: peek-in .14s ease; }
+.inktools [data-tip]:hover::after { top: auto; bottom: calc(100% + 11px); }
+.inktools .tool[aria-pressed="true"] { background: var(--bg-emphasis); color: var(--text); }
+.inktools .tool[aria-pressed="false"] { color: var(--text-2); }
+.inktools-done { gap: 7px; padding: 0 6px 0 10px; }
+.tool-ink[aria-pressed="true"] { background: var(--bg-emphasis); color: var(--text); }
+.tool-ink[aria-pressed="false"]:not(:disabled) { color: var(--text-2); }
+.key-ink { display: inline-grid; place-items: center; color: var(--text-2); }
 .timebar { left: 50%; bottom: 64px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 4px; width: min(640px, calc(100% - 24px)); padding: 6px 8px 4px 6px; animation: peek-in .14s ease; }
 .timebar-head { display: flex; align-items: center; gap: 10px; }
 .timebar-head [data-tip]:hover::after { top: auto; bottom: calc(100% + 7px); }

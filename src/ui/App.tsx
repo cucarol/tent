@@ -520,6 +520,7 @@ export function App() {
                         hotLane={hotLane}
                         carriedBy={carriedBy}
                         keys={!reading && !overlay}
+                        onNotice={setToast}
                         onSelect={open}
                         onFold={fold}
                         onExpand={() => {

@@ -46,6 +46,17 @@ import { PUBLIC } from "../shell/work.js";
 import { nearest, refPath } from "./geometry.js";
 import { routeLinks, type Route } from "./route.js";
 import { Timeline } from "./Timeline.js";
+import {
+  InkEditor,
+  InkLayer,
+  InkPad,
+  InkTools,
+  type InkTool,
+  type Moving,
+  type Writing,
+} from "./Ink.js";
+import { newId, withNote, type Pt } from "./drawings.js";
+import { useInk } from "./useInk.js";
 import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
 // Below the minimum even top-level names stop reading as words; the map pans instead.
@@ -507,6 +518,8 @@ type MapProps = {
   onSelect: (ref: SnapshotRef | null) => void;
   onFold: (id: string, expand?: boolean) => void;
   onExpand: () => void;
+  /** A short message for the page to show, such as a save that lost to one made elsewhere. */
+  onNotice: (message: string) => void;
 };
 
 export function MapView(props: MapProps) {
@@ -529,6 +542,7 @@ function MapContent({
   onSelect,
   onFold,
   onExpand,
+  onNotice,
 }: MapProps) {
   const [filters, setFilters] = useState<Filters>(() => {
     const stored = readStored<Partial<Filters>>("tent-map-filters-v2", {});
@@ -595,6 +609,7 @@ function MapContent({
   }, [playing, time, last]);
   const openTime = () => {
     setLens(false);
+    setInkTool(null);
     setTime(last);
   };
   const closeTime = () => {
@@ -647,6 +662,67 @@ function MapContent({
   }, [hotLane, carriedBy, sources, selected?.kind, selected?.id, graph]);
   const pins = useMemo(() => new Map(draft.map((id, i) => [id, i + 1] as const)), [draft]);
   const lensId = lens && selected?.kind === "node" && visible(selected.id) ? selected.id : null;
+
+  // ---------- drawing ----------
+  // Drawings keep their own map coordinates, so they show only on the tree, not in the lens or a
+  // moment of the past, where cards stand elsewhere. null: drawing is off.
+  const ink = useInk(graph.snapshot.workspace.id, graph.snapshot.workspace.revision, onNotice);
+  const [inkTool, setInkTool] = useState<InkTool | null>(null);
+  const [inkPicked, setInkPicked] = useState<string | null>(null);
+  const [inkMoving, setInkMoving] = useState<Moving | null>(null);
+  const [inkDraft, setInkDraft] = useState<Pt[] | null>(null);
+  const [inkWriting, setInkWriting] = useState<Writing | null>(null);
+  const inkShown = !lensId && time === null;
+  const inking = inkTool !== null && inkShown;
+  useEffect(() => {
+    if (inkTool) setPeek(null);
+    else {
+      // Leaving mid-stroke or mid-drag drops it: nothing half drawn stays on the map.
+      setInkPicked(null);
+      setInkWriting(null);
+      setInkDraft(null);
+      setInkMoving(null);
+    }
+  }, [inkTool]);
+  // Picking belongs to select: the pen and text start with nothing picked, so Esc leaves at once.
+  useEffect(() => {
+    if (inkTool !== "select") setInkPicked(null);
+  }, [inkTool]);
+  // A picked drawing undone away is no longer picked.
+  useEffect(() => {
+    if (inkPicked && !ink.ink.some((d) => d.id === inkPicked)) setInkPicked(null);
+  }, [ink.ink, inkPicked]);
+  // A note closes into the drawings as they are then, which may have changed while it was open.
+  const writeNote = (w: Writing, text: string | null) => {
+    setInkWriting((open) => (open === w ? null : open));
+    ink.commit((all) => withNote(all, { at: w.at, id: w.note?.id }, text, () => newId("text")));
+  };
+  useEffect(() => {
+    if (!inking || !keys) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (/INPUT|TEXTAREA|SELECT/.test(el.tagName) || el.isContentEditable) return;
+      const key = e.key.toLowerCase();
+      const mod = e.ctrlKey || e.metaKey;
+      if (e.key === "Escape") {
+        if (inkPicked) setInkPicked(null);
+        else setInkTool(null);
+      } else if (mod && key === "z") (e.shiftKey ? ink.redo : ink.undo)();
+      else if (mod && key === "y") ink.redo();
+      else if (mod || e.altKey) return;
+      else if ((e.key === "Delete" || e.key === "Backspace") && inkPicked) {
+        ink.commit(ink.ink.filter((d) => d.id !== inkPicked));
+        setInkPicked(null);
+      } else if (key === "v" || key === "p" || key === "t")
+        setInkTool(key === "v" ? "select" : key === "p" ? "pen" : "text");
+      else return;
+      // Capture on the window runs before the page's own keys, which then never see these.
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [inking, keys, inkPicked, ink]);
   useEffect(() => {
     if (selected?.kind !== "node") setLens(false);
   }, [selected?.kind]);
@@ -1116,13 +1192,15 @@ function MapContent({
   }, [hover, selected?.id]);
 
   // ---------- keyboard ----------
-  const latest = useRef({ view, selected, lensId, collapsed, visible, timeOpen });
-  latest.current = { view, selected, lensId, collapsed, visible, timeOpen };
+  const latest = useRef({ view, selected, lensId, collapsed, visible, timeOpen, inking });
+  latest.current = { view, selected, lensId, collapsed, visible, timeOpen, inking };
   useEffect(() => {
     if (!keys) return;
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
-      const { view, selected, lensId, collapsed, visible, timeOpen } = latest.current;
+      const { view, selected, lensId, collapsed, visible, timeOpen, inking } = latest.current;
+      // While drawing, the keys are the drawing tools'.
+      if (inking) return;
       // Esc leaves the map's modes first, even from the time slider.
       if (e.key === "Escape" && (lensId || timeOpen)) {
         e.preventDefault();
@@ -1275,11 +1353,43 @@ function MapContent({
             }}
             onNodeMouseLeave={() => hoverSoon(null, 100)}
             onPaneClick={() => onSelect(null)}
-          />
+          >
+            {inkShown && (
+              <InkLayer
+                ink={ink.ink}
+                picked={inking ? inkPicked : null}
+                moving={inkMoving}
+                draft={inkDraft}
+                writing={inkWriting?.note?.id ?? null}
+              />
+            )}
+          </ReactFlow>
         </MapActions.Provider>
       </MapFlags.Provider>
 
-      {peek && <PeekCard graph={graph} peek={peek} flag={flags[peek.id]} />}
+      {inking && (
+        <InkPad
+          tool={inkTool}
+          store={ink}
+          zoom={ZOOM}
+          onPick={setInkPicked}
+          onMoving={setInkMoving}
+          onDraft={setInkDraft}
+          writing={!!inkWriting}
+          onWrite={setInkWriting}
+        />
+      )}
+      {inking && inkWriting && (
+        <InkEditor
+          key={inkWriting.note?.id ?? inkWriting.at.join()}
+          writing={inkWriting}
+          onDone={(text) => writeNote(inkWriting, text)}
+        />
+      )}
+      {inking && (
+        <InkTools tool={inkTool} store={ink} onTool={setInkTool} onDone={() => setInkTool(null)} />
+      )}
+      {peek && !inking && <PeekCard graph={graph} peek={peek} flag={flags[peek.id]} />}
       <FlagCounts graph={graph} flags={flags} onSelect={onSelect} />
       {lensName ? (
         <div className="panel map-hint">
@@ -1371,7 +1481,10 @@ function MapContent({
           className="tool tool-lens"
           aria-pressed={!!lensId}
           disabled={selected?.kind !== "node"}
-          onClick={() => setLens((l) => !l)}
+          onClick={() => {
+            setInkTool(null);
+            setLens((l) => !l);
+          }}
           aria-label={t.map.lens}
           data-tip={selected?.kind === "node" ? t.map.lensTitle : t.map.lensNeedsNode}
           data-key={selected?.kind === "node" ? "Space" : undefined}
@@ -1389,6 +1502,18 @@ function MapContent({
         >
           <Icon name="clock" size={15} />
           <span className="lbl">{t.map.time}</span>
+        </button>
+        <button
+          type="button"
+          className="tool tool-ink"
+          aria-pressed={inking}
+          disabled={!inkShown || !ink.ready}
+          onClick={() => setInkTool((tool) => (tool ? null : "pen"))}
+          aria-label={t.ink.draw}
+          data-tip={t.ink.drawTitle}
+        >
+          <Icon name="pen" size={15} />
+          <span className="lbl">{t.ink.draw}</span>
         </button>
         <span className="tool-sep" />
         <button
@@ -1502,6 +1627,14 @@ function MapKey({ graph }: { graph: Graph }) {
           </span>
         </dt>
         <dd>{t.map.keyPreview}</dd>
+      </div>
+      <div>
+        <dt>
+          <span className="key-ink">
+            <Icon name="pen" size={13} />
+          </span>
+        </dt>
+        <dd>{t.ink.keyInk}</dd>
       </div>
       <div className="mapkey-keys">
         <dt>

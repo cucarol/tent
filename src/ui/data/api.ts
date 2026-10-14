@@ -162,6 +162,11 @@ export const api = {
   /** Rebuilds at the same revision: Card progress and completions follow materials outside Tent. */
   freshSnapshot: () => call<Snapshot>("/api/snapshot?fresh=1"),
   revision: () => call<{ revision: string }>("/api/revision"),
+  /** The map's canvas file (`.tent/canvas.json`); both null while the file does not exist. */
+  canvas: () => call<{ etag: string | null; canvas: unknown }>("/api/canvas"),
+  /** Replaces the whole canvas file; a stale ETag is refused with the current file in the details. */
+  saveCanvas: (baseEtag: string | null, canvas: unknown) =>
+    call<{ etag: string }>("/api/canvas", send("PUT", { baseEtag, canvas })),
   /** Ahead and behind Nodes, computed fresh: material changes do not move the revision. */
   sync: () => call<{ revision: string; nodes: SyncFlags }>("/api/sync"),
   node: (id: string, capture = false) =>
