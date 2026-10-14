@@ -25,4 +25,4 @@ Reuse a tag from `tent node tags` or a preset:
 | `analysis` | draws conclusions from measurements |
 | `issue` | describes a known problem |
 
-Pass `--tags a,b` to `node create` or `node link-output`, or run `tent node tags add <id> <tag> --base-etag <etag>`. Change a type with `tent node type <id> <type> --base-etag <etag>`.
+Pass `--tags a,b` to `node create` or `node link-output`. To change the type or tags later, edit them in the file's frontmatter.

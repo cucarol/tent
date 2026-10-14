@@ -14,7 +14,7 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows.
 | No pointer | `tent workspace brief` | `behind`, `ahead`, `cardInputs`, then `roots` |
 | A `path` | Read the file with your own reader | text |
 | Only a Node id | `tent node get <id>` | `text`, `etag` |
-| A topic | `tent node search "<term>"` | `items[].nodeId`, `path` |
+| A topic | Search `.tent/` with your own search tool | `path` |
 
 Treat each Node by its [type](../../skill-resources/references/node-types.md). More reads: [input](../../skill-resources/references/input.md).
 
@@ -24,7 +24,7 @@ Update only the Nodes your work touched; if nothing changed, change nothing. Rec
 
 | When | Command | Read |
 | --- | --- | --- |
-| Change text | Edit the file with your own editor; Tent records it on its next run | |
+| Change text | Edit the file with your own editor; Tent records it at its next write, brief or check | |
 | Add a section without reading | `tent node append <id> --heading <title> --body -` | `etag` |
 | A behind Node still holds | `tent node get <id> --full --json`, then `tent node confirm <id> --base-etag <etag>` | `etag` |
 | New fact | `tent node create <name> --type <type> [--parent <id>] --tags <tag> --body -` | `node.nodeId` |

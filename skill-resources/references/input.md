@@ -2,7 +2,7 @@
 
 | When | Command | Read |
 | --- | --- | --- |
-| A file | `tent node search --resource <path>` | `items[].nodeId`, `path` |
+| Rules for a file to change | `tent node search --resource <path>`, most specific first | `items[].nodeId`, `path` |
 | Children or parent | `tent node relations <id> --direction children` (or `parent`) | `items[].nodeId`, `path` |
 | Links in or out | `tent node relations <id> --direction incoming --json` (or `outgoing`) | `items[].from` for incoming, `items[].target` for outgoing: `kind`, `id`, or `workspacePath` for a file |
 | A type or tag | `tent node list --type prompt --tag decision` | `items[].nodeId`, `path` |
