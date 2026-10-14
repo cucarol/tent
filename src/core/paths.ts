@@ -18,7 +18,6 @@ export const WORKSPACE_SETTINGS_PATH = "settings.json";
 /** Published Card input, destination and reception facts. */
 export const CARDS_DIR = "cards";
 export const TEMP_DIR = "temp";
-export const ATTACHMENTS_DIR = "attachments";
 
 /** Canonical Markdown identity file for a Node directory. */
 export function nodeNotePath(nodePath: string): string {
@@ -33,7 +32,6 @@ export const OPERATIONAL_TOP_LEVEL = new Set([
   ROLES_DIR,
   CARDS_DIR,
   TEMP_DIR,
-  ATTACHMENTS_DIR,
   // 若仍见嵌套 .tent，视为系统区而非 Node。
   TENT_SYSTEM_DIR,
 ]);

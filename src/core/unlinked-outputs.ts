@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { FsAdapter } from "./adapter.js";
-import { materialCoverageContains } from "./material-coverage.js";
+import { isTentWorkspacePath, materialCoverageContains } from "./material-coverage.js";
 import type { StopMaterialIndex } from "./stop-material-index.js";
 
 /** Compare local URI aliases in the material index's Workspace-relative address domain. */
@@ -18,6 +18,7 @@ export function indexedMaterialCovers(
     canonical = outside ? pathToFileURL(filename).href : relative;
   }
   const key = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+  if (isTentWorkspacePath(canonical)) return false;
   return index.nodes.some((node) =>
     node.materials.some((material) =>
       "file" in material
@@ -41,9 +42,16 @@ export async function unlinkedWrittenFiles<T extends { address: string; kind: st
   files: readonly T[],
   workspaceRoot: string,
 ): Promise<T[]> {
-  const candidates = files.filter(
-    (file) => file.kind === "written" && !indexedMaterialCovers(index, file.address, workspaceRoot),
-  );
+  const candidates = files.filter((file) => {
+    const address = file.address.startsWith("file:")
+      ? path.relative(workspaceRoot, fileURLToPath(file.address)).split(path.sep).join("/")
+      : file.address;
+    return (
+      file.kind === "written" &&
+      !isTentWorkspacePath(address) &&
+      !indexedMaterialCovers(index, file.address, workspaceRoot)
+    );
+  });
   if (!candidates.length || !fs.nonignoredFiles) return [];
   const allowed = new Set(
     await fs.nonignoredFiles([...new Set(candidates.map((file) => file.address))]),

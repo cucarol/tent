@@ -22,8 +22,8 @@ async function fixture(t: TestContext) {
   await git(path.join(root, ".tent"), "init");
   await fs.mkdir(path.join(root, "docs"));
   await fs.writeFile(path.join(root, "docs/req.md"), "# Requirements\nFirst.\n");
-  await fs.mkdir(path.join(root, ".tent/attachments"), { recursive: true });
-  await fs.writeFile(path.join(root, ".tent/attachments/x.png"), "png");
+  await fs.mkdir(path.join(root, "attachments"), { recursive: true });
+  await fs.writeFile(path.join(root, "attachments/x.png"), "png");
   const cwd = path.join(root, "nested/deeper");
   await fs.mkdir(cwd, { recursive: true });
   const globals = { cwd, json: true };
@@ -41,7 +41,7 @@ test("link-output, node create and card create resolve the same Workspace-root a
   const { globals, parse, stored } = await fixture(t);
   const cases = [
     [".tent/Goal/Goal.md", "Goal/Goal.md"],
-    [".tent/attachments/x.png", "attachments/x.png"],
+    ["attachments/x.png", "../attachments/x.png"],
     ["docs/req.md", "../docs/req.md"],
     ["./docs/req.md", "../docs/req.md"],
     ["/docs/req.md", "../docs/req.md"],
@@ -80,7 +80,7 @@ test("link-output, node create and card create resolve the same Workspace-root a
       cases[index]![1],
       cases[index]![0],
     );
-  for (const input of [".tent/missing.md", "./docs/missing.md"]) {
+  for (const input of ["./attachments/missing.png", "./docs/missing.md"]) {
     const missing = await runNodeCommand(
       "link-output",
       ["node-goal", "--resource", input],
@@ -101,7 +101,7 @@ test("card create warns about explicit path sources that name nothing and stores
   const sources = [
     "./docs/missing.md",
     "/docs/gone.md",
-    ".tent/Missing/Missing.md",
+    "./docs/Missing/Missing.md",
     "docs/absent.md",
     "./docs/req.md",
     ".tent/Goal/Goal.md",
@@ -120,7 +120,7 @@ test("card create warns about explicit path sources that name nothing and stores
   for (const [index, input] of [
     "./docs/missing.md",
     "/docs/gone.md",
-    ".tent/Missing/Missing.md",
+    "./docs/Missing/Missing.md",
     "./docs/json-missing.md",
   ].entries())
     assert.match(warnings[index]!, new RegExp(`^Warning: source "${literal(input)}" names no `));
@@ -132,7 +132,7 @@ test("card create warns about explicit path sources that name nothing and stores
     [
       { resource: "../../docs/missing.md" },
       { resource: "../../docs/gone.md" },
-      { resource: ".tent/Missing/Missing.md" },
+      { resource: "../../docs/Missing/Missing.md" },
       { resource: "docs/absent.md" },
       { resource: "../../docs/req.md" },
       { resource: "../Goal/Goal.md" },

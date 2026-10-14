@@ -57,12 +57,12 @@ test("bare descriptive sources matching existing files warn with document-relati
   const { root, workspace, adapter, write, fileExists } = await fixture(t);
   await fs.mkdir(path.join(workspace, "docs"));
   await fs.writeFile(path.join(workspace, "docs/req file.md"), "Requirements.");
-  await adapter.writeFile("Author/local.md", "Local.");
+  await write("Author/Local/Local.md", { id: "node-local" }, "Local.");
   await write("Author/Author.md", {
     id: "node-author",
     sources: [
       { resource: "docs/req%20file.md?mode=review#part" },
-      { resource: "local.md" },
+      { resource: "Local/Local.md" },
       { resource: "customer discussion" },
       { resource: "docs/missing.md" },
     ],
@@ -77,7 +77,7 @@ test("bare descriptive sources matching existing files warn with document-relati
   assert.equal(rootFile.suggestion, "../../docs/req%20file.md?mode=review#part");
   const localFile = result.issues.find((issue) => "index" in issue && issue.index === 1)!;
   assert.ok("suggestion" in localFile);
-  assert.equal(localFile.suggestion, "./local.md");
+  assert.equal(localFile.suggestion, "./Local/Local.md");
   assert.deepEqual(await bytes(root), before);
 });
 
@@ -139,7 +139,7 @@ test("whole graph inspection reports the three categories across Nodes, Roles an
       schemaVersion: 3,
       state: "pending",
       sources: [
-        { resource: "../missing-card.txt" },
+        { resource: "../../missing-card.txt" },
         { resource: "https://example.invalid/material" },
         { resource: "interviews with users" },
         { resource: "looks-like-a-file.pdf" },
@@ -152,14 +152,14 @@ test("whole graph inspection reports the three categories across Nodes, Roles an
     "Author/Author.md",
     {
       id: "node-author",
-      resource: "./missing.txt",
+      resource: "../../missing.txt",
       sources: [
         { resource: "../../source%20file.txt?download=1#part" },
         { resource: pathToFileURL(outside).href },
         { resource: "../../../outside.txt" },
         { resource: "//host/material.txt" },
         { resource: "./bad%ZZ" },
-        { resource: "./empty-directory" },
+        { resource: "../../empty-directory" },
       ],
     },
     [
@@ -176,7 +176,7 @@ test("whole graph inspection reports the three categories across Nodes, Roles an
       "\n`[code](./missing-code.md)` ![image](./missing-image.png) [[wiki]]",
     ].join("\n"),
   );
-  await adapter.mkdir("Author/empty-directory");
+  await fs.mkdir(path.join(workspace, "empty-directory"));
   const before = await bytes(root);
   const result = await checkGraph(adapter, workspace, fileExists);
   assert.equal(result.documents, 4);
@@ -193,8 +193,29 @@ test("whole graph inspection reports the three categories across Nodes, Roles an
     "unresolved-link",
     "unresolved-link",
   ]);
+  assert.ok(
+    result.issues.some(
+      (issue) => issue.kind === "unresolved-link" && issue.target === "../attachments/missing.pdf",
+    ),
+  );
+  assert.equal(
+    result.issues.some(
+      (issue) => issue.kind === "unresolved-link" && issue.target === "../attachments/linked.pdf",
+    ),
+    false,
+  );
   assert.equal(result.issues.filter((issue) => issue.path === "roles/role-a.md").length, 1);
   assert.equal(result.issues.filter((issue) => issue.path === "cards/card-a.md").length, 2);
+  assert.deepEqual(
+    result.issues
+      .filter((issue) => issue.kind === "missing-material-file")
+      .map((issue) => [issue.path, "resource" in issue && issue.resource, issue.reason]),
+    [
+      ["Author/Author.md", "../../missing.txt", "Local material does not exist as a file"],
+      ["Author/Author.md", "../../empty-directory", "Local material does not exist as a file"],
+      ["cards/card-a.md", "../../missing-card.txt", "Local material does not exist as a file"],
+    ],
+  );
   assert.ok(
     result.issues.some(
       (issue) =>
@@ -211,7 +232,7 @@ test("invalid documents and malformed declarations remain visible and inspectabl
     "Invalid/Invalid.md",
     {
       id: "bad-id",
-      sources: [null, { resource: 3 }, { resource: "./missing.txt" }],
+      sources: [null, { resource: 3 }, { resource: "../../missing.txt" }],
     },
     "[missing](node-missing)",
   );
@@ -250,6 +271,64 @@ test("invalid documents and malformed declarations remain visible and inspectabl
       (issue) => issue.kind === "missing-material-file" && issue.path === "Invalid/Invalid.md",
     ),
   );
+});
+
+test("legacy internal ordinary materials are invalid while native materials and body links remain valid", async (t) => {
+  const { root, workspace, systemRoot, adapter, write, fileExists } = await fixture(t);
+  await adapter.writeFile("attachments/legacy.txt", "legacy bytes stay in Tent");
+  await write("Target/Target.md", { id: "node-target" }, "native Node");
+  await write("roles/role-a.md", { id: "role-a", type: "role" }, "native Role");
+  await write(
+    "cards/card-a.md",
+    { id: "card-a", type: "card", schemaVersion: 3, state: "pending", sources: [] },
+    "native Card",
+  );
+  const legacyUri = pathToFileURL(path.join(systemRoot, "attachments/legacy.txt")).href;
+  await write(
+    "Owner/Owner.md",
+    {
+      id: "node-owner",
+      resource: "../attachments/legacy.txt",
+      sources: [
+        { resource: legacyUri },
+        { resource: "../Target/Target.md" },
+        { resource: pathToFileURL(path.join(systemRoot, "Target/Target.md")).href },
+        { resource: "../roles/role-a.md" },
+        { resource: pathToFileURL(path.join(systemRoot, "roles/role-a.md")).href },
+        { resource: "../cards/card-a.md" },
+        { resource: pathToFileURL(path.join(systemRoot, "cards/card-a.md")).href },
+      ],
+    },
+    `[relative](../attachments/legacy.txt) [URI](${legacyUri})`,
+  );
+  const before = await bytes(root);
+  const result = await checkGraph(adapter, workspace, fileExists);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(
+    result.issues.map((issue) => [
+      issue.kind,
+      issue.path,
+      "field" in issue && issue.field,
+      "index" in issue ? issue.index : undefined,
+      "resource" in issue && issue.resource,
+    ]),
+    [
+      [
+        "invalid-material-address",
+        "Owner/Owner.md",
+        "resource",
+        undefined,
+        "../attachments/legacy.txt",
+      ],
+      ["invalid-material-address", "Owner/Owner.md", "sources", 0, legacyUri],
+    ],
+  );
+  assert.ok(
+    result.issues.every((issue) =>
+      /Materials must point to Workspace files, or Node, Role, Card documents/.test(issue.reason),
+    ),
+  );
+  assert.deepEqual(await bytes(root), before);
 });
 
 test("material checks report missing or ambiguous Markdown sections at their occurrences", async (t) => {
@@ -409,7 +488,7 @@ test("file inspection failures are diagnostics, not missing file findings", asyn
   const { workspace, write, adapter } = await fixture(t);
   await write(
     "Author/Author.md",
-    { id: "node-author", resource: "./denied.txt" },
+    { id: "node-author", resource: "../../denied.txt" },
     "[denied](./other.txt)",
   );
   const result = await checkGraph(adapter, workspace, async () => {
@@ -418,6 +497,7 @@ test("file inspection failures are diagnostics, not missing file findings", asyn
   assert.deepEqual(result.issues, []);
   assert.equal(result.errors.length, 2);
   assert.ok(result.errors.every((error) => /EACCES/.test(error.reason)));
+  assert.ok(result.errors.some((error) => error.reason.includes('"../../denied.txt"')));
 });
 
 test("duplicate identities report their own path, not an unreadable Node named like the id", async (t) => {
@@ -468,7 +548,7 @@ test("unreadable Node documents and directory areas do not prevent checking heal
   await write("Hidden/Child/Child.md", { id: "node-hidden" }, "unreadable subtree");
   await write(
     "Healthy/Healthy.md",
-    { id: "node-healthy", resource: "./missing.txt" },
+    { id: "node-healthy", resource: "../../missing.txt" },
     "[missing](node-missing)",
   );
   await write("roles/role-a.md", { id: "role-a", type: "role" }, "unreadable roles area");

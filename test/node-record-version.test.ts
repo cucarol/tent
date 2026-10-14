@@ -107,13 +107,16 @@ test("version 1 preserves extension fields throughout material and goal records"
     ],
     extension: { uri: "https://example.invalid/material", enabled: true },
   };
-  const capture = await adapter.history.captureUnlocked([], {
+  await adapter.history.captureUnlocked([], {
     operation: "test.record.extensions",
     nodeRecords: { "node-extended": record },
   });
   const reader = new GitDocumentHistory(system);
   assert.deepEqual((await reader.nodeRecords())["node-extended"], record);
-  assert.deepEqual((await reader.nodeRecordEvents())[capture.commit!]?.["node-extended"], record);
+  const records = await reader.nodeRecords();
+  records["node-extended"]!.extension = "local mutation";
+  assert.deepEqual((await new GitDocumentHistory(system).nodeRecords())["node-extended"], record);
+  assert.deepEqual((await reader.nodeRecords())["node-extended"], record);
   assert.deepEqual(await reader.unportableNodeRecordIds(), []);
 });
 
@@ -133,7 +136,7 @@ test("bad declarations isolate each Node, mask old bases and use the final dupli
     nodeRecords: Object.fromEntries([...badIds, "node-duplicate"].map((id) => [id, valid])),
   });
   const latest = { ...valid, extension: "latest" };
-  const commit = await commitTrailers([
+  await commitTrailers([
     trailer("node-unversioned", { materials: [] }),
     trailer("node-unsupported", { v: 2, materials: [] }),
     'Tent-Node-Record: ["node-short"]',
@@ -151,7 +154,7 @@ test("bad declarations isolate each Node, mask old bases and use the final dupli
   for (const id of [...badIds, "node-finalbad"]) assert.equal(records[id], null, id);
   assert.deepEqual(records["node-good"], latest);
   assert.deepEqual(records["node-duplicate"], latest);
-  assert.deepEqual((await reader.nodeRecordEvents())[commit], records);
+  assert.deepEqual(await new GitDocumentHistory(system).nodeRecords(), records);
 });
 
 for (const hasResource of [false, true]) {

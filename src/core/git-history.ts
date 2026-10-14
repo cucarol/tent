@@ -10,7 +10,7 @@ import { isCardId, isNodeId, isRoleId } from "./id.js";
 import { isHistoryDocument, isHistoryFile } from "./document-history.js";
 import { isDeepStrictEqual } from "node:util";
 import { nodeBasisRecordSchema, type NodeBasisRecord } from "./node-basis-record.js";
-import { SYSTEM_REGISTRY_FILES, TEMP_DIR, ATTACHMENTS_DIR, TENT_SYSTEM_DIR } from "./paths.js";
+import { SYSTEM_REGISTRY_FILES, TEMP_DIR, TENT_SYSTEM_DIR } from "./paths.js";
 
 export type DocumentVersion = { commit: string; path: string };
 export type DocumentChange = { path: string; raw: string | null };
@@ -24,7 +24,6 @@ export type CaptureMetadata = {
   objectIds?: readonly string[];
   entry?: "cli" | "ui" | "core";
   nodeRecords?: Record<string, NodeBasisRecord>;
-  acknowledgedOutputIds?: readonly string[];
 };
 export type HistoryChange = {
   objectId?: string;
@@ -39,7 +38,6 @@ export type HistoryCommit = {
   objectIds: string[];
   entry?: "cli" | "ui" | "core";
   changes: HistoryChange[];
-  acknowledgedOutputIds?: string[];
 };
 
 const oidPattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
@@ -92,14 +90,10 @@ function commitMessage(metadata: CaptureMetadata, objectIds: readonly string[]):
   if (metadata.entry !== undefined && !["cli", "ui", "core"].includes(metadata.entry)) {
     throw new Error(`Invalid Tent history entry: ${metadata.entry}`);
   }
-  const acknowledgedOutputIds = [...new Set(metadata.acknowledgedOutputIds ?? [])].sort();
-  for (const id of acknowledgedOutputIds)
-    if (!isNodeId(id)) throw new Error(`Invalid acknowledged output id: ${id}`);
   return (
     `Tent: ${metadata.operation}\n\nTent-Operation: ${metadata.operation}` +
     objectIds.map((id) => `\nTent-Object: ${id}`).join("") +
     (metadata.entry ? `\nTent-Entry: ${metadata.entry}` : "") +
-    `\nTent-Output-Acknowledged: ${JSON.stringify(acknowledgedOutputIds)}` +
     Object.entries(metadata.nodeRecords ?? {})
       .map(([id, record]) => {
         if (!isNodeId(id)) throw new Error(`Invalid Node record id: ${id}`);
@@ -796,27 +790,6 @@ export class GitDocumentHistory {
     return [...ids];
   }
 
-  /** Material basis updates per retained first-parent capture. */
-  async nodeRecordEvents(): Promise<Record<string, Record<string, NodeBasisRecord | null>>> {
-    await this.ensureRepository();
-    const head = await this.retainedHead();
-    if (!head) return {};
-    const result: Record<string, Record<string, NodeBasisRecord | null>> = {};
-    for (const event of this.firstParentRecords({
-      head,
-      records: await this.snapshotRecords(head),
-    })) {
-      const records: Record<string, NodeBasisRecord | null> = {};
-      for (const line of event.message.split("\n")) {
-        if (!line.startsWith("Tent-Node-Record: ")) continue;
-        const retained = readRetainedNodeRecord(line);
-        if (retained) records[retained.id] = retained.record;
-      }
-      if (Object.keys(records).length) result[event.commit] = records;
-    }
-    return result;
-  }
-
   /** First retained identity event, independent of its current filename. */
   async firstNodeTime(nodeId: string): Promise<string | undefined> {
     if (!isNodeId(nodeId)) throw new Error("Invalid Node id");
@@ -945,7 +918,7 @@ export class GitDocumentHistory {
     const excluded = new Set(exclude.split(/\r?\n/));
     const rules = [
       ...[...SYSTEM_REGISTRY_FILES].map((file) => `/${file}`),
-      ...[TEMP_DIR, ATTACHMENTS_DIR, TENT_SYSTEM_DIR].map((dir) => `/${dir}/`),
+      ...[TEMP_DIR, TENT_SYSTEM_DIR].map((dir) => `/${dir}/`),
       "/mutation.lock.guard*",
     ].filter((rule) => !excluded.has(rule));
     if (rules.length) {
@@ -964,11 +937,7 @@ export class GitDocumentHistory {
       ),
     );
     metadata = { ...metadata, nodeRecords: recordChanges };
-    if (
-      changes.length === 0 &&
-      !Object.keys(recordChanges).length &&
-      !metadata.acknowledgedOutputIds?.length
-    )
+    if (changes.length === 0 && !Object.keys(recordChanges).length)
       return { commit: before, created: false, versions: [] };
 
     commitMessage(metadata, metadata.objectIds ?? []);
@@ -984,7 +953,6 @@ export class GitDocumentHistory {
     if (
       cached &&
       !Object.keys(recordChanges).length &&
-      !metadata.acknowledgedOutputIds?.length &&
       changes.every((change) =>
         change.raw === null
           ? !retainedBlobs.has(change.path)
@@ -1035,7 +1003,6 @@ export class GitDocumentHistory {
     );
     if (
       !Object.keys(recordChanges).length &&
-      !metadata.acknowledgedOutputIds?.length &&
       changes.every((change) => this.knownEntries.get(change.path) === expected.get(change.path))
     ) {
       if ((await this.currentCommit()) !== before)
@@ -1052,10 +1019,7 @@ export class GitDocumentHistory {
       };
     }
 
-    const objectIds = new Set([
-      ...(metadata.objectIds ?? []),
-      ...(metadata.acknowledgedOutputIds ?? []),
-    ]);
+    const objectIds = new Set(metadata.objectIds ?? []);
     for (const change of changes) {
       if (!isHistoryDocument(change.path)) continue;
       if (this.knownEntries.get(change.path) === expected.get(change.path)) continue;
@@ -1513,7 +1477,7 @@ export class GitDocumentHistory {
   /** Changes from an exclusive ancestor to an inclusive descendant, oldest first. */
   async changesInRange(range: { from?: string; to?: string } = {}): Promise<HistoryCommit[]> {
     if (!range.from && !range.to)
-      return this.derived("identity-events", 4, () => this.buildChangesInRange(range));
+      return this.derived("identity-events", 5, () => this.buildChangesInRange(range));
     return this.buildChangesInRange(range);
   }
 
@@ -1589,10 +1553,6 @@ export class GitDocumentHistory {
       )?.[1];
       const entryValue = /^Tent-Entry: (cli|ui|core)$/m.exec(message)?.[1];
       const entry = entryValue as HistoryCommit["entry"];
-      const acknowledgment = /^Tent-Output-Acknowledged: (.+)$/m.exec(message);
-      const acknowledgedOutputIds = acknowledgment
-        ? z.array(z.string().refine(isNodeId)).parse(JSON.parse(acknowledgment[1]!))
-        : undefined;
       const objectIds = new Set(
         [...message.matchAll(/^Tent-Object: (.+)$/gm)]
           .map((match) => match[1]!)
@@ -1625,7 +1585,6 @@ export class GitDocumentHistory {
         ...(operation ? { operation } : {}),
         objectIds: [...objectIds].sort(),
         ...(entry ? { entry } : {}),
-        ...(acknowledgedOutputIds ? { acknowledgedOutputIds } : {}),
         changes,
       });
 

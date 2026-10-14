@@ -2,7 +2,6 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import type { Definition, Link, Nodes, Root } from "mdast";
 import { resolveNode, type OkfNode } from "../core/okf-index.js";
 import { normalizeTarget } from "../core/link-target.js";
-import { ATTACHMENTS_DIR } from "../core/paths.js";
 
 export { normalizeTarget } from "../core/link-target.js";
 export type OutLink = {
@@ -40,9 +39,6 @@ function external(href: string): boolean {
 function pathPart(href: string): string {
   return href.split(/[?#]/, 1)[0]!;
 }
-function attachment(href: string): boolean {
-  return href.replace(/\\/g, "/").split("/").includes(ATTACHMENTS_DIR);
-}
 
 /** Standard Markdown links only. Code, HTML, images and wiki text are not edges. */
 export function extractOutLinksDetailed(body: string, occurrences = false): ExtractedOutLink[] {
@@ -56,7 +52,6 @@ export function extractOutLinksDetailed(body: string, occurrences = false): Extr
     const url = node.type === "link" ? node.url : defs.get(node.identifier)?.url;
     if (!url || url.startsWith("#")) return "skip";
     const targetPath = pathPart(url);
-    if (!external(url) && attachment(targetPath)) return "skip";
     const label = labelText(node).replace(/\s+/g, " ").trim() || undefined;
     const key = JSON.stringify([url, label]);
     if (!occurrences && seen.has(key)) return "skip";
@@ -111,7 +106,7 @@ export function resolveOutLink(
 ): ResolvedLink {
   if (link.kind === "artifact") return { raw: link.raw, kind: "artifact", label: link.label };
   const target = link.targetPath ?? pathPart(link.raw);
-  if (!target || target.startsWith("#") || external(target) || attachment(target)) {
+  if (!target || target.startsWith("#") || external(target)) {
     return { raw: link.raw, kind: "unresolved", label: link.label };
   }
   const normalized = normalizeTarget(target, fromNotePath);

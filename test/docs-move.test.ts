@@ -401,3 +401,34 @@ test("moveNode: injected write failure restores tree and note bytes", async (t) 
   const tent = await loadTent(base);
   assert.equal(tent.byId.get(a)?.path, "alpha");
 });
+
+test("attachments is an ordinary indexed Node name through move, place and rename", async (t) => {
+  const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-ordinary-name-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  const fsa = new NodeFs(dir);
+  const bytes = new Uint8Array([0, 255, 128, 1]);
+  await fsa.writeBinary("attachments/legacy.bin", bytes);
+  await scaffoldTent(fsa, { name: "ordinary directory" });
+  assert.deepEqual([...(await fsa.readBinary("attachments/legacy.bin"))], [...bytes]);
+  const env = envFor(fsa);
+  const parent = await createNode(env, { parentPath: "", name: "parent", type: "prompt" });
+  // Existing unclaimed ordinary directory can contain a canonical identity document.
+  await fsa.writeFile(
+    "attachments/attachments.md",
+    "---\nid: node-attachments\ntype: prompt\n---\nExisting identity\n",
+  );
+  assert.equal((await loadTent(fsa)).byId.get("node-attachments")?.path, "attachments");
+  await moveNode(env, "node-attachments", parent, { mode: "inside" });
+  assert.equal((await loadTent(fsa)).byId.get("node-attachments")?.path, "parent/attachments");
+  await placeNode(env, "parent/attachments", "", { mode: "inside" });
+  await renameNode(env, "node-attachments", "renamed");
+  await renameNode(env, "node-attachments", "attachments");
+  assert.equal((await loadTent(fsa)).byId.get("node-attachments")?.path, "attachments");
+  assert.deepEqual([...(await fsa.readBinary("attachments/legacy.bin"))], [...bytes]);
+  const created = await createNode(env, {
+    parentPath: "parent",
+    name: "attachments",
+    type: "prompt",
+  });
+  assert.equal((await loadTent(fsa)).byId.get(created)?.path, "parent/attachments");
+});

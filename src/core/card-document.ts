@@ -17,6 +17,7 @@ import {
   materialLocator,
   isDirectoryMaterial,
   sourcesSchema,
+  MaterialAddressError,
   type MaterialSource,
 } from "./material.js";
 import { isHistoryDocument } from "./document-history.js";
@@ -24,6 +25,7 @@ import { parseRoleDocument } from "./role-document.js";
 import { boundary, ReaderError, type ReaderRange } from "./context-reader.js";
 import { canonicalSha256 } from "./canonical-digest.js";
 import { canonicalDocumentReferences } from "./document-links.js";
+import { assertSystemMaterial, systemMaterialPath } from "./material-target.js";
 import {
   documentHeader,
   loadNodeCatalog,
@@ -193,13 +195,13 @@ async function roleAvailable(fs: FsAdapter, roleId: string) {
   }
 }
 
-function sourceVersion(owner: string, source: MaterialSource) {
+function sourceVersion(fs: FsAdapter, owner: string, source: MaterialSource) {
   const version = documentVersionSchema.parse(source.version),
     locator = materialLocator(source.resource, owner, true);
+  const file = systemMaterialPath(locator, fs.workspaceRoot);
   if (
-    locator.kind !== "path" ||
     isDirectoryMaterial(locator) ||
-    locator.target !== version.path ||
+    file !== version.path ||
     version.path === ".." ||
     version.path.startsWith("../") ||
     version.path.startsWith(CARDS_DIR + "/") ||
@@ -215,7 +217,7 @@ export async function verifyCardSourceVersion(
   owner: string,
   source: MaterialSource,
 ) {
-  const version = sourceVersion(owner, source);
+  const version = sourceVersion(fs, owner, source);
   const history = await historyOf(fs);
   const changedSince = await history.changedSince(version);
   const raw = await history.read(version);
@@ -230,7 +232,7 @@ export async function verifyCardSourceVersions(
 ) {
   const selected = sources.map(({ owner, source }) => {
     try {
-      return sourceVersion(owner, source);
+      return sourceVersion(fs, owner, source);
     } catch (error) {
       return error instanceof Error ? error : new Error(String(error));
     }
@@ -271,8 +273,9 @@ async function captureSources(fs: FsAdapter, owner: string, sources: MaterialSou
   for (let i = 0; i < sources.length; i++) {
     const source = sources[i]!,
       locator = materialLocator(source.resource, owner, true);
-    const file =
-      locator.kind === "path" && !isDirectoryMaterial(locator) ? locator.target : undefined;
+    const file = !isDirectoryMaterial(locator)
+      ? systemMaterialPath(locator, fs.workspaceRoot)
+      : undefined;
     const internal =
       file &&
       file !== ".." &&
@@ -281,7 +284,16 @@ async function captureSources(fs: FsAdapter, owner: string, sources: MaterialSou
       isHistoryDocument(file);
     if (source.version !== undefined) {
       await verifyCardSourceVersion(fs, owner, source);
-    } else if (internal) {
+      continue;
+    }
+    try {
+      await assertSystemMaterial(fs, locator);
+    } catch (error) {
+      throw new MaterialAddressError(
+        `Invalid sources[${i}].resource: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (internal) {
       if (fs.invalidNodeEdits?.has(file))
         invalid(`Invalid Node source: ${file}: ${fs.invalidNodeEdits.get(file)}`);
       const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
@@ -1038,7 +1050,7 @@ export async function inspectReceivedCardSourceChanges(
           return { selected };
         for (const source of current.data.sources) {
           if (!source.version) continue;
-          const version = sourceVersion(current.path, source);
+          const version = sourceVersion(fs, current.path, source);
           if (!version.path.startsWith("roles/"))
             selected.push({ card: current, owner: current.path, source });
         }

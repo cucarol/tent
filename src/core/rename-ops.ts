@@ -250,7 +250,7 @@ async function renameNodeUnlocked(
     }),
   );
 
-  // order.json is id-keyed — no path rewrite. Attachments are node-keyed and stay put.
+  // order.json is id-keyed — no path rewrite.
 
   const pathMapRecord: Record<string, string> = {};
   for (const [from, to] of pathMap) pathMapRecord[from] = to;
@@ -277,10 +277,6 @@ function resolveRenameTarget(tent: LoadedTent, nodeIdOrPath: string): Node {
 function assertNotOperationalPath(path: string): void {
   if (isOperationalPath(path) || path === "temp" || path.startsWith("temp/")) {
     throw new Error("temp/ and other system pipelines cannot be renamed as Nodes.");
-  }
-  const top = path.split("/")[0] ?? "";
-  if (top === "attachments" || top === ".tent") {
-    throw new Error("System directories cannot be renamed as Nodes.");
   }
 }
 

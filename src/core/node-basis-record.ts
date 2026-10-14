@@ -1,7 +1,5 @@
 import * as z from "zod/v4";
 import { isNodeId } from "./id.js";
-import { repositoryMaterialSchema } from "./repository-material.js";
-import { directoryFilesSchema, directoryFingerprint } from "./directory-material.js";
 import { structureDependenciesSchema, structureFingerprint } from "./structure-material.js";
 
 const version = z.string().regex(/^[a-f0-9]{64}$/);
@@ -10,30 +8,17 @@ const materialBasisSchema = z
     identity: z.string(),
     version: version.optional(),
     fingerprintVersion: z.literal(2).optional(),
-    repository: repositoryMaterialSchema.optional(),
-    directoryFiles: directoryFilesSchema.optional(),
     structureDependencies: structureDependenciesSchema.optional(),
   })
   .superRefine((material, context) => {
     if (
       material.structureDependencies &&
-      (material.directoryFiles ||
-        material.version !== structureFingerprint(material.structureDependencies))
+      material.version !== structureFingerprint(material.structureDependencies)
     )
       context.addIssue({
         code: "custom",
         path: ["structureDependencies"],
-        message:
-          "Structure dependency set must match its retained version and cannot include content manifests",
-      });
-    if (
-      material.directoryFiles &&
-      material.version !== directoryFingerprint(material.directoryFiles)
-    )
-      context.addIssue({
-        code: "custom",
-        path: ["directoryFiles"],
-        message: "Directory manifest must match its retained version",
+        message: "Structure dependency set must match its retained version",
       });
   });
 export const nodeBasisRecordSchema = z

@@ -6,7 +6,7 @@ import {
   isTestSource,
   type RepositoryImport,
 } from "./repository-imports.js";
-import { materialCoverageContains } from "./material-coverage.js";
+import { isTentWorkspacePath, materialCoverageContains } from "./material-coverage.js";
 
 export const MODULE_MAP_THRESHOLDS = {
   historyCommitLimit: 300,
@@ -79,6 +79,7 @@ const barrel = (file: string) => /(^|\/)index\.[^/]+$/.test(file);
 
 const comparable = (file: string) => (process.platform === "win32" ? file.toLowerCase() : file);
 function matches(material: ModuleMapMaterial, file: string): boolean {
+  if (isTentWorkspacePath(file)) return false;
   if (material.kind === "file") return comparable(material.path) === comparable(file);
   return materialCoverageContains(
     {
@@ -123,7 +124,7 @@ function median(numbers: number[]): number {
 /** Pure module-map rules: supplied repository facts only, with no I/O or model calls. */
 export function checkModuleMap(input: ModuleMapInput) {
   const thresholds = MODULE_MAP_THRESHOLDS;
-  const trackedFiles = ordered(input.trackedFiles);
+  const trackedFiles = ordered(input.trackedFiles.filter((file) => !isTentWorkspacePath(file)));
   const nodes = [...input.nodes].sort(
     (a, b) => comparePaths(a.path, b.path) || comparePaths(a.id, b.id),
   );
@@ -274,6 +275,8 @@ export function checkModuleMap(input: ModuleMapInput) {
   ].sort((a, b) => comparePaths(JSON.stringify(a), JSON.stringify(b)));
   for (const edge of imports) {
     if (
+      isTentWorkspacePath(edge.from) ||
+      isTentWorkspacePath(edge.to) ||
       isTestSource(edge.from) ||
       isTestSource(edge.to) ||
       barrel(edge.from) ||
@@ -330,13 +333,16 @@ export function checkModuleMap(input: ModuleMapInput) {
   }
 
   const eligible = input.commits.filter(
-    (commit) => commit.files.length > 0 && commit.changedFiles <= thresholds.maximumCommitFiles,
+    (commit) =>
+      commit.files.some((file) => !isTentWorkspacePath(file)) &&
+      commit.changedFiles <= thresholds.maximumCommitFiles,
   );
   const singles = new Map<string, number>();
   const pairs = new Map<string, number>();
   for (const commit of eligible) {
     const ids = ordered(
       commit.files.flatMap((file) => {
+        if (isTentWorkspacePath(file)) return [];
         const id = owner(file)?.node.id;
         return id ? [id] : [];
       }),

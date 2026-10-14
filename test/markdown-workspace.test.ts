@@ -51,7 +51,7 @@ test("NodeFs binary read/write: exact bytes including NUL and non-UTF8", async (
   );
 });
 
-test("historical attachment names stay separate from Node links", () => {
+test("historical attachment links are ordinary links while images remain separate", () => {
   const targets = [
     "../attachments/node-x/draft..final.png",
     "../attachments/node-x/my shot.png",
@@ -64,7 +64,9 @@ test("historical attachment names stay separate from Node links", () => {
     ["RealConcept"],
   );
   assert.deepEqual(
-    extractOutLinksDetailed(targets.map((target) => `[file](<${target}>)`).join("\n")),
-    [],
+    extractOutLinksDetailed(targets.map((target) => `[file](<${target}>)`).join("\n")).map(
+      (link) => link.raw,
+    ),
+    targets,
   );
 });

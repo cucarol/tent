@@ -108,6 +108,24 @@ test("brief covered writes need no ignore lookup", async () => {
   assert.deepEqual(await findUnlinkedOutputs(sync, [turn], process.cwd(), index, adapter), []);
 });
 
+test("brief excludes internal files before ignore lookup, including URI aliases and stale index entries", async () => {
+  const root = process.cwd();
+  const internal = ".tent/attachments/result.svg";
+  const uri = pathToFileURL(path.join(root, internal)).href;
+  const adapter = {
+    nonignoredFiles: async () => {
+      throw new Error("internal files are outside the output domain");
+    },
+  } as unknown as FsAdapter;
+  const stale = { nodes: [{ ...index.nodes[0]!, materials: [{ file: internal }] }] };
+  assert.equal(indexedMaterialCovers(stale, internal, root), false);
+  assert.equal(indexedMaterialCovers(stale, uri, root), false);
+  assert.deepEqual(
+    await findUnlinkedOutputs(sync, [event([internal, uri])], root, stale, adapter),
+    [],
+  );
+});
+
 async function uriFixture(t: TestContext) {
   const scratch = path.resolve(".scratch/brief-uri-fix");
   await fs.mkdir(scratch, { recursive: true });

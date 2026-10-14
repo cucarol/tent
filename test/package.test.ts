@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isValidTentIndexMarker } from "../src/core/scaffold.js";
 import { listBundledSkillNames } from "./fixtures/bundled-skills.js";
+import { initializeFixtureRepository } from "./scratch.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -110,7 +111,10 @@ async function runCliOk(cwd: string, ...args: string[]): Promise<RunResult> {
 }
 
 test("tent new adopts an existing project without touching project files", async () => {
-  const workspace = await temporaryDirectory("tent-adopt-");
+  const fixture = await temporaryDirectory("tent-adopt-");
+  initializeFixtureRepository(fixture);
+  const workspace = path.join(fixture, "project");
+  await fs.mkdir(workspace);
   const readme = path.join(workspace, "README.md");
   const agents = path.join(workspace, "AGENTS.md");
   await fs.writeFile(readme, "# Existing project\n", "utf8");
@@ -127,7 +131,8 @@ test("tent new adopts an existing project without touching project files", async
   assert.equal(await exists(path.join(workspace, ".tent", "types.json")), false);
   assert.equal(await exists(path.join(workspace, ".tent", "temp")), true);
   assert.equal(await exists(path.join(workspace, ".git")), false);
-  assert.match(await fs.readFile(path.join(workspace, ".gitignore"), "utf8"), /\.tent\//);
+  assert.equal(await exists(path.join(workspace, ".gitignore")), false);
+  assert.equal(await exists(path.join(workspace, ".tent", "attachments")), false);
 
   const repeated = await runCli(workspace, "new", ".");
   assert.notEqual(repeated.code, 0);
@@ -303,7 +308,7 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
       await fs.readFile(path.join(installed, "package.json"), "utf8"),
     );
     assert.deepEqual(installedPackage.dependencies ?? {}, expectedDependencies);
-    await fs.mkdir(workspace, { recursive: true });
+    initializeFixtureRepository(workspace);
     await fs.writeFile(path.join(workspace, "README.md"), "# keep\n", "utf8");
     await runOk(process.execPath, [cli, "new", "."], workspace);
     assert.equal(await fs.readFile(path.join(workspace, "README.md"), "utf8"), "# keep\n");

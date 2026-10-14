@@ -9,6 +9,7 @@ import { assertStatusEdit, documentLifecycle } from "./document-status.js";
 import { boundary, ReaderError, type ReaderRange } from "./context-reader.js";
 import { canonicalSha256 } from "./canonical-digest.js";
 import { canonicalDocumentReferences } from "./document-links.js";
+import { validateSystemMaterials } from "./material-target.js";
 import { uncapturedChecker } from "./retained-read.js";
 
 export async function requireRoleDocument(fs: FsAdapter, roleId: string): Promise<RoleDocument> {
@@ -214,6 +215,7 @@ export function editRoleContext(fs: FsAdapter, roleId: string, input: RoleEdit) 
           : serializeFrontmatter(canonicalFields, canonicalBody, parsed.keyOrder);
       parseRoleDocument(roleId, raw);
       const after = parseFrontmatter(raw).data;
+      await validateSystemMaterials(fs, after, current.path, before.data);
       assertStatusEdit(before.data, after);
       if ((await fs.readFile(current.path)) !== current.raw)
         throw new Error(

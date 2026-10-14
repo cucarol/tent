@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { prepareNodeBatch, readNodeBatch } from "../src/core/node-batch.js";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 
 const raw = (id: string, body: string) => `---\nid: ${id}\ntype: prompt\n---\n${body}`;
@@ -17,7 +17,7 @@ async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(scratch, "node-batch-"));
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspace = path.join(root, "workspace");
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const adapter = new NodeFs(path.join(workspace, ".tent"));
   const git = async (...args: string[]) =>
     (

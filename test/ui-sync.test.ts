@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import { createNode } from "../src/core/ops.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { confirmNodeSync } from "../src/core/node-sync.js";
@@ -15,7 +15,7 @@ import { testScratchRoot } from "./scratch.js";
 test("sync reads changed materials without a revision change and agrees with brief on both flags", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "ui-sync-"));
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await initializeTentWorkspace(root);
+  await initializeFixtureWorkspace(root);
   const tent = new NodeFs(path.join(root, ".tent"));
   await fs.writeFile(path.join(root, "requirements.txt"), "before");
   const goal = await createNode(

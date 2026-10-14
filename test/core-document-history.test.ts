@@ -15,7 +15,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import { renameNode, deleteNode } from "../src/core/ops.js";
 import { withTentMutation } from "../src/core/adapter.js";
 import { DELETE_PENDING_PATH } from "../src/core/delete-recovery.js";
@@ -32,7 +32,7 @@ async function fixture(t: TestContext) {
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "history-service-"));
   const workspace = path.join(root, "workspace");
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const systemRoot = path.join(workspace, ".tent"),
     adapter = new NodeFs(systemRoot);
@@ -385,8 +385,8 @@ test("batch writes share a commit, Role reads capture explicitly, and Git failur
 test("material versions are automatic, body-preserving, local and captured with the Node", async (t) => {
   const h = await fixture(t),
     { adapter } = h;
-  const target = "attachments/checked.txt";
-  await adapter.writeFile(target, "material one");
+  const target = path.join(h.workspace, "checked.txt");
+  await fs.writeFile(target, "material one");
   let node = await readNodeForEdit(adapter, "node-alpha");
   const originalBody = parseFrontmatter(node.raw).body;
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "unanchored");
@@ -398,7 +398,7 @@ test("material versions are automatic, body-preserving, local and captured with 
   };
   await writeNodeDocument(adapter, node.nodeId, {
     baseEtag: node.etag,
-    frontmatter: { resource: "/attachments/checked.txt" },
+    frontmatter: { resource: "../../checked.txt" },
   });
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
   assert.equal(
@@ -416,7 +416,7 @@ test("material versions are automatic, body-preserving, local and captured with 
   assert.deepEqual(parseFrontmatter(firstConfirmed.raw).data.generated, node.frontmatter.generated);
   assert.ok(parseFrontmatter(firstConfirmed.raw).data.verified);
   assert.deepEqual((await adapter.history.nodeRecords())[node.nodeId], firstRecord);
-  await adapter.writeFile(target, "material two");
+  await fs.writeFile(target, "material two");
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "behind");
   const confirmed = await confirmNodeSync(adapter, node.nodeId, { baseEtag: firstConfirmed.etag });
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
@@ -425,9 +425,9 @@ test("material versions are automatic, body-preserving, local and captured with 
     confirmNodeSync(adapter, node.nodeId, { baseEtag: node.etag }),
     /etag conflict/i,
   );
-  await adapter.remove(target);
+  await fs.rm(target);
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "behind");
-  await adapter.writeFile(target, "material two");
+  await fs.writeFile(target, "material two");
   await renameNode(h.mount.env, node.nodeId, "Moved");
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
   const retained = (

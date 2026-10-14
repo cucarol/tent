@@ -4,7 +4,7 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import {
   createCardDocument,
   readCardDocument,
@@ -124,7 +124,7 @@ test("Card progress counts only outputs explicitly responding to this Card", asy
   const root = await fs.mkdtemp(path.join(scratch, "card-progress-"));
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspace = path.join(root, "workspace");
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const adapter = new NodeFs(path.join(workspace, ".tent"));
   await adapter.writeFile(
     "Main/Main.md",
@@ -337,7 +337,7 @@ test("behind responses retract Card completion and output activity without chang
   const root = await fs.mkdtemp(path.join(scratch, "card-review-"));
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspace = path.join(root, "workspace");
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const adapter = new NodeFs(path.join(workspace, ".tent"));
   await adapter.writeFile(
     "Goal/Goal.md",
@@ -787,7 +787,7 @@ test("Card publication retains only selected Node/Role sources; moving live Node
       { resource: "/roles/role-a.md" },
       { resource: "https://example.invalid/unread" },
       { resource: "客户访谈结论" },
-      { resource: "../external.txt" },
+      { resource: "../../external.txt" },
     ],
   });
   assert.deepEqual(reads, ["Main/Main.md", "roles/role-a.md"]);

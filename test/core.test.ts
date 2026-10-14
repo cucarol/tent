@@ -19,7 +19,7 @@ test("Node creation rejects unindexable names before writing and allows nested s
   const before = await readdir(root, { recursive: true });
   const orderBefore = (await fs.exists("order.json")) ? await fs.readFile("order.json") : null;
   for (const parentPath of ["", "prompt"]) {
-    const names = [".gitnotes", ".github", "roles", "cards", "temp", "attachments", ".tent"];
+    const names = [".gitnotes", ".github", "roles", "cards", "temp", ".tent"];
     if (!parentPath)
       names.push(
         "index.md",

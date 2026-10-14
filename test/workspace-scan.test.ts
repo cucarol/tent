@@ -18,6 +18,7 @@ async function fixture(t: TestContext, initializeGit = true) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "workspace-scan-"));
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   if (initializeGit) await git(root, "init", "-b", "main");
+  if (initializeGit) await fs.appendFile(path.join(root, ".git/info/exclude"), "\n/.tent/\n");
   await scaffoldInWorkspace(new NodeFs(root), { name: "Scan" });
   const adapter = new NodeFs(path.join(root, ".tent"));
   const write = async (file: string, text = "text") => {
@@ -69,6 +70,29 @@ test("scan text bounds retained fact groups and escapes path control characters"
   assert.match(text, /a\\nbreak/);
   assert.match(text, /b\\u2029/);
   assert.match(text, /guidance .*; \+5 more/);
+});
+
+test("scan removes .tent files and diagnostics even when repository input contains them", async (t) => {
+  const { root, adapter, write, node } = await fixture(t);
+  await write("src/main.ts", "export const value = 1;");
+  await node("Root", { sources: [{ resource: "../../", track: "structure" }] });
+  const baseline = {
+    head: null,
+    trackedFiles: ["src/main.ts"],
+    sources: { files: [{ path: "src/main.ts", content: "export const value = 1;" }], errors: [] },
+  };
+  const polluted = {
+    ...baseline,
+    trackedFiles: [...baseline.trackedFiles, ".tent/cache/AGENTS.md"],
+    sources: {
+      files: [...baseline.sources.files, { path: ".tent/cache/AGENTS.md", content: "internal" }],
+      errors: [{ file: ".tent/cache/AGENTS.md", reason: "internal failure" }],
+    },
+  };
+  assert.deepEqual(
+    await scanWorkspace(adapter, root, polluted, scanFileKind),
+    await scanWorkspace(adapter, root, baseline, scanFileKind),
+  );
 });
 
 test("scan uses active material coverage, excludes body links and respects directory boundaries", async (t) => {
@@ -188,7 +212,7 @@ test("CLI scan summarizes facts without changing Git/Tent bytes and limits text 
   const json = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
   assert.equal(json.exitCode, 0, json.stderr);
   const report = JSON.parse(json.stdout);
-  assert.equal(report.coverage.directories.length, 28);
+  assert.equal(report.coverage.directories.length, 27);
   assert.ok(!report.coverage.uncoveredFiles.includes("new.markdown"));
   assert.deepEqual(Object.keys(report).sort(), [
     "coverage",
@@ -244,7 +268,6 @@ test("material coverage preserves section addresses independently of body links 
   assert.deepEqual(result.inspectionErrors, []);
   assert.equal(result.coverage.coveredFiles, 2);
   assert.deepEqual(result.coverage.uncoveredFiles, [
-    ".gitignore",
     "docs/ambiguous.md",
     "docs/broken.md",
     "docs/deprecated.md",
@@ -325,7 +348,7 @@ test("scan never executes a configured Git clean filter for uncommitted Markdown
     await readWorkspaceScanRepository(root),
     scanFileKind,
   );
-  assert.deepEqual(result.coverage.uncoveredFiles, [".gitattributes", ".gitignore", "doc.md"]);
+  assert.deepEqual(result.coverage.uncoveredFiles, [".gitattributes", "doc.md"]);
   assert.deepEqual(await snapshot(root), before);
 });
 

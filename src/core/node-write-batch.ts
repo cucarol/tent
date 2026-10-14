@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import * as z from "zod/v4";
 import { readOnlyFs } from "./adapter.js";
 import { canonicalDocumentReferencesWithPaths } from "./document-links.js";
+import { validateSystemMaterials } from "./material-target.js";
 import { contentEtag } from "./etag.js";
 import {
   NODE_FRONTMATTER_KEY_ORDER,
@@ -215,7 +216,7 @@ async function writeNodesBatchUnlocked(
       requireLocalRef(address);
     }
     // Validate exactly the AST destinations that canonical writes visit,
-    // including attachment-like links that relationship discovery excludes.
+    // including destinations that do not participate in document relationships.
     rewriteMarkdownDestinations(body, (address) => {
       requireLocalRef(address);
       return undefined;
@@ -286,6 +287,20 @@ async function writeNodesBatchUnlocked(
     }
   }
   const now = env.clock.now();
+  const nodePaths = new Set([
+    ...[...catalog.byId.values()]
+      .filter((node) => !node.invalid)
+      .map((node) => nodeNotePath(node.path)),
+    ...[...creates.values()].map((node) => nodeNotePath(node.path!)),
+  ]);
+  for (const node of planned)
+    await validateSystemMaterials(
+      fs,
+      parseFrontmatter(node.raw).data,
+      nodeNotePath(node.path),
+      node.before === null ? {} : parseFrontmatter(node.before).data,
+      nodePaths,
+    );
   const finalDocuments = new Map<string, string>();
   const nodes = new Map(catalog.byId);
   const nodeRecords: Record<string, NodeBasisRecord> = {};
@@ -311,14 +326,11 @@ async function writeNodesBatchUnlocked(
     });
   }
   const basisRecords = await retainedNodeRecords(fs);
-  const acknowledgedOutputIds: string[] = [];
   for (const node of [...planned].sort(
     (a, b) =>
       Number(isOutputNode(parseFrontmatter(a.raw).data)) -
       Number(isOutputNode(parseFrontmatter(b.raw).data)),
   )) {
-    const output = isOutputNode(parseFrontmatter(node.raw).data);
-    if (output && node.confirm) acknowledgedOutputIds.push(node.nodeId);
     const prepared = await prepareNodeSyncSave(fs, nodeNotePath(node.path), node.raw, {
       now,
       created: node.before === null,
@@ -383,7 +395,7 @@ async function writeNodesBatchUnlocked(
       fs.history && (await fs.exists(".git"))
         ? await fs.history.captureUnlocked(
             planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
-            { operation: "node.write-many", nodeRecords, acknowledgedOutputIds },
+            { operation: "node.write-many", nodeRecords },
           )
         : undefined;
     return {

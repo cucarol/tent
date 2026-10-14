@@ -22,7 +22,6 @@ export class PropagationMemoryFs implements FsAdapter {
     const snapshots = new Map<string, Map<string, string>>();
     const events: HistoryCommit[] = [];
     const records: Record<string, NodeBasisRecord> = {};
-    const recordEvents: Record<string, Record<string, NodeBasisRecord>> = {};
     const images = new Map<
       string,
       Array<{ path: string; before: string | null; after: string | null }>
@@ -33,7 +32,6 @@ export class PropagationMemoryFs implements FsAdapter {
     history.available = async () => true;
     history.currentCommit = async () => head();
     history.nodeRecords = async () => structuredClone(records);
-    history.nodeRecordEvents = async () => structuredClone(recordEvents);
     history.captureUnlocked = async (
       changes: readonly DocumentChange[],
       metadata?: CaptureMetadata,
@@ -43,8 +41,7 @@ export class PropagationMemoryFs implements FsAdapter {
       const recordChanged = Object.entries(metadata?.nodeRecords ?? {}).some(
         ([id, record]) => !isDeepStrictEqual(records[id], record),
       );
-      const acknowledgedOutputIds = [...new Set(metadata?.acknowledgedOutputIds ?? [])];
-      if (changed.length || recordChanged || acknowledgedOutputIds.length) {
+      if (changed.length || recordChanged) {
         const commit = createHash("sha1")
           .update(String(events.length + 1))
           .digest("hex");
@@ -76,7 +73,6 @@ export class PropagationMemoryFs implements FsAdapter {
               ...(raw !== null ? { after: { commit, path } } : {}),
             };
           }),
-          acknowledgedOutputIds,
         };
         event.objectIds = [
           ...new Set(event.changes.flatMap((x) => (x.objectId ? [x.objectId] : []))),
@@ -84,13 +80,12 @@ export class PropagationMemoryFs implements FsAdapter {
         events.push(event);
         snapshots.set(commit, snapshot);
         if (metadata?.nodeRecords) {
-          recordEvents[commit] = structuredClone(metadata.nodeRecords);
           Object.assign(records, structuredClone(metadata.nodeRecords));
         }
       }
       return {
         commit: head(),
-        created: !!(changed.length || recordChanged || acknowledgedOutputIds.length),
+        created: !!(changed.length || recordChanged),
         versions: changes
           .filter((x) => x.raw !== null)
           .map(({ path }) => ({ commit: head()!, path })),

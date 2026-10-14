@@ -103,10 +103,16 @@ test("retained structure dependency sets validate their digest in own and ancest
     structureDependencies,
   };
   assert.equal(nodeBasisRecordSchema.safeParse({ v: 1, materials: [material] }).success, true);
+  assert.equal(
+    nodeBasisRecordSchema.safeParse({
+      v: 1,
+      materials: [{ ...material, directoryFiles: "old malformed extension" }],
+    }).success,
+    true,
+  );
   for (const broken of [
     { ...material, version: "0".repeat(64) },
     { ...material, structureDependencies: [...structureDependencies].reverse() },
-    { ...material, directoryFiles: [] },
     { ...material, structureDependencies: ["../escape/"] },
   ]) {
     assert.equal(nodeBasisRecordSchema.safeParse({ v: 1, materials: [broken] }).success, false);
@@ -186,7 +192,7 @@ async function fixture(t: TestContext) {
   return { root, adapter, run, confirm, globals };
 }
 
-test("prefix content and structure coexist, and goal confirmation never confirms its output", async (t) => {
+test("prefix coverage and structure coexist, and goal confirmation never confirms its output", async (t) => {
   const { root, adapter, run, confirm, globals } = await fixture(t);
   const goal = (
     await run("create", [
@@ -204,7 +210,7 @@ test("prefix content and structure coexist, and goal confirmation never confirms
   assert.equal((await run("check", [goal])).state, "synced");
   await fs.writeFile(path.join(root, "src/core/card-a.ts"), "export const value = 2;\n");
   assert.equal((await run("check", [goal])).state, "synced");
-  assert.equal((await run("check", [content])).state, "behind");
+  assert.equal((await run("check", [content])).state, "unanchored");
   await fs.writeFile(path.join(root, "src/core/card-b.ts"), "export const added = true;\n");
   await git(root, "add", "src/core/card-b.ts");
   assert.equal((await run("check", [goal])).state, "synced");
@@ -251,7 +257,7 @@ test("prefix content and structure coexist, and goal confirmation never confirms
   );
 });
 
-test("same directory with content and structure declarations retains two independent bases", async (t) => {
+test("same directory with coverage and structure declarations retains only the structure basis", async (t) => {
   const { root, run } = await fixture(t);
   const id = (
     await run("create", [
@@ -266,8 +272,7 @@ test("same directory with content and structure declarations retains two indepen
   ).node.nodeId;
   await fs.writeFile(path.join(root, "src/core/card-a.ts"), "export const value = 99;\n");
   const check = await run("check", [id]);
-  assert.equal(check.materials.length, 2);
-  assert.equal(check.materials[0].state, "changed");
-  assert.equal(check.materials[1].state, "current");
-  assert.equal(check.materials[1].track, "structure");
+  assert.equal(check.materials.length, 1);
+  assert.equal(check.materials[0].state, "current");
+  assert.equal(check.materials[0].track, "structure");
 });

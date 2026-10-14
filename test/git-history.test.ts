@@ -20,32 +20,74 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, init = true)
   return { workspace, root, git, history: new GitDocumentHistory(root) };
 }
 
-test("output acknowledgment facts survive unchanged documents and records in a fresh history reader", async (t) => {
-  const { root, history } = await fixture(t);
+test("unchanged output documents and records do not create history solely for confirmation", async (t) => {
+  const { root, history, git } = await fixture(t);
   const raw = "---\nid: node-output\ntype: output\ntags: [evidence]\n---\nunchanged\n";
   const record = { v: 1 as const, materials: [], futureField: { retained: true } };
   const first = await history.captureUnlocked([{ path: "Output/Output.md", raw }], {
     operation: "node.create",
     nodeRecords: { "node-output": record },
   });
-  assert.deepEqual(
-    (await new GitDocumentHistory(root).changesInRange()).at(-1)!.acknowledgedOutputIds,
-    [],
-  );
-  const ack = await history.captureUnlocked([], {
+  assert.ok(!git("show", "-s", "--format=%B", first.commit!).includes("Tent-Output-Acknowledged:"));
+  const confirmation = await history.captureUnlocked([], {
     operation: "node.sync-confirm",
     nodeRecords: { "node-output": record },
-    acknowledgedOutputIds: ["node-output"],
   });
-  assert.ok(ack.created);
-  assert.notEqual(ack.commit, first.commit);
+  assert.equal(confirmation.created, false);
+  assert.equal(confirmation.commit, first.commit);
   const latest = (await new GitDocumentHistory(root).changesInRange()).at(-1)!;
-  assert.deepEqual(latest.acknowledgedOutputIds, ["node-output"]);
   assert.deepEqual(latest.objectIds, ["node-output"]);
-  assert.deepEqual(latest.changes, []);
+  assert.equal(latest.changes[0]!.objectId, "node-output");
   assert.deepEqual((await history.nodeRecords())["node-output"], record);
   assert.equal((await history.captureUnlocked([], { operation: "node.write" })).created, false);
 });
+
+for (const trailer of ['["node-output"]', "malformed legacy value"]) {
+  test(`old output acknowledgment trailer is ignored without rewriting history: ${trailer}`, async (t) => {
+    const { root, history, git } = await fixture(t);
+    await history.captureUnlocked(
+      [{ path: "Output/Output.md", raw: "---\nid: node-output\ntype: output\n---\noutput\n" }],
+      {
+        operation: "node.create",
+        nodeRecords: { "node-output": { v: 1, materials: [], extension: "retained" } },
+      },
+    );
+    git(
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "--allow-empty",
+      "-m",
+      `Legacy\n\nTent-Output-Acknowledged: ${trailer}`,
+    );
+    const head = git("rev-parse", "HEAD");
+    const bytes = git("cat-file", "commit", head);
+    await history.derived("identity-events", 4, async () => [
+      {
+        commit: head,
+        time: "stale cache",
+        objectIds: ["node-output"],
+        changes: [],
+        acknowledgedOutputIds: ["node-output"],
+      },
+    ]);
+    const reader = new GitDocumentHistory(root);
+    const events = await reader.changesInRange();
+    assert.equal(events.at(-1)!.commit, head);
+    assert.equal("acknowledgedOutputIds" in events.at(-1)!, false);
+    assert.deepEqual((await reader.nodeRecords())["node-output"], {
+      v: 1,
+      materials: [],
+      extension: "retained",
+    });
+    assert.equal(await reader.currentCommit(), head);
+    assert.equal(git("cat-file", "commit", head), bytes);
+  });
+}
 
 test("Node records use only the first-parent lineage and isolate unsupported records", async (t) => {
   const { root, git, history } = await fixture(t);
@@ -995,4 +1037,22 @@ test("selected historical reads retain deletion, recreation and ancestry despite
     { raw: current.raw, changed: current.changedSince },
     { raw: "replacement", changed: false },
   );
+});
+
+test("history treats attachments identity paths as ordinary documents and never adds an exclude rule", async (t) => {
+  const { root, git, history } = await fixture(t);
+  const file = "attachments/attachments.md";
+  const raw = "---\nid: node-attachments\ntype: prompt\n---\nOrdinary Node\n";
+  await fs.mkdir(path.join(root, "attachments"));
+  await fs.writeFile(path.join(root, file), raw);
+  const captured = await history.captureUnlocked([{ path: file, raw }]);
+  assert.equal(await history.read(captured.versions[0]!), raw);
+  assert.equal(git("ls-tree", "-r", "--name-only", "HEAD"), file);
+  assert.doesNotMatch(
+    await fs.readFile(path.join(root, ".git/info/exclude"), "utf8"),
+    /^\/attachments\/$/m,
+  );
+  const changed = raw + "Updated\n";
+  await fs.writeFile(path.join(root, file), changed);
+  assert.match(git("status", "--porcelain"), /M attachments\/attachments.md/);
 });

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import {
-  ensureWorkspaceGitignore,
+  scaffoldInWorkspace,
   isValidTentIndexMarker,
   tentIndexMarker,
 } from "../src/core/scaffold.js";
@@ -43,12 +43,10 @@ test("existing Git ignore entries and structural markers remain valid", async (t
   const root = await fs.mkdtemp(path.join(scratch, "scaffold-contract-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const adapter = new NodeFs(root);
-  for (const entry of [".tent/", "/.tent/", ".tent", "/.tent"]) {
-    const raw = `# user rules\r\n${entry}\r\n`;
-    await adapter.writeFile(".gitignore", raw);
-    await ensureWorkspaceGitignore(adapter);
-    assert.equal(await adapter.readFile(".gitignore"), raw);
-  }
+  const raw = "# user rules\r\n.tent/\r\n";
+  await adapter.writeFile(".gitignore", raw);
+  await scaffoldInWorkspace(adapter, { name: "preserve project" });
+  assert.equal(await adapter.readFile(".gitignore"), raw);
   assert.equal(isValidTentIndexMarker(tentIndexMarker()), true);
   assert.equal(isValidTentIndexMarker("# bare index\n"), true);
   assert.equal(isValidTentIndexMarker("---\ntype: role\n---\n"), false);

@@ -5,7 +5,7 @@ import test, { type TestContext } from "node:test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import { createNode } from "../src/core/ops.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
@@ -20,7 +20,7 @@ async function fixture(t: TestContext) {
   await fs.mkdir(path.resolve(".scratch"), { recursive: true });
   const workspace = await fs.mkdtemp(path.resolve(".scratch/native-node-"));
   t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const adapter = new NodeFs(path.join(workspace, ".tent"));
   const env = { fs: adapter, clock: { now: () => new Date().toISOString() }, tentName: "Native" };
   await fs.writeFile(path.join(workspace, "input.txt"), "original material");

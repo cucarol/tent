@@ -17,7 +17,6 @@ import {
   verifyCardSourceVersions,
 } from "../src/core/card-document.js";
 import { readCardGoalIds } from "../src/core/card-progress.js";
-import { historicalNodeCatalog } from "../src/core/node-semantic-history.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { readNode } from "../src/core/node-query.js";
 import { scaffoldInWorkspace, scaffoldTent } from "../src/core/scaffold.js";
@@ -233,8 +232,6 @@ test("a historical version with a former suffixed type is rejected like any inva
     const shown = (await readCardDocument(adapter, cardId)) as Record<string, unknown>;
     const anonymous = (text: unknown) =>
       String(text).replace(`../${file}`, "<source>").replace(`/${file}`, "<source>");
-    // Ahead replay over the retained document.
-    const replayed = historicalNodeCatalog(new Map([[id, { path: name, raw }]]));
     outcomes.push({
       read,
       single,
@@ -243,7 +240,6 @@ test("a historical version with a former suffixed type is rejected like any inva
       diagnostics: progress.diagnostics.map(anonymous),
       list: [listed.progress, listed.totalGoalCount, anonymous(listed.diagnostic)],
       show: [shown.progress, shown.totalGoalCount, anonymous(shown.diagnostic)],
-      replayedNodeIds: [...replayed.keys()],
     });
   }
   // An invalid pin is diagnosed, never read as a Card without goals.
@@ -256,7 +252,6 @@ test("a historical version with a former suffixed type is rejected like any inva
     diagnostics: [diagnostic],
     list: [null, 0, diagnostic],
     show: [null, 0, diagnostic],
-    replayedNodeIds: [],
   });
   assert.deepEqual(outcomes[1], outcomes[0], "a padded former type is invalid too");
   assert.deepEqual(outcomes[2], outcomes[0], "the same result as an unknown type");

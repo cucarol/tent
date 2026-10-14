@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import { contentEtag } from "../src/core/etag.js";
 import { readNode, listNodes, relatedNodes } from "../src/core/node-query.js";
 import { readWorkspaceSettings } from "../src/core/workspace-settings.js";
@@ -20,7 +20,7 @@ test("public discovery uses only headers, omits edit tokens and keeps metadata p
   const root = await fs.mkdtemp(path.join(scratch, "node-discovery-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const workspace = path.join(root, "workspace");
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const adapter = new NodeFs(path.join(workspace, ".tent"));
   const original = raw("node-alpha", "A".repeat(128 * 1024), "tags: [offline, PDF]\r\n");
   await adapter.writeFile("A/A.md", original);

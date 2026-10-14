@@ -56,10 +56,41 @@ test("export validates standard bundle materials and reports external and unreso
   await adapter.writeFile(".git/tent-history-index.json", '{"disposable":true}');
   await adapter.writeFile(".git/tent-derived-card-progress.json", '{"disposable":true}');
   await adapter.writeFile(".git/tent-derived-card-progress.json.pending.tmp", "incomplete");
+  const legacyBytes = Buffer.from([0, 255, 254, 128]);
+  await adapter.writeBinary("attachments/legacy.bin", legacyBytes);
+  const ordinaryFiles = new Map([
+    ["attachments/ordinary.md", Buffer.from("---\nx: [\n---\nordinary attachment bytes\n")],
+    ["notes/ordinary.md", Buffer.from("---\nx: [\n---\nordinary file bytes\n")],
+    ["notes/binary.md", Buffer.from([0, 255, 254, 128])],
+    ["notes/metadata.md", Buffer.from("---\nresource: ./absent.bin\n---\nNot a Node\n")],
+  ]);
+  for (const [file, bytes] of ordinaryFiles) await adapter.writeBinary(file, bytes);
+  await adapter.mkdir("attachments/empty");
+  const attachmentNode = serializeFrontmatter(
+    { id: "node-attachments", type: "prompt", resource: "./owned.txt" },
+    "[ordinary file](./legacy.bin) ![image](./missing.png) [missing ordinary link](./missing.bin)\n",
+  );
+  await adapter.writeFile("attachments/attachments.md", attachmentNode);
+  await assert.rejects(
+    exportGraph(mount, { outputDir: "output/missing-native-material" }),
+    /Owned material missing/,
+  );
+  await adapter.writeFile("attachments/owned.txt", "Node material");
   const result = await exportGraph(mount, { outputDir: "output/valid" });
+  for (const [file, bytes] of ordinaryFiles)
+    assert.deepEqual(await fs.readFile(path.join(result.outputDir, ".tent", file)), bytes);
   const manifest = JSON.parse(
     await fs.readFile(path.join(result.outputDir, "tent-export.json"), "utf8"),
   );
+  assert.deepEqual(
+    await fs.readFile(path.join(result.outputDir, ".tent/attachments/legacy.bin")),
+    legacyBytes,
+  );
+  assert.equal(
+    await fs.readFile(path.join(result.outputDir, ".tent/attachments/attachments.md"), "utf8"),
+    attachmentNode,
+  );
+  assert.ok((await fs.stat(path.join(result.outputDir, ".tent/attachments/empty"))).isDirectory());
   assert.equal(manifest.externalNotPacked.length, 3);
   assert.deepEqual(
     manifest.externalNotPacked.map((item: { index: number }) => item.index),
@@ -89,6 +120,29 @@ test("export validates standard bundle materials and reports external and unreso
     { code: "ENOENT" },
   );
   await assert.rejects(fs.stat(path.join(result.outputDir, "outside.txt")), { code: "ENOENT" });
+});
+
+test("export still rejects malformed native Node, Role and Card frontmatter", async (t) => {
+  const workspace = await fs.mkdtemp(path.join(path.resolve(".scratch"), "export-invalid-native-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  await scaffoldInWorkspace(new NodeFs(workspace), { name: "Invalid native" });
+  const systemRoot = path.join(workspace, ".tent"),
+    adapter = new NodeFs(systemRoot);
+  const mount = {
+    workspaceRoot: workspace,
+    systemRoot,
+    workspaceId: "ws-invalid-native",
+    env: { fs: adapter },
+  };
+  for (const file of ["Bad/Bad.md", "roles/role-bad.md", "cards/card-bad.md"]) {
+    await adapter.writeFile(file, "---\nx: [\n---\ninvalid native document\n");
+    await assert.rejects(
+      exportGraph(mount, { outputDir: "output/rejected" }),
+      /Invalid frontmatter YAML/,
+    );
+    await assert.rejects(fs.stat(path.join(workspace, "output/rejected")), { code: "ENOENT" });
+    await adapter.remove(file);
+  }
 });
 
 for (const outcome of ["success", "failure"]) {

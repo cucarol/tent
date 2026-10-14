@@ -2,7 +2,6 @@ import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { structureMaterialCoverage, materialCoverageContains } from "../core/material-coverage.js";
-import { directoryFingerprint, type DirectoryFile } from "../core/directory-material.js";
 import { externalStructureDependencies, structureFingerprint } from "../core/structure-material.js";
 import {
   extractRepositoryImports,
@@ -111,54 +110,5 @@ export async function observeStructureMaterial(
     structureDependencies,
     cacheHit: false,
     blobs: aggregateBlobs(structureDependencies),
-  };
-}
-
-/** Prefix content uses nonignored directory membership and ordinary text normalization. */
-export async function observePrefixMaterial(
-  workspaceRoot: string,
-  documentPath: string,
-  resource: string,
-  cacheDir?: string,
-) {
-  const coverage = structureMaterialCoverage(resource, documentPath, workspaceRoot);
-  if (coverage?.kind !== "prefix") throw new Error("Invalid prefix material");
-  const physical = path.resolve(workspaceRoot, `${coverage.prefix}*`),
-    directory = path.dirname(physical);
-  await checkedSourceFile(workspaceRoot, directory, true);
-  const canonicalPath = path.join(await realpath(directory), path.basename(physical));
-  const paths = await sourceDirectoryPaths(workspaceRoot, directory, cacheDir);
-  const directoryFiles: DirectoryFile[] = [];
-  let cacheHit = true;
-  for (const filename of paths) {
-    const workspacePath = path.relative(workspaceRoot, filename).split(path.sep).join("/");
-    if (!materialCoverageContains(coverage, workspacePath)) continue;
-    const observed = await observeSourceFile(workspaceRoot, filename, cacheDir, {
-      key: "directory-text-v1",
-      content: (bytes) => {
-        try {
-          const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-          return text.includes("\0") ? bytes : text.replace(/\r\n?/g, "\n");
-        } catch {
-          return bytes;
-        }
-      },
-    });
-    directoryFiles.push({
-      path: path.relative(directory, observed.canonicalPath).split(path.sep).join("/"),
-      version: observed.observedVersion,
-    });
-    cacheHit &&= observed.cacheHit;
-  }
-  directoryFiles.sort((left, right) =>
-    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-  );
-  await checkedSourceFile(workspaceRoot, directory, true);
-  return {
-    canonicalPath,
-    observedVersion: directoryFingerprint(directoryFiles),
-    directoryFiles,
-    cacheHit,
-    blobs: aggregateBlobs(directoryFiles),
   };
 }

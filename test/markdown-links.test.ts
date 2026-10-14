@@ -27,7 +27,7 @@ test("Markdown parser handles links, reference definitions, escapes and exact so
   assert.equal(extractOutLinksDetailed("[a](x.md) [a](x.md)", true).length, 2);
 });
 
-test("code, HTML, images, escapes, wiki prose and attachment links are not Node edges", () => {
+test("code, HTML, images, escapes and wiki prose are not Node edges", () => {
   const body = [
     "[yes](./real.md)",
     "[[Old]] ![[Embed]]",
@@ -48,7 +48,7 @@ test("code, HTML, images, escapes, wiki prose and attachment links are not Node 
   ].join("\n");
   assert.deepEqual(
     extractOutLinksDetailed(body).map((l) => l.raw),
-    ["./real.md"],
+    ["./real.md", "../attachments/a.png"],
   );
 });
 

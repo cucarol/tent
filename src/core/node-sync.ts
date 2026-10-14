@@ -39,8 +39,6 @@ import { ReaderError } from "./context-reader.js";
 import { validateNodeName } from "./scaffold.js";
 import { listCardDocuments, readCardDocument } from "./card-document.js";
 import { readCardGoalIds, type CardProgressInput } from "./card-progress.js";
-import { latestGoalAheadTimes } from "./node-ahead-history.js";
-import { changedDirectoryFiles } from "./directory-material.js";
 import { changedStructureDependencies } from "./structure-material.js";
 
 export type NodeSyncState = "synced" | "ahead" | "behind" | "unanchored";
@@ -53,12 +51,11 @@ export type NodeSyncInspection = {
   goalIds?: string[];
   /** Detail summary; the independent attention flags below drive counts and lists. */
   state: NodeSyncState;
-  ahead?: { since?: string; reasons: string[] };
+  ahead?: { reasons: string[] };
   behind?: { reasons: string[] };
   trustTier: NodeTrustTier;
   stale: boolean;
   uncertain?: boolean;
-  aheadSince?: string;
   materials: {
     resource: string;
     track?: "structure";
@@ -67,8 +64,6 @@ export type NodeSyncInspection = {
     currentVersion?: string;
     state: "current" | "changed" | "unavailable" | "unanchored";
     reason?: string;
-    changedFiles?: ReturnType<typeof changedDirectoryFiles>["changedFiles"];
-    changedFilesOverflow?: number;
     changedDependencies?: ReturnType<typeof changedStructureDependencies>["changedDependencies"];
     changedDependenciesOverflow?: number;
   }[];
@@ -133,7 +128,7 @@ async function inspectCatalogNodes(
   // One inspection observes each declaration once. Shared ancestor materials use
   // that same observation; later inspections always start with an empty map.
   const materialReads = new Map<string, ReturnType<typeof observeNodeMaterials>>();
-  const materialObservations: NonNullable<Parameters<typeof observeNodeMaterials>[6]> = new Map();
+  const materialObservations: NonNullable<Parameters<typeof observeNodeMaterials>[5]> = new Map();
   const documents = new Map<string, ReturnType<typeof readCatalogDocument>>();
   const readDocument = (node: CatalogNode, retry: boolean) => {
     if (retry) return readCatalogDocument(fs, node);
@@ -160,6 +155,7 @@ async function inspectCatalogNodes(
         parsed.body,
         nodeNotePath(goal.path),
         nodeCatalog.byId,
+        fs.workspaceRoot,
       ),
     };
   }
@@ -167,7 +163,6 @@ async function inspectCatalogNodes(
     data: Record<string, unknown>,
     documentPath: string,
     nodeCatalog: typeof catalog,
-    previous: Parameters<typeof observeNodeMaterials>[5],
     retry: boolean,
   ) => {
     const read = () =>
@@ -177,17 +172,10 @@ async function inspectCatalogNodes(
         documentPath,
         undefined,
         nodeCatalog.byId,
-        previous,
         retry || nodeCatalog !== catalog ? undefined : materialObservations,
       );
     if (retry || nodeCatalog !== catalog) return read();
-    const key = JSON.stringify([
-      documentPath,
-      materialOccurrences(data),
-      previous?.materials
-        .filter((material) => material.repository)
-        .map(({ identity, repository }) => ({ identity, repository })),
-    ]);
+    const key = JSON.stringify([documentPath, materialOccurrences(data)]);
     let pending = materialReads.get(key);
     if (!pending) {
       pending = read();
@@ -201,48 +189,45 @@ async function inspectCatalogNodes(
     goalId?: string,
     unknownBasis = false,
   ): NodeSyncInspection["materials"] =>
-    observations.map((observation) => {
-      const basis = bases.find((m) => m.identity === observation.identity);
-      const recordedVersion = basis?.version;
-      return {
-        resource: observation.resource,
-        ...(observation.track ? { track: observation.track } : {}),
-        ...(goalId ? { goalId } : {}),
-        ...(recordedVersion ? { recordedVersion } : {}),
-        ...(observation.version ? { currentVersion: observation.version } : {}),
-        ...(observation.directoryFiles &&
-        basis?.directoryFiles &&
-        observation.version !== recordedVersion
-          ? changedDirectoryFiles(basis.directoryFiles, observation.directoryFiles)
-          : {}),
-        ...(observation.structureDependencies &&
-        basis?.structureDependencies &&
-        observation.version !== recordedVersion
-          ? changedStructureDependencies(
-              basis.structureDependencies,
-              observation.structureDependencies,
-            )
-          : {}),
-        state: recordedVersion
-          ? !observation.version
-            ? "unavailable"
-            : observation.version === recordedVersion
-              ? "current"
-              : "changed"
-          : unknownBasis
-            ? "unavailable"
-            : "unanchored",
-        ...(observation.reason
-          ? { reason: observation.reason }
-          : unknownBasis && !recordedVersion
-            ? {
-                reason: goalId
-                  ? "Output has no retained baseline for this goal material"
-                  : "Node record has no retained baseline for this material",
-              }
+    observations
+      .filter((observation) => !observation.coverage)
+      .map((observation) => {
+        const basis = bases.find((m) => m.identity === observation.identity);
+        const recordedVersion = basis?.version;
+        return {
+          resource: observation.resource,
+          ...(observation.track ? { track: observation.track } : {}),
+          ...(goalId ? { goalId } : {}),
+          ...(recordedVersion ? { recordedVersion } : {}),
+          ...(observation.version ? { currentVersion: observation.version } : {}),
+          ...(observation.structureDependencies &&
+          basis?.structureDependencies &&
+          observation.version !== recordedVersion
+            ? changedStructureDependencies(
+                basis.structureDependencies,
+                observation.structureDependencies,
+              )
             : {}),
-      };
-    });
+          state: recordedVersion
+            ? !observation.version
+              ? "unavailable"
+              : observation.version === recordedVersion
+                ? "current"
+                : "changed"
+            : unknownBasis
+              ? "unavailable"
+              : "unanchored",
+          ...(observation.reason
+            ? { reason: observation.reason }
+            : unknownBasis && !recordedVersion
+              ? {
+                  reason: goalId
+                    ? "Output has no retained baseline for this goal material"
+                    : "Node record has no retained baseline for this material",
+                }
+              : {}),
+        };
+      });
   const inspect = async (current: CatalogNode) => {
     let nodeCatalog = catalog;
     let result: NodeSyncInspection | undefined;
@@ -252,13 +237,7 @@ async function inspectCatalogNodes(
         const data = nodeCatalog.tree.byPath.get(current.path)!.fm;
         const path = nodeNotePath(current.path);
         const record = records[current.nodeId];
-        const observations = await observeMaterials(
-          data,
-          path,
-          nodeCatalog,
-          record ?? undefined,
-          attempt > 0,
-        );
+        const observations = await observeMaterials(data, path, nodeCatalog, attempt > 0);
         const recordUnreadable = hasRetainedHistory && !record && isOutputNode(data);
         const materials = comparedMaterials(
           observations,
@@ -308,7 +287,6 @@ async function inspectCatalogNodes(
               parsed.data,
               nodeNotePath(goal.path),
               nodeCatalog,
-              { materials: basis?.materials ?? [] },
               attempt > 0,
             );
             checkedMaterials.push(
@@ -421,7 +399,6 @@ async function inspectCatalogNodes(
       ...(n.goalId ? { goalId: n.goalId } : {}),
     }));
   const requirementsWithoutOutputs: string[] = [];
-  let aheadTimes: Promise<Record<string, string>> | undefined;
   for (const goal of nodes.filter((n) => isRequirementNode({ type: n.type }))) {
     if (goal.uncertain) continue;
     const subtreeOutputs = nodes.filter(
@@ -441,9 +418,7 @@ async function inspectCatalogNodes(
           : "Goal subtree has no current output Node",
       ];
       goal.reasons.push(...reasons);
-      if (fs.history && hasRetainedHistory)
-        goal.aheadSince = (await (aheadTimes ??= latestGoalAheadTimes(fs.history)))[goal.nodeId];
-      goal.ahead = { ...(goal.aheadSince ? { since: goal.aheadSince } : {}), reasons };
+      goal.ahead = { reasons };
     } else if (
       !goal.behind &&
       owned.some((node) => {

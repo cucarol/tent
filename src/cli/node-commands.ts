@@ -180,7 +180,7 @@ export async function runNodeCommand(
     const collectsNativeEdits =
       !["get", "read-many", "list", "search", "relations", "history"].includes(sub) &&
       sub !== "tags";
-    const fs = new NodeFs(systemRoot, "cli", collectsNativeEdits ? "record" : "inspect");
+    const fs = new NodeFs(systemRoot, "cli");
     const { workspaceId } = await readWorkspaceSettings(fs);
     if (!workspaceId)
       throw new Error(

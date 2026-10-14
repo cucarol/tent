@@ -16,7 +16,7 @@ import { readDocumentDiff, readDocumentVersion } from "../src/core/document-diff
 import { readWorkspaceRevision } from "../src/core/workspace-revision.js";
 import { MUTATION_LOCK_PATH } from "../src/core/paths.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import { exportGraph } from "../src/fs/graph-export.js";
 import { testScratchRoot } from "./scratch.js";
 import { buildSnapshot } from "../src/ui-server/snapshot.js";
@@ -26,7 +26,7 @@ async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "canvas-"));
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspace = path.join(root, "ws");
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const systemRoot = path.join(workspace, ".tent");
   return { root, workspace, systemRoot, adapter: new NodeFs(systemRoot, "ui") };
 }

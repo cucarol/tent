@@ -8,7 +8,11 @@ import {
   materialOccurrences,
   isDirectoryMaterial,
 } from "./material.js";
-import { structureMaterialCoverage, type MaterialCoverage } from "./material-coverage.js";
+import {
+  isTentWorkspacePath,
+  structureMaterialCoverage,
+  type MaterialCoverage,
+} from "./material-coverage.js";
 import { isUsableNode } from "./tree.js";
 
 export type StopIndexedNode = {
@@ -61,6 +65,7 @@ export function buildStopMaterialIndex(
                   !!(new URL(locator.uri).search || new URL(locator.uri).hash);
             if (filename.includes("*") && hasSelector) continue;
             const relative = path.relative(workspaceRoot, filename).split(path.sep).join("/");
+            if (isTentWorkspacePath(relative)) continue;
             const outside =
               relative === ".." || relative.startsWith("../") || path.isAbsolute(relative);
             const scope = outside ? path.dirname(filename) : workspaceRoot;

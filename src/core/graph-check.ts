@@ -20,8 +20,8 @@ import { CARDS_DIR, ROLES_DIR, ORDER_PATH, nodeNotePath } from "./paths.js";
 import { isNodeId, isRoleId, isCardId } from "./id.js";
 import { markdownMaterialHeading } from "./material-section.js";
 import { NodeSectionError } from "./markdown-section.js";
-import { retainedNodeRecords, syncMaterialIdentity } from "./node-sync-record.js";
 import { isHistoryDocument } from "./document-history.js";
+import { assertSystemMaterial } from "./material-target.js";
 
 export type GraphCheckIssue =
   | { kind: "unresolved-link"; path: string; target: string; reason: string }
@@ -43,15 +43,7 @@ export type GraphCheckIssue =
 export type GraphCheckResult = {
   documents: number;
   issues: GraphCheckIssue[];
-  notices: {
-    kind: "relocated-material-file";
-    path: string;
-    field: "resource" | "sources";
-    index?: number;
-    resource?: string;
-    checkout: string;
-    reason: string;
-  }[];
+  notices: { path: string; field?: string; resource?: string; reason: string }[];
   errors: { path: string; reason: string }[];
 };
 
@@ -69,7 +61,6 @@ export async function checkGraph(
   fileExists: GraphFileExists,
 ): Promise<GraphCheckResult> {
   const readonlyFs = readOnlyFs(fs);
-  const nodeRecords = await retainedNodeRecords(readonlyFs);
   const result: GraphCheckResult = { documents: 0, issues: [], notices: [], errors: [] };
   const documents: Array<{
     path: string;
@@ -264,7 +255,7 @@ export async function checkGraph(
   }
   for (const document of documents) {
     const targets = new Set<string>();
-    // Reuse the native Markdown parser, including attachment destinations;
+    // Reuse the native Markdown parser for local destinations;
     // collecting destinations never rewrites the observed document.
     rewriteMarkdownDestinations(document.body, (target) => {
       targets.add(target);
@@ -304,6 +295,7 @@ export async function checkGraph(
         if (!parsed.success) throw new Error("Material resource must be nonempty text");
         const resource = parsed.data;
         const locator = materialLocator(resource, document.path, field === "sources");
+        await assertSystemMaterial(readonlyFs, locator);
         directory = isDirectoryMaterial(locator);
         if (isPrefixMaterial(locator))
           prefixResource =
@@ -321,6 +313,7 @@ export async function checkGraph(
             let possible;
             try {
               possible = candidate();
+              await assertSystemMaterial(readonlyFs, possible);
             } catch {
               continue;
             }
@@ -374,48 +367,11 @@ export async function checkGraph(
           await readonlyFs.observeMaterial(prefixResource, document.path);
           return;
         }
-        const repository =
-          typeof value === "string" && document.id
-            ? nodeRecords[document.id]?.materials.find(
-                (material) => material.identity === syncMaterialIdentity(value, document.path),
-              )?.repository
-            : undefined;
-        if (!(await exists(filename, directory)) && repository && readonlyFs.observeMaterial) {
-          try {
-            const resource =
-              typeof value === "string" &&
-              !/^(?:\.{1,2}\/|\/|[a-z][a-z\d+.-]*:)/i.test(value.trim())
-                ? `./${value.trim()}`
-                : String(value);
-            const observed = await readonlyFs.observeMaterial(resource, document.path, repository);
-            if (observed.readFrom)
-              result.notices.push({
-                kind: "relocated-material-file",
-                ...occurrence,
-                checkout: observed.readFrom,
-                reason: `从 ${observed.readFrom} 读取`,
-              });
-            return;
-          } catch (cause) {
-            if (
-              cause instanceof NodeSectionError &&
-              ["SECTION_NOT_FOUND", "SECTION_AMBIGUOUS"].includes(cause.code)
-            ) {
-              result.issues.push({
-                kind: "missing-material-section",
-                ...occurrence,
-                reason: message(cause),
-              });
-              return;
-            }
-            if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-          }
-        }
         if (await exists(filename, directory)) {
           if (sectionResource !== undefined) {
             if (!readonlyFs.observeMaterial) throw new Error("Material observer is unavailable");
             try {
-              await readonlyFs.observeMaterial(sectionResource, document.path, repository);
+              await readonlyFs.observeMaterial(sectionResource, document.path);
             } catch (cause) {
               if (
                 !(cause instanceof NodeSectionError) ||

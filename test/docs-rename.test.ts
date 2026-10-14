@@ -82,7 +82,7 @@ test("renameNode: rejects unindexable names without moving nodes and allows nest
   const childOriginal = await fsa.readFile("parent/child/child.md");
   const orderBefore = await fsa.readFile("order.json");
   for (const target of [parent, child]) {
-    const names = [".gitnotes", ".github", "roles", "cards", "temp", "attachments", ".tent"];
+    const names = [".gitnotes", ".github", "roles", "cards", "temp", ".tent"];
     if (target === parent) names.push("index.md", "settings.json");
     for (const name of names)
       await assert.rejects(renameNode(env, target, name), /reserved or excluded/);

@@ -58,11 +58,22 @@ export function materialOccurrences(data: Record<string, unknown>) {
 }
 
 /** A Card source records the output's response relationship, never material content. */
-export function isCardResponseSource(resource: string, documentPath: string): boolean {
+export function isCardResponseSource(
+  resource: string,
+  documentPath: string,
+  workspaceRoot?: string,
+): boolean {
   try {
     const locator = materialLocator(resource, documentPath, true);
-    if (locator.kind !== "path" || isDirectoryMaterial(locator)) return false;
-    const match = /^cards\/(card-[^/]+)\.md$/.exec(locator.target);
+    if (isDirectoryMaterial(locator)) return false;
+    const filename = workspaceRoot ? localMaterialPath(locator, workspaceRoot) : undefined;
+    const target =
+      locator.kind === "path"
+        ? locator.target
+        : filename && workspaceRoot
+          ? path.relative(path.join(workspaceRoot, ".tent"), filename).split(path.sep).join("/")
+          : "";
+    const match = /^cards\/(card-[^/]+)\.md$/.exec(target);
     return !!match && isCardId(match[1]!);
   } catch {
     return false;

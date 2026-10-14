@@ -5,8 +5,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { observeMaterialResource } from "../src/fs/source-observation.js";
-import { GitDocumentHistory } from "../src/core/git-history.js";
-import { historicalNodeCatalog } from "../src/core/node-semantic-history.js";
+import { loadNodeCatalog } from "../src/core/node-catalog.js";
 import {
   nodeMaterialFingerprint,
   prepareNodeSyncSave,
@@ -71,12 +70,12 @@ test("review fix: a batch URI confirmation uses final upstream sections and reco
     { id: "node-g", type: "goal", sources: [{ resource }] },
     "goal\n",
   );
-  const nodes = historicalNodeCatalog(
-    new Map([
-      ["node-p", { path: "P", raw: finalUpstream }],
-      ["node-g", { path: "G", raw: goal }],
-    ]),
-  );
+  const adapter = new NodeFs(systemRoot);
+  await adapter.mkdir("P");
+  await adapter.mkdir("G");
+  await adapter.writeFile("P/P.md", finalUpstream);
+  await adapter.writeFile("G/G.md", goal);
+  const nodes = (await loadNodeCatalog(adapter)).byId;
   const locator = {
     kind: "path" as const,
     anchor: "bundle" as const,
@@ -95,7 +94,6 @@ test("review fix: a batch URI confirmation uses final upstream sections and reco
   };
   let diskReads = 0,
     observations = 0;
-  const adapter = new NodeFs(systemRoot);
   t.mock.method(adapter, "readFile", async () => {
     diskReads++;
     return upstream;
@@ -120,16 +118,19 @@ test("review fix: a batch URI confirmation uses final upstream sections and reco
   assert.equal(observations, 0, "planned URI target does not need to exist on disk yet");
 });
 
-test("historical root Nodes have no parent and independent outputs have no goal", async () => {
-  const { historicalNodeCatalog } = await import("../src/core/node-semantic-history.js");
+test("current root Nodes have no parent and independent outputs have no goal", async (t) => {
   const { nearestGoal } = await import("../src/core/node-sync-record.js");
-  const catalog = historicalNodeCatalog(
-    new Map([
-      ["node-root", { path: "Root", raw: "---\nid: node-root\ntype: prompt\n---\ngroup" }],
-      ["node-out", { path: "Out", raw: "---\nid: node-out\ntype: output\n---\nresult" }],
-      ["node-child", { path: "Root/Child", raw: "---\nid: node-child\ntype: output\n---\nresult" }],
-    ]),
-  );
+  const adapter = new NodeFs(await scratch(t));
+  for (const [nodePath, raw] of [
+    ["Root", "---\nid: node-root\ntype: prompt\n---\ngroup"],
+    ["Out", "---\nid: node-out\ntype: output\n---\nresult"],
+    ["Root/Child", "---\nid: node-child\ntype: output\n---\nresult"],
+  ] as const) {
+    await adapter.mkdir(nodePath);
+    const name = path.posix.basename(nodePath);
+    await adapter.writeFile(`${nodePath}/${name}.md`, raw);
+  }
+  const catalog = (await loadNodeCatalog(adapter)).byId;
   assert.equal(catalog.get("node-root")!.parentNodeId, null);
   assert.equal(catalog.get("node-out")!.parentNodeId, null);
   assert.equal(nearestGoal(catalog.get("node-out")!, catalog), undefined);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { createNode, deleteNode, renameNode } from "../src/core/ops.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
@@ -13,7 +13,7 @@ import { testScratchRoot } from "./scratch.js";
 test("public saves and observed edits retain distinct history operations across locations", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "history-operations-"));
   t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const adapter = new NodeFs(path.join(workspace, ".tent"), "cli");
   const env = {
     fs: adapter,

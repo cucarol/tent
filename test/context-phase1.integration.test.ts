@@ -209,7 +209,8 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   const id = created.node.nodeId;
   const ahead = await f.node("check", [id]);
   assert.equal(ahead.state, "ahead");
-  assert.ok(ahead.aheadSince);
+  assert.deepEqual(ahead.ahead.reasons, ["Goal subtree has no current output Node"]);
+  assert.equal("aheadSince" in ahead, false);
   await fs.writeFile(path.join(f.root, "result.html"), "<h1>Implemented</h1>");
   const linked = await f.node("link-output", [
     id,
@@ -459,9 +460,8 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
     state: (i % 2 ? "ahead" : "behind") as "ahead" | "behind",
     trustTier: "unverified" as const,
     stale: false,
-    aheadSince: "2026-01-01T00:00:00.000Z",
     ...(i % 2
-      ? { ahead: { since: "2026-01-01T00:00:00.000Z", reasons: ["No output"] } }
+      ? { ahead: { reasons: ["No output"] } }
       : { behind: { reasons: ["材料变化".repeat(100)] } }),
     materials: [],
     reasons: ["材料变化".repeat(100)],
@@ -529,7 +529,9 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
     0,
     "an address never becomes a misleading truncated path",
   );
-  assert.equal(brief.ahead[0].since, "2026-01-01T00:00:00.000Z");
+  assert.equal(brief.ahead[0].reason, "No output");
+  assert.equal("since" in brief.ahead[0], false);
+  assert.equal("sinceUnknown" in brief.ahead[0], false);
   assert.equal("ageSeconds" in brief.ahead[0], false);
 });
 
@@ -550,11 +552,9 @@ test("CLI discovery text and JSON stay byte-identical when the clock advances on
     f.options,
   );
   assert.equal(card.exitCode, 0, card.stderr);
-  const since = (await f.node("check", [id])).ahead.since;
-  assert.ok(since, "fixture must expose a known ahead start time");
+  assert.ok((await f.node("check", [id])).ahead);
   const head = await git(path.join(f.root, ".tent"), "rev-parse", "HEAD");
-  // Crossing 59s -> 1m catches both the old JSON age and the text formatAge boundary.
-  t.mock.timers.enable({ apis: ["Date"], now: Date.parse(since) + 59_000 });
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-07T04:00:59Z") });
   const readAll = async () => {
     const outputs: Record<string, string> = {};
     for (const json of [false, true]) {
@@ -580,9 +580,11 @@ test("CLI discovery text and JSON stay byte-identical when the clock advances on
   };
   const before = await readAll();
   const brief = JSON.parse(before["brief json"]);
-  assert.equal(brief.ahead[0].since, since);
+  assert.equal(brief.ahead[0].reason, "Goal subtree has no current output Node");
+  assert.equal("since" in brief.ahead[0], false);
+  assert.equal("sinceUnknown" in brief.ahead[0], false);
   assert.equal("ageSeconds" in brief.ahead[0], false);
-  assert.ok(before["brief text"].includes(`since ${since}`));
+  assert.ok(before["brief text"].includes("Goal subtree has no current output Node"));
   assert.equal(JSON.parse(before["card list json"]).items.length, 1);
   assert.ok(
     JSON.parse(before["drift json"]).items.some(
@@ -800,10 +802,11 @@ test("brief and drift both show a dual-status goal and leave neutral recorded ou
     ["node-goal"],
   );
   assert.equal(brief.behind[0]!.reason, "Material changed");
+  assert.equal(brief.ahead[0]!.reason, "No output");
   const text = formatContextBrief(brief);
   assert.match(text, /^behind 1 · ahead 1\nAhead:/);
   assert.ok(text.indexOf("Ahead:") < text.indexOf("Behind:"));
-  assert.match(text, /start time not recorded/);
+  assert.doesNotMatch(text, /start time not recorded/);
   assert.doesNotMatch(text, /node-quiet|Recent inputs|Recent outputs|synced/);
   assert.deepEqual(
     contextDriftItems(context).map((item) => [item.kind, item.nodeId]),

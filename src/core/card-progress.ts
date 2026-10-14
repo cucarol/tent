@@ -3,6 +3,7 @@ import type { CardDocumentState } from "./card-document.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { documentVersionSchema, type DocumentVersion } from "./git-history.js";
 import { materialLocator, isDirectoryMaterial, type MaterialSource } from "./material.js";
+import { systemMaterialPath } from "./material-target.js";
 import { loadNodeCatalog, type NodeCatalog } from "./node-catalog.js";
 import { isRequirementNode, isOutputNode } from "./node-sync-record.js";
 import { inspectNodesSync, type NodeSyncInspection } from "./node-sync.js";
@@ -105,9 +106,8 @@ export async function readCardGoalIds(fs: FsAdapter, cards: readonly CardProgres
     try {
       const locator = materialLocator(entry.source.resource, cardRecordPath(entry.cardId), true);
       if (
-        locator.kind !== "path" ||
         isDirectoryMaterial(locator) ||
-        locator.target !== entry.version.path
+        systemMaterialPath(locator, fs.workspaceRoot) !== entry.version.path
       )
         throw new Error("Source address disagrees with its pinned version");
       const read = byVersion.get(key(entry.version))!;
@@ -199,8 +199,15 @@ export async function readCardProgress(
         for (const source of sources) {
           try {
             const locator = materialLocator(source.resource, nodeNotePath(node.path), true);
-            if (locator.kind === "path" && !isDirectoryMaterial(locator) && !locator.suffix)
-              targets.add(locator.target);
+            const target = systemMaterialPath(locator, fs.workspaceRoot);
+            const suffix =
+              locator.kind === "path"
+                ? locator.suffix
+                : locator.kind === "uri"
+                  ? new URL(locator.uri).search + new URL(locator.uri).hash
+                  : "";
+            if (target !== undefined && !isDirectoryMaterial(locator) && !suffix)
+              targets.add(target);
           } catch {
             /* Invalid source addresses are not response evidence. */
           }

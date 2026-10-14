@@ -8,6 +8,7 @@ import { runRoleCommand } from "../src/cli/role-commands.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { git } from "./helpers.js";
+import { initializeFixtureRepository } from "./scratch.js";
 
 async function fixture(t: TestContext) {
   const scratch = fileURLToPath(new URL("../.scratch/", import.meta.url));
@@ -113,6 +114,7 @@ test("full direct CLI preserves Role text, Unicode, duplicate flags and stdin", 
 
 test("new and retired agent-hooks parse only their own options in isolated directories", async (t) => {
   const root = await fixture(t);
+  initializeFixtureRepository(root);
   const created = await cli(root, ["new", "--", "--workspace-name"]);
   assert.equal(created.code, 0, created.stderr);
   await fs.stat(path.join(root, "--workspace-name", ".tent"));

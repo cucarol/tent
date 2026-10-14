@@ -15,6 +15,7 @@ import {
   structureMaterialCoverage,
   materialCoverageContains,
   type MaterialCoverage,
+  isTentWorkspacePath,
 } from "./material-coverage.js";
 
 export type WorkspaceScanRepository = {
@@ -50,10 +51,14 @@ export async function scanWorkspace(
   fileKind: ScanFileKind,
 ) {
   const tent = await loadTent(readOnlyFs(fs));
-  const trackedFiles = ordered(repository.trackedFiles);
+  const trackedFiles = ordered(
+    repository.trackedFiles.filter((file) => !isTentWorkspacePath(file)),
+  );
   const covered = new Set<string>();
   const inspectionErrors: Array<{ node: string; resource?: string; reason: string }> =
-    repository.sources.errors.map((error) => ({ node: error.file, reason: error.reason }));
+    repository.sources.errors
+      .filter((error) => !isTentWorkspacePath(error.file))
+      .map((error) => ({ node: error.file, reason: error.reason }));
   const kinds = new Map<string, Promise<"file" | "directory" | undefined>>();
   async function target(resource: string, owner: string, source = false) {
     const locator = materialLocator(resource, owner, source);
@@ -61,6 +66,7 @@ export async function scanWorkspace(
     if (filename === undefined) return;
     const relative = path.relative(workspaceRoot, filename).split(path.sep).join("/") || ".";
     if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) return;
+    if (isTentWorkspacePath(relative)) return;
     let coverage: MaterialCoverage | undefined;
     if (isDirectoryMaterial(locator) || relative.includes("*")) {
       const address =
@@ -144,7 +150,7 @@ export async function scanWorkspace(
       directories: countDirectories(uncoveredFiles),
     },
     inspectionErrors,
-    ...repositoryFacts(repository.sources.files),
+    ...repositoryFacts(repository.sources.files.filter((file) => !isTentWorkspacePath(file.path))),
   };
 }
 

@@ -55,8 +55,6 @@ async function fixture(t: TestContext, repository = true) {
       owner,
       resource,
       undefined,
-      undefined,
-      undefined,
       track === "structure" ? track : undefined,
     );
   return { root, write, observe };
@@ -66,7 +64,7 @@ test("structure fingerprints contain only the outgoing external dependency set",
   const { root, write, observe } = await fixture(t);
   const initial = await observe();
   assert.deepEqual(initial.structureDependencies, ["src/out/"]);
-  assert.equal(initial.directoryFiles, undefined);
+  assert.equal(initial.coverage, undefined);
   await write("src/core/card-main.ts", 'import "../out/a.js";\nexport const value = 99;\n');
   await write("src/core/card-new.ts", "export const extra = true;\n");
   await write("src/core/card-helper.ts", 'import "./card-main.js";\n');
@@ -97,14 +95,8 @@ test("structure fingerprints contain only the outgoing external dependency set",
     { changedDependencies: [{ target: "src/out/", state: "deleted" }] },
   );
   assert.equal(
-    (
-      await new NodeFs(path.join(root, ".tent")).observeMaterial(
-        "../src/core/",
-        owner,
-        undefined,
-        "structure",
-      )
-    ).repository,
+    (await new NodeFs(path.join(root, ".tent")).observeMaterial("../src/core/", owner, "structure"))
+      .coverage,
     undefined,
   );
 });
@@ -166,10 +158,10 @@ test("unrelated symbolic paths do not affect structure or prefix content; releva
     syncBuiltinESMExports();
   });
   assert.deepEqual((await observe("../src/core/card-*")).structureDependencies, []);
-  assert.ok((await observe("../src/core/card-*", "content")).directoryFiles?.length);
+  assert.equal((await observe("../src/core/card-*", "content")).coverage, true);
   linked = path.join(root, "src/core/card-main.ts");
   await assert.rejects(observe("../src/core/card-*"), /Symbolic links/);
-  await assert.rejects(observe("../src/core/card-*", "content"), /Symbolic links/);
+  assert.equal((await observe("../src/core/card-*", "content")).coverage, true);
 });
 
 test("directory structure resolves ignored tracked targets while preserving nonignored members", async (t) => {
@@ -181,55 +173,15 @@ test("directory structure resolves ignored tracked targets while preserving noni
   assert.deepEqual((await observe()).structureDependencies, ["src/core/card-helper.ts"]);
 });
 
-test("prefix content retains nonignored names and normalized content, including nested prefix members", async (t) => {
+test("prefix coverage does not acquire a version when members change", async (t) => {
   const { root, write, observe } = await fixture(t);
   const initial = await observe("../src/core/card-*", "content");
-  assert.deepEqual(
-    initial.directoryFiles?.map((file) => file.path),
-    ["card-helper.ts", "card-main.ts"],
-  );
-  await write("src/core/sibling.ts", "changed sibling\n");
-  assert.equal(
-    (await observe("../src/core/card-*", "content")).observedVersion,
-    initial.observedVersion,
-  );
-  await write("src/core/card-untracked.ts", "untracked\n");
-  const membership = await observe("../src/core/card-*", "content");
-  assert.notEqual(membership.observedVersion, initial.observedVersion);
-  await git(root, "add", "src/core/card-untracked.ts");
-  assert.equal(
-    (await observe("../src/core/card-*", "content")).observedVersion,
-    membership.observedVersion,
-  );
-  await write("src/core/card-sub/nested.ts", "nested\n");
-  await git(root, "add", "src/core/card-sub/nested.ts");
-  assert.ok(
-    (await observe("../src/core/card-*", "content")).directoryFiles?.some(
-      (file) => file.path === "card-sub/nested.ts",
-    ),
-  );
-  await write("src/core/card-main.ts", 'import "../out/a.js";\r\nexport const value = 1;\r\n');
-  await fs.rm(path.join(root, "src/core/card-sub"), { recursive: true });
-  assert.equal(
-    (await observe("../src/core/card-*", "content")).observedVersion,
-    membership.observedVersion,
-  );
-  const all = await observe("../src/core/*", "content");
-  assert.ok(all.directoryFiles?.some((file) => file.path === "sibling.ts"));
-  await fs.rename(
-    path.join(root, "src/core/card-untracked.ts"),
-    path.join(root, "src/core/card-renamed.ts"),
-  );
-  await git(root, "add", "--all", "src/core");
-  const renamed = await observe("../src/core/card-*", "content");
-  assert.notEqual(renamed.observedVersion, membership.observedVersion);
-  assert.ok(renamed.directoryFiles?.some((file) => file.path === "card-renamed.ts"));
-  assert.ok(!renamed.directoryFiles?.some((file) => file.path === "card-untracked.ts"));
+  assert.equal(initial.coverage, true);
+  assert.equal(initial.observedVersion, undefined);
   await write("src/core/card-main.ts", "changed member\n");
-  assert.notEqual(
-    (await observe("../src/core/card-*", "content")).observedVersion,
-    renamed.observedVersion,
-  );
+  await write("src/core/card-nested/member.ts", Buffer.from([0xff]));
+  await fs.rm(path.join(root, "src/core/card-helper.ts"));
+  assert.deepEqual(await observe("../src/core/card-*", "content"), initial);
 });
 
 test("structure fails honestly for unreadable text, invalid config and unresolved local imports", async (t) => {
@@ -248,7 +200,7 @@ test("structure fails honestly for unreadable text, invalid config and unresolve
 test("prefix observation is unavailable without a trustworthy ignore interpreter", async (t) => {
   const { observe } = await fixture(t, false);
   await assert.rejects(observe("../src/core/card-*"), /缺少可信的忽略规则解释/);
-  await assert.rejects(observe("../src/core/card-*", "content"), /缺少可信的忽略规则解释/);
+  assert.equal((await observe("../src/core/card-*", "content")).coverage, true);
 });
 
 test("prefix and directory share nonignored membership for tracked and untracked files", async (t) => {
@@ -261,21 +213,17 @@ test("prefix and directory share nonignored membership for tracked and untracked
   assert.deepEqual((await observe("../src/core/card-*")).structureDependencies, ["src/other/"]);
   const content = await observe("../src/core/card-*", "content");
   const directory = await observe("../src/core/", "content");
-  assert.deepEqual(
-    content.directoryFiles,
-    directory.directoryFiles?.filter((file) => file.path.startsWith("card-")),
-  );
-  assert.deepEqual(
-    content.directoryFiles?.map((file) => file.path),
-    ["card-main.ts", "card-untracked.ts"],
-  );
+  assert.equal(content.coverage, true);
+  assert.equal(directory.coverage, true);
+  assert.equal(content.observedVersion, undefined);
+  assert.equal(directory.observedVersion, undefined);
 });
 
 test("non-Git prefix uses Tent Git ignore rules and supports rule-free standalone reads", async (t) => {
   const { root, write, observe } = await fixture(t, false);
   await write(".gitignore", "");
   assert.deepEqual((await observe("../src/core/card-*")).structureDependencies, ["src/out/"]);
-  assert.equal((await observe("../src/core/card-*", "content")).directoryFiles?.length, 2);
+  assert.equal((await observe("../src/core/card-*", "content")).coverage, true);
   await write(".gitignore", ".tent/\nsrc/core/card-helper.ts\nsrc/core/card-ignored.ts\n");
   await write("src/core/card-helper.ts", Buffer.from([0xff]));
   await write("src/core/card-ignored.ts", Buffer.from([0xff]));
@@ -283,23 +231,12 @@ test("non-Git prefix uses Tent Git ignore rules and supports rule-free standalon
   await fs.mkdir(path.join(root, ".tent"));
   await git(path.join(root, ".tent"), "init", "--quiet", "--initial-branch=main");
   const adapter = new NodeFs(path.join(root, ".tent"));
-  const structure = await adapter.observeMaterial(
-    "../src/core/card-*",
-    owner,
-    undefined,
-    "structure",
-  );
+  const structure = await adapter.observeMaterial("../src/core/card-*", owner, "structure");
   assert.deepEqual(structure.structureDependencies, ["src/other/", "src/out/"]);
   const content = await adapter.observeMaterial("../src/core/card-*", owner);
   const directory = await adapter.observeMaterial("../src/core/", owner);
-  assert.deepEqual(
-    content.directoryFiles,
-    directory.directoryFiles?.filter((file) => file.path.startsWith("card-")),
-  );
-  assert.deepEqual(
-    content.directoryFiles?.map((file) => file.path),
-    ["card-main.ts", "card-new.ts"],
-  );
+  assert.equal(content.coverage, true);
+  assert.equal(directory.coverage, true);
 });
 
 test("standalone directory structure retains safe reading with no ignore rules", async (t) => {

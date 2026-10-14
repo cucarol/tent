@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { test } from "node:test";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
@@ -16,7 +16,7 @@ test("direct export preserves published Git sources after live rename/deletion a
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "direct-export-"));
   t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const tentRoot = path.join(workspace, ".tent"),
     adapter = new NodeFs(tentRoot);
   assert.equal(await adapter.exists("roles.json"), false);

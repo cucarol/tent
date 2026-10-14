@@ -4,28 +4,24 @@ import { MUTATION_LOCK_PATH } from "./paths.js";
 import { recoverPendingNodeMoveUnlocked } from "./node-move-recovery.js";
 import { recoverPendingDeleteUnlocked } from "./delete-recovery.js";
 import type { GitDocumentHistory, CaptureMetadata } from "./git-history.js";
-import type { RepositoryMaterial } from "./repository-material.js";
-import type { DirectoryFile } from "./directory-material.js";
 
 export interface FsAdapter {
+  /** Available for adapters rooted at a Workspace's .tent directory. */
+  readonly workspaceRoot?: string;
   /** Native edits rejected at this command boundary; never persisted or used as a cache. */
   invalidNodeEdits?: ReadonlyMap<string, string>;
   /** Existing regular files after one batch ignore lookup; undefined without a trusted interpreter. */
   nonignoredFiles?(addresses: readonly string[]): Promise<string[] | undefined>;
-  /** Observe local material content; normalize text lines and select addressed Markdown sections. */
+  /** Observe explicit content or safely validate a coverage address without reading members. */
   observeMaterial?(
     resource: string,
     documentPath: string,
-    repository?: RepositoryMaterial,
     track?: "structure",
   ): Promise<{
-    observedVersion: string;
-    directoryFiles?: DirectoryFile[];
+    observedVersion?: string;
+    coverage?: true;
     structureDependencies?: string[];
     systemPath?: string;
-    repository?: RepositoryMaterial;
-    /** Present only when a missing declaration was read from another checkout. */
-    readFrom?: string;
   }>;
   readonly history?: GitDocumentHistory;
   /** File paths in the independent Tent Git HEAD tree; undefined without Tent Git. */
@@ -39,7 +35,7 @@ export interface FsAdapter {
   readFrontmatter?(path: string): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
   /**
-   * Read raw bytes (attachments, non-UTF-8 payloads).
+   * Read raw bytes, including non-UTF-8 payloads.
    * Path traversal defenses must match readFile.
    */
   readBinary(path: string): Promise<Uint8Array>;

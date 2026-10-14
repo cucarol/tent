@@ -108,6 +108,33 @@ test("equal materials choose deterministically and a clean map has no findings",
   assert.deepEqual(checkModuleMap(input([...tracked].reverse(), [...nodes].reverse())), result);
 });
 
+test("internal .tent files never enter broad module coverage, imports or history facts", () => {
+  const baseline = input(
+    ["src/main.ts"],
+    [node("root", { materials: [{ path: ".", kind: "directory" }] })],
+  );
+  const internal = ".tent/cache/generated.ts";
+  const polluted = {
+    ...baseline,
+    trackedFiles: [...baseline.trackedFiles, internal],
+    imports: [
+      {
+        from: "src/main.ts",
+        to: internal,
+        kind: "file" as const,
+        specifier: "../.tent/cache/generated",
+      },
+    ],
+    commits: [{ commit: "a".repeat(40), files: [internal], changedFiles: 1 }],
+  };
+  assert.deepEqual(checkModuleMap(polluted), checkModuleMap(baseline));
+  for (const coverage of [
+    { kind: "directory" as const, prefix: "" },
+    { kind: "prefix" as const, prefix: ".t" },
+  ])
+    assert.equal(materialCoverageContains(coverage, internal), false);
+});
+
 test("only structure-tracked directories or prefixes define modules; ordinary and file materials still cover", () => {
   const tracked = ["old/a.ts", "tracked/a.ts", "single.ts"];
   const result = checkModuleMap(

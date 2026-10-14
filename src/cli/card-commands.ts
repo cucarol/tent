@@ -109,7 +109,7 @@ export async function runCardCommand(
       workspace: value("workspace") ?? globals.workspace,
     });
     const mutation = ["create", "move", "deprecate", "take"].includes(sub);
-    const fs = new NodeFs(systemRoot, "cli", mutation ? "record" : "inspect"),
+    const fs = new NodeFs(systemRoot, "cli"),
       id = positionals[0]!;
     let result: unknown;
     let warnings: string[] = [];

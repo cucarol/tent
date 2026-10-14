@@ -193,7 +193,6 @@ export function contextDriftItems(context: Pick<CurrentContext, "sync">) {
             path: node.path,
             address: node.resource,
             reasons: node.ahead.reasons,
-            ...(node.ahead.since ? { aheadSince: node.ahead.since } : {}),
           },
         ]
       : []),
@@ -282,11 +281,7 @@ export function makeContextBrief(
         nodeId: node.nodeId,
         path: `.tent/${nodeNotePath(node.path)}`,
         name: shorten(path.posix.basename(node.path), 56),
-        ...(node.ahead!.since
-          ? {
-              since: node.ahead!.since,
-            }
-          : { sinceUnknown: true }),
+        reason: shorten(node.ahead!.reasons.join("; "), 160),
       })),
     cardInputs: context.cards.items
       .filter(
@@ -405,7 +400,7 @@ export function formatContextBrief(brief: ContextBrief): string {
           : String(item.nodeId ?? item.cardId ?? item.address);
       const detail =
         key === "ahead"
-          ? `${String(item.name ?? "")}; ${item.since ? `since ${item.since}` : "start time not recorded"}`
+          ? `${String(item.name ?? "")}; ${String(item.reason ?? "")}`
           : String(item.reason ?? item.title ?? item.kind ?? item.at ?? item.address ?? "");
       lines.push(
         `- ${identity}${item.path ? ` ${item.path}` : ""}${detail && detail !== identity ? ` ${detail}` : ""}${item.progress || item.state ? ` [${item.progress || item.state}${Number(item.totalGoalCount) > 0 ? ` ${item.goalCount}/${item.totalGoalCount}` : ""}]` : ""}`,

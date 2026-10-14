@@ -86,7 +86,7 @@ export async function runWorkspaceCommand(
       cwd: globals.cwd,
       workspace: values.workspace ?? globals.workspace,
     });
-    const fs = new NodeFs(roots.systemRoot, "cli", "inspect"),
+    const fs = new NodeFs(roots.systemRoot, "cli"),
       { workspaceId } = await readWorkspaceSettings(fs);
     if (!workspaceId)
       throw new Error(

@@ -85,7 +85,7 @@ export async function runRoleCommand(
       workspace: value("workspace") ?? globals.workspace,
     });
     const mutation = ["create", "write", "delete"].includes(sub);
-    const fs = new NodeFs(systemRoot, "cli", mutation ? "record" : "inspect");
+    const fs = new NodeFs(systemRoot, "cli");
     if (mutation) await captureNativeNodeEdits(fs);
     let result: unknown;
     if (sub === "list")

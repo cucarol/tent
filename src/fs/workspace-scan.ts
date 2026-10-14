@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
+import { isTentWorkspacePath } from "../core/material-coverage.js";
 import type { WorkspaceScanRepository } from "../core/workspace-scan.js";
 import { MODULE_MAP_THRESHOLDS, type ModuleMapCommit } from "../core/module-map.js";
 import type { WorkspaceModuleMapRepository } from "../core/workspace-module-map.js";
@@ -61,9 +62,12 @@ async function readRepositoryFiles(workspaceRoot: string) {
   const prefix = path.relative(root, workspaceRoot).split(path.sep).join("/");
   const workspacePrefix = process.platform === "win32" ? prefix.toLowerCase() : prefix;
   const workspaceFile = (file: string) => {
-    if (!prefix) return file;
+    if (!prefix) return isTentWorkspacePath(file) ? undefined : file;
     const candidate = process.platform === "win32" ? file.toLowerCase() : file;
-    return candidate.startsWith(`${workspacePrefix}/`) ? file.slice(prefix.length + 1) : undefined;
+    const relative = candidate.startsWith(`${workspacePrefix}/`)
+      ? file.slice(prefix.length + 1)
+      : undefined;
+    return relative !== undefined && !isTentWorkspacePath(relative) ? relative : undefined;
   };
   const list = (raw: string) =>
     raw

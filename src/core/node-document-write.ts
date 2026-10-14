@@ -13,8 +13,9 @@ import { isNodeId } from "./id.js";
 import { assertStatusEdit } from "./document-status.js";
 import { ReaderError } from "./context-reader.js";
 import { canonicalDocumentReferences } from "./document-links.js";
+import { validateSystemMaterials } from "./material-target.js";
 import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "./node-read-basis.js";
-import { assertNodeRecordFields, isOutputNode, prepareNodeSyncSave } from "./node-sync-record.js";
+import { assertNodeRecordFields, prepareNodeSyncSave } from "./node-sync-record.js";
 import { prepareNodeProvenanceSave, assertNodeProvenanceEdit } from "./node-provenance.js";
 
 export class NodeWriteError extends Error {
@@ -104,7 +105,18 @@ export async function savePreparedNodeDocumentUnlocked(
   const nodeId = node.id;
   const now = new Date().toISOString();
   const parsed = parseFrontmatter(preparedRaw);
-  const output = isOutputNode(parsed.data);
+  try {
+    await validateSystemMaterials(
+      fs,
+      parsed.data,
+      nodeNotePath(node.path),
+      parseFrontmatter(diskRaw).data,
+    );
+  } catch (error) {
+    if (error instanceof MaterialAddressError)
+      throw new NodeWriteError("INVALID_EDIT", error.message);
+    throw error;
+  }
   const { raw, record } = await prepareNodeSyncSave(
     fs,
     nodeNotePath(node.path),
@@ -137,7 +149,6 @@ export async function savePreparedNodeDocumentUnlocked(
     version = await captureDocumentUnlocked(fs, path, raw, {
       operation,
       ...(record ? { nodeRecords: { [nodeId]: record } } : {}),
-      ...(output && input.confirm ? { acknowledgedOutputIds: [nodeId] } : {}),
     });
   } catch (error) {
     if (changed && (await fs.readFile(path)) === raw) await fs.writeFile(path, diskRaw);

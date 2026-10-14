@@ -9,13 +9,12 @@ import {
   isDirectoryMaterial,
   isPrefixMaterial,
 } from "../core/material.js";
-import { observeSourceDirectory, DirectoryObservationCache } from "./directory-observation.js";
-import { observePrefixMaterial, observeStructureMaterial } from "./structure-observation.js";
-import type { DirectoryFile } from "../core/directory-material.js";
+import { observeStructureMaterial } from "./structure-observation.js";
 import { markdownMaterialHeading, materialContent } from "../core/material-section.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { isNodeId } from "../core/id.js";
 import { nodeSemanticContent } from "../core/node-sync-record.js";
+import { systemMaterialPath } from "../core/material-target.js";
 
 /** Safely read and hash bytes; the Core caller supplies any content selection. */
 export async function observeSourceFile(
@@ -142,38 +141,41 @@ export async function observeMaterialResource(
   documentPath: string,
   resource: string,
   cacheDir?: string,
-  relocated?: { root: string; filename: string },
-  directoryCache?: DirectoryObservationCache,
   track?: "structure",
 ): Promise<{
   canonicalPath: string;
-  observedVersion: string;
-  cacheHit: boolean;
-  blobs: { sha1: string; sha256: string };
-  directoryFiles?: DirectoryFile[];
+  observedVersion?: string;
+  coverage?: true;
+  cacheHit?: boolean;
+  blobs?: { sha1: string; sha256: string };
   structureDependencies?: string[];
 }> {
   const locator = materialLocator(resource, documentPath, true);
-  const filename = relocated?.filename ?? localMaterialPath(locator, workspaceRoot);
+  const filename = localMaterialPath(locator, workspaceRoot);
   if (filename === undefined)
     throw new Error("Mechanical checks require an explicit local path or file: URI");
   if (track === "structure") {
-    if (relocated) throw new Error("Structure materials cannot be relocated between repositories");
     return observeStructureMaterial(workspaceRoot, documentPath, resource, cacheDir);
   }
-  if (isPrefixMaterial(locator))
-    return observePrefixMaterial(workspaceRoot, documentPath, resource, cacheDir);
   // An absolute file URI explicitly addresses another location. Check every path
   // segment from its filesystem root; relative addresses remain in this workspace.
-  const root =
-    relocated?.root ?? (locator.kind === "uri" ? path.parse(filename).root : workspaceRoot);
-  if (isDirectoryMaterial(locator))
-    return observeSourceDirectory(root, filename, cacheDir, directoryCache);
+  const root = locator.kind === "uri" ? path.parse(filename).root : workspaceRoot;
+  if (isDirectoryMaterial(locator) || isPrefixMaterial(locator)) {
+    const directory = isPrefixMaterial(locator) ? path.dirname(filename) : filename;
+    await checkedSourceFile(root, directory, true);
+    const canonicalDirectory = await realpath(directory);
+    return {
+      canonicalPath: isPrefixMaterial(locator)
+        ? path.join(canonicalDirectory, path.basename(filename))
+        : canonicalDirectory,
+      coverage: true,
+    };
+  }
   const heading = markdownMaterialHeading(locator);
   return observeSourceFile(root, filename, cacheDir, {
     key: JSON.stringify([
-      "semantic-text-v3",
-      locator.kind === "path" ? locator.target : "",
+      "semantic-text-v4",
+      systemMaterialPath(locator, workspaceRoot) ?? "",
       heading,
     ]),
     content: (bytes) => {
@@ -193,7 +195,9 @@ export async function observeMaterialResource(
             return nodeSemanticContent(
               parsed.data,
               heading === undefined ? parsed.body : materialContent(normalized, locator),
-              locator.kind === "path" ? locator.target : "",
+              systemMaterialPath(locator, workspaceRoot) ?? "",
+              undefined,
+              workspaceRoot,
             );
         } catch {
           // Ordinary Markdown is material text even when its optional YAML is malformed.

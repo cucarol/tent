@@ -12,13 +12,7 @@ import { GitDocumentHistory, type CaptureMetadata } from "../core/git-history.js
 import { isHistoryDocument, isHistoryFile } from "../core/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 import { observeMaterialResource } from "./source-observation.js";
-import { DirectoryObservationCache, nonignoredLocalFiles } from "./directory-observation.js";
-import {
-  observedRepositoryMaterial,
-  relocatedRepositoryMaterial,
-  RepositoryMaterialCache,
-} from "./repository-material.js";
-import type { RepositoryMaterial } from "../core/repository-material.js";
+import { nonignoredLocalFiles } from "./directory-observation.js";
 import { workspaceRootFromSystemRoot } from "../core/paths.js";
 import {
   prepareNodeSyncSave,
@@ -27,22 +21,23 @@ import {
 } from "../core/node-sync-record.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { loadNodeCatalog } from "../core/node-catalog.js";
+import { materialLocator } from "../core/material.js";
+import { assertSystemMaterial } from "../core/material-target.js";
 
 export class NodeFs implements FsAdapter {
   private root: string;
+  readonly workspaceRoot: string | undefined;
   invalidNodeEdits?: ReadonlyMap<string, string>;
   readonly history: GitDocumentHistory;
   private historyWrites = new AsyncLocalStorage<Map<string, string | null>>();
   private historyPreimages = new AsyncLocalStorage<Map<string, string | null>>();
-  private repositoryMaterials = new RepositoryMaterialCache();
-  private directoryObservations = new DirectoryObservationCache();
 
   constructor(
     root: string,
     private readonly entry: CaptureMetadata["entry"] = "core",
-    private readonly materialPurpose: "record" | "inspect" = "record",
   ) {
     this.root = nodePath.resolve(root);
+    this.workspaceRoot = workspaceRootFromSystemRoot(this.root);
     this.history = new GitDocumentHistory(this.root, entry);
   }
 
@@ -53,54 +48,18 @@ export class NodeFs implements FsAdapter {
       : undefined;
   }
 
-  async observeMaterial(
-    resource: string,
-    documentPath: string,
-    previous?: RepositoryMaterial,
-    track?: "structure",
-  ) {
+  async observeMaterial(resource: string, documentPath: string, track?: "structure") {
     const workspaceRoot = workspaceRootFromSystemRoot(this.root);
     if (!workspaceRoot) throw new Error("Material observation requires a Workspace .tent root");
+    await assertSystemMaterial(this, materialLocator(resource, documentPath, true));
     const cacheDir = (await this.exists(".git")) ? this.abs(".git/tent-material-cache") : undefined;
-    let readFrom: string | undefined;
     const observed = await observeMaterialResource(
       workspaceRoot,
       documentPath,
       resource,
       cacheDir,
-      undefined,
-      this.directoryObservations,
       track,
-    ).catch(async (error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT" || !previous) throw error;
-      const relocated = await relocatedRepositoryMaterial(
-        workspaceRoot,
-        previous,
-        this.repositoryMaterials,
-      );
-      readFrom = relocated.root;
-      return observeMaterialResource(
-        workspaceRoot,
-        documentPath,
-        resource,
-        cacheDir,
-        relocated,
-        this.directoryObservations,
-        track,
-      );
-    });
-    // Synchronization reads compare observed content; repository metadata is needed when recording a basis.
-    const repository =
-      this.materialPurpose === "inspect" ||
-      observed.directoryFiles !== undefined ||
-      observed.structureDependencies !== undefined
-        ? undefined
-        : await observedRepositoryMaterial(
-            workspaceRoot,
-            observed.canonicalPath,
-            observed.blobs,
-            this.repositoryMaterials,
-          );
+    );
     const relative = nodePath.relative(this.root, observed.canonicalPath);
     const inside =
       relative !== ".." &&
@@ -110,8 +69,6 @@ export class NodeFs implements FsAdapter {
     return {
       ...observed,
       ...(systemPath ? { systemPath } : {}),
-      ...(repository ? { repository } : {}),
-      ...(readFrom ? { readFrom } : {}),
     };
   }
 

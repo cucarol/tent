@@ -13,10 +13,10 @@ import {
   TEMP_DIR,
 } from "../core/paths.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
-import { extractAttachmentReferences } from "../markdown/attachment-refs.js";
 import { liveContextReader } from "../core/context-reader-factory.js";
 import type { FsAdapter } from "../core/adapter.js";
 import { verifyCardSourceVersion } from "../core/card-document.js";
+import { isHistoryDocument } from "../core/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 
 export type GraphExportSource = {
@@ -137,12 +137,12 @@ async function validateMaterial(root: string, workspaceId: string, files: FileEn
       if (kind === "directory" || locator.target === ".") directories.add(locator.target);
       else owned.add(locator.target); // Missing declared bundle files fail the same inventory check.
     }
-    for (const ref of extractAttachmentReferences(parsed.body, sourcePath)) owned.add(ref.path);
     collectLinks(parsed.body, sourcePath);
   };
   for (const file of files) {
-    if (file.kind !== "file" || !file.path.endsWith(".md") || file.path.startsWith("attachments/"))
-      continue;
+    if (file.kind !== "file" || !file.path.endsWith(".md")) continue;
+    // Ordinary files are byte inventory, not Tent declarations, regardless of directory name.
+    if (!isHistoryDocument(file.path) && !/^(?:roles|cards)\/[^/]+\.md$/.test(file.path)) continue;
     const raw = await adapter.readFile(file.path),
       data = parseFrontmatter(raw).data,
       gitSources = new Set<number>();

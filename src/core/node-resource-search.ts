@@ -15,7 +15,11 @@ import {
   materialLocator,
   resolvedMaterialOccurrences,
 } from "./material.js";
-import { materialCoverageContains, structureMaterialCoverage } from "./material-coverage.js";
+import {
+  isTentWorkspacePath,
+  materialCoverageContains,
+  structureMaterialCoverage,
+} from "./material-coverage.js";
 
 export const nodeResourceSearchSchema = z.strictObject({ resource: resourceSchema });
 
@@ -35,9 +39,7 @@ export async function searchNodeResources(
   const workspacePath = filename
     ? path.relative(workspaceRoot, filename).split(path.sep).join("/")
     : undefined;
-  const systemPath = workspacePath?.split("/")[0];
-  const excluded =
-    process.platform === "win32" ? systemPath?.toLowerCase() === ".tent" : systemPath === ".tent";
+  const excluded = workspacePath !== undefined && isTentWorkspacePath(workspacePath);
   const catalog = await loadNodeCatalog(fs);
   const retained = options.uncaptured
     ? new Set((await fs.retainedDocumentPaths?.()) ?? [])

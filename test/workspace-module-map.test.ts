@@ -23,6 +23,7 @@ async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "module-map-"));
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   await git(root, "init", "-b", "main");
+  await fs.appendFile(path.join(root, ".git/info/exclude"), "\n/.tent/\n");
   await scaffoldInWorkspace(new NodeFs(root), { name: "Map" });
   const adapter = new NodeFs(path.join(root, ".tent"));
   const write = async (file: string, body: string) => {
@@ -271,7 +272,7 @@ test("module history preserves unborn/nested workspaces, root changes and newlin
   const nested = await readModuleMapRepository(path.join(root, "nested"));
   assert.deepEqual(nested.trackedFiles, ["source file.md"]);
   assert.deepEqual(nested.commits[0]!.files, ["source file.md"]);
-  assert.equal(nested.commits[0]!.changedFiles, 3);
+  assert.equal(nested.commits[0]!.changedFiles, 2);
   if (process.platform === "win32")
     assert.deepEqual(await readModuleMapRepository(path.join(root, "NESTED")), nested);
   const sha = "a".repeat(40),

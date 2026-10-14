@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { spawn } from "node:child_process";
 import { runUiCommand } from "../src/cli/ui-command.js";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import { defaultWorkspacesFile, readWorkspaces } from "../src/ui-server/workspaces.js";
 import { testScratchRoot } from "./scratch.js";
 
@@ -14,7 +14,7 @@ test("UI command selects the workspace and package assets and closes once on Ctr
     assert.equal(path.dirname(workspace), path.resolve(testScratchRoot()));
     await fs.rm(workspace, { recursive: true, force: true });
   });
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const signals = [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
   let closed = 0;
   const server = await runUiCommand(["--workspace", workspace, "--port", "0", "--no-open"], {
@@ -54,7 +54,7 @@ test("UI rejects invalid arguments before starting a service", async () => {
 test("CLI ui dispatch starts a real loopback service for the selected workspace", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-ui-dispatch-"));
   t.after(() => fs.rm(workspace, { recursive: true, force: true }));
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const userDir = path.join(workspace, "test-user");
   const env = {
     ...process.env,

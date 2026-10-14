@@ -21,8 +21,8 @@ for (const failure of ["none", "body", "order"] as const) {
   test(`Node creation writes initial body and refs once and rolls back ${failure} failure`, async (t) => {
     const adapter = await fixture(t);
     const sources = [
-      { resource: "/refs/example.pdf", custom: [2, 1] },
-      { resource: "/refs/example.pdf" },
+      { resource: "../../refs/example.pdf", custom: [2, 1] },
+      { resource: "../../refs/example.pdf" },
     ];
     const write = adapter.writeFile.bind(adapter);
     let nodeWrites = 0;

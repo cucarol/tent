@@ -285,10 +285,6 @@ function assertNotOperationalPath(path: string): void {
   if (isOperationalPath(path) || path === "temp" || path.startsWith("temp/")) {
     throw new Error("temp/ and other system pipelines cannot be moved as Nodes.");
   }
-  const top = path.split("/")[0] ?? "";
-  if (top === "attachments" || top === ".tent") {
-    throw new Error("System directories cannot be moved as Nodes.");
-  }
 }
 
 function collectSubtree(node: Node, out: Node[] = []): Node[] {

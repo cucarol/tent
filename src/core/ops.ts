@@ -20,6 +20,7 @@ import type { CaptureMetadata } from "./git-history.js";
 import { prepareNodeSyncSave } from "./node-sync-record.js";
 import { prepareNodeProvenanceSave } from "./node-provenance.js";
 import { captureDocumentUnlocked } from "./document-history.js";
+import { validateSystemMaterials } from "./material-target.js";
 
 export type { OpsEnv } from "./ops-context.js";
 export { renameNode, type RenameNodeResult } from "./rename-ops.js";
@@ -69,6 +70,18 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
   const notePath = nodeNotePath(path);
   validateMaterialAddresses(fm, notePath);
   const body = await canonicalDocumentReferences(env.fs, notePath, fm, input.body ?? "");
+  await validateSystemMaterials(
+    env.fs,
+    fm,
+    notePath,
+    {},
+    new Set([
+      ...[...tent.byId.values()]
+        .filter((node) => !node.invalid)
+        .map((node) => nodeNotePath(node.path)),
+      notePath,
+    ]),
+  );
   const content = prepareNodeProvenanceSave(
     serializeFrontmatter(fm, body, NODE_FRONTMATTER_KEY_ORDER),
     null,

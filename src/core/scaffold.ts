@@ -9,7 +9,6 @@ import { normalizeOptionalNodeType } from "./node-type.js";
 import { nodeNotePath } from "./tree.js";
 import { isNodeId, makeUniqueNodeId } from "./id.js";
 import {
-  ATTACHMENTS_DIR,
   INDEX_PATH,
   OPERATIONAL_TOP_LEVEL,
   TEMP_DIR,
@@ -54,7 +53,6 @@ export async function scaffoldTent(fs: FsAdapter, options: ScaffoldTentOptions):
   }
 
   await fs.mkdir(TEMP_DIR);
-  await fs.mkdir(ATTACHMENTS_DIR);
 
   await fs.writeFile(INDEX_PATH, tentIndexMarker());
   await fs.writeFile(
@@ -65,7 +63,7 @@ export async function scaffoldTent(fs: FsAdapter, options: ScaffoldTentOptions):
 
 /**
  * 在 **workspace 根** 上创建 in-workspace tent：`<workspace>/.tent/`。
- * 会确保 workspace `.gitignore` 忽略 `.tent/`（若仓库使用 Git 且文件可写）。
+ * 只创建 Tent 系统内容，不写项目文件或 Git 排除规则。
  * 不创建外置 vault 路径，不双写。
  */
 export async function scaffoldInWorkspace(
@@ -97,14 +95,12 @@ export async function scaffoldInWorkspace(
   }
 
   await workspaceFs.mkdir(nested(TEMP_DIR));
-  await workspaceFs.mkdir(nested(ATTACHMENTS_DIR));
   await workspaceFs.writeFile(nested(INDEX_PATH), tentIndexMarker());
   await workspaceFs.writeFile(
     nested(WORKSPACE_SETTINGS_PATH),
     JSON.stringify({ workspaceId: `ws-${randomUUID()}` }, null, 2) + "\n",
   );
 
-  await ensureWorkspaceGitignore(workspaceFs);
   return { systemRootRelative: systemRelative };
 }
 
@@ -118,25 +114,6 @@ export function isValidTentIndexMarker(raw: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** 确保 workspace 根 `.gitignore` 含 `.tent/` 条目。 */
-export async function ensureWorkspaceGitignore(workspaceFs: FsAdapter): Promise<void> {
-  const path = ".gitignore";
-  const entry = `${TENT_SYSTEM_DIR}/`;
-  if (!(await workspaceFs.exists(path))) {
-    await workspaceFs.writeFile(path, `${entry}\n`);
-    return;
-  }
-  const text = await workspaceFs.readFile(path);
-  const lines = text.split(/\r?\n/);
-  const has = lines.some((line) => {
-    const t = line.trim();
-    return t === entry || t === TENT_SYSTEM_DIR || t === `/${entry}` || t === `/${TENT_SYSTEM_DIR}`;
-  });
-  if (has) return;
-  const next = text.endsWith("\n") || text === "" ? `${text}${entry}\n` : `${text}\n${entry}\n`;
-  await workspaceFs.writeFile(path, next);
 }
 
 /**

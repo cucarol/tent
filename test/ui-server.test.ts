@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
 import { renameNode } from "../src/core/ops.js";
 import { readWorkspaceSettings } from "../src/core/workspace-settings.js";
@@ -36,7 +36,7 @@ async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "ui-server-"));
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const workspace = path.join(root, "ws");
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const tent = new NodeFs(path.join(workspace, ".tent"));
   await tent.writeFile(
     "Main/Main.md",
@@ -914,7 +914,7 @@ test(
   async (t) => {
     const { workspace, dist } = await fixture(t);
     const other = path.join(path.dirname(workspace), "starting");
-    await initializeTentWorkspace(other);
+    await initializeFixtureWorkspace(other);
     const { workspaceId } = await readWorkspaceSettings(new NodeFs(path.join(other, ".tent")));
     const first = await startUiServer({ workspaceRoot: workspace, staticDir: dist, port: 0 });
     t.after(() => first.close());
@@ -984,9 +984,9 @@ test("the page can switch to another workspace, served by the same process", asy
   const { workspace, dist } = await fixture(t);
   const root = path.dirname(workspace);
   const other = path.join(root, "other");
-  await initializeTentWorkspace(other);
+  await initializeFixtureWorkspace(other);
   const gone = path.join(root, "gone");
-  await initializeTentWorkspace(gone);
+  await initializeFixtureWorkspace(gone);
   const file = path.join(root, "state", "ui-workspaces.json");
 
   const first = await startUiServer({

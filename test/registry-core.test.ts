@@ -47,6 +47,9 @@ test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS
     nodes: [{ name: "root", type: "goal" }],
   });
   assert.equal(parseFrontmatter(await workspaceFs.readFile(".tent/root/root.md")).body, "");
+  assert.equal(await workspaceFs.exists(".gitignore"), false);
+  assert.equal(await workspaceFs.exists(".tent/attachments"), false);
+  assert.equal(await fsa.exists("attachments"), false);
 
   const emptyDir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-scaffold-empty-"));
   t.after(() => fs.rm(emptyDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));

@@ -64,9 +64,11 @@ test("first intent time comes from retained identity history including manual co
   await git(system, "commit", "-m", "User intent");
   const head = await adapter.history.currentCommit(),
     expected = await adapter.history.commitTime(head!);
-  assert.equal((await inspectNodeSync(adapter, id)).aheadSince, expected);
+  assert.equal(await adapter.history.firstNodeTime(id), expected);
+  assert.ok((await inspectNodeSync(adapter, id)).ahead);
   await renameNode(env, id, "Renamed Intent");
-  assert.equal((await inspectNodeSync(adapter, id)).aheadSince, expected);
+  assert.equal(await new NodeFs(system).history.firstNodeTime(id), expected);
+  assert.ok((await inspectNodeSync(adapter, id)).ahead);
 });
 
 test("Node and material baselines are one commit, read capture retains them, reset rolls both back", async (t) => {
@@ -239,31 +241,33 @@ test("renames and moves retain Node-ID material baselines without refreshing kno
   assert.equal((await inspectNodeSync(adapter, id)).state, "behind");
 });
 
-test("relocation retains changed attachment baselines and link-output normalizes its actual name", async (t) => {
-  const { adapter, system, env } = await fixture(t);
+test("relocation retains changed Workspace file baselines and link-output normalizes its actual name", async (t) => {
+  const { root, adapter, env } = await fixture(t);
   const goal = await createNode(env, { parentPath: "", name: "Goal", type: "goal" });
   const id = await createNode(env, { parentPath: "", name: "Fact", type: "prompt" });
-  await fs.writeFile(path.join(system, "Fact", "attachment.txt"), "v1");
+  await fs.mkdir(path.join(root, "materials"));
+  const material = path.join(root, "materials", "attachment.txt");
+  await fs.writeFile(material, "v1");
   const current = await readNodeForEdit(adapter, id);
   await writeNodeDocument(adapter, id, {
     baseEtag: current.etag,
-    frontmatter: { resource: "./attachment.txt" },
+    frontmatter: { resource: "../../materials/attachment.txt" },
   });
   const before = (await inspectNodeSync(adapter, id)).materials[0]!.recordedVersion;
-  await fs.writeFile(path.join(system, "Fact", "attachment.txt"), "changed");
+  await fs.writeFile(material, "changed");
   await renameNode(env, id, "Renamed");
   await moveNode(env, id, goal, { mode: "inside" });
   const inspection = await inspectNodeSync(adapter, id);
   assert.equal(inspection.state, "behind");
   assert.equal(inspection.materials[0]!.recordedVersion, before);
   const output = await linkNodeOutput(adapter, goal, {
-    resource: ".tent/Goal/Renamed/attachment.txt",
+    resource: "materials/attachment.txt",
     name: "  Result  ",
   });
   assert.equal(output.path, "Goal/Result");
   assert.equal((await inspectNodeSync(adapter, output.nodeId)).state, "synced");
   assert.equal(
     (await readNodeForEdit(adapter, output.nodeId)).frontmatter.resource,
-    "../Renamed/attachment.txt",
+    "../../../materials/attachment.txt",
   );
 });

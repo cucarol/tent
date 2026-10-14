@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
+import { initializeFixtureWorkspace } from "./scratch.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { createNode, renameNode } from "../src/core/ops.js";
 import { readWorkspaceRevision } from "../src/core/workspace-revision.js";
@@ -19,7 +19,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
     assert.equal(path.dirname(workspace), path.resolve(testScratchRoot()));
     await fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
-  await initializeTentWorkspace(workspace);
+  await initializeFixtureWorkspace(workspace);
   const root = path.join(workspace, ".tent");
   const adapter = new NodeFs(root, "ui");
   const env = {

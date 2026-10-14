@@ -3,6 +3,12 @@ import { isDirectoryMaterial, localMaterialPath, materialLocator } from "./mater
 
 export type MaterialCoverage = { kind: "directory" | "prefix"; prefix: string };
 
+/** The Workspace file domain excludes its local collaboration state. */
+export function isTentWorkspacePath(workspacePath: string): boolean {
+  const first = workspacePath.split("/")[0];
+  return process.platform === "win32" ? first?.toLowerCase() === ".tent" : first === ".tent";
+}
+
 /** Shared membership authority. A prefix has exactly one final-segment trailing star. */
 export function structureMaterialCoverage(
   resource: string,
@@ -15,6 +21,7 @@ export function structureMaterialCoverage(
     if (filename === undefined) return undefined;
     let relative = path.relative(workspaceRoot, filename).split(path.sep).join("/");
     if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) return;
+    if (isTentWorkspacePath(relative)) return;
     if (locator.kind === "path" && locator.suffix) return;
     if (locator.kind === "uri" && (new URL(locator.uri).search || new URL(locator.uri).hash))
       return;
@@ -36,6 +43,7 @@ export function materialCoverageContains(
 ): boolean {
   if (!workspacePath || workspacePath.includes("\\") || path.posix.isAbsolute(workspacePath))
     return false;
+  if (isTentWorkspacePath(workspacePath)) return false;
   if (workspacePath.split("/").some((part) => part === "." || part === ".." || !part)) return false;
   const normalized = process.platform === "win32" ? workspacePath.toLowerCase() : workspacePath;
   const prefix = process.platform === "win32" ? coverage.prefix.toLowerCase() : coverage.prefix;
