@@ -46,7 +46,9 @@ test("Fastify's 82 recorded extensionless declaration imports resolve to their t
   assert.deepEqual(result.issues, []);
   assert.deepEqual(
     result.edges.map(({ from, to, specifier }) => `${from} -> ${specifier} -> ${to}`).sort(),
-    fixture.imports.map(({ file, specifier, target }) => `${file} -> ${specifier} -> ${target}`).sort(),
+    fixture.imports
+      .map(({ file, specifier, target }) => `${file} -> ${specifier} -> ${target}`)
+      .sort(),
   );
   assert.deepEqual(extractRepositoryImports([...files].reverse()), result);
 });
