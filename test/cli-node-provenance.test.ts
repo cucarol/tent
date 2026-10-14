@@ -60,22 +60,23 @@ test("Node CLI forwards explicit actors through content writes, confirmation and
 
   await run("append", [id, "--heading", "Evidence", "--body", "Added.", "--by", "agent/append"]);
   assert.equal((await data()).generated.by, "agent/append");
-  const section = await run("get-section", [id, "--heading", "Evidence"]);
-  await run("write-section", [
-    id,
-    "--heading",
-    "Evidence",
-    "--base-etag",
-    section.etag,
-    "--body",
-    "## Evidence\nRevised.\n",
-    "--by",
-    "agent/section",
-  ]);
+  await run("append", [id, "--heading", "Evidence", "--body", "Revised.", "--by", "agent/section"]);
   assert.equal((await data()).generated.by, "agent/section");
-  await run("type", [id, "goal", "--base-etag", await etag(), "--by", "agent/type"]);
+  await run("write", [
+    id,
+    "--input-json",
+    JSON.stringify({ baseEtag: await etag(), frontmatter: { type: "goal" }, by: "agent/type" }),
+  ]);
   assert.equal((await data()).generated.by, "agent/type");
-  await run("tags", ["set", id, "reviewed", "--base-etag", await etag(), "--by", "agent/tags"]);
+  await run("write", [
+    id,
+    "--input-json",
+    JSON.stringify({
+      baseEtag: await etag(),
+      frontmatter: { tags: ["reviewed"] },
+      by: "agent/tags",
+    }),
+  ]);
   assert.equal((await data()).generated.by, "agent/tags");
   await run(
     "write",

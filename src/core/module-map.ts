@@ -6,7 +6,6 @@ import {
   isTestSource,
   type RepositoryImport,
 } from "./repository-imports.js";
-import type { ScanCommit } from "./workspace-scan.js";
 import { materialCoverageContains } from "./material-coverage.js";
 
 export const MODULE_MAP_THRESHOLDS = {
@@ -63,11 +62,12 @@ export type ModuleMapModuleFacts = {
   productionFiles: number;
   generatedFiles: number;
 };
+export type ModuleMapCommit = { commit: string; files: string[]; changedFiles: number };
 export type ModuleMapInput = {
   trackedFiles: readonly string[];
   imports: readonly RepositoryImport[];
   /** First-parent history, as collected by the caller. */
-  commits: readonly ScanCommit[];
+  commits: readonly ModuleMapCommit[];
   nodes: readonly ModuleMapNode[];
 };
 

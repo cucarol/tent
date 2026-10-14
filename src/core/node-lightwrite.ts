@@ -1,7 +1,5 @@
-import { NodeSectionError, findSection, selectSection } from "./markdown-section.js";
-export { NodeSectionError } from "./markdown-section.js";
+import { findSection } from "./markdown-section.js";
 import { withTentMutation, type FsAdapter } from "./adapter.js";
-import { contentEtag } from "./etag.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { nodeNotePath } from "./paths.js";
@@ -13,13 +11,6 @@ import {
 } from "./node-document-write.js";
 
 export type NodeAppendInput = { body: string; heading?: string; by?: string };
-export type NodeSectionWriteInput = {
-  heading: string;
-  baseEtag: string;
-  body: string;
-  by?: string;
-};
-
 /** Append without a caller read; the current body is observed only inside the write lock. */
 export function appendNodeBody(fs: FsAdapter, nodeId: string, input: NodeAppendInput) {
   assertBody(input.body);
@@ -56,70 +47,6 @@ export function appendNodeBody(fs: FsAdapter, nodeId: string, input: NodeAppendI
   );
 }
 
-/** Read the complete selected section, including its heading and nested subsections. */
-export async function readNodeSection(
-  fs: FsAdapter,
-  nodeId: string,
-  heading: string,
-  options: { uncaptured?: boolean } = {},
-) {
-  const title = headingText(heading);
-  const current = await readNodeForEdit(fs, nodeId, options);
-  const section = selectSection(current.body, title);
-  return {
-    nodeId,
-    path: current.path,
-    heading: title,
-    depth: section.depth,
-    text: section.text,
-    sectionEtag: sectionEtag(nodeId, title, section.text),
-    ...(current.uncaptured ? { uncaptured: true as const } : {}),
-  };
-}
-
-/** Replace the exact section range; only that section's observed bytes are the CAS basis. */
-export function writeNodeSection(fs: FsAdapter, nodeId: string, input: NodeSectionWriteInput) {
-  const title = headingText(input.heading);
-  assertBody(input.body);
-  if (typeof input.baseEtag !== "string" || !input.baseEtag.trim())
-    throw new NodeWriteError("ETAG_REQUIRED", "node.write-section requires a section ETag");
-  return withTentMutation(
-    fs,
-    async () => {
-      const current = await readNodeForEdit(fs, nodeId);
-      const section = selectSection(current.body, title);
-      const currentEtag = sectionEtag(nodeId, title, section.text);
-      if (input.baseEtag !== currentEtag)
-        throw new NodeSectionError(
-          "SECTION_ETAG_CONFLICT",
-          "Section ETag conflict; reread the section",
-          {
-            nodeId,
-            heading: title,
-            baseEtag: input.baseEtag,
-            currentSectionEtag: currentEtag,
-          },
-        );
-      let replacement = input.body;
-      const remainder = current.body.slice(section.end);
-      // The separator belongs to the replaced range; keep the following heading on its own block.
-      if (remainder && replacement && !/\r?\n[ \t]*\r?\n$/.test(replacement)) {
-        const eol = /\r?\n/.exec(current.raw)?.[0] ?? "\n";
-        replacement = normalizeTail(replacement) + eol + eol;
-      }
-      const body = await resolveChangedBody(
-        fs,
-        current.path,
-        current.raw,
-        current.body.slice(0, section.start) + replacement + remainder,
-        { start: section.start, end: section.start + replacement.length },
-      );
-      return saveBody(fs, current, body, "node.write-section", input.by);
-    },
-    { operation: "node.write-section" },
-  );
-}
-
 async function resolveChangedBody(
   fs: FsAdapter,
   nodePath: string,
@@ -152,10 +79,6 @@ async function saveBody(
     input,
     operation,
   );
-}
-
-function sectionEtag(nodeId: string, heading: string, text: string) {
-  return "section:" + contentEtag(JSON.stringify([nodeId, heading, text]));
 }
 
 function headingText(value: string): string {

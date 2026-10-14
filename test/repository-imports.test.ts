@@ -211,7 +211,7 @@ test("Python imports support src layout, relative modules, from-dot members and 
   assert.ok(result.edges.every((edge) => edge.from === "src/pkg/sub/main.py"));
 });
 
-test("directory graph uses SCC layers and no test-only reverse edges", () => {
+test("directory graph preserves SCC cycles and excludes test-only reverse edges", () => {
   const files = [
     source("src/cli/main.ts", "import '../core/a.js'"),
     source("src/core/a.ts", "import '../markdown/b.js'"),
@@ -226,12 +226,13 @@ test("directory graph uses SCC layers and no test-only reverse edges", () => {
   );
   assert.deepEqual(graph.entries, ["src/cli"]);
   assert.deepEqual(graph.cycles, [["src/core", "src/markdown"]]);
-  assert.deepEqual(graph.layers, [
-    { directory: "src/cli", layer: 0 },
-    { directory: "src/core", layer: 1 },
-    { directory: "src/markdown", layer: 1 },
-    { directory: "src/base", layer: 2 },
+  assert.deepEqual(graph.edges, [
+    { from: "src/cli", to: "src/core", imports: 1, files: ["src/cli/main.ts"] },
+    { from: "src/core", to: "src/markdown", imports: 1, files: ["src/core/a.ts"] },
+    { from: "src/markdown", to: "src/base", imports: 1, files: ["src/markdown/b.ts"] },
+    { from: "src/markdown", to: "src/core", imports: 1, files: ["src/markdown/b.ts"] },
   ]);
+  assert.ok(!Object.prototype.hasOwnProperty.call(graph, "layers"));
 });
 
 test("repository facts identify guidance, generated trees, flat code and test directories", () => {

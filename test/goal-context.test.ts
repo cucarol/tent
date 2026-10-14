@@ -93,8 +93,11 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
     assert.ok(first.context.includes(id), first.context);
   // The English CLI hint adds no CJK labels of its own; this fixture's names are ASCII.
   assert.doesNotMatch(first.context, /[\p{Script=Han}\u3000-\u303f\uff00-\uffef]/u);
-  assert.match(first.context, /^Context\nAncestor Scope node-scope /);
-  assert.match(first.context, /Ancestor Scope node-scope useful description/);
+  assert.match(first.context, /^Context\nAncestor Scope node-scope\n/);
+  assert.doesNotMatch(first.context, /useful description/);
+  assert.equal(context.find((item) => item.kind === "card")?.totalGoalCount, 1);
+  assert.equal(context.find((item) => item.kind === "card")?.goalCount, 0);
+  assert.match(first.context, /0\/1/);
   // Imported outputs have no retained goal basis, so context must expose review debt.
   assert.match(first.context, /stable\/behind/);
   assert.match(first.context, /received-no-output/);
@@ -131,13 +134,23 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
   const beforeCrowding = await node("node-goal", "--view", "summary");
   const headBeforeCrowding = await adapter.history.currentCommit();
   for (let i = 0; i < 30; i++)
-    await write(`Scope/Rule${i}`, `node-extra${i}`, "prompt", "large description", {
-      description: "超长描述".repeat(1000),
-    });
+    await write(
+      `Scope/${"LongRule".repeat(5)}${i}`,
+      `node-extra${i}`,
+      "prompt",
+      "large description",
+      {
+        description: "超长描述".repeat(1000),
+      },
+    );
   const uncaptured = await node("node-goal", "--view", "summary");
   assert.equal(uncaptured.context, beforeCrowding.context);
   assert.equal(await adapter.history.currentCommit(), headBeforeCrowding);
-  await git(system, "add", ...Array.from({ length: 30 }, (_, i) => `Scope/Rule${i}`));
+  await git(
+    system,
+    "add",
+    ...Array.from({ length: 30 }, (_, i) => `Scope/${"LongRule".repeat(5)}${i}`),
+  );
   await git(system, "commit", "-m", "retain crowded context fixture");
   const crowded = await node("node-goal", "--view", "summary");
   assert.ok(Buffer.byteLength(JSON.stringify({ context: crowded.context })) <= 1024);

@@ -122,7 +122,6 @@ function summarize(node: CatalogNode) {
       type: typeof data.type === "string" ? data.type : node.type,
       // The same tag set that `node tags` counts, so every counted tag can be filtered.
       tags: normalizeNodeTags(data.tags),
-      description: typeof data.description === "string" ? data.description : undefined,
     }),
     ...documentLifecycle(data),
   };

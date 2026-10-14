@@ -8,7 +8,6 @@ import {
   materialLocator,
   resolvedMaterialOccurrences,
 } from "./material.js";
-import { extractOutLinksDetailed } from "../markdown/links.js";
 import { markdownMaterialHeading } from "./material-section.js";
 import { repositoryFacts } from "./repository-facts.js";
 import type { RepositorySource } from "./repository-imports.js";
@@ -18,98 +17,29 @@ import {
   type MaterialCoverage,
 } from "./material-coverage.js";
 
-export const WORKSPACE_SCAN_COMMIT_LIMIT = 300;
-export const COCHANGE_BULK_FILE_LIMIT = 25;
-export const COCHANGE_HUB_RATIO = 0.2;
-
-export type ScanCommit = { commit: string; files: string[]; changedFiles: number };
 export type WorkspaceScanRepository = {
   head: string | null;
   trackedFiles: string[];
-  markdownFiles: string[];
-  commits: ScanCommit[];
   sources: { files: RepositorySource[]; errors: Array<{ file: string; reason: string }> };
 };
 export type ScanFileKind = (
   filename: string,
   heading?: string,
 ) => Promise<"file" | "directory" | undefined>;
-export type CochangeGroup = { files: string[]; count: number; commits: string[] };
 
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const directory = (file: string) => path.posix.dirname(file);
 const ordered = (items: Iterable<string>) => [...new Set(items)].sort(compare);
 
-export function workspaceScanCommitLimit(value: number = WORKSPACE_SCAN_COMMIT_LIMIT): number {
-  if (!Number.isSafeInteger(value) || value < 1)
-    throw new Error("--commits must be a positive safe integer");
-  return value;
-}
-
-function countDirectories(files: Iterable<string>, fileDirectory = directory) {
+function countDirectories(files: Iterable<string>) {
   const counts = new Map<string, number>();
   for (const file of files) {
-    const dir = fileDirectory(file);
+    const dir = directory(file);
     counts.set(dir, (counts.get(dir) ?? 0) + 1);
   }
   return [...counts]
     .map(([directory, count]) => ({ directory, count }))
     .sort((a, b) => b.count - a.count || compare(a.directory, b.directory));
-}
-
-/** Closed groups supported by a pair; shared commits describe every file in the group. */
-export function scanCochange(commits: ScanCommit[]) {
-  const eligible = commits.filter((commit) => commit.changedFiles <= COCHANGE_BULK_FILE_LIMIT);
-  const frequencies = new Map<string, number>();
-  for (const commit of eligible)
-    for (const file of new Set(commit.files))
-      frequencies.set(file, (frequencies.get(file) ?? 0) + 1);
-  const hubCommitThreshold = Math.max(3, Math.ceil(eligible.length * COCHANGE_HUB_RATIO));
-  const hubs = [...frequencies]
-    .filter(([, count]) => count >= hubCommitThreshold)
-    .map(([file, count]) => ({ file, count }))
-    .sort((a, b) => b.count - a.count || compare(a.file, b.file));
-  const hubFiles = new Set(hubs.map((hub) => hub.file));
-  const sets = eligible.map(
-    (commit) => new Set(ordered(commit.files).filter((file) => !hubFiles.has(file))),
-  );
-  const supports = new Map<string, number[]>();
-  sets.forEach((set, index) => {
-    const files = [...set];
-    for (let left = 0; left < files.length; left++)
-      for (let right = left + 1; right < files.length; right++) {
-        const key = JSON.stringify([files[left], files[right]]);
-        const support = supports.get(key) ?? [];
-        support.push(index);
-        supports.set(key, support);
-      }
-  });
-  const groups = new Map<string, CochangeGroup>();
-  for (const support of supports.values()) {
-    if (support.length < 2) continue;
-    const files = [...sets[support[0]!]!].filter((file) =>
-      support.every((index) => sets[index]!.has(file)),
-    );
-    groups.set(JSON.stringify(files), {
-      files,
-      count: support.length,
-      commits: ordered(support.map((index) => eligible[index]!.commit)),
-    });
-  }
-  return {
-    bulkFileLimit: COCHANGE_BULK_FILE_LIMIT,
-    hubCommitThreshold,
-    excludedCommits: commits
-      .filter((commit) => commit.changedFiles > COCHANGE_BULK_FILE_LIMIT)
-      .map((commit) => ({ commit: commit.commit, changedFiles: commit.changedFiles })),
-    groups: [...groups.values()].sort(
-      (a, b) =>
-        b.count - a.count ||
-        b.files.length - a.files.length ||
-        compare(JSON.stringify(a.files), JSON.stringify(b.files)),
-    ),
-    hubs,
-  };
 }
 
 /** Query only: no history capture, material observation cache, repair or model execution. */
@@ -118,14 +48,10 @@ export async function scanWorkspace(
   workspaceRoot: string,
   repository: WorkspaceScanRepository,
   fileKind: ScanFileKind,
-  commitLimit = WORKSPACE_SCAN_COMMIT_LIMIT,
 ) {
-  workspaceScanCommitLimit(commitLimit);
   const tent = await loadTent(readOnlyFs(fs));
   const trackedFiles = ordered(repository.trackedFiles);
-  const markdownFiles = ordered(repository.markdownFiles);
   const covered = new Set<string>();
-  const pointed = new Set<string>();
   const inspectionErrors: Array<{ node: string; resource?: string; reason: string }> =
     repository.sources.errors.map((error) => ({ node: error.file, reason: error.reason }));
   const kinds = new Map<string, Promise<"file" | "directory" | undefined>>();
@@ -146,8 +72,7 @@ export async function scanWorkspace(
         throw new Error(
           "Directory or prefix material requires a local Workspace address, one trailing * for a prefix, and no query or fragment",
         );
-      if (coverage.kind === "prefix")
-        return { relative, present: false, kind: undefined, coverage };
+      if (coverage.kind === "prefix") return { relative, coverage };
     }
     const heading = markdownMaterialHeading(locator);
     const key = JSON.stringify([filename, heading]);
@@ -161,17 +86,12 @@ export async function scanWorkspace(
       throw new Error("Directory material points at a regular file");
     if (!isDirectoryMaterial(locator) && observedKind === "directory")
       throw new Error("Directory materials require a trailing /");
-    return {
-      relative,
-      present: observedKind !== undefined,
-      kind: isDirectoryMaterial(locator) ? ("directory" as const) : observedKind,
-      coverage,
-    };
+    return { relative, coverage };
   }
   function mark(
     files: string[],
     destinations: Set<string>,
-    resolved: { relative: string; kind?: "file" | "directory"; coverage?: MaterialCoverage },
+    resolved: { relative: string; coverage?: MaterialCoverage },
   ) {
     const target =
       process.platform === "win32" ? resolved.relative.toLowerCase() : resolved.relative;
@@ -204,22 +124,7 @@ export async function scanWorkspace(
       }
       try {
         const resolved = await target(occurrence.resource, owner, occurrence.field === "sources");
-        if (resolved) {
-          mark(trackedFiles, covered, resolved);
-          if (resolved.present) mark(markdownFiles, pointed, resolved);
-          if (resolved.coverage?.kind === "prefix")
-            for (const file of markdownFiles) {
-              if (!materialCoverageContains(resolved.coverage, file)) continue;
-              const filename = path.resolve(workspaceRoot, file);
-              const key = JSON.stringify([filename, undefined]);
-              let kind = kinds.get(key);
-              if (!kind) {
-                kind = fileKind(filename);
-                kinds.set(key, kind);
-              }
-              if ((await kind) === "file") pointed.add(file);
-            }
-        }
+        if (resolved) mark(trackedFiles, covered, resolved);
       } catch (error) {
         inspectionErrors.push({
           node: node.path,
@@ -228,51 +133,16 @@ export async function scanWorkspace(
         });
       }
     }
-    const destinations = new Set(extractOutLinksDetailed(node.body).map((link) => link.raw));
-    for (const destination of ordered(destinations)) {
-      try {
-        const resolved = await target(destination, owner);
-        if (resolved?.kind === "file") mark(markdownFiles, pointed, resolved);
-      } catch {
-        // Broken links do not point at a local document; workspace check explains them.
-      }
-    }
   }
   const uncoveredFiles = trackedFiles.filter((file) => !covered.has(file));
-  const hotspotCounts = new Map<string, number>();
-  for (const commit of repository.commits)
-    for (const dir of new Set(commit.files.map(directory)))
-      hotspotCounts.set(dir, (hotspotCounts.get(dir) ?? 0) + 1);
-  const recentChanges = new Map<string, number>();
-  const tracked = new Set(trackedFiles);
-  for (const file of markdownFiles) if (!tracked.has(file)) recentChanges.set(file, -1);
-  repository.commits.forEach((commit, index) => {
-    for (const file of commit.files) if (!recentChanges.has(file)) recentChanges.set(file, index);
-  });
-  const unpointedDocuments = markdownFiles
-    .filter((file) => !pointed.has(file))
-    .sort(
-      (a, b) =>
-        (recentChanges.get(a) ?? Infinity) - (recentChanges.get(b) ?? Infinity) || compare(a, b),
-    );
   return {
     head: repository.head,
-    commitLimit,
-    commitsScanned: repository.commits.length,
     coverage: {
       trackedFiles: trackedFiles.length,
       coveredFiles: covered.size,
       uncoveredFiles,
       directories: countDirectories(uncoveredFiles),
     },
-    cochange: scanCochange(repository.commits),
-    hotspots: [...hotspotCounts]
-      .map(([directory, count]) => ({ directory, count }))
-      .sort((a, b) => b.count - a.count || compare(a.directory, b.directory)),
-    unpointedDocuments,
-    unpointedDirectories: countDirectories(unpointedDocuments, (file) =>
-      file.includes("/") ? file.split("/")[0]! : ".",
-    ),
     inspectionErrors,
     ...repositoryFacts(repository.sources.files),
   };
@@ -297,36 +167,12 @@ export function formatWorkspaceScan(result: WorkspaceScanResult): string {
     ...result.coverage.directories
       .slice(0, 3)
       .map((item) => `uncovered ${item.count} ${shown(item.directory)}`),
-    `cochange-groups ${result.cochange.groups.length}; hubs ${result.cochange.hubs.length}`,
-    ...result.cochange.groups
-      .slice(0, 3)
-      .map((group) => `cochange ${group.count} ${sample(group.files.map(shown), 3)}`),
-    `hotspots ${
-      sample(
-        result.hotspots.map((item) => `${shown(item.directory)} (${item.count})`),
-        3,
-      ) || "none"
-    }`,
     `dependencies depth=2; ${graph.edges.length} edges; ${result.imports.issues.length} unresolved/config issues`,
     `entries ${sample(graph.entries.map(shown), 5) || "none"}`,
     `cycles ${
       sample(
         graph.cycles.map((cycle) => cycle.map(shown).join(" <-> ")),
         2,
-      ) || "none"
-    }`,
-    `layers ${
-      sample(
-        [...new Set(graph.layers.map((item) => item.layer))].map(
-          (layer) =>
-            `${layer}: ${sample(
-              graph.layers
-                .filter((item) => item.layer === layer)
-                .map((item) => shown(item.directory)),
-              4,
-            )}`,
-        ),
-        4,
       ) || "none"
     }`,
     `guidance ${sample(result.guidanceFiles.map(shown), 5) || "none"}`,
@@ -347,8 +193,6 @@ export function formatWorkspaceScan(result: WorkspaceScanResult): string {
           ) || "no repeated prefixes"
         }`,
     ),
-    `unpointed-total ${result.unpointedDocuments.length}`,
-    ...result.unpointedDocuments.slice(0, 2).map((file) => `unpointed ${shown(file)}`),
     "all-facts tent workspace scan --json",
   ];
   return lines.join("\n");

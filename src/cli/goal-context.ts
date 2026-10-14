@@ -25,10 +25,11 @@ export async function goalContextText(fs: FsAdapter, nodeId: string): Promise<st
   const items = await readGoalContext(fs, nodeId);
   if (!items.length) return "Context: no related items";
   const selected: GoalContextItem[] = [];
-  const render = (entries: GoalContextItem[], length = 12, descriptionLength = 8) => {
+  const render = (entries: GoalContextItem[], length = 12) => {
     const lines = entries.map((item) => {
-      const description = clip(item.description, descriptionLength);
-      return `${labels[item.kind]}${item.kind === "child" ? `(${clip(item.type ?? "", 12)})` : ""}${item.relationKinds ? `(${item.relationKinds.join("/")})` : ""} ${clip(item.name, length)} ${item.id}${description ? ` ${description}` : ""}${item.state ? ` [${item.state}${item.progress !== undefined ? `/${item.progress ?? "—"}` : ""}]` : ""}${item.receiver ? ` ${clip(item.receiver, 12)}` : ""}`;
+      const counts =
+        item.goalCount === undefined ? "" : ` ${item.goalCount}/${item.totalGoalCount}`;
+      return `${labels[item.kind]}${item.kind === "child" ? `(${clip(item.type ?? "", 12)})` : ""}${item.relationKinds ? `(${item.relationKinds.join("/")})` : ""} ${clip(item.name, length)} ${item.id}${counts}${item.state ? ` [${item.state}${item.progress !== undefined ? `/${item.progress ?? "—"}` : ""}]` : ""}${item.receiver ? ` ${clip(item.receiver, 12)}` : ""}`;
     });
     const omitted = Object.keys(labels).flatMap((kind) => {
       const count =
@@ -68,14 +69,8 @@ export async function goalContextText(fs: FsAdapter, nodeId: string): Promise<st
   for (const item of selected)
     if (item.sync && sync.has(item.id)) item.state = `${item.state}/${sync.get(item.id)}`;
   selected.sort((a, b) => items.indexOf(a) - items.indexOf(b));
-  for (const [nameLength, descriptionLength] of [
-    [64, 48],
-    [32, 24],
-    [24, 16],
-    [16, 8],
-    [12, 8],
-  ]) {
-    const text = render(selected, nameLength, descriptionLength);
+  for (const nameLength of [64, 32, 24, 16, 12]) {
+    const text = render(selected, nameLength);
     if (bytes(text) <= budget) return text;
   }
   return render(selected);

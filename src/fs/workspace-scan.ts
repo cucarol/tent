@@ -1,15 +1,12 @@
 import { execFile } from "node:child_process";
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  workspaceScanCommitLimit,
-  type ScanCommit,
-  type WorkspaceScanRepository,
-} from "../core/workspace-scan.js";
+import type { WorkspaceScanRepository } from "../core/workspace-scan.js";
+import { MODULE_MAP_THRESHOLDS, type ModuleMapCommit } from "../core/module-map.js";
+import type { WorkspaceModuleMapRepository } from "../core/workspace-module-map.js";
 import { selectSection } from "../core/markdown-section.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { readRepositorySources } from "./repository-sources.js";
-import { MODULE_MAP_THRESHOLDS } from "../core/module-map.js";
 
 async function git(root: string, args: string[]): Promise<string> {
   const env = Object.fromEntries(
@@ -39,9 +36,9 @@ async function git(root: string, args: string[]): Promise<string> {
 }
 
 /** NUL-prefixed commit headers are distinct from even SHA-shaped or newline filenames. */
-export function parseScanGitLog(raw: string): ScanCommit[] {
+export function parseModuleMapGitLog(raw: string): ModuleMapCommit[] {
   const fields = raw.split("\0");
-  const commits: ScanCommit[] = [];
+  const commits: ModuleMapCommit[] = [];
   let index = 0;
   while (index < fields.length) {
     if (fields[index] !== "" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(fields[index + 1] ?? "")) {
@@ -59,12 +56,7 @@ export function parseScanGitLog(raw: string): ScanCommit[] {
 }
 
 /** Git queries never refresh the index or create lock, cache, hook or model state. */
-async function readRepository(
-  workspaceRoot: string,
-  commitLimit?: number,
-  firstParent = false,
-): Promise<WorkspaceScanRepository> {
-  const limit = workspaceScanCommitLimit(commitLimit);
+async function readRepositoryFiles(workspaceRoot: string) {
   const root = (await git(workspaceRoot, ["rev-parse", "--show-toplevel"])).trim();
   const prefix = path.relative(root, workspaceRoot).split(path.sep).join("/");
   const workspacePrefix = process.platform === "win32" ? prefix.toLowerCase() : prefix;
@@ -88,14 +80,33 @@ async function readRepository(
     },
   );
   const head = heads.trim() || null;
-  const [tracked, others, log] = await Promise.all([
-    git(root, ["ls-files", "--cached", "-z"]),
-    git(root, ["ls-files", "--others", "--exclude-standard", "-z"]),
+  const trackedFiles = list(await git(root, ["ls-files", "--cached", "-z"]));
+  return { root, head, trackedFiles, workspaceFile };
+}
+
+export async function readWorkspaceScanRepository(
+  workspaceRoot: string,
+): Promise<WorkspaceScanRepository> {
+  const { head, trackedFiles } = await readRepositoryFiles(workspaceRoot);
+  return {
+    head,
+    trackedFiles,
+    sources: await readRepositorySources(workspaceRoot, trackedFiles),
+  };
+}
+
+/** Module history follows the mainline rather than counting merged branches twice. */
+export async function readModuleMapRepository(
+  workspaceRoot: string,
+): Promise<WorkspaceModuleMapRepository> {
+  const { root, head, trackedFiles, workspaceFile } = await readRepositoryFiles(workspaceRoot);
+  const [sources, log] = await Promise.all([
+    readRepositorySources(workspaceRoot, trackedFiles),
     head
       ? git(root, [
           "log",
-          ...(firstParent ? ["--first-parent"] : []),
-          `-${limit}`,
+          "--first-parent",
+          `-${MODULE_MAP_THRESHOLDS.historyCommitLimit}`,
           "--format=%x00%H",
           "-z",
           "--name-only",
@@ -110,17 +121,11 @@ async function readRepository(
         ])
       : Promise.resolve(""),
   ]);
-  const trackedFiles = list(tracked);
   return {
     head,
     trackedFiles,
-    sources: await readRepositorySources(workspaceRoot, trackedFiles),
-    markdownFiles: [...new Set([...trackedFiles, ...list(others)])].filter(
-      (file) =>
-        /\.(md|markdown)$/i.test(file) &&
-        !(process.platform === "win32" ? file.toLowerCase() : file).startsWith(".tent/"),
-    ),
-    commits: parseScanGitLog(log).map((commit) => ({
+    sources,
+    commits: parseModuleMapGitLog(log).map((commit) => ({
       ...commit,
       files: commit.files.flatMap((file) => {
         const relative = workspaceFile(file);
@@ -128,15 +133,6 @@ async function readRepository(
       }),
     })),
   };
-}
-
-export function readWorkspaceScanRepository(workspaceRoot: string, commitLimit?: number) {
-  return readRepository(workspaceRoot, commitLimit);
-}
-
-/** Module history follows the mainline rather than counting merged branches twice. */
-export function readModuleMapRepository(workspaceRoot: string) {
-  return readRepository(workspaceRoot, MODULE_MAP_THRESHOLDS.historyCommitLimit, true);
 }
 
 export async function scanFileKind(

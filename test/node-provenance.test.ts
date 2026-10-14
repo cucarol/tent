@@ -12,7 +12,7 @@ import { readNodeForEdit, listNodes } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
 import { nodeWriteInputSchema } from "../src/core/node-write.js";
 import { writeNodesBatch } from "../src/core/node-write-batch.js";
-import { appendNodeBody, readNodeSection, writeNodeSection } from "../src/core/node-lightwrite.js";
+import { appendNodeBody } from "../src/core/node-lightwrite.js";
 import {
   confirmNodeSync,
   inspectNodeSync,
@@ -170,11 +170,9 @@ test("Core create and all body write forms set explicit actor; no-op and lifecyc
     by: "writer/2",
   });
   assert.equal((parseFrontmatter(appended.raw).data.generated as { by: string }).by, "writer/2");
-  const section = await readNodeSection(adapter, id, "Fact");
-  const replaced = await writeNodeSection(adapter, id, {
+  const replaced = await appendNodeBody(adapter, id, {
     heading: "Fact",
-    baseEtag: section.sectionEtag,
-    body: "## Fact\nupdated",
+    body: "updated",
     by: "writer/3",
   });
   assert.equal((parseFrontmatter(replaced.raw).data.generated as { by: string }).by, "writer/3");

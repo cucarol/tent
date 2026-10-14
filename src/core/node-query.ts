@@ -5,7 +5,6 @@ import {
   readerListSchema,
   readerReadSchema,
   readerRelationsSchema,
-  readerSearchSchema,
 } from "./context-reader.js";
 import { liveContextReader, selectedContextReader } from "./context-reader-factory.js";
 import * as z from "zod/v4";
@@ -190,29 +189,10 @@ export async function listNodeTags(
   };
 }
 
-export async function searchNodes(
-  fs: FsAdapter,
-  workspaceId: string,
-  input: unknown,
-  options: { uncaptured?: boolean } = {},
-) {
-  const request = readerSearchSchema.parse(input);
-  const reader = await liveContextReader(fs, { kind: "live", workspaceId });
-  const result = reader.search(request);
-  if (!options.uncaptured) return { workspaceId, ...result };
-  const changed = await uncapturedChecker(fs);
-  return {
-    workspaceId,
-    ...result,
-    items: result.items.map((item) => {
-      const document = reader.documentBytes(item.nodeId)!;
-      return {
-        ...item,
-        ...(changed(document.path, document.raw) ? { uncaptured: true as const } : {}),
-      };
-    }),
-  };
-}
+export {
+  searchNodeResources as searchNodes,
+  nodeResourceSearchSchema,
+} from "./node-resource-search.js";
 
 export async function relatedNodes(fs: FsAdapter, workspaceId: string, input: unknown) {
   const request = readerRelationsSchema.parse(input);

@@ -1,10 +1,7 @@
 import {
   materialFields,
   resolvedMaterialOccurrences,
-  materialLocator,
-  materialIdentity,
   isDirectoryMaterial,
-  resourceSchema,
   type MaterialFields,
 } from "./material.js";
 import * as z from "zod/v4";
@@ -56,16 +53,6 @@ export const readerRangeSchema = z.strictObject({
   end: z.number().int().nonnegative(),
 });
 export type ReaderRange = z.infer<typeof readerRangeSchema>;
-export const readerSearchSchema = z
-  .strictObject({
-    query: z.string().trim().min(1).optional(),
-    resource: resourceSchema.optional(),
-    includeArchived: z.boolean().optional(),
-  })
-  .refine(
-    (p) => [p.query, p.resource].filter((value) => value !== undefined).length === 1,
-    "Supply exactly one query or resource",
-  );
 export const readerReadSchema = z
   .strictObject({
     nodeId: z.string().min(1),
@@ -93,7 +80,6 @@ export const readerListSchema = z.strictObject({
   parentNodeId: z.string().nullable().optional(),
   includeArchived: z.boolean().optional(),
 });
-export type ReaderSearch = z.infer<typeof readerSearchSchema>;
 export type ReaderRead = z.infer<typeof readerReadSchema>;
 export type ReaderRelations = z.infer<typeof readerRelationsSchema>;
 
@@ -125,7 +111,6 @@ export function nodeSummary(d: {
   name: string;
   type?: string;
   tags: string[];
-  description?: string;
 }) {
   return {
     nodeId: d.nodeId,
@@ -133,7 +118,6 @@ export function nodeSummary(d: {
     name: d.name,
     type: d.type,
     tags: d.tags,
-    description: d.description,
   };
 }
 
@@ -145,68 +129,12 @@ export function readerResult<T>(
 ) {
   return { source, revision, scope: input, items };
 }
-type Term = { value: string; start: number; end: number; weight: number };
-function terms(text: string): Term[] {
-  const result: Term[] = [];
-  for (const m of text.matchAll(/\p{Script=Han}+|[\p{L}\p{N}_$]+/gu)) {
-    const value = m[0];
-    const start = m.index;
-    const add = (part: string, at: number, weight: number) =>
-      result.push({
-        value: part.normalize("NFKC").toLowerCase(),
-        start: at,
-        end: at + part.length,
-        weight,
-      });
-    if (/^\p{Script=Han}+$/u.test(value)) {
-      add(value, start, 3);
-      const chars = [...value];
-      let at = start;
-      chars.forEach((char, i) => {
-        add(char, at, 0.15);
-        if (chars[i + 1]) add(char + chars[i + 1], at, 1);
-        at += char.length;
-      });
-    } else {
-      add(value, start, 2);
-      for (const part of value.matchAll(/[A-Z]+(?=[A-Z][a-z]|$)|[A-Z]?[a-z]+|\d+/g))
-        if (part[0] !== value) add(part[0], start + part.index, 1);
-    }
-  }
-  return result;
-}
-function snippet(text: string, matches: Term[], query: Map<string, number>) {
-  // 两组重叠的定长窗口，每个命中只参与两次评分，避免重复词造成平方级扫描。
-  const windows = new Map<number, Set<string>>();
-  for (const term of matches) {
-    const bucket = Math.floor(term.start / 96) * 96;
-    for (const at of [bucket - 96, bucket]) {
-      if (at < 0 || term.end > at + 192) continue;
-      const covered = windows.get(at) ?? new Set<string>();
-      covered.add(term.value);
-      windows.set(at, covered);
-    }
-  }
-  let start = matches[0]!.start,
-    score = 0;
-  for (const [at, covered] of windows) {
-    const candidate = [...covered].reduce((sum, term) => sum + query.get(term)!, 0);
-    if (candidate > score || (candidate === score && at < start)) {
-      start = at;
-      score = candidate;
-    }
-  }
-  start = boundary(text, start);
-  const end = boundary(text, Math.min(text.length, start + 192));
-  return { score, range: range(start, end), text: text.slice(start, end) };
-}
 type MaterializedDocument = ReaderDocument & {
   lifecycle: ReturnType<typeof documentLifecycle>;
   body: string;
   materials?: MaterialFields;
   materialOccurrences: ReturnType<typeof resolvedMaterialOccurrences>;
   tags: string[];
-  description?: string;
 };
 
 /** Query a materialized observation; CLI pagination never changes this data. */
@@ -245,7 +173,6 @@ export class ContextReader {
         tags: Array.isArray(data.tags)
           ? data.tags.filter((t): t is string => typeof t === "string")
           : [],
-        description: typeof data.description === "string" ? data.description : undefined,
       };
     });
     this.byId = new Map(this.documents.filter((d) => !d.invalid).map((d) => [d.nodeId, d]));
@@ -328,99 +255,6 @@ export class ContextReader {
       partial: requested.start !== 0 || requested.end !== text.length,
       ...(view === "body" && d.materials ? structuredClone(d.materials) : {}),
     };
-  }
-  search(input: ReaderSearch) {
-    const p = readerSearchSchema.parse(input);
-    // A search has no declaring Node: explicit relative addresses start at .tent.
-    const material =
-      p.resource === undefined
-        ? undefined
-        : materialIdentity(materialLocator(p.resource, ".search.md", true));
-    if (p.resource !== undefined && material === undefined)
-      throw new Error("Exact material search requires an explicit path or URI");
-    const query = new Map(terms(p.query ?? "").map((t) => [t.value, t.weight]));
-    const hits: Array<{
-      doc: MaterializedDocument;
-      score: number;
-      match: Record<string, unknown>;
-    }> = [];
-    for (const d of this.documents) {
-      if (d.invalid || ((d.archived || d.lifecycle.status === null) && !p.includeArchived))
-        continue;
-      if (material !== undefined) {
-        const occurrence = d.materialOccurrences.find(
-          (item) => item.locator && materialIdentity(item.locator) === material,
-        );
-        if (occurrence)
-          hits.push({
-            doc: d,
-            score: 1,
-            match: {
-              field: occurrence.field,
-              index: occurrence.index,
-              relation: "same-resource",
-              resource: occurrence.resource,
-              read: { nodeId: d.nodeId, view: "raw", expectedEtag: d.etag },
-            },
-          });
-        continue;
-      }
-      const materialText: Array<{ field: string; value: string; index?: number; part?: string }> = [
-        ...(d.materials?.resource === undefined
-          ? []
-          : [{ field: "resource", value: d.materials.resource }]),
-        ...(d.materials?.sources ?? []).flatMap((source, index) => [
-          { field: "sources", index, part: "resource", value: source.resource },
-          ...(typeof source.title === "string"
-            ? [{ field: "sources", index, part: "title", value: source.title }]
-            : []),
-        ]),
-      ];
-      const fields = [
-        { field: "body", value: d.body },
-        { field: "name", value: d.name },
-        { field: "description", value: d.description ?? "" },
-        { field: "path", value: d.path },
-        { field: "type", value: d.type ?? "" },
-        { field: "tags", value: d.tags.join(" ") },
-        ...materialText,
-      ];
-      let best: { score: number; match: Record<string, unknown> } | undefined;
-      const covered = new Map<string, number>();
-      for (const f of fields) {
-        const matches = terms(f.value).filter((t) => query.has(t.value));
-        if (!matches.length) continue;
-        for (const t of matches) covered.set(t.value, query.get(t.value)!);
-        const excerpt = snippet(f.value, matches, query);
-        const score =
-          f.field === "body"
-            ? excerpt.score
-            : [...new Set(matches.map((t) => t.value))].reduce((sum, t) => sum + query.get(t)!, 0);
-        const match =
-          f.field === "body"
-            ? { field: f.field, range: excerpt.range, text: excerpt.text }
-            : {
-                field: f.field,
-                ...("index" in f ? { index: f.index, part: f.part } : {}),
-                value: f.value,
-              };
-        if (!best || score > best.score) best = { score, match };
-      }
-      if (best)
-        hits.push({
-          doc: d,
-          score: [...covered.values()].reduce((a, b) => a + b, 0),
-          match: best.match,
-        });
-    }
-    hits.sort(
-      (a, b) =>
-        b.score - a.score || compare(a.doc.path, b.doc.path) || compare(a.doc.nodeId, b.doc.nodeId),
-    );
-    return this.result(
-      { query: p.query, resource: p.resource, includeArchived: p.includeArchived ?? false },
-      hits.map((h) => ({ ...this.summary(h.doc), etag: h.doc.etag, match: h.match })),
-    );
   }
   list(input: z.infer<typeof readerListSchema> = {}) {
     const p = readerListSchema.parse(input);

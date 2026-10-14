@@ -4,17 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
-import {
-  scanCochange,
-  scanWorkspace,
-  formatWorkspaceScan,
-  type ScanCommit,
-} from "../src/core/workspace-scan.js";
-import {
-  readWorkspaceScanRepository,
-  scanFileKind,
-  parseScanGitLog,
-} from "../src/fs/workspace-scan.js";
+import { scanWorkspace, formatWorkspaceScan } from "../src/core/workspace-scan.js";
+import { readWorkspaceScanRepository, scanFileKind } from "../src/fs/workspace-scan.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
@@ -57,63 +48,30 @@ async function snapshot(root: string, prefix = ""): Promise<Record<string, strin
   return files;
 }
 
-function commit(id: string, files: string[], changedFiles = files.length): ScanCommit {
-  return { commit: id, files, changedFiles };
-}
-
-test("cochange closes shared groups, excludes hubs/bulk, retains stronger subsets and stable ties", () => {
-  const commits = [
-    commit("03", ["a", "b", "c", "hub"]),
-    commit("02", ["c", "b", "a", "hub"]),
-    commit("01", ["a", "b", "hub"]),
-    commit("d2", ["d", "e", "hub"]),
-    commit("d1", ["e", "d", "hub"]),
-    ...Array.from({ length: 15 }, (_, i) => commit(`single-${i}`, [`single-${i}`])),
-    commit("bulk", ["a", "b", "c", "d", "e", "hub"], 26),
-  ];
-  const result = scanCochange(commits);
-  assert.equal(result.hubCommitThreshold, 4);
-  assert.deepEqual(result.hubs, [{ file: "hub", count: 5 }]);
-  assert.deepEqual(result.excludedCommits, [{ commit: "bulk", changedFiles: 26 }]);
-  assert.deepEqual(result.groups, [
-    { files: ["a", "b"], count: 3, commits: ["01", "02", "03"] },
-    { files: ["a", "b", "c"], count: 2, commits: ["02", "03"] },
-    { files: ["d", "e"], count: 2, commits: ["d1", "d2"] },
-  ]);
-  assert.deepEqual(
-    scanCochange(commits.map((c) => ({ ...c, files: [...c.files].reverse() }))),
-    result,
-  );
-  assert.equal(scanCochange([commit("once", ["x", "y"])]).groups.length, 0);
-  assert.equal(scanCochange([commit("exact-limit", ["x"], 25)]).excludedCommits.length, 0);
-  const many = scanCochange(
-    Array.from({ length: 24 }, (_, index) =>
-      commit(String(index), [
-        `pair${Math.floor(index / 2)}/a.ts`,
-        `pair${Math.floor(index / 2)}/b.ts`,
-      ]),
-    ),
-  );
-  assert.equal(many.groups.length, 12);
-  const resultText = formatWorkspaceScan({
+test("scan text bounds retained fact groups and escapes path control characters", () => {
+  const report = {
     head: null,
-    commitLimit: 300,
-    commitsScanned: 24,
-    coverage: { trackedFiles: 0, coveredFiles: 0, uncoveredFiles: [], directories: [] },
-    cochange: many,
-    hotspots: [],
-    unpointedDocuments: ["docs/line\nbreak.md", "docs/paragraph\u2029.md"],
-    unpointedDirectories: [{ directory: "docs", count: 2 }],
+    coverage: {
+      trackedFiles: 8,
+      coveredFiles: 0,
+      uncoveredFiles: [],
+      directories: Array.from({ length: 8 }, (_, i) => ({ directory: `dir${i}`, count: 1 })),
+    },
     inspectionErrors: [],
-    ...repositoryFacts([]),
-  });
-  assert.equal(resultText.split("\n").filter((line) => line.startsWith("cochange ")).length, 3);
-  assert.equal(resultText.split("\n").filter((line) => line.startsWith("unpointed ")).length, 2);
-  assert.match(resultText, /line\\nbreak\.md/);
-  assert.match(resultText, /paragraph\\u2029\.md/);
+    ...repositoryFacts([
+      { path: "a\nbreak/AGENTS.md" },
+      { path: "b\u2029/CONTRIBUTING.md" },
+      ...Array.from({ length: 8 }, (_, i) => ({ path: `guide${i}/AGENTS.md` })),
+    ]),
+  };
+  const text = formatWorkspaceScan(report);
+  assert.equal(text.split("\n").filter((line) => line.startsWith("uncovered ")).length, 3);
+  assert.match(text, /a\\nbreak/);
+  assert.match(text, /b\\u2029/);
+  assert.match(text, /guidance .*; \+5 more/);
 });
 
-test("scan separates material coverage from document pointers and respects directory boundaries", async (t) => {
+test("scan uses active material coverage, excludes body links and respects directory boundaries", async (t) => {
   const { root, adapter, write, node } = await fixture(t);
   for (const file of [
     "src/core/a.ts",
@@ -163,9 +121,6 @@ test("scan separates material coverage from document pointers and respects direc
   await write(".gitignore", ".tent/\nignored.md\n");
   const repository = await readWorkspaceScanRepository(root);
   repository.trackedFiles.push("gone/x.ts");
-  repository.commits.push(
-    commit("bulk", ["src/core/a.ts", "src/core/nested/b.ts", "docs/no.md"], 26),
-  );
   const before = await snapshot(root);
   const result = await scanWorkspace(adapter, root, repository, scanFileKind);
   assert.deepEqual(result.inspectionErrors, []);
@@ -174,16 +129,11 @@ test("scan separates material coverage from document pointers and respects direc
   assert.ok(result.coverage.uncoveredFiles.includes("src/core-other/c.ts"));
   assert.ok(result.coverage.uncoveredFiles.includes("docs/body.md"));
   assert.ok(!result.coverage.uncoveredFiles.includes("gone/x.ts"));
-  assert.deepEqual(result.unpointedDocuments, [
-    "draft.md",
-    "docs/gone.md",
-    "docs/no.md",
-    "docs/quoted.md",
-    "guide/README.markdown",
-  ]);
-  assert.ok(!repository.markdownFiles.some((file) => file.startsWith(".tent/")));
-  assert.ok(result.hotspots.some((item) => item.directory === "docs" && item.count === 2));
-  assert.ok(result.cochange.excludedCommits.some((item) => item.commit === "bulk"));
+  assert.ok(result.coverage.uncoveredFiles.includes("docs/ref.md"));
+  assert.ok(result.coverage.uncoveredFiles.includes("docs/quoted.md"));
+  assert.ok(result.coverage.uncoveredFiles.includes("docs/no.md"));
+  assert.ok(!repository.trackedFiles.includes("draft.md"));
+  assert.ok(!repository.trackedFiles.includes("ignored.md"));
   assert.deepEqual(await snapshot(root), before);
   assert.equal(
     JSON.stringify(await scanWorkspace(adapter, root, repository, scanFileKind)),
@@ -212,7 +162,6 @@ test("scan prefix coverage uses shared membership, including nested suffixes, wi
   assert.deepEqual(report.inspectionErrors, []);
   assert.equal(report.coverage.coveredFiles, 3);
   assert.deepEqual(report.coverage.uncoveredFiles, ["src/cardinal.ts"]);
-  assert.deepEqual(report.unpointedDocuments, []);
   assert.deepEqual(await snapshot(root), before);
 });
 
@@ -235,32 +184,32 @@ test("CLI scan summarizes facts without changing Git/Tent bytes and limits text 
   const lines = first.stdout.trimEnd().split("\n");
   assert.ok(lines.length <= 24);
   assert.equal(lines.filter((line) => line.startsWith("uncovered ")).length, 3);
-  assert.match(first.stdout, /hotspots dir01 \(2\)/);
-  assert.match(first.stdout, /unpointed new.markdown/);
-  assert.match(first.stdout, /unpointed-total 28\n/);
   assert.match(first.stdout, /all-facts tent workspace scan --json\n$/);
-  assert.equal(lines.filter((line) => line.startsWith("unpointed ")).length, 2);
   const json = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
   assert.equal(json.exitCode, 0, json.stderr);
   const report = JSON.parse(json.stdout);
   assert.equal(report.coverage.directories.length, 28);
-  assert.equal(report.hotspots.length, 29);
-  assert.equal(report.unpointedDocuments.length, 28);
-  assert.deepEqual(report.unpointedDocuments.slice(0, 3), [
-    "new.markdown",
-    "dir01/doc.md",
-    "dir02/doc.md",
+  assert.ok(!report.coverage.uncoveredFiles.includes("new.markdown"));
+  assert.deepEqual(Object.keys(report).sort(), [
+    "coverage",
+    "dependencies",
+    "flatDirectories",
+    "generatedDirectories",
+    "guidanceFiles",
+    "head",
+    "imports",
+    "inspectionErrors",
   ]);
-  assert.equal(first.stdout, formatWorkspaceScan(report) + "\n");
-  const limited = JSON.parse(
-    (await runWorkspaceCommand("scan", ["--commits", "1", "--json"], { workspace: root })).stdout,
+  assert.ok(
+    report.dependencies.every(
+      (graph: object) => !Object.prototype.hasOwnProperty.call(graph, "layers"),
+    ),
   );
-  assert.equal(limited.commitsScanned, 1);
-  assert.deepEqual(limited.hotspots, [{ directory: "dir01", count: 1 }]);
+  assert.equal(first.stdout, formatWorkspaceScan(report) + "\n");
   assert.deepEqual(await snapshot(root), before);
 });
 
-test("document pointers are direct, existing section links and exclude deprecated Nodes", async (t) => {
+test("material coverage preserves section addresses independently of body links and deprecated Nodes", async (t) => {
   const { root, adapter, write, node } = await fixture(t);
   for (const file of [
     "README.md",
@@ -293,14 +242,18 @@ test("document pointers are direct, existing section links and exclude deprecate
     scanFileKind,
   );
   assert.deepEqual(result.inspectionErrors, []);
-  assert.deepEqual(result.unpointedDocuments, [
+  assert.equal(result.coverage.coveredFiles, 2);
+  assert.deepEqual(result.coverage.uncoveredFiles, [
+    ".gitignore",
     "docs/ambiguous.md",
     "docs/broken.md",
     "docs/deprecated.md",
-    "docs/material.md",
+    "docs/direct.md",
     "docs/transitive.md",
   ]);
-  assert.deepEqual(result.unpointedDirectories, [{ directory: "docs", count: 5 }]);
+  assert.equal(await scanFileKind(path.join(root, "docs/direct.md"), "Part"), "file");
+  assert.equal(await scanFileKind(path.join(root, "docs/broken.md"), "Missing"), undefined);
+  assert.equal(await scanFileKind(path.join(root, "docs/ambiguous.md"), "Part"), undefined);
   assert.deepEqual(await snapshot(root), before);
 });
 
@@ -372,17 +325,17 @@ test("scan never executes a configured Git clean filter for uncommitted Markdown
     await readWorkspaceScanRepository(root),
     scanFileKind,
   );
-  assert.deepEqual(result.unpointedDocuments, ["doc.md"]);
+  assert.deepEqual(result.coverage.uncoveredFiles, [".gitattributes", ".gitignore", "doc.md"]);
   assert.deepEqual(await snapshot(root), before);
 });
 
-test("scan supports unborn Git, nested workspaces, spaces and newline-safe log parsing", async (t) => {
+test("scan supports unborn Git and nested workspaces with tracked filenames", async (t) => {
   const { root, write } = await fixture(t);
   await write("new.md");
   const unborn = await readWorkspaceScanRepository(root);
   assert.equal(unborn.head, null);
-  assert.deepEqual(unborn.commits, []);
-  assert.ok(unborn.markdownFiles.includes("new.md"));
+  assert.deepEqual(unborn.trackedFiles, []);
+  assert.ok(!Object.prototype.hasOwnProperty.call(unborn, "commits"));
   await write("nested/source file.md");
   await git(root, "add", ".");
   await git(root, "commit", "-m", "source");
@@ -390,16 +343,12 @@ test("scan supports unborn Git, nested workspaces, spaces and newline-safe log p
   await git(root, "config", "log.showSignature", "true");
   const nested = await readWorkspaceScanRepository(path.join(root, "nested"));
   assert.deepEqual(nested.trackedFiles, ["source file.md"]);
-  assert.deepEqual(nested.commits[0]!.files, ["source file.md"]);
-  assert.equal(nested.commits[0]!.changedFiles, 3);
+  assert.deepEqual(
+    nested.sources.files.map((source) => source.path),
+    ["source file.md"],
+  );
   if (process.platform === "win32")
     assert.deepEqual(await readWorkspaceScanRepository(path.join(root, "NESTED")), nested);
-  const sha = "a".repeat(40),
-    next = "b".repeat(40);
-  assert.deepEqual(parseScanGitLog(`\0${sha}\0\n\nleading.md\0${next}\0\0${next}\0`), [
-    commit(sha, ["\nleading.md", next]),
-    commit(next, []),
-  ]);
 });
 
 test("scan JSON preserves repository facts and a diagnostic for invalid TypeScript paths", async (t) => {
@@ -415,7 +364,6 @@ test("scan JSON preserves repository facts and a diagnostic for invalid TypeScri
   assert.equal(result.stderr, "");
   const report = JSON.parse(result.stdout);
   assert.equal(report.coverage.trackedFiles, 3);
-  assert.equal(report.commitsScanned, 1);
   assert.equal(report.imports.scannedFiles, 2);
   assert.deepEqual(report.imports.edges, [
     { from: "src/main.ts", to: "src/helper.ts", kind: "file", specifier: "./helper" },
@@ -426,63 +374,25 @@ test("scan JSON preserves repository facts and a diagnostic for invalid TypeScri
   assert.deepEqual(await snapshot(root), before);
 });
 
-test("scan rejects invalid commit counts and incompatible options before reading workspaces", async () => {
-  for (const value of ["0", "-1", "1.5", "NaN", "Infinity", "9007199254740992", ""]) {
+test("scan rejects removed history flags and incompatible options before reading workspaces", async () => {
+  for (const value of ["1", "0", "-1", "1.5", "NaN", "Infinity", "9007199254740992", ""]) {
     const result = await runWorkspaceCommand("scan", [`--commits=${value}`], {
       workspace: path.resolve(".scratch/no-workspace"),
     });
     assert.equal(result.exitCode, 1);
-    assert.match(result.stderr, /--commits must be a positive safe integer/);
+    assert.match(result.stderr, /Unknown option '--commits'/);
   }
   assert.match(
     (await runWorkspaceCommand("brief", ["--commits", "2"])).stderr,
-    /only valid for workspace scan/,
+    /Unknown option '--commits'/,
   );
   assert.equal((await runWorkspaceCommand("scan", ["--limit", "2"])).exitCode, 1);
   const help = await runWorkspaceCommand("scan", ["--help"], {
     workspace: path.resolve(".scratch/no-workspace"),
   });
   assert.equal(help.exitCode, 0);
-  assert.match(help.stdout, /workspace scan \[--commits <n>\]/);
-});
-
-test("scan counts gitlink changes even when Git is configured to ignore submodules", async (t) => {
-  const { root, write } = await fixture(t);
-  await write("doc.md");
-  await git(root, "add", ".");
-  await git(root, "commit", "-m", "source");
-  const first = (await git(root, "rev-parse", "HEAD")).trim();
-  await git(root, "update-index", "--add", "--cacheinfo", `160000,${first},vendor/mod`);
-  await git(root, "commit", "-m", "add gitlink");
-  const before = await readWorkspaceScanRepository(root);
-  assert.deepEqual(before.commits[0]!.files, ["vendor/mod"]);
-  await git(root, "config", "diff.ignoreSubmodules", "all");
-  assert.deepEqual(await readWorkspaceScanRepository(root), before);
-});
-
-test("scan refuses missing partial-clone trees without fetching or writing Git state", async (t) => {
-  const { root, write } = await fixture(t);
-  await write("doc.md");
-  await git(root, "add", ".");
-  await git(root, "commit", "-m", "source");
-  await git(root, "config", "uploadpack.allowFilter", "true");
-  const partial = await fs.mkdtemp(path.join(testScratchRoot(), "scan-partial-"));
-  t.after(() => fs.rm(partial, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await git(
-    root,
-    "clone",
-    "--filter=tree:0",
-    "--no-checkout",
-    "--no-local",
-    pathToFileURL(root).href,
-    partial,
-  );
-  const before = await snapshot(partial);
-  await assert.rejects(
-    readWorkspaceScanRepository(partial),
-    /bad tree object|unable to read tree|could not read/i,
-  );
-  assert.deepEqual(await snapshot(partial), before);
+  assert.match(help.stdout, /workspace scan \[--json\]/);
+  assert.ok(!help.stdout.includes("--commits"));
 });
 
 test("scan fails explicitly without Workspace Git and reports invalid Node inspection", async (t) => {

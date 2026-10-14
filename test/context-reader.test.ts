@@ -42,13 +42,12 @@ test("Core returns complete body, raw, and metadata without output paging", () =
   assert.equal(read.partial, false);
   assert.deepEqual(read.tags, tags);
   assert.deepEqual(read.sources, [{ resource: "https://example.com/" + "long".repeat(7000) }]);
-  assert.equal(read.description, "Detailed overview");
+  assert.equal("description" in read, false);
   const raw = r.read({ nodeId: d.nodeId, view: "raw" });
   assert.ok("text" in raw);
   assert.equal(raw.text, d.raw);
-  assert.equal(r.read({ nodeId: d.nodeId, view: "summary" }).description, "Detailed overview");
-  assert.equal(r.list().items[0]!.description, "Detailed overview");
-  assert.equal(r.search({ query: "overview" }).items[0]!.description, "Detailed overview");
+  assert.equal("description" in r.read({ nodeId: d.nodeId, view: "summary" }), false);
+  assert.equal("description" in r.list().items[0]!, false);
 });
 
 test("Core keeps range and ETag checks while returning every selected code unit", () => {
@@ -68,19 +67,18 @@ test("Core keeps range and ETag checks while returning every selected code unit"
   );
 });
 
-test("search and relations return complete result sets", () => {
+test("list and relations return complete result sets", () => {
   const target = doc("node-target", "Target");
   const body = "[first](../node-target/node-target.md)\n[second](../node-target/node-target.md)\n";
   const from = doc("node-from", body, { resource: "../../src/a.ts" });
   const r = reader([target, from]);
-  assert.equal(r.search({ resource: "../src/a.ts" }).items[0]!.nodeId, from.nodeId);
   assert.equal(r.relations({ nodeId: target.nodeId, direction: "incoming" }).items.length, 2);
   assert.equal(r.relations({ nodeId: from.nodeId, direction: "outgoing" }).items.length, 3);
-  assert.equal(r.search({ query: "Target" }).items.length, 2);
+  assert.equal(r.list().items.length, 2);
   const many = reader(
     Array.from({ length: 81 }, (_, i) =>
       doc(`node-many${i}`, "ACP cancellation preserves drafts."),
     ),
   );
-  assert.equal(many.search({ query: "ACP drafts" }).items.length, 81);
+  assert.equal(many.list().items.length, 81);
 });

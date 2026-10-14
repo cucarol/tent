@@ -5,7 +5,7 @@ import { scaffoldTent } from "../src/core/scaffold.js";
 import { createNode } from "../src/core/ops.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { appendNodeBody, readNodeSection, writeNodeSection } from "../src/core/node-lightwrite.js";
+import { appendNodeBody } from "../src/core/node-lightwrite.js";
 import { confirmNodeSync, inspectNodeSync } from "../src/core/node-sync.js";
 import { writeNodesBatch } from "../src/core/node-write-batch.js";
 import { serializeFrontmatter } from "../src/core/frontmatter.js";
@@ -62,12 +62,7 @@ test("output metadata, equivalent newlines and partial edits retain a changed de
   assert.ok((await inspectNodeSync(fs, output)).behind);
   await appendNodeBody(fs, output, { body: "An added detail." });
   assert.ok((await inspectNodeSync(fs, output)).behind);
-  const section = await readNodeSection(fs, output, "Result");
-  await writeNodeSection(fs, output, {
-    heading: "Result",
-    baseEtag: section.sectionEtag,
-    body: "## Result\nChanged section.\n",
-  });
+  await appendNodeBody(fs, output, { heading: "Result", body: "Changed section." });
   assert.ok((await inspectNodeSync(fs, output)).behind);
   assert.deepEqual(
     (await fs.history.nodeRecords())[output]?.goals?.[0]?.materials.map((m) => m.version),

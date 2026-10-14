@@ -2,13 +2,18 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { checkWorkspaceModules } from "../src/core/workspace-module-map.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { serializeFrontmatter } from "../src/core/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { readModuleMapRepository, readWorkspaceScanRepository } from "../src/fs/workspace-scan.js";
+import {
+  parseModuleMapGitLog,
+  readModuleMapRepository,
+  readWorkspaceScanRepository,
+} from "../src/fs/workspace-scan.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
 
@@ -113,7 +118,6 @@ test("pair exceptions resolve real Markdown links on the same line, from either 
   const repository = {
     head: null,
     trackedFiles: files,
-    markdownFiles: [],
     commits: [],
     sources: { files: sources, errors: [] },
   };
@@ -156,7 +160,6 @@ test("ordinary directories and files cover without becoming modules, structure t
   const repository = {
     head: null,
     trackedFiles: ["legacy/a.ts", "normal/a.ts", "single.ts", "module/a.ts", "bad.ts", "old/a.ts"],
-    markdownFiles: [],
     commits: [],
     sources: { files: [], errors: [] },
   };
@@ -229,7 +232,7 @@ test("module command reports covered root code without ownership and clears it o
   assert.deepEqual(await snapshot(root), repaired);
 });
 
-test("module history follows first-parent while scan keeps all selected commits", async (t) => {
+test("module history follows first-parent while scan collects current facts only", async (t) => {
   const { root, write } = await fixture(t);
   await write("base.md", "base");
   await git(root, "add", "base.md");
@@ -247,7 +250,76 @@ test("module history follows first-parent while scan keeps all selected commits"
   const moduleRepo = await readModuleMapRepository(root);
   const scanRepo = await readWorkspaceScanRepository(root);
   assert.equal(moduleRepo.commits.length, 3);
-  assert.equal(scanRepo.commits.length, 4);
+  assert.ok(!Object.prototype.hasOwnProperty.call(scanRepo, "commits"));
+  assert.deepEqual(scanRepo.trackedFiles, moduleRepo.trackedFiles);
+  assert.deepEqual(scanRepo.sources, moduleRepo.sources);
   assert.deepEqual(moduleRepo.commits[0]!.files, ["feature.md"]);
   assert.deepEqual(await snapshot(root), before);
+});
+
+test("module history preserves unborn/nested workspaces, root changes and newline-safe filenames", async (t) => {
+  const { root, write } = await fixture(t);
+  const unborn = await readModuleMapRepository(root);
+  assert.equal(unborn.head, null);
+  assert.deepEqual(unborn.commits, []);
+  await write("new.md", "new");
+  await write("nested/source file.md", "source");
+  await git(root, "add", ".");
+  await git(root, "commit", "-m", "source");
+  await git(root, "config", "log.showRoot", "false");
+  await git(root, "config", "log.showSignature", "true");
+  const nested = await readModuleMapRepository(path.join(root, "nested"));
+  assert.deepEqual(nested.trackedFiles, ["source file.md"]);
+  assert.deepEqual(nested.commits[0]!.files, ["source file.md"]);
+  assert.equal(nested.commits[0]!.changedFiles, 3);
+  if (process.platform === "win32")
+    assert.deepEqual(await readModuleMapRepository(path.join(root, "NESTED")), nested);
+  const sha = "a".repeat(40),
+    next = "b".repeat(40);
+  assert.deepEqual(parseModuleMapGitLog(`\0${sha}\0\n\nleading.md\0${next}\0\0${next}\0`), [
+    { commit: sha, files: ["\nleading.md", next], changedFiles: 2 },
+    { commit: next, files: [], changedFiles: 0 },
+  ]);
+});
+
+test("module history counts gitlink changes even when Git is configured to ignore submodules", async (t) => {
+  const { root, write } = await fixture(t);
+  await write("doc.md", "doc");
+  await git(root, "add", ".");
+  await git(root, "commit", "-m", "source");
+  const first = (await git(root, "rev-parse", "HEAD")).trim();
+  await git(root, "update-index", "--add", "--cacheinfo", `160000,${first},vendor/mod`);
+  await git(root, "commit", "-m", "add gitlink");
+  const before = await readModuleMapRepository(root);
+  assert.deepEqual(before.commits[0]!.files, ["vendor/mod"]);
+  await git(root, "config", "diff.ignoreSubmodules", "all");
+  assert.deepEqual(await readModuleMapRepository(root), before);
+});
+
+test("module history refuses missing partial-clone trees without fetching or writing Git state", async (t) => {
+  const { root, write } = await fixture(t);
+  await write("doc.md", "doc");
+  await git(root, "add", ".");
+  await git(root, "commit", "-m", "source");
+  await git(root, "config", "uploadpack.allowFilter", "true");
+  const partial = await fs.mkdtemp(path.join(testScratchRoot(), "scan-partial-"));
+  t.after(() => fs.rm(partial, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  await git(
+    root,
+    "clone",
+    "--filter=tree:0",
+    "--no-checkout",
+    "--no-local",
+    pathToFileURL(root).href,
+    partial,
+  );
+  const before = await snapshot(partial);
+  const scan = await readWorkspaceScanRepository(partial);
+  assert.deepEqual(scan.trackedFiles, []);
+  assert.ok(!Object.prototype.hasOwnProperty.call(scan, "commits"));
+  await assert.rejects(
+    readModuleMapRepository(partial),
+    /bad tree object|unable to read tree|could not read/i,
+  );
+  assert.deepEqual(await snapshot(partial), before);
 });

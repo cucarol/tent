@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { checkModuleMap, type ModuleMapInput, type ModuleMapNode } from "../src/core/module-map.js";
 import type { RepositoryImport } from "../src/core/repository-imports.js";
-import type { ScanCommit } from "../src/core/workspace-scan.js";
+import type { ModuleMapCommit } from "../src/core/module-map.js";
 import { materialCoverageContains } from "../src/core/material-coverage.js";
 
 const node = (id: string, overrides: Partial<ModuleMapNode> = {}): ModuleMapNode => ({
@@ -40,12 +40,12 @@ const imports = (from: string, to: string, count: number, kind: "file" | "direct
     kind,
     specifier: to,
   }));
-const commit = (id: string, files: string[], changedFiles = files.length): ScanCommit => ({
+const commit = (id: string, files: string[], changedFiles = files.length): ModuleMapCommit => ({
   commit: id,
   files,
   changedFiles,
 });
-const history = (shared = 5, unrelated = 5): ScanCommit[] => [
+const history = (shared = 5, unrelated = 5): ModuleMapCommit[] => [
   ...Array.from({ length: shared }, (_, i) => commit(`pair-${i}`, ["a/file.ts", "b/file.ts"])),
   ...Array.from({ length: unrelated }, (_, i) => commit(`other-${i}`, ["other/file.ts"])),
 ];

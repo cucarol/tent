@@ -6,13 +6,8 @@ import { NodeFs } from "../fs/node-fs.js";
 import { exportGraph } from "../fs/graph-export.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
 import { readWorkspaceSettings } from "../core/workspace-settings.js";
-import { listHistoryChanges } from "../core/history-query.js";
 import { checkGraph } from "../core/graph-check.js";
-import {
-  scanWorkspace,
-  formatWorkspaceScan,
-  workspaceScanCommitLimit,
-} from "../core/workspace-scan.js";
+import { scanWorkspace, formatWorkspaceScan } from "../core/workspace-scan.js";
 import {
   readWorkspaceScanRepository,
   readModuleMapRepository,
@@ -31,12 +26,11 @@ import { cliErrorText, type ErrorContext } from "./error-text.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
 
 export const workspaceHelpText = `tent workspace export --output <new-output-or-scratch-directory>
-tent workspace changes [--from <commit>] [--to <commit>] [--limit <n>] [--cursor <cursor>]
 tent workspace check [--json]
 tent workspace check-modules [--json]
 tent workspace brief [--role <roleId>] [--json]
 tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
-tent workspace scan [--commits <n>] [--json]
+tent workspace scan [--json]
 Accepts --workspace <root> and --json. check reports broken links, invalid material addresses, missing local files, unavailable Markdown material sections and Node documents whose disk and Tent Git presence differ (node-git-mismatch) after collecting valid native edits; invalid files remain untouched. Exit 1 means issues or inspection errors; JSON remains on stdout. check-modules checks module coverage, size, imports and cochange without collecting edits; a clean map emits no text. brief lists all invalid Nodes and pending Cards, then prioritizes ahead and changed sources; optional detail fits 4 KiB. --role filters Card inputs; Node counts remain Workspace-wide. drift reports ahead and behind Nodes. Use node confirm after reviewing a Node; Tent records hashes itself.`;
 
 export async function runWorkspaceCommand(
@@ -48,19 +42,16 @@ export async function runWorkspaceCommand(
   try {
     if (["help", "--help", "-h"].includes(sub))
       return { exitCode: 0, stdout: workspaceHelpText + "\n", stderr: "" };
-    if (!["export", "changes", "check", "check-modules", "brief", "drift", "scan"].includes(sub))
+    if (!["export", "check", "check-modules", "brief", "drift", "scan"].includes(sub))
       throw new Error(workspaceHelpText);
     const { values, positionals } = parseArgs({
       args,
       allowPositionals: true,
       options: {
         output: { type: "string" },
-        from: { type: "string" },
-        to: { type: "string" },
         limit: { type: "string" },
         cursor: { type: "string" },
         role: { type: "string" },
-        commits: { type: "string" },
         help: { type: "boolean", short: "h" },
         workspace: { type: "string" },
         json: { type: "boolean" },
@@ -72,44 +63,23 @@ export async function runWorkspaceCommand(
     if (positionals.length) throw new Error(workspaceHelpText);
     if (values.role !== undefined && sub !== "brief")
       throw new Error("--role is only valid for workspace brief");
-    if (values.commits !== undefined && sub !== "scan")
-      throw new Error("--commits is only valid for workspace scan");
     if (
       sub === "scan" &&
-      [values.output, values.from, values.to, values.limit, values.cursor].some(
-        (value) => value !== undefined,
-      )
+      [values.output, values.limit, values.cursor].some((value) => value !== undefined)
     )
       throw new Error(workspaceHelpText);
-    const commitLimit =
-      sub === "scan"
-        ? workspaceScanCommitLimit(
-            values.commits === undefined ? undefined : Number(values.commits),
-          )
-        : undefined;
-    if (
-      sub === "export" &&
-      (!values.output || values.from || values.to || values.limit || values.cursor)
-    )
+    if (sub === "export" && (!values.output || values.limit || values.cursor))
       throw new Error(workspaceHelpText);
-    if (sub === "changes" && values.output) throw new Error(workspaceHelpText);
     if (
       sub === "brief" &&
-      [values.output, values.from, values.to, values.limit, values.cursor].some(
-        (value) => value !== undefined,
-      )
+      [values.output, values.limit, values.cursor].some((value) => value !== undefined)
     )
       throw new Error(workspaceHelpText);
-    if (
-      sub === "drift" &&
-      [values.output, values.from, values.to].some((value) => value !== undefined)
-    )
+    if (sub === "drift" && [values.output].some((value) => value !== undefined))
       throw new Error(workspaceHelpText);
     if (
       ["check", "check-modules"].includes(sub) &&
-      [values.output, values.from, values.to, values.limit, values.cursor].some(
-        (value) => value !== undefined,
-      )
+      [values.output, values.limit, values.cursor].some((value) => value !== undefined)
     )
       throw new Error(workspaceHelpText);
     const roots = await resolveWorkspacePaths({
@@ -162,9 +132,8 @@ export async function runWorkspaceCommand(
       const result = await scanWorkspace(
         fs,
         roots.workspaceRoot,
-        await readWorkspaceScanRepository(roots.workspaceRoot, commitLimit),
+        await readWorkspaceScanRepository(roots.workspaceRoot),
         scanFileKind,
-        commitLimit,
       );
       return {
         exitCode: result.inspectionErrors.length ? 1 : 0,
@@ -180,13 +149,10 @@ export async function runWorkspaceCommand(
       };
     }
     const captureFs = new NodeFs(roots.systemRoot, "cli");
-    const nodes =
-      sub === "changes"
-        ? Promise.resolve({ invalidNodes: [] })
-        : captureNativeNodeEdits(captureFs).then((result) => {
-            fs.invalidNodeEdits = captureFs.invalidNodeEdits;
-            return result;
-          });
+    const nodes = captureNativeNodeEdits(captureFs).then((result) => {
+      fs.invalidNodeEdits = captureFs.invalidNodeEdits;
+      return result;
+    });
     if (sub === "brief") {
       const brief = makeContextBrief(
         await inspectCurrentContext(fs, roots.workspaceRoot, {
@@ -280,28 +246,6 @@ export async function runWorkspaceCommand(
         stdout: output + "\n",
         stderr: "",
       };
-    }
-    if (sub === "changes") {
-      const range = { from: values.from, to: values.to };
-      const result = pageItems(
-        { items: await listHistoryChanges(fs, range), scope: { workspaceId, ...range } },
-        "workspace.changes",
-        {
-          limit: values.limit === undefined ? undefined : Number(values.limit),
-          cursor: values.cursor,
-        },
-      );
-      const output =
-        values.json || globals.json
-          ? JSON.stringify(result)
-          : [
-              ...result.items.map(
-                (item) =>
-                  `${item.commit}  ${item.operation ?? "external commit"}  ${item.objectIds.join(", ")}`,
-              ),
-              ...(result.page.hasMore ? [`Continue with --cursor ${result.page.nextCursor}`] : []),
-            ].join("\n") || "No changes.";
-      return { exitCode: 0, stdout: output + "\n", stderr: "" };
     }
     const result = await exportGraph(
       { ...roots, workspaceId, env: { fs } },

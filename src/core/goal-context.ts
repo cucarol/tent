@@ -12,7 +12,8 @@ export type GoalContextItem = {
     "ancestor" | "child" | "incoming" | "outgoing" | "goal" | "prompt" | "output" | "card" | "self";
   id: string;
   name: string;
-  description: string;
+  goalCount?: number;
+  totalGoalCount?: number;
   type?: string;
   relationKinds?: WorkspaceRelation["via"][];
   state?: string;
@@ -37,7 +38,6 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
       kind,
       id: node.nodeId,
       name: node.name,
-      description: typeof data.description === "string" ? data.description : "",
       type: node.type,
       ...(nodeTypeOf(node.type) === "output"
         ? {
@@ -153,7 +153,6 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
             kind,
             id: ref.id,
             name: String(card?.title ?? metadata?.title ?? ref.id),
-            description: typeof metadata?.description === "string" ? metadata.description : "",
             type: ref.kind,
           }),
       relationKinds: [relation.via],
@@ -161,7 +160,8 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
         ? {
             state: String(card.state),
             progress: card.progress == null ? null : String(card.progress),
-            description: `${card.goalCount}/${card.totalGoalCount}`,
+            goalCount: Number(card.goalCount),
+            totalGoalCount: Number(card.totalGoalCount),
             receiver: String(card.receivedBy ?? card.target ?? "open"),
           }
         : {}),

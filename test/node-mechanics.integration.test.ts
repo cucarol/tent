@@ -116,7 +116,7 @@ test("Node Git budgets use retained history and unchanged selected bytes, with f
     "create",
     "append",
     "write",
-    "write-section",
+    "append-heading",
     "confirm",
     "link-output",
     "write-many",
@@ -135,21 +135,8 @@ test("Node Git budgets use retained history and unchanged selected bytes, with f
       if (op === "write") args.push("--body", body + "Updated fact.\n");
       else await fs.appendFile(path.join(workspace, "source.md"), "Material changed.\n");
     }
-    if (op === "write-section") {
-      const section = (await run(workspace, ["node", "get-section", prompt, "--heading", "Alpha"]))
-        .value;
-      args = [
-        "node",
-        op,
-        prompt,
-        "--heading",
-        "Alpha",
-        "--base-etag",
-        section.etag,
-        "--body",
-        "## Alpha\n\nChanged fact.\n",
-      ];
-    }
+    if (op === "append-heading")
+      args = ["node", "append", prompt, "--heading", "Alpha", "--body", "Changed fact."];
     if (op === "link-output")
       args = ["node", op, goal, "--resource", "result.txt", "--name", "Result"];
     if (op === "write-many") {

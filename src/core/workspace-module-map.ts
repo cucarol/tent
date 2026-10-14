@@ -14,6 +14,7 @@ import { structureMaterialCoverage } from "./material-coverage.js";
 import {
   checkModuleMap,
   MODULE_MAP_THRESHOLDS,
+  type ModuleMapCommit,
   type ModuleMapNode,
   type ModuleMapCode,
   isModuleMapNode,
@@ -21,6 +22,8 @@ import {
 } from "./module-map.js";
 import { extractRepositoryImports, comparePaths } from "./repository-imports.js";
 import type { WorkspaceScanRepository } from "./workspace-scan.js";
+
+export type WorkspaceModuleMapRepository = WorkspaceScanRepository & { commits: ModuleMapCommit[] };
 
 const pairCodes: ModuleMapCode[] = [
   "deps.cycle",
@@ -32,7 +35,7 @@ const pairCodes: ModuleMapCode[] = [
 export async function checkWorkspaceModules(
   fs: FsAdapter,
   workspaceRoot: string,
-  repository: WorkspaceScanRepository,
+  repository: WorkspaceModuleMapRepository,
 ) {
   const tent = await loadTent(readOnlyFs(fs));
   const inspectionErrors: Array<{ node: string; resource?: string; reason: string }> =

@@ -138,28 +138,22 @@ test("pure CLI reads leave native Node, Role and Card edits unretained", async (
   await adapter.writeFile(nodeFile, nativeNode);
   await adapter.writeFile(roleFile, nativeRole);
   await adapter.writeFile(cardFile, nativeCard);
-  const version = JSON.stringify({ commit: beforeHead, path: nodeFile });
   const reads = [
     ...[[], ["--full"], ["--view", "raw"], ["--context"]].map((args) => ({
       label: `node get ${args.join(" ")}`,
       run: () => runNodeCommand("get", [output, ...args], options),
     })),
-    {
-      label: "node get-section",
-      run: () => runNodeCommand("get-section", [output, "--heading", "Result"], options),
-    },
     { label: "node list", run: () => runNodeCommand("list", [], options) },
     { label: "node list --full", run: () => runNodeCommand("list", ["--full"], options) },
-    { label: "node search", run: () => runNodeCommand("search", ["Native"], options) },
+    {
+      label: "node search",
+      run: () => runNodeCommand("search", ["--resource", "input.txt"], options),
+    },
     {
       label: "node relations",
       run: () => runNodeCommand("relations", [goal, "--direction", "incoming"], options),
     },
     { label: "node history", run: () => runNodeCommand("history", [output], options) },
-    {
-      label: "node diff",
-      run: () => runNodeCommand("diff", ["--from-json", version, "--to-json", version], options),
-    },
     { label: "node tags", run: () => runNodeCommand("tags", [], options) },
     { label: "role list", run: () => runRoleCommand("list", [], options) },
     { label: "role show", run: () => runRoleCommand("show", [role.roleId], options) },
@@ -169,10 +163,6 @@ test("pure CLI reads leave native Node, Role and Card edits unretained", async (
     {
       label: "card watch",
       run: () => runCardCommand("watch", ["--role", role.roleId, "--timeout", "0"], options),
-    },
-    {
-      label: "workspace changes",
-      run: () => runWorkspaceCommand("changes", [], options),
     },
     { label: "workspace scan", run: () => runWorkspaceCommand("scan", [], options) },
   ];
@@ -214,11 +204,6 @@ test("pure readers return live bytes and mark them while relations wait for capt
     parse(await runNodeCommand("relations", [output, "--direction", "outgoing"], options)),
     relations,
   );
-  const section = parse(
-    await runNodeCommand("get-section", [output, "--heading", "Result"], options),
-  );
-  assert.equal(section.uncaptured, true);
-  assert.match(section.text, /Live role/);
   const plain = await runNodeCommand("get", [output], { ...options, json: false });
   assert.equal(plain.exitCode, 0, plain.stderr);
   assert.match(plain.stdout, /有未收录的改动，下一次写命令、brief 或 hook 时收录。/);
@@ -302,7 +287,10 @@ test("uncaptured new and moved Nodes remain live in discovery and export", async
   await fs.rename(path.join(workspace, ".tent/需求/结果"), path.join(workspace, ".tent/结果"));
   await adapter.writeFile(
     "结果/结果.md",
-    (await adapter.readFile("结果/结果.md")) + "\nDiscovery needle",
+    (await adapter.readFile("结果/结果.md")).replace(
+      "type: output",
+      "type: output\nresource: ../../input.txt",
+    ) + "\nDiscovery needle",
   );
   const newId = "node-nativenew";
   await adapter.writeFile(
@@ -310,7 +298,7 @@ test("uncaptured new and moved Nodes remain live in discovery and export", async
     `---\nid: ${newId}\ntype: prompt\nresource: ../../input.txt\n---\nDiscovery needle`,
   );
   const listed = parse(await runNodeCommand("list", [], options));
-  const searched = parse(await runNodeCommand("search", ["Discovery needle"], options));
+  const searched = parse(await runNodeCommand("search", ["--resource", "input.txt"], options));
   const exported = parse(await runNodeCommand("list", ["--full"], options));
   for (const items of [listed.items, searched.items, exported.nodes]) {
     for (const [id, file] of [

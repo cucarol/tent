@@ -26,11 +26,11 @@ import {
   listNodes,
   listNodeTags,
   searchNodes,
+  nodeResourceSearchSchema,
   relatedNodes,
 } from "../core/node-query.js";
 import { prepareNodeBatch } from "../core/node-batch.js";
 import { nodeNotePath } from "../core/paths.js";
-import { readDocumentDiff } from "../core/document-diff.js";
 import {
   createNode,
   renameNode,
@@ -40,22 +40,14 @@ import {
   deleteNode,
 } from "../core/ops.js";
 import { writeNodeDocument, NodeWriteError } from "../core/node-document-write.js";
-import {
-  appendNodeBody,
-  readNodeSection,
-  writeNodeSection,
-  NodeSectionError,
-} from "../core/node-lightwrite.js";
+import { appendNodeBody } from "../core/node-lightwrite.js";
+import { NodeSectionError } from "../core/markdown-section.js";
 import { NodeLifecycleError } from "../core/node-lifecycle.js";
 import { ContextReader } from "../core/context-reader.js";
 import { documentLifecycle } from "../core/document-status.js";
 import { parseFrontmatter } from "../core/frontmatter.js";
 import { loadNodeCatalog } from "../core/node-catalog.js";
-import {
-  readerReadSchema,
-  readerRelationsSchema,
-  readerSearchSchema,
-} from "../core/context-reader.js";
+import { readerReadSchema, readerRelationsSchema } from "../core/context-reader.js";
 import { readerFlags } from "./reader-flags.js";
 import { readerBatchSchema } from "../core/reader-batch.js";
 import {
@@ -67,7 +59,6 @@ import {
   incompleteNodeRead,
 } from "./reader-page.js";
 import { canonicalSha256 } from "../core/canonical-digest.js";
-import { nodeReadRevisionEtag } from "../core/node-read-basis.js";
 import { inspectNodeSync, confirmNodeSync, linkNodeOutput } from "../core/node-sync.js";
 import { goalContextText } from "./goal-context.js";
 import { retainedDocumentFs } from "../core/retained-read.js";
@@ -108,11 +99,10 @@ export async function runNodeCommand(
   try {
     const { positionals, flags, tagFilters } = parseFlags(args);
     errorContext.workspace = flags.workspace ?? globals.workspace;
-    errorContext.heading = flags.heading;
     errorContext.baseEtag = flags["base-etag"];
     errorContext.json = globals.json === true || flags.json === "true";
     if (sub === "link-output") errorContext.outputResource = flags.resource;
-    const target = sub === "tags" ? positionals[1] : positionals[0];
+    const target = positionals[0];
     if (
       target &&
       [
@@ -123,16 +113,12 @@ export async function runNodeCommand(
         "history",
         "relations",
         "append",
-        "get-section",
-        "write-section",
         "write",
         "rename",
         "move",
         "archive",
         "restore",
         "delete",
-        "type",
-        "tags",
       ].includes(sub)
     )
       errorContext.target = { kind: "node", id: target };
@@ -144,20 +130,11 @@ export async function runNodeCommand(
       return usage("--context is only valid for node get");
     if (flags.id !== undefined && sub !== "create")
       return usage("--id is only valid for node create");
-    if (flags.heading !== undefined && !["append", "get-section", "write-section"].includes(sub))
-      return usage("--heading is only valid for node append, get-section or write-section");
+    if (flags.heading !== undefined && sub !== "append")
+      return usage("--heading is only valid for node append");
     if (
       flags.by !== undefined &&
-      ![
-        "create",
-        "write",
-        "append",
-        "write-section",
-        "confirm",
-        "link-output",
-        "type",
-        "tags",
-      ].includes(sub)
+      !["create", "write", "append", "confirm", "link-output"].includes(sub)
     )
       return usage("--by is only valid for content writes and node confirm");
     if (flags.start !== undefined && sub !== "read-many")
@@ -201,17 +178,8 @@ export async function runNodeCommand(
     });
     errorContext.workspaceRoot = workspaceRoot;
     const collectsNativeEdits =
-      ![
-        "get",
-        "read-many",
-        "get-section",
-        "list",
-        "search",
-        "relations",
-        "history",
-        "diff",
-      ].includes(sub) &&
-      !(sub === "tags" && !positionals.length && flags["base-etag"] === undefined);
+      !["get", "read-many", "list", "search", "relations", "history"].includes(sub) &&
+      sub !== "tags";
     const fs = new NodeFs(systemRoot, "cli", collectsNativeEdits ? "record" : "inspect");
     const { workspaceId } = await readWorkspaceSettings(fs);
     if (!workspaceId)
@@ -365,20 +333,6 @@ export async function runNodeCommand(
           value.results.map((item) => `${item.nodeId}  ${item.path}  ${item.etag}`).join("\n"),
         );
       }
-      case "diff": {
-        if (positionals.length || !flags["from-json"] || !flags["to-json"])
-          return usage(nodeHelpText("diff"));
-        const diff = await readDocumentDiff(fs, {
-          from: JSON.parse(flags["from-json"]),
-          to: JSON.parse(flags["to-json"]),
-        });
-        const result = pageText(
-          { ...diff, etag: canonicalSha256(diff.text), view: "diff", total: diff.length },
-          "node.diff",
-          { cursor: flags.cursor },
-        );
-        return print(result, json, formatTextPage);
-      }
       case "history": {
         const target = oneTarget(
           positionals,
@@ -527,10 +481,9 @@ export async function runNodeCommand(
         return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
       }
       case "search": {
-        if (positionals.length > 1)
-          return usage("tent node search [query | --resource <address>] [--json]");
-        const input = readerSearchSchema.parse({
-          ...(positionals[0] !== undefined ? { query: positionals[0] } : {}),
+        if (positionals.length || flags["include-archived"] !== undefined)
+          return usage("tent node search --resource <address> [--json]");
+        const input = nodeResourceSearchSchema.parse({
           ...coreReaderFlags(flags),
           ...(flags.resource === undefined
             ? {}
@@ -542,7 +495,7 @@ export async function runNodeCommand(
         });
         const result = pageItems(
           workspaceReadPaths(
-            await searchNodes(fs, workspaceId, input, { uncaptured: true }),
+            await searchNodes(fs, workspaceId, workspaceRoot, input, { uncaptured: true }),
             workspaceRoot,
           ),
           "node.search",
@@ -646,45 +599,19 @@ export async function runNodeCommand(
         };
         return mutationPrint(output, json, (value) => `Created ${formatNode(value)}`);
       }
-      case "append":
-      case "get-section":
-      case "write-section": {
+      case "append": {
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
-        const allowed = [
-          "json",
-          "workspace",
-          "heading",
-          ...(sub === "get-section" ? [] : ["body", "by"]),
-          ...(sub === "write-section" ? ["base-etag"] : []),
-        ];
-        if (
-          Object.keys(flags).some((key) => !allowed.includes(key)) ||
-          (sub !== "append" && flags.heading === undefined) ||
-          (sub !== "get-section" && flags.body === undefined) ||
-          (sub === "write-section" && !flags["base-etag"])
-        )
+        const allowed = ["json", "workspace", "heading", "body", "by"];
+        if (Object.keys(flags).some((key) => !allowed.includes(key)) || flags.body === undefined)
           return usage(nodeHelpText(sub));
         const nodeId = nodeRef(target);
-        if (sub === "get-section") {
-          const {
-            sectionEtag: etag,
-            path,
-            ...section
-          } = await readNodeSection(fs, nodeId, flags.heading, { uncaptured: true });
-          const result = { ...section, path: `.tent/${nodeNotePath(path)}`, etag };
-          return print(result, json, formatNodeRead);
-        }
         const body = flags.body === "-" ? (globals.stdin ?? (await readStdin())) : flags.body;
-        const saved =
-          sub === "append"
-            ? await appendNodeBody(fs, nodeId, { body, heading: flags.heading, by: flags.by })
-            : await writeNodeSection(fs, nodeId, {
-                heading: flags.heading,
-                baseEtag: flags["base-etag"],
-                body,
-                by: flags.by,
-              });
+        const saved = await appendNodeBody(fs, nodeId, {
+          body,
+          heading: flags.heading,
+          by: flags.by,
+        });
         const result = {
           workspaceId,
           nodeId,
@@ -846,67 +773,16 @@ export async function runNodeCommand(
         const result = await deleteNode(env, nodeRef(target));
         return mutationPrint(result, json, () => `Deleted ${target}`);
       }
-      case "type": {
-        const baseEtag = flagValue(flags, "base-etag");
-        if (positionals.length !== 2 || !baseEtag?.trim())
-          return usage("tent node type <nodeId> <type> --base-etag <live-etag> [--json]");
-        const ref = nodeRef(positionals[0]);
-        const saved = await writeNodeDocument(fs, ref, {
-          baseEtag,
-          frontmatter: { type: positionals[1] },
-          by: flags.by,
-        });
-        const result = { nodeId: ref, etag: saved.etag, version: saved.version };
-        return mutationPrint(incompleteNodeRead(result), json, () => `Updated type for ${ref}`);
-      }
       case "tags": {
-        if (!positionals.length && flags["base-etag"] === undefined) {
-          if (
-            Object.keys(flags).some(
-              (key) => !["json", "workspace", "include-archived"].includes(key),
-            )
-          )
-            return usage(nodeHelpText("tags"));
-          const result = await listNodeTags(fs, workspaceId, {
-            includeArchived: flags["include-archived"] === "true",
-          });
-          return print(result, json, formatTags);
-        }
-        const action = positionals[0];
-        const target = positionals[1];
-        const baseEtag = flagValue(flags, "base-etag");
-        if (!baseEtag?.trim()) return usage("tent node tags requires --base-etag <live-etag>");
-        if (!action || !target || !["set", "add", "remove"].includes(action)) {
-          return usage(
-            "tent node tags set|add|remove <nodeId> <tag[,tag...]> --base-etag <live-etag> [--json]",
-          );
-        }
-        const values = parseCsv(positionals.slice(2).join(",")).map(normalizeTagName);
-        if (values.length === 0 && action !== "set") {
-          return usage(
-            "tent node tags set|add|remove <nodeId> <tag[,tag...]> --base-etag <live-etag> [--json]",
-          );
-        }
-        const ref = nodeRef(target);
-        const edit = await readNodeForEdit(fs, ref);
-        if (edit.etag !== nodeReadRevisionEtag(baseEtag))
-          throw new Error("Node ETag conflict; reread and reconcile before changing tags.");
-        const current = Array.isArray(edit.frontmatter.tags)
-          ? (edit.frontmatter.tags as string[])
-          : [];
-        const tags =
-          action === "set"
-            ? values
-            : action === "add"
-              ? [...new Set([...current, ...values])]
-              : current.filter((tag) => !values.includes(tag));
-        const saved = await writeNodeDocument(fs, ref, {
-          baseEtag,
-          frontmatter: { tags },
-          by: flags.by,
+        if (
+          positionals.length ||
+          Object.keys(flags).some((key) => !["json", "workspace", "include-archived"].includes(key))
+        )
+          return usage(nodeHelpText("tags"));
+        const result = await listNodeTags(fs, workspaceId, {
+          includeArchived: flags["include-archived"] === "true",
         });
-        const result = { nodeId: ref, etag: saved.etag, version: saved.version };
-        return mutationPrint(incompleteNodeRead(result), json, () => `Updated tags for ${target}`);
+        return print(result, json, formatTags);
       }
       default:
         return usage(nodeHelpText());
@@ -942,16 +818,13 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
     "tent node get <nodeId> --full [--view body|raw] [--json]",
   ],
   "read-many": ["tent node read-many <nodeId> [...] [--view body|raw] [--start <index>] [--json]"],
-  diff: ["tent node diff --from-json <version> --to-json <version> [--cursor <cursor>] [--json]"],
   history: ["tent node history <nodeId> [--limit <n>] [--cursor <cursor>] [--json]"],
   check: ["tent node check <nodeId> [--json]"],
   confirm: ["tent node confirm <nodeId> --base-etag <complete-live-etag> [--by <actor>] [--json]"],
   "link-output": [
     "tent node link-output <goalId> --resource <address> [--name <name>] [--tags a,b] [--by <actor>] [--role <roleId>] [--card <id>] [--json]",
   ],
-  search: [
-    "tent node search [query | --resource <address>] [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
-  ],
+  search: ["tent node search --resource <address> [--limit <n>] [--cursor <cursor>] [--json]"],
   relations: [
     "tent node relations <nodeId|root> --direction parent|children|outgoing|incoming [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
   ],
@@ -963,23 +836,13 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
     "tent node write <nodeId> --input-json <JSON>|- [--json]",
   ],
   append: ["tent node append <nodeId> --body <text|-> [--heading <title>] [--by <actor>] [--json]"],
-  "get-section": ["tent node get-section <nodeId> --heading <title> [--json]"],
-  "write-section": [
-    "tent node write-section <nodeId> --heading <title> --base-etag <section-etag> --body <complete-section|-> [--by <actor>] [--json]",
-  ],
   "write-many": ["tent node write-many --input-json <JSON|-> [--json]"],
   rename: ["tent node rename <nodeId> <new-name> [--json]"],
   move: ["tent node move <nodeId> --parent <nodeId|root> [--json]"],
   archive: ["tent node archive <nodeId> [--json]"],
   restore: ["tent node restore <nodeId> --archive-commit <commit> [--json]"],
   delete: ["tent node delete <nodeId> [--json]"],
-  type: [
-    "tent node type <nodeId> goal|prompt|output --base-etag <live-etag> [--by <actor>] [--json]",
-  ],
-  tags: [
-    "tent node tags [--include-archived] [--json]",
-    "tent node tags set|add|remove <nodeId> <tag[,tag...]> --base-etag <live-etag> [--by <actor>] [--json]",
-  ],
+  tags: ["tent node tags [--include-archived] [--json]"],
 };
 export function nodeHelpText(sub?: string): string {
   const commands = NODE_COMMAND_HELP;
@@ -995,17 +858,12 @@ export function nodeHelpText(sub?: string): string {
     "link-output":
       "Create an output child of the selected goal; --tags adds tags, none are added automatically. Local file or slash-marked directory paths, including / addresses, resolve from the Workspace root and are saved relative to the output document. Node IDs and absolute URIs are supported. Local materials must exist and be readable. The default name is the file or directory name, or Output for the root. Remote addresses are never fetched. The returned nodeId identifies the new output. --card explicitly selects its response Card. Automatic selection requires --role matching the receiver of exactly one incomplete Card for this goal; otherwise choose --card. The receipt names the selected Card.",
     search:
-      "resource is a file or slash-marked directory path from the Workspace root (for example .tent/Node/Node.md, src/file.ts or src/) or an absolute URI. Exact resource matching preserves query/fragment identity and does not infer bare source text.",
+      "Look up active Nodes by a Workspace file path or absolute URI. Results include exact material matches and directory/prefix coverage, most specific first, with the matching field and address. Only headers are read; no document ETag is returned. Text search uses the Agent's own file tools.",
     create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output depends on every goal ancestor. The type is goal, prompt or output; tags name form and topic, preferably from tent node tags or the presets ${NODE_TAG_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; local paths resolve from the Workspace root, including / addresses, and are saved relative to the new Node document. Card response sources /cards/<card-id>.md keep their .tent root. Bare sources are descriptive unless they match an existing Workspace file or a directory marked with a trailing /; use ./ for a path that does not exist yet. Node IDs and absolute URIs are supported. --id <node-id> sets the new Node's id, so a retry after an unclear result cannot create a duplicate. An existing id or sibling name fails and names the existing Node. Names follow Windows file-name rules on every platform.`,
     write:
-      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"src/file.ts","sources":[{"resource":".tent/Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields and unchanged material declarations are preserved. New local material declarations in frontmatter use Workspace-root paths, as in create. Ordinary saves retain existing material and goal baselines, including full-body output rewrites, metadata edits, no-ops, append and write-section. Only --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
+      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"src/file.ts","sources":[{"resource":".tent/Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields and unchanged material declarations are preserved. New local material declarations in frontmatter use Workspace-root paths, as in create. Ordinary saves retain existing material and goal baselines, including full-body output rewrites, metadata edits, no-ops and append. Only --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
     append:
       "Append under the Workspace lock without a prior read or ETag. --heading adds a level-two Markdown heading. Existing and new content are separated by one blank line; the saved body ends with one newline. Ordinary saves retain material baselines.",
-    "get-section":
-      "Match the unique Markdown document heading text outside lists and blockquotes. The complete section includes its heading and ends at the next same-level or higher-level heading. Code blocks do not define sections. etag authorizes replacing only this section.",
-    "write-section":
-      "Replace the selected section with complete Markdown from --body, including any replacement heading. The title may change or be removed. Other body bytes are preserved. Use etag from get-section; changes to other sections do not conflict. Ordinary saves retain material baselines.",
-    type: "The type is what the content rests on: goal, prompt or output. Form and topic belong in tags.",
     tags: "Without arguments, list the tags of current Nodes with their counts, marking presets; --include-archived also counts deprecated Nodes. Prefer an existing tag or a preset to a new synonym. Tags add no behavior.",
     "write-many":
       'Batch JSON: {"items":[{"op":"create","ref":"rules","name":"Rules","type":"prompt","body":"..."},{"op":"update","nodeId":"node-existing","baseEtag":"<complete-read etag>","body":"...","confirm":true}]}. Create parent is null/omitted, an existing Node ID or @ref. @ref also works in Markdown links and material addresses, including forward references. New resource and sources fields use Workspace-root file or slash-marked directory paths, as in create; raw updates use stored document-relative addressing. Unchanged material declarations are preserved. Ordinary updates retain recorded material baselines; confirm:true refreshes the final saved content and output bases. All items validate before saving under one lock and one Tent commit; failures roll back the batch. Ordered results contain nodeId, path and etag. Existing Node updates require a complete read ETag; read: bases are rejected.',
@@ -1095,8 +953,6 @@ function parseFlags(args: string[]): {
           "start",
           "expected-etag",
           "version-json",
-          "from-json",
-          "to-json",
           "resource",
           "name",
           "card",
@@ -1195,7 +1051,6 @@ function formatReaderContent(value: unknown): string {
     node?: {
       nodeId: string;
       name?: string;
-      description?: string;
       text?: string;
       view?: string;
       etag?: string;
@@ -1205,7 +1060,6 @@ function formatReaderContent(value: unknown): string {
       nodeId?: string;
       path?: string;
       name?: string;
-      description?: string;
       title?: string;
       text?: string;
       uncaptured?: boolean;
@@ -1213,6 +1067,7 @@ function formatReaderContent(value: unknown): string {
       operation?: string;
       time?: string;
       objectIds?: string[];
+      match?: { kind: string; field: string; index?: number; resource?: string };
       changes?: Array<{ before?: { path: string }; after?: { path: string } }>;
     }>;
     page?: { hasMore: boolean; nextCursor?: string; nextIndex?: number };
@@ -1221,7 +1076,7 @@ function formatReaderContent(value: unknown): string {
     const etag = result.node.etag ? `\nETag: ${result.node.etag}` : "";
     return result.node.text !== undefined
       ? `${[result.node.nodeId, result.node.name, result.node.view].filter(Boolean).join("  ")}${etag}\n${formatTextPage(result.node)}`
-      : `${result.node.nodeId}  ${result.node.name ?? ""}${etag}\n${result.node.description ?? ""}`;
+      : `${result.node.nodeId}  ${result.node.name ?? ""}${etag}`;
   }
   if (result.items)
     return (
@@ -1236,7 +1091,9 @@ function formatReaderContent(value: unknown): string {
                 item.nodeId,
                 item.path,
                 item.name ?? item.title,
-                item.description,
+                item.match
+                  ? `${item.match.kind} ${item.match.field}${item.match.index === undefined ? "" : `[${item.match.index}]`} ${item.match.resource ?? ""}`.trimEnd()
+                  : undefined,
                 item.uncaptured ? uncapturedNotice : undefined,
                 item.objectIds?.join(", "),
                 item.changes

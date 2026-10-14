@@ -78,10 +78,7 @@ test("CLI validation errors name the command, argument and field instead of issu
     assert.equal(result.stdout, "");
     assert.doesNotMatch(result.stderr, /^\[|"code"|"path"/);
   }
-  assert.equal(
-    search.stderr.split("\n")[0],
-    "tent node search: Supply exactly one query or resource",
-  );
+  assert.match(search.stderr.split("\n")[0]!, /^tent node search: resource:/);
   assert.match(
     batch.stderr.split("\n")[0]!,
     /^tent node write-many --input-json: items: Too small: .+$/,
@@ -165,7 +162,8 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
     assert.equal(await new NodeFs(path.join(workspace, ".tent")).exists("Invalid refs"), false);
     assert.equal((await runNodeCommand("fork", ["node-fact"], globals)).exitCode, 1);
     assert.equal(
-      result(await runNodeCommand("search", ["Original fact"], globals)).items.length,
+      result(await runNodeCommand("search", ["--resource", "refs/example.pdf"], globals)).items
+        .length,
       1,
     );
     assert.deepEqual(
@@ -188,44 +186,51 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
       ),
     );
     const concurrent = await readFact();
-    for (const [command, args] of [
-      ["type", ["node-fact", "output"]],
-      ["tags", ["set", "node-fact", "new"]],
-      ["tags", ["add", "node-fact", "new"]],
-      ["tags", ["remove", "node-fact", "old"]],
-    ] as const) {
+    for (const frontmatter of [{ type: "output" }, { tags: ["new"] }]) {
       const staleEdit = await runNodeCommand(
-        command,
-        [...args, "--base-etag", observed.etag],
+        "write",
+        ["node-fact", "--input-json", JSON.stringify({ baseEtag: observed.etag, frontmatter })],
         globals,
       );
-      assert.equal(staleEdit.exitCode, 1, `${command} must reject the stale observation`);
+      assert.equal(staleEdit.exitCode, 1, "metadata writes must reject a stale observation");
       assert.match(staleEdit.stderr, /conflict|etag/i);
       assert.deepEqual(await readFact(), concurrent);
-      assert.equal((await runNodeCommand(command, [...args], globals)).exitCode, 1);
+      assert.equal(
+        (
+          await runNodeCommand(
+            "write",
+            ["node-fact", "--input-json", JSON.stringify({ frontmatter })],
+            globals,
+          )
+        ).exitCode,
+        1,
+      );
     }
     result(
       await runNodeCommand(
-        "type",
-        ["node-fact", "output", "--base-etag", concurrent.etag],
+        "write",
+        [
+          "node-fact",
+          "--input-json",
+          JSON.stringify({ baseEtag: concurrent.etag, frontmatter: { type: "output" } }),
+        ],
         globals,
       ),
     );
     assert.equal((await readFact()).type, "output");
-    for (const [action, values, expected] of [
-      ["set", "alpha,beta", ["alpha", "beta"]],
-      ["add", "beta,gamma", ["alpha", "beta", "gamma"]],
-      ["remove", "alpha,gamma", ["beta"]],
-      ["set", "", []],
-    ] as const) {
+    for (const tags of [["alpha", "beta"], ["alpha", "beta", "gamma"], ["beta"], []]) {
       result(
         await runNodeCommand(
-          "tags",
-          [action, "node-fact", values, "--base-etag", (await readFact()).etag],
+          "write",
+          [
+            "node-fact",
+            "--input-json",
+            JSON.stringify({ baseEtag: (await readFact()).etag, frontmatter: { tags } }),
+          ],
           globals,
         ),
       );
-      assert.deepEqual((await readFact()).tags ?? [], expected);
+      assert.deepEqual((await readFact()).tags ?? [], tags);
     }
     await git(path.join(workspace, ".tent"), "init");
     const source = { resource: "./refs/example.pdf", title: "Reference document" };

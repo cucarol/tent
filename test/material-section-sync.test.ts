@@ -7,7 +7,7 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { createNode } from "../src/core/ops.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
-import { readNodeSection } from "../src/core/node-lightwrite.js";
+import { selectSection } from "../src/core/markdown-section.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
 import { writeNodesBatch } from "../src/core/node-write-batch.js";
 import { confirmNodeSync, inspectNodeSync } from "../src/core/node-sync.js";
@@ -20,7 +20,7 @@ const digest = (value: string) => createHash("sha256").update(value).digest("hex
 
 async function nodeSectionDigest(fs: NodeFs, id: string, section: string) {
   const read = await readNodeForEdit(fs, id);
-  const selected = await readNodeSection(fs, id, section);
+  const selected = selectSection(read.body, section);
   return nodeSemanticFingerprint(
     read.frontmatter,
     selected.text,
@@ -129,12 +129,7 @@ test("atomic batches record final peer and self sections, including missing-sect
   const consumer = saved.results[0]!.nodeId,
     self = saved.results[1]!.nodeId,
     peer = saved.results[2]!.nodeId;
-  const peerSection = await readNodeSection(fs, peer, "状态"),
-    selfSection = await readNodeSection(fs, self, "状态");
-  for (const [id] of [
-    [consumer, peerSection.text],
-    [self, selfSection.text],
-  ]) {
+  for (const id of [consumer, self]) {
     const sync = await inspectNodeSync(fs, id!);
     assert.equal(sync.state, "synced");
     assert.equal(
@@ -167,7 +162,7 @@ test("atomic batches record final peer and self sections, including missing-sect
   ]) {
     const sync = await inspectNodeSync(fs, id!);
     assert.equal(sync.state, "synced");
-    await readNodeSection(fs, materialId!, "状态");
+    selectSection((await readNodeForEdit(fs, materialId!)).body, "状态");
     assert.equal(
       sync.materials[0]!.recordedVersion,
       await nodeSectionDigest(fs, materialId!, "状态"),

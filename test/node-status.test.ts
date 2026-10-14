@@ -99,8 +99,7 @@ test("local status never inherits or freezes edits; unknown status stays visible
   );
   const reader = await liveContextReader(adapter, source);
   assert.ok(reader.list().items.some((n) => n.nodeId === root.id));
-  assert.equal(reader.search({ query: "corrected" }).items.length, 0);
-  assert.equal(reader.search({ query: "corrected", includeArchived: true }).items.length, 1);
+  assert.equal(reader.read({ nodeId: root.id, view: "body" }).status, "deprecated");
   await adapter.writeFile(
     "A/A.md",
     edited.raw.replace("status: deprecated", "status: future-state"),

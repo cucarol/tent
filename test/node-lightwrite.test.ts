@@ -11,12 +11,8 @@ import { readNodeForEdit } from "../src/core/node-query.js";
 import { contentEtag } from "../src/core/etag.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
-import {
-  appendNodeBody,
-  readNodeSection,
-  writeNodeSection,
-  NodeSectionError,
-} from "../src/core/node-lightwrite.js";
+import { appendNodeBody } from "../src/core/node-lightwrite.js";
+import { NodeSectionError, selectSection } from "../src/core/markdown-section.js";
 import { inspectNodeSync } from "../src/core/node-sync.js";
 import { runNodeCommand, nodeHelpText } from "../src/cli/node-commands.js";
 import { cli, extendTestLockWait, git } from "./helpers.js";
@@ -41,6 +37,10 @@ async function fixture(t: TestContext, body = "") {
   return { root, tentRoot, adapter: new NodeFs(tentRoot), peer: new NodeFs(tentRoot) };
 }
 
+async function readSection(adapter: NodeFs, nodeId: string, heading: string) {
+  return selectSection((await readNodeForEdit(adapter, nodeId)).body, heading);
+}
+
 test("append requires no caller read, normalizes boundary newlines, captures exact canonical bytes", async (t) => {
   const { adapter } = await fixture(t, "Keep indentation\n    code  \n\n\n");
   const saved = await appendNodeBody(adapter, "node-note", {
@@ -55,7 +55,7 @@ test("append requires no caller read, normalizes boundary newlines, captures exa
   assert.ok(saved.version);
   assert.equal(await adapter.history.read(saved.version), saved.raw);
   assert.equal(
-    (await readNodeSection(adapter, "node-note", "Notes *literally*")).text,
+    (await readSection(adapter, "node-note", "Notes *literally*")).text,
     "## Notes \\*literally\\*\n\n[next](../Peer/Peer.md)\n",
   );
   await assert.rejects(async () => appendNodeBody(adapter, "node-note", { body: "" }), /nonempty/);
@@ -121,15 +121,14 @@ test("Markdown AST section boundaries include children, ignore code and quoted h
   const body =
     "Intro\n\n## **Plan**\nOne\n\n```md\n# Fake\n## Plan\n```\n\n    # Indented fake\n\n> # Quoted fake\n\n### Child\nchild\n\n## Next\nnext\n\nTop\n===\ntop\n";
   const { adapter } = await fixture(t, body);
-  const plan = await readNodeSection(adapter, "node-note", "Plan");
+  const plan = await readSection(adapter, "node-note", "Plan");
   assert.equal(plan.depth, 2);
   assert.equal(plan.text, body.slice(body.indexOf("## **Plan**"), body.indexOf("## Next")));
-  assert.match(plan.sectionEtag, /^section:[a-f0-9]{24}$/);
-  const next = await readNodeSection(adapter, "node-note", "Next");
+  const next = await readSection(adapter, "node-note", "Next");
   assert.equal(next.text, "## Next\nnext\n\n");
-  assert.equal((await readNodeSection(adapter, "node-note", "Top")).depth, 1);
+  assert.equal((await readSection(adapter, "node-note", "Top")).depth, 1);
   await assert.rejects(
-    readNodeSection(adapter, "node-note", "Fake"),
+    readSection(adapter, "node-note", "Fake"),
     (e) => e instanceof NodeSectionError && e.code === "SECTION_NOT_FOUND",
   );
   const current = await readNodeForEdit(adapter, "node-note");
@@ -137,124 +136,53 @@ test("Markdown AST section boundaries include children, ignore code and quoted h
     baseEtag: current.etag,
     body: body + "\n## Plan\nduplicate",
   });
-  for (const request of [
-    () => readNodeSection(adapter, "node-note", "Plan"),
-    () =>
-      writeNodeSection(adapter, "node-note", {
-        heading: "Plan",
-        baseEtag: plan.sectionEtag,
-        body: "replacement",
-      }),
-  ])
-    await assert.rejects(
-      request(),
-      (e) => e instanceof NodeSectionError && e.code === "SECTION_AMBIGUOUS",
-    );
+  await assert.rejects(
+    appendNodeBody(adapter, "node-note", { heading: "Plan", body: "replacement" }),
+    (e) => e instanceof NodeSectionError && e.code === "SECTION_AMBIGUOUS",
+  );
 });
 
-test("section CAS permits another section edit, preserves surrounding bytes and permits title rename/removal", async (t) => {
+test("append preserves surrounding bytes and uses current sections after another writer's edit", async (t) => {
   const body = "intro  \n\n## First\noriginal\n\n## Second\n[keep](node-peer)\n";
-  const { adapter } = await fixture(t, body);
-  // Preserve an externally written uncanonicalized link outside the selected section.
+  const { adapter, peer } = await fixture(t, body);
   const original = await readNodeForEdit(adapter, "node-note");
   await adapter.writeFile("Note/Note.md", serializeFrontmatter(original.frontmatter, body));
-  const first = await readNodeSection(adapter, "node-note", "First");
-  const second = await readNodeSection(adapter, "node-note", "Second");
-  const secondSaved = await writeNodeSection(adapter, "node-note", {
+  const second = await appendNodeBody(peer, "node-note", {
     heading: "Second",
-    baseEtag: second.sectionEtag,
-    body: "## Second\nchanged elsewhere\n",
+    body: "changed elsewhere",
   });
-  assert.notEqual(secondSaved.etag, original.etag);
-  const saved = await writeNodeSection(adapter, "node-note", {
+  const saved = await appendNodeBody(adapter, "node-note", {
     heading: "First",
-    baseEtag: first.sectionEtag,
-    body: "## Renamed\n[new](node-peer)\n\n",
+    body: "[new](node-peer)",
   });
   assert.equal(
     parseFrontmatter(saved.raw).body,
-    "intro  \n\n## Renamed\n[new](../Peer/Peer.md)\n\n## Second\nchanged elsewhere\n",
+    "intro  \n\n## First\noriginal\n\n[new](../Peer/Peer.md)\n\n## Second\n[keep](node-peer)\n\nchanged elsewhere\n",
   );
+  assert.notEqual(second.etag, original.etag);
   assert.equal(saved.etag, contentEtag(saved.raw));
   assert.equal(await adapter.history.read(saved.version!), saved.raw);
-  await assert.rejects(readNodeSection(adapter, "node-note", "First"), /not found/);
-  const renamed = await readNodeSection(adapter, "node-note", "Renamed");
-  const removed = await writeNodeSection(adapter, "node-note", {
-    heading: "Renamed",
-    baseEtag: renamed.sectionEtag,
-    body: "",
-  });
-  assert.equal(parseFrontmatter(removed.raw).body, "intro  \n\n## Second\nchanged elsewhere\n");
-});
-
-test("section write leaves other body bytes exact and rejects changes within its own nested section", async (t) => {
-  const body = "## A\nalpha\n\n### Child\nchild\n\n## B\n[raw](node-peer)\n";
-  const { adapter, peer } = await fixture(t, body);
-  const current = await readNodeForEdit(adapter, "node-note");
-  await adapter.writeFile("Note/Note.md", serializeFrontmatter(current.frontmatter, body));
-  const a = await readNodeSection(adapter, "node-note", "A");
-  const saved = await writeNodeSection(peer, "node-note", {
-    heading: "A",
-    baseEtag: a.sectionEtag,
-    body: "## A\nnew\n\n### Child\nchanged\n\n",
-  });
-  assert.equal(
-    parseFrontmatter(saved.raw).body,
-    "## A\nnew\n\n### Child\nchanged\n\n## B\n[raw](node-peer)\n",
-  );
   await assert.rejects(
-    writeNodeSection(adapter, "node-note", { heading: "A", baseEtag: a.sectionEtag, body: a.text }),
-    (e) => e instanceof NodeSectionError && e.code === "SECTION_ETAG_CONFLICT",
-  );
-  await assert.rejects(
-    writeNodeSection(adapter, "node-note", { heading: "A", baseEtag: saved.etag, body: "x" }),
-    /Section ETag conflict/,
-  );
-  await assert.rejects(
-    writeNodeSection(adapter, "node-note", {
-      heading: "Missing",
-      baseEtag: a.sectionEtag,
-      body: "x",
-    }),
-    /not found/,
+    writeNodeDocument(adapter, "node-note", { baseEtag: original.etag, body: "stale overwrite" }),
+    /etag conflict/i,
   );
   assert.equal((await readNodeForEdit(adapter, "node-note")).raw, saved.raw);
 });
 
-test("section replacement without a final newline keeps the next ATX and Setext heading intact", async (t) => {
+test("append keeps peer ATX and Setext headings intact without a payload final newline", async (t) => {
   const { adapter } = await fixture(
     t,
     "before\n\n## A\nalpha\n\n## B\nbeta\n\nSetext\n------\nsetext\n",
   );
-  const a = await readNodeSection(adapter, "node-note", "A");
-  const saved = await writeNodeSection(adapter, "node-note", {
-    heading: "A",
-    baseEtag: a.sectionEtag,
-    body: "## A\nchanged",
-  });
+  await appendNodeBody(adapter, "node-note", { heading: "A", body: "changed" });
+  await appendNodeBody(adapter, "node-note", { heading: "B", body: "paragraph" });
   assert.equal(
-    parseFrontmatter(saved.raw).body,
-    "before\n\n## A\nchanged\n\n## B\nbeta\n\nSetext\n------\nsetext\n",
-  );
-  const b = await readNodeSection(adapter, "node-note", "B");
-  await writeNodeSection(adapter, "node-note", {
-    heading: "B",
-    baseEtag: b.sectionEtag,
-    body: "replacement paragraph",
-  });
-  assert.equal(
-    (await readNodeSection(adapter, "node-note", "Setext")).text,
+    (await readSection(adapter, "node-note", "Setext")).text,
     "Setext\n------\nsetext\n",
   );
-  const currentA = await readNodeSection(adapter, "node-note", "A");
-  await writeNodeSection(adapter, "node-note", {
-    heading: "A",
-    baseEtag: currentA.sectionEtag,
-    body: "",
-  });
   assert.equal(
     (await readNodeForEdit(adapter, "node-note")).body,
-    "before\n\nSetext\n------\nsetext\n",
+    "before\n\n## A\nalpha\n\nchanged\n\n## B\nbeta\n\nparagraph\n\nSetext\n------\nsetext\n",
   );
 });
 
@@ -275,15 +203,10 @@ test("lightweight ordinary saves retain material behind and standard material va
     sources: [{ resource: pathToFileURL(material).href }],
   });
   const before = await inspectNodeSync(adapter, id);
-  const section = await readNodeSection(adapter, id, "Evidence");
   await fs.writeFile(material, "v2");
   await appendNodeBody(adapter, id, { body: "## Notes\nextra" });
   assert.equal((await inspectNodeSync(adapter, id)).state, "behind");
-  await writeNodeSection(adapter, id, {
-    heading: "Evidence",
-    baseEtag: section.sectionEtag,
-    body: "## Evidence\nupdated\n\n",
-  });
+  await appendNodeBody(adapter, id, { heading: "Evidence", body: "updated" });
   const after = await inspectNodeSync(adapter, id);
   assert.equal(after.state, "behind");
   assert.equal(after.materials[0]!.recordedVersion, before.materials[0]!.recordedVersion);
@@ -349,7 +272,7 @@ test("real CLI append times out without changing bytes or history, then one call
   assert.equal((await git(tentRoot, "rev-list", "--count", `${head}..HEAD`)).trim(), "1");
 });
 
-test("real CLI processes queue concurrent append and section stdin edit reports captured version", async (t) => {
+test("real CLI processes queue concurrent append and stdin writes report captured versions", async (t) => {
   const { root, tentRoot, adapter } = await fixture(t, "start");
   await readNodeForEdit(adapter, "node-note", { capture: true });
   const head = (await git(tentRoot, "rev-parse", "HEAD")).trim();
@@ -388,41 +311,30 @@ test("real CLI processes queue concurrent append and section stdin edit reports 
     { workspace: root, json: true, stdin: "from stdin\n" },
   );
   assert.equal(appended.exitCode, 0, appended.stderr);
-  const selected = await cli(
-    root,
-    "node",
-    "get-section",
-    "node-note",
-    "--heading",
-    "Summary",
-    "--json",
-  );
+  const selected = await cli(root, "node", "get", "node-note", "--full", "--json");
   assert.equal(selected.code, 0, selected.stderr);
-  const section = JSON.parse(selected.stdout);
+  const observed = JSON.parse(selected.stdout);
   const changed = await runNodeCommand(
-    "write-section",
-    ["node-note", "--heading", "Summary", "--base-etag", section.etag, "--body", "-"],
-    { workspace: root, json: true, stdin: "## New summary\nreplaced\n" },
+    "write",
+    ["node-note", "--base-etag", observed.etag, "--body", "-"],
+    { workspace: root, json: true, stdin: observed.text.replace("## Summary", "## New summary") },
   );
   assert.equal(changed.exitCode, 0, changed.stderr);
   assert.ok(JSON.parse(changed.stdout).version);
   const stale = await cli(
     root,
     "node",
-    "write-section",
+    "write",
     "node-note",
-    "--heading",
-    "New summary",
     "--base-etag",
-    section.etag,
+    observed.etag,
     "--body",
     "overwrite",
     "--json",
   );
   assert.equal(stale.code, 1);
-  assert.match(stale.stderr, /Section ETag conflict/);
-  for (const sub of ["append", "get-section", "write-section"])
-    assert.match(nodeHelpText(sub), new RegExp(`tent node ${sub}`));
+  assert.match(stale.stderr, /etag conflict/i);
+  assert.match(nodeHelpText("append"), /tent node append/);
   const invalid = await runNodeCommand(
     "append",
     ["node-note", "--body", "x", "--base-etag", "irrelevant"],
@@ -448,7 +360,7 @@ test("append reuses a unique section after its nested content and preserves foll
   });
   assert.equal(parseFrontmatter(saved.raw).body, before + "[Peer](../Peer/Peer.md)\n\n" + after);
   await appendNodeBody(adapter, "node-note", { heading: "Notes", body: "again" });
-  const section = await readNodeSection(adapter, "node-note", "Notes");
+  const section = await readSection(adapter, "node-note", "Notes");
   assert.match(section.text, /nested\n\n\[Peer\].*\n\nagain\n\n$/);
   await appendNodeBody(adapter, "node-note", { body: "## Notes\nduplicate" });
   const raw = await adapter.readFile("Note/Note.md");
@@ -483,69 +395,48 @@ test("CLI adapter waits before execution but preserves CAS conflicts without ret
   assert.match(await adapter.readFile("Note/Note.md"), /external change/);
 });
 
-test("cross-section reference definitions are canonicalized only inside the appended or replaced range", async (t) => {
+test("cross-section reference definitions are canonicalized only inside the appended range", async (t) => {
   const { adapter } = await fixture(t);
-  const writeRawBody = async (body: string) => {
-    const current = await readNodeForEdit(adapter, "node-note");
-    await adapter.writeFile("Note/Note.md", serializeFrontmatter(current.frontmatter, body));
-  };
-  const uses = "## Uses\n[Peer][p]\n[untouched](node-peer)\n";
-  await writeRawBody(uses);
-  const appended = await appendNodeBody(adapter, "node-note", {
+  const uses = "## Uses\n[Peer][p]\n[untouched](node-peer)\n\n";
+  const suffix = "## Last\nlast\n";
+  const current = await readNodeForEdit(adapter, "node-note");
+  await adapter.writeFile(
+    "Note/Note.md",
+    serializeFrontmatter(current.frontmatter, uses + "## Definitions\nexisting\n\n" + suffix),
+  );
+  const saved = await appendNodeBody(adapter, "node-note", {
+    heading: "Definitions",
     body: '[p]: <node-peer#part> "Peer title"',
   });
   assert.equal(
-    parseFrontmatter(appended.raw).body,
-    uses + '\n[p]: <../Peer/Peer.md#part> "Peer title"\n',
+    parseFrontmatter(saved.raw).body,
+    uses + '## Definitions\nexisting\n\n[p]: <../Peer/Peer.md#part> "Peer title"\n\n' + suffix,
   );
-  const prefix = uses + "\n";
-  const suffix = "## Last\nlast\n";
-  await writeRawBody(prefix + "## Definitions\n[p]: https://example.invalid\n\n" + suffix);
-  const observedUses = await readNodeSection(adapter, "node-note", "Uses");
-  const definitions = await readNodeSection(adapter, "node-note", "Definitions");
-  const replaced = await writeNodeSection(adapter, "node-note", {
-    heading: "Definitions",
-    baseEtag: definitions.sectionEtag,
-    body: "## Definitions\n[p]: node-peer",
-  });
-  assert.equal(
-    parseFrontmatter(replaced.raw).body,
-    prefix + "## Definitions\n[p]: ../Peer/Peer.md\n\n" + suffix,
-  );
-  assert.equal(
-    (await readNodeSection(adapter, "node-note", "Uses")).sectionEtag,
-    observedUses.sectionEtag,
-  );
-  assert.equal(await adapter.history.read(replaced.version!), replaced.raw);
+  assert.equal(await adapter.history.read(saved.version!), saved.raw);
 });
 
-test("new reference uses preserve definitions outside the append or replacement range", async (t) => {
+test("new reference uses preserve definitions outside the append range", async (t) => {
   const { adapter } = await fixture(t);
   const source = "## Uses\nold\n\n## Definitions\n[p]: node-peer\n";
   const current = await readNodeForEdit(adapter, "node-note");
   await adapter.writeFile("Note/Note.md", serializeFrontmatter(current.frontmatter, source));
-  const uses = await readNodeSection(adapter, "node-note", "Uses");
-  const definitions = await readNodeSection(adapter, "node-note", "Definitions");
-  const replaced = await writeNodeSection(adapter, "node-note", {
+  const definitions = await readSection(adapter, "node-note", "Definitions");
+  const appended = await appendNodeBody(adapter, "node-note", {
+    body: "[Peer][p]",
     heading: "Uses",
-    baseEtag: uses.sectionEtag,
-    body: "## Uses\n[Peer][p]",
   });
   assert.equal(
-    parseFrontmatter(replaced.raw).body,
-    "## Uses\n[Peer][p]\n\n## Definitions\n[p]: node-peer\n",
+    parseFrontmatter(appended.raw).body,
+    "## Uses\nold\n\n[Peer][p]\n\n## Definitions\n[p]: node-peer\n",
   );
-  assert.equal(
-    (await readNodeSection(adapter, "node-note", "Definitions")).sectionEtag,
-    definitions.sectionEtag,
-  );
-  const appended = await appendNodeBody(adapter, "node-note", {
+  assert.equal((await readSection(adapter, "node-note", "Definitions")).text, definitions.text);
+  const more = await appendNodeBody(adapter, "node-note", {
     body: "[Peer again][p]",
     heading: "More",
   });
   assert.equal(
-    parseFrontmatter(appended.raw).body,
-    "## Uses\n[Peer][p]\n\n## Definitions\n[p]: node-peer\n\n## More\n\n[Peer again][p]\n",
+    parseFrontmatter(more.raw).body,
+    parseFrontmatter(appended.raw).body + "\n## More\n\n[Peer again][p]\n",
   );
 });
 
@@ -558,14 +449,10 @@ test("plain appended heading text round-trips named and numeric entity spellings
     { workspace: root },
   );
   assert.equal(result.exitCode, 0, result.stderr);
-  const section = await runNodeCommand(
-    "get-section",
-    ["node-note", "--heading", heading, "--json"],
-    { workspace: root },
-  );
-  assert.equal(section.exitCode, 0, section.stderr);
-  assert.equal(JSON.parse(section.stdout).heading, heading);
-  const read = await readNodeSection(adapter, "node-note", heading);
+  const page = await runNodeCommand("get", ["node-note", "--full", "--json"], { workspace: root });
+  assert.equal(page.exitCode, 0, page.stderr);
+  assert.equal(JSON.parse(page.stdout).text, (await readNodeForEdit(adapter, "node-note")).body);
+  const read = await readSection(adapter, "node-note", heading);
   assert.match(read.text, /A \\&amp; B \\&\\#35; C \\&\\#x26; D \\& E/);
-  await assert.rejects(readNodeSection(adapter, "node-note", "A & B # C & D & E"), /not found/);
+  await assert.rejects(readSection(adapter, "node-note", "A & B # C & D & E"), /not found/);
 });

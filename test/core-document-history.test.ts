@@ -1,6 +1,7 @@
 import { NodeFs } from "../src/fs/node-fs.js";
 import { readWorkspaceSettings } from "../src/core/workspace-settings.js";
 import { readNode, readNodeForEdit, listNodes, searchNodes } from "../src/core/node-query.js";
+import { readDocumentDiff } from "../src/core/document-diff.js";
 import {
   createRoleContext,
   editRoleContext,
@@ -262,7 +263,7 @@ test("explicit read capture and Core saves retain only selected documents; Git d
     { workspaceId, adapter, git } = h;
   await listNodes(adapter, workspaceId, {});
   await readNode(adapter, workspaceId, { nodeId: "node-alpha", ...{ view: "summary" } });
-  await searchNodes(adapter, workspaceId, { query: "Original" });
+  await searchNodes(adapter, workspaceId, h.workspace, { resource: "../source.txt" });
   await assert.rejects(git("rev-parse", "--verify", "HEAD"));
   const uncaptured = await readNodeForEdit(adapter, "node-alpha");
   assert.equal(uncaptured.version, undefined);
@@ -302,14 +303,12 @@ test("explicit read capture and Core saves retain only selected documents; Git d
   const renamed = await readNodeForEdit(adapter, original.nodeId, { capture: true });
   assert.ok(renamed.version);
   assert.equal(await git("ls-tree", "-r", "--name-only", "HEAD"), "Renamed/Renamed.md");
-  const diff = await runNodeCommand(
-    "diff",
-    ["--from-json", JSON.stringify(original.version), "--to-json", JSON.stringify(renamed.version)],
-    { workspace: h.workspace, json: true },
-  );
-  assert.equal(diff.exitCode, 0, diff.stderr);
-  assert.equal(JSON.parse(diff.stdout).pathChanged, true);
-  assert.match(JSON.parse(diff.stdout).text, /Core save/);
+  const diff = await readDocumentDiff(adapter, {
+    from: original.version,
+    to: renamed.version,
+  });
+  assert.equal(diff.pathChanged, true);
+  assert.match(diff.text, /Core save/);
   await deleteNode(h.mount.env, original.nodeId);
   await git("gc", "--prune=now");
   const history = await runNodeCommand(

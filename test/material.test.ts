@@ -233,9 +233,6 @@ test("real Node move and rename preserve resource targets, ordered sources and h
     assert.ok("text" in first);
     assert.deepEqual(first.sources, sources);
     assert.equal(first.resource, "./image.bin");
-    assert.equal(before.search({ query: "main" }).items[0]?.match.field, "sources");
-    assert.equal(before.search({ query: "访谈结论" }).items[0]?.match.field, "sources");
-    assert.equal(before.search({ query: "image" }).items[0]?.match.field, "resource");
     await moveNode(env, sourceId, parentId, { mode: "inside" });
     await renameNode(env, sourceId, "New");
     const raw = await adapter.readFile("Group/New/New.md");

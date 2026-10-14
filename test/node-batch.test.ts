@@ -221,7 +221,7 @@ test("CLI summaries and creation responses stay bounded for large documents", as
   const { workspace, adapter } = await fixture(t);
   await adapter.writeFile(
     "A/A.md",
-    `---\nid: node-alpha\ntype: prompt\ndescription: ${"d".repeat(40000)}\n---\nShort body`,
+    `---\nid: node-alpha\ntype: prompt\ntags: ${JSON.stringify(Array.from({ length: 500 }, (_, i) => `tag-${i}-${"d".repeat(80)}`))}\n---\nShort body`,
   );
   const summary = await runNodeCommand("get", ["node-alpha", "--view", "summary"], {
     workspace,
@@ -230,7 +230,7 @@ test("CLI summaries and creation responses stay bounded for large documents", as
   assert.equal(summary.exitCode, 0, summary.stderr);
   assert.ok(Buffer.byteLength(summary.stdout) <= 16 * 1024 + 1);
   const metadata = JSON.parse(summary.stdout);
-  assert.equal(metadata.descriptionTruncated, true);
+  assert.equal(metadata.tagsTruncated, true);
   assert.equal(metadata.metadataRead.nodeId, "node-alpha");
   const created = await runNodeCommand(
     "create",

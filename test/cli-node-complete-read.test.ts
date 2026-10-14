@@ -165,15 +165,14 @@ test("every partial page and explicit range remains read-only while full reads p
 });
 
 test("batch, create, read-back and excerpt outputs expose no unrestricted replacement basis", async (t) => {
-  const { adapter, raw, body, cli } = await fixture(t);
+  const { adapter, raw, body, cli } = await fixture(t, "resource: ../../src/a.ts\n");
   const batch = await cli("read-many", ["node-alpha", "node-bravo"]);
   assertIncomplete(batch.items[0], raw);
   assert.equal(batch.items[1].partial, false);
-  const search = await cli("search", ["正文"]);
-  assertIncomplete(
-    search.items.find((item: { nodeId: string }) => item.nodeId === "node-alpha"),
-    raw,
-  );
+  const search = await cli("search", ["--resource", "src/a.ts"]);
+  const hit = search.items.find((item: { nodeId: string }) => item.nodeId === "node-alpha");
+  assert.ok(hit);
+  assert.deepEqual(etags(hit), [], "header discovery supplies no body replacement basis");
   // Relations use retained documents; excerpts still cannot authorize full replacement.
   await adapter.history.captureUnlocked(
     [
@@ -217,9 +216,17 @@ test("incomplete bases support metadata-only edits and retain revision conflict 
   ]);
   assert.equal(parseFrontmatter(await adapter.readFile("A/A.md")).body, body);
   assertIncomplete(saved, await adapter.readFile("A/A.md"));
-  const typed = await cli("type", ["node-alpha", "output", "--base-etag", saved.etag]);
+  const typed = await cli("write", [
+    "node-alpha",
+    "--input-json",
+    JSON.stringify({ baseEtag: saved.etag, frontmatter: { type: "output" } }),
+  ]);
   assertIncomplete(typed, await adapter.readFile("A/A.md"));
-  const tagged = await cli("tags", ["add", "node-alpha", "reviewed", "--base-etag", typed.etag]);
+  const tagged = await cli("write", [
+    "node-alpha",
+    "--input-json",
+    JSON.stringify({ baseEtag: typed.etag, frontmatter: { tags: ["reviewed"] } }),
+  ]);
   assertIncomplete(tagged, await adapter.readFile("A/A.md"));
   const stale = await runNodeCommand(
     "write",

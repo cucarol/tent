@@ -45,6 +45,15 @@ async function fixture(t: TestContext) {
       { id: "node-peer", name: "Peer", type: "prompt", body: "Peer body\n" },
     ],
   });
+  await fs.writeFile(path.join(root, "peer.txt"), "peer material");
+  const peerFile = path.join(root, ".tent/Peer/Peer.md");
+  await fs.writeFile(
+    peerFile,
+    (await fs.readFile(peerFile, "utf8")).replace(
+      "type: prompt",
+      "type: prompt\nresource: ../../peer.txt",
+    ),
+  );
   await git(path.join(root, ".tent"), "init");
   await git(path.join(root, ".tent"), "add", ".");
   await git(path.join(root, ".tent"), "commit", "-m", "retained relation fixture");
@@ -132,7 +141,7 @@ test("text lists/details identify their objects, body reads preserve text, and a
       () => node("read-many", ["node-child", "node-peer"]),
       [/node-child/, /node-peer/, /Child body/, /Peer body/],
     ],
-    [() => node("search", ["Peer"]), [/node-peer/, /Peer/]],
+    [() => node("search", ["--resource", "peer.txt"]), [/node-peer/, /Peer/]],
     [
       () => node("relations", ["node-child", "--direction", "parent"]),
       [/parent  /, /node-goal/, /Goal/],
@@ -163,8 +172,6 @@ test("text lists/details identify their objects, body reads preserve text, and a
       [/card-text/, /consumed/, /Replayed: false/],
     ],
     [() => card("take", ["card-text", "--role", "role-text"]), [/card-text/, /Replayed: true/]],
-    [() => node("get-section", ["node-child", "--heading", "Facts"]), [/node-child/, /## Facts/]],
-    [() => workspace("changes"), [/node-child/]],
   ] as Array<[() => Promise<Result>, RegExp[]]>) {
     const text = ok(await call());
     for (const pattern of patterns) assert.match(text, pattern);
@@ -422,7 +429,6 @@ test("judge W1-W4 wording is exact, Next runs, and text conflicts do not expose 
   await next(confirm, /node get node-peer --full/);
   for (const [sub, input] of [
     ["create", ["Bad type", "--type", "decision"]],
-    ["type", ["node-peer", "decision", "--base-etag", current]],
     [
       "write-many",
       [

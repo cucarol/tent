@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { test } from "node:test";
+import { readDocumentDiff } from "../src/core/document-diff.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { cli, git } from "./helpers.js";
 
-test("separate CLI processes continue discovery, live and Git reads and diffs with checked cursor addresses", async (t) => {
+test("separate CLI processes continue discovery, live and Git reads with checked cursor addresses", async (t) => {
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "reader-process-"));
@@ -20,6 +21,16 @@ test("separate CLI processes continue discovery, live and Git reads and diffs wi
     ],
   });
   const tent = path.join(root, ".tent");
+  for (const name of ["A", "B"]) {
+    const file = path.join(tent, name, `${name}.md`);
+    await fs.writeFile(
+      file,
+      (await fs.readFile(file, "utf8")).replace(
+        "type: prompt",
+        "type: prompt\nresource: ../../src/a.ts",
+      ),
+    );
+  }
   await git(tent, "init");
   await git(tent, "add", ".");
   await git(tent, "commit", "-m", "retained relation fixture");
@@ -36,7 +47,7 @@ test("separate CLI processes continue discovery, live and Git reads and diffs wi
   };
   for (const query of [
     ["list"],
-    ["search", "DATA"],
+    ["search", "--resource", "src/a.ts"],
     ["relations", "root", "--direction", "children"],
   ]) {
     const first = await read(...query, "--limit", "1");
@@ -74,25 +85,18 @@ test("separate CLI processes continue discovery, live and Git reads and diffs wi
   const current = await read("get", "node-alpha");
   await read("check", "node-alpha");
   const currentVersion = { commit: (await adapter.history.currentCommit())!, path: "A/A.md" };
-  const diffArgs = [
-    "diff",
-    "--from-json",
-    JSON.stringify(firstVersion),
-    "--to-json",
-    JSON.stringify(currentVersion),
-  ];
-  const diff = await read(...diffArgs);
-  assert.ok(diff.page.nextCursor);
-  assert.equal(
-    await collect(diffArgs, diff),
-    await new NodeFs(tent).history.diff(firstVersion, currentVersion),
-  );
+  const diff = await readDocumentDiff(new NodeFs(tent), { from: firstVersion, to: currentVersion });
+  assert.equal(diff.text, await new NodeFs(tent).history.diff(firstVersion, currentVersion));
+  assert.ok(diff.text.includes("-DATA") && diff.text.includes("+NEW"));
   await reject(
     ["get", "node-beta", "--cursor", current.page.nextCursor],
     /another source or query/,
   );
   const listing = await read("list", "--limit", "1");
-  await reject(["search", "DATA", "--cursor", listing.page.nextCursor], /another source or query/);
+  await reject(
+    ["search", "--resource", "src/a.ts", "--cursor", listing.page.nextCursor],
+    /another source or query/,
+  );
   const cursor = JSON.parse(Buffer.from(listing.page.nextCursor, "base64url").toString());
   cursor.position = 999;
   await reject(

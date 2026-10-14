@@ -2,7 +2,6 @@ import { validationIssueText } from "../core/validation-message.js";
 
 export type ErrorContext = {
   target?: { kind: "node" | "card" | "role"; id: string };
-  heading?: string;
   baseEtag?: string;
   json?: boolean;
   workspace?: string;
@@ -80,18 +79,14 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
     )
   ) {
     if (command.endsWith(" create")) next = ["tent", "workspace", "brief"];
-    else if (target?.kind === "node")
-      next =
-        command.includes("write-section") && context.heading
-          ? ["tent", "node", "get-section", target.id, "--heading", context.heading]
-          : ["tent", "node", "get", target.id, "--full"];
+    else if (target?.kind === "node") next = ["tent", "node", "get", target.id, "--full"];
     else if (target?.kind === "card") next = ["tent", "card", "show", target.id];
     else if (target?.kind === "role") next = ["tent", "role", "show", target.id];
     else next = ["tent", "workspace", "brief"];
   }
   if (context.workspace) next.push("--workspace", context.workspace);
   const comment =
-    /^tent node (?:create|type|write-many)(?: |$)/.test(command) &&
+    /^tent node (?:create|write-many)(?: |$)/.test(command) &&
     message === "Node type must be goal, prompt or output."
       ? "  # words like decision or evidence go in --tags"
       : "";

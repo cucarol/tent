@@ -77,29 +77,9 @@ export function repositoryDirectoryGraph(
     components.push(component.sort(comparePaths));
   }
   for (const node of nodes) if (!indices.has(node)) visit(node);
-  const componentOf = new Map<string, number>();
-  components.forEach((component, i) => component.forEach((node) => componentOf.set(node, i)));
-  const parents = components.map(() => new Set<number>());
-  for (const edge of collected.values()) {
-    const from = componentOf.get(edge.from)!,
-      to = componentOf.get(edge.to)!;
-    if (from !== to) parents[to]!.add(from);
-  }
-  const layers = new Map<number, number>();
-  function layer(component: number): number {
-    if (!layers.has(component))
-      layers.set(
-        component,
-        Math.max(0, ...[...parents[component]!].map((parent) => layer(parent) + 1)),
-      );
-    return layers.get(component)!;
-  }
   return {
     depth,
     entries: nodes.filter((node) => incoming.get(node)!.size === 0),
-    layers: nodes
-      .map((directory) => ({ directory, layer: layer(componentOf.get(directory)!) }))
-      .sort((a, b) => a.layer - b.layer || comparePaths(a.directory, b.directory)),
     cycles: components
       .filter((component) => component.length > 1)
       .sort((a, b) => comparePaths(JSON.stringify(a), JSON.stringify(b))),

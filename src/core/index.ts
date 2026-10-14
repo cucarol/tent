@@ -20,6 +20,7 @@ export * from "./role-delete.js";
 export * from "./node-query.js";
 export * from "./node-document-write.js";
 export * from "./node-lightwrite.js";
+export { NodeSectionError } from "./markdown-section.js";
 export * from "./node-write-batch.js";
 export * from "./graph-check.js";
 export * from "./node-sync.js";

@@ -3,7 +3,7 @@ import type { Nodes } from "mdast";
 
 export class NodeSectionError extends Error {
   constructor(
-    readonly code: "SECTION_NOT_FOUND" | "SECTION_AMBIGUOUS" | "SECTION_ETAG_CONFLICT",
+    readonly code: "SECTION_NOT_FOUND" | "SECTION_AMBIGUOUS",
     message: string,
     readonly details?: Record<string, unknown>,
   ) {

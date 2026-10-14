@@ -7,8 +7,7 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { createNode, deleteNode, renameNode } from "../src/core/ops.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { listNodeVersions } from "../src/core/history-query.js";
-import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
+import { listNodeVersions, listHistoryChanges } from "../src/core/history-query.js";
 import { testScratchRoot } from "./scratch.js";
 
 test("public saves and observed edits retain distinct history operations across locations", async (t) => {
@@ -52,19 +51,9 @@ test("public saves and observed edits retain distinct history operations across 
   assert.equal(rows.at(-1)!.changes[0]!.before!.path, "Beta/Beta.md");
   assert.equal(rows.at(-1)!.changes[0]!.after, undefined);
 
-  const result = await runWorkspaceCommand("changes", ["--from", first.commit, "--limit", "1"], {
-    workspace,
-    json: true,
-  });
-  assert.equal(result.exitCode, 0, result.stderr);
-  const page = JSON.parse(result.stdout);
-  assert.equal(page.items[0].operation, "document.external-capture");
-  assert.equal(page.page.hasMore, true);
-  const next = await runWorkspaceCommand(
-    "changes",
-    ["--from", first.commit, "--limit", "1", "--cursor", page.page.nextCursor],
-    { workspace, json: true },
+  const changes = await listHistoryChanges(adapter, { from: first.commit });
+  assert.deepEqual(
+    changes.map((change) => change.operation),
+    ["document.external-capture", "node.write", "node.rename", "node.delete"],
   );
-  assert.equal(next.exitCode, 0, next.stderr);
-  assert.equal(JSON.parse(next.stdout).items[0].operation, "node.write");
 });

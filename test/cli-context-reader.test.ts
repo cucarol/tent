@@ -33,12 +33,13 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
     };
     const node = async (sub: string, args: string[]) =>
       parse(await runNodeCommand(sub, args, globals));
-    await node("tags", [
-      "set",
+    await node("write", [
       "node-readera",
-      "offline,PDF",
-      "--base-etag",
-      (await node("get", ["node-readera", "--full"])).etag,
+      "--input-json",
+      JSON.stringify({
+        baseEtag: (await node("get", ["node-readera", "--full"])).etag,
+        frontmatter: { tags: ["offline", "PDF"] },
+      }),
     ]);
     const first = await node("list", ["--limit", "1"]);
     assert.equal(first.items.length, 1);
@@ -115,12 +116,13 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
     );
     assert.equal(unqualified.exitCode, 1);
     assert.match(unqualified.stderr, /expected-etag/);
-    await node("tags", [
-      "set",
+    await node("write", [
       "node-readera",
-      "online,PDF",
-      "--base-etag",
-      (await node("get", ["node-readera", "--full"])).etag,
+      "--input-json",
+      JSON.stringify({
+        baseEtag: (await node("get", ["node-readera", "--full"])).etag,
+        frontmatter: { tags: ["online", "PDF"] },
+      }),
     ]);
     assert.deepEqual((await node("get", ["node-readera", "--view", "summary"])).tags, [
       "online",

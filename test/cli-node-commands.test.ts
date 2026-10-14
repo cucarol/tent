@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { nodeHelpText, runNodeCommand } from "../src/cli/node-commands.js";
+import { runWorkspaceCommand, workspaceHelpText } from "../src/cli/workspace-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
@@ -135,8 +136,14 @@ test("direct Node CLI creates standard materials and uses observed CAS for metad
   );
   for (const [sub, args] of [
     ["write", [id, "--body", "stale", "--base-etag", old.etag]],
-    ["type", [id, "prompt", "--base-etag", old.etag]],
-    ["tags", ["set", id, "lost", "--base-etag", old.etag]],
+    [
+      "write",
+      [id, "--input-json", JSON.stringify({ baseEtag: old.etag, frontmatter: { type: "prompt" } })],
+    ],
+    [
+      "write",
+      [id, "--input-json", JSON.stringify({ baseEtag: old.etag, frontmatter: { tags: ["lost"] } })],
+    ],
   ] as const) {
     const rejected = await runNodeCommand(sub, [...args], { workspace: root });
     assert.equal(rejected.exitCode, 1);
@@ -146,7 +153,11 @@ test("direct Node CLI creates standard materials and uses observed CAS for metad
     parseFrontmatter(await tent.readFile("Parent/Child/Child.md")).data.custom,
     [3, 2, 1],
   );
-  await cli("tags", ["add", id, "kept", "--base-etag", saved.etag]);
+  await cli("write", [
+    id,
+    "--input-json",
+    JSON.stringify({ baseEtag: saved.etag, frontmatter: { tags: ["kept", "proof", "scope"] } }),
+  ]);
   assert.deepEqual((await cli("get", [id, "--view", "summary"])).tags, ["kept", "proof", "scope"]);
   const tree = await cli("list", ["--full"]);
   assert.equal(
@@ -447,18 +458,29 @@ test("node tags lists tags in use with counts and preset marks; types accept exa
   );
   const target = (await cli("create", ["Typed", "--type", "prompt"])).node;
   const changed = await runNodeCommand(
-    "type",
-    [target.nodeId, "prompt-decision", "--base-etag", target.etag],
+    "write",
+    [
+      target.nodeId,
+      "--input-json",
+      JSON.stringify({
+        baseEtag: (await cli("get", [target.nodeId, "--full"])).etag,
+        frontmatter: { type: "prompt-decision" },
+      }),
+    ],
     { workspace: root },
   );
   assert.equal(changed.exitCode, 1);
   assert.equal(changed.stderr.split("\n")[0], "Node type must be goal, prompt or output.");
   assert.match(
     changed.stderr.split("\n").slice(1).join("\n"),
-    /^Next: tent node type --help --workspace .+  # words like decision or evidence go in --tags\n$/,
+    /^Next: tent node write --help --workspace .+\n$/,
   );
   const full = await cli("get", [target.nodeId, "--full"]);
-  await cli("type", [target.nodeId, "goal", "--base-etag", full.etag]);
+  await cli("write", [
+    target.nodeId,
+    "--input-json",
+    JSON.stringify({ baseEtag: full.etag, frontmatter: { type: "goal" } }),
+  ]);
   assert.equal((await cli("get", [target.nodeId, "--view", "summary"])).type, "goal");
 });
 
@@ -487,4 +509,57 @@ test("link-output creates a plain output and adds only the tags it is given", as
     ),
     [tagged.nodeId],
   );
+});
+
+test("removed convenience commands are unavailable and leave document and history unchanged", async (t) => {
+  const { root, tent, cli } = await fixture(t, "removed-node-commands-");
+  await git(path.join(root, ".tent"), "init", "--initial-branch=main");
+  await cli("create", [
+    "Tagged",
+    "--id",
+    "node-tagged",
+    "--type",
+    "prompt",
+    "--tags",
+    "evidence",
+    "--body",
+    "## Facts\nKept.\n",
+  ]);
+  const captured = await tent.readFile("Tagged/Tagged.md");
+  await tent.writeFile(
+    "Tagged/Tagged.md",
+    captured.replace("Kept.", "Native edit awaiting capture."),
+  );
+  const before = await tent.readFile("Tagged/Tagged.md");
+  const head = await tent.history.currentCommit();
+  const globals = { workspace: root, json: true };
+  for (const [command, args] of [
+    ["get-section", ["node-tagged", "--heading", "Facts"]],
+    [
+      "write-section",
+      ["node-tagged", "--heading", "Facts", "--body", "lost", "--base-etag", "stale"],
+    ],
+    ["type", ["node-tagged", "output", "--base-etag", "stale"]],
+    ["diff", ["--from-json", "{}", "--to-json", "{}"]],
+    ...["set", "add", "remove"].map((action) => [
+      "tags",
+      [action, "node-tagged", "lost", "--base-etag", "stale"],
+    ]),
+  ] as Array<[string, string[]]>) {
+    const result = await runNodeCommand(command, args, globals);
+    assert.equal(result.exitCode, 1, command);
+    assert.equal(result.stdout, "", command);
+    assert.equal(await tent.readFile("Tagged/Tagged.md"), before, command);
+    assert.equal(await tent.history.currentCommit(), head, command);
+  }
+  const removedChanges = await runWorkspaceCommand("changes", [], globals);
+  assert.equal(removedChanges.exitCode, 1);
+  assert.equal(removedChanges.stdout, "");
+  assert.equal(await tent.history.currentCommit(), head);
+  assert.ok((await cli("tags", [])).tags.some((item: { tag: string }) => item.tag === "evidence"));
+  assert.doesNotMatch(
+    nodeHelpText(),
+    /tent node (?:get-section|write-section|type|diff)\b|tags set\|add\|remove/,
+  );
+  assert.doesNotMatch(workspaceHelpText, /workspace changes/);
 });

@@ -9,7 +9,7 @@ import { createNode, renameNode, moveNode, archiveNode } from "../src/core/ops.j
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
 import { writeNodesBatch } from "../src/core/node-write-batch.js";
-import { appendNodeBody, readNodeSection, writeNodeSection } from "../src/core/node-lightwrite.js";
+import { appendNodeBody } from "../src/core/node-lightwrite.js";
 import {
   inspectNodeSync,
   inspectWorkspaceSync,
@@ -1222,7 +1222,7 @@ test("repeat output confirmation records its acknowledgment with identical bytes
   assert.equal((await inspectNodeSync(new NodeFs(root), goal)).ahead, undefined);
 });
 
-test("metadata, append and section output writes explicitly acknowledge no output", async (t) => {
+test("metadata and append output writes explicitly acknowledge no output", async (t) => {
   const { fs, root, env, create, edit } = await fixture(t);
   const upstream = await create("Upstream");
   const goal = await createNode(env, {
@@ -1262,12 +1262,7 @@ test("metadata, append and section output writes explicitly acknowledge no outpu
   const actions = [
     () => edit(output, { frontmatter: { tags: ["metadata"] } }),
     () => appendNodeBody(fs, output, { body: "append" }),
-    async () =>
-      writeNodeSection(fs, output, {
-        heading: "Plan",
-        baseEtag: (await readNodeSection(fs, output, "Plan")).sectionEtag,
-        body: "## Plan\n\nsection replacement\n",
-      }),
+    () => appendNodeBody(fs, output, { heading: "Plan", body: "section addition" }),
   ];
   for (const action of actions) {
     await action();
