@@ -32,6 +32,7 @@ import {
 } from "./node-catalog.js";
 import { listWorkspaceRelations, type DocumentRef } from "./workspace-relations.js";
 import { cardSourceIdentityError, readCardProgress } from "./card-progress.js";
+import { retainedDocumentFs, uncapturedChecker } from "./retained-read.js";
 
 export type CardDocumentState = "pending" | "consumed";
 type CardFields = Record<string, unknown> & {
@@ -544,6 +545,8 @@ type PageOptions = {
   capture?: boolean;
   /** Internal callers already holding batch progress can skip a second derivation. */
   includeProgress?: boolean;
+  /** Pure CLI reads use retained documents for derived state, with live material observations. */
+  retainedState?: boolean;
 };
 function cardPage(
   id: string,
@@ -601,12 +604,16 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
       if (!(error instanceof CardDocumentError)) throw error;
       const metadata: Record<string, unknown> = {
         diagnostic: { code: error.code, message: error.message.slice(0, 512) },
+        ...(options.retainedState && (await uncapturedChecker(fs))(cardPath(id), raw)
+          ? { uncaptured: true }
+          : {}),
       };
       return cardPage(id, raw, options, metadata);
     }
     if (checked.current.raw !== raw)
       throw new ReaderError("SOURCE_CHANGED", "Card changed during lookup");
     const { current, history, publishedVersion } = checked;
+    const stateFs = options.retainedState ? await retainedDocumentFs(fs) : fs;
     const metadata = {
       publishedVersion,
       sources: current.data.sources,
@@ -617,12 +624,15 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
       ...(options.includeProgress === false
         ? {}
         : (
-            await readCardProgress(fs, [
+            await readCardProgress(stateFs, [
               { cardId: id, state: current.data.state, sources: current.data.sources },
             ])
           ).get(id)!),
       ...documentLifecycle(current.data),
-      ...(await deprecatedCardNotice(fs, current)),
+      ...(await deprecatedCardNotice(stateFs, current)),
+      ...(options.retainedState && (await uncapturedChecker(fs))(current.path, raw)
+        ? { uncaptured: true as const }
+        : {}),
     };
     const page = cardPage(id, raw, options, metadata);
     if (!options.capture) return { ...page, version: checked.version };
@@ -761,6 +771,7 @@ export async function listCardDocumentHeaders(
     includeOpen?: boolean;
     state?: CardDocumentState;
     includeDeprecated?: boolean;
+    uncaptured?: boolean;
   } = {},
 ) {
   if (options.roleId) await roleAvailable(fs, options.roleId);
@@ -768,6 +779,7 @@ export async function listCardDocumentHeaders(
   const items: Array<Record<string, unknown>> = [];
   const selected: Array<Record<string, unknown> & { path: string }> = [];
   const sourceSets = new Map<string, MaterialSource[]>();
+  const isUncaptured = options.uncaptured ? await uncapturedChecker(fs) : undefined;
   const entries = (await fs.exists(CARDS_DIR))
     ? (await fs.listDir(CARDS_DIR)).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     : [];
@@ -781,9 +793,14 @@ export async function listCardDocumentHeaders(
         if (entry.isDir || !entry.name.endsWith(".md") || !isCardId(id)) continue;
         if (cardIds && !cardIds.has(id)) continue;
         const path = cardPath(id);
+        let uncaptured = false;
         try {
-          const raw = fs.readFrontmatter ? await fs.readFrontmatter(path) : await fs.readFile(path),
-            data = parseFrontmatter(raw).data;
+          const raw =
+            !isUncaptured && fs.readFrontmatter
+              ? await fs.readFrontmatter(path)
+              : await fs.readFile(path);
+          uncaptured = isUncaptured?.(path, raw) ?? false;
+          const data = parseFrontmatter(raw).data;
           if (data.id !== id || data.type !== "card" || data.schemaVersion !== 3)
             invalid("Card header identity mismatch");
           const state = data.state;
@@ -807,12 +824,18 @@ export async function listCardDocumentHeaders(
             target: data.target,
             receivedBy: data.receivedBy,
             ...documentLifecycle(data),
+            ...(uncaptured ? { uncaptured: true } : {}),
           };
           items.push(item);
           selected.push(item);
           sourceSets.set(id, Array.isArray(data.sources) ? (data.sources as MaterialSource[]) : []);
         } catch {
-          items.push({ cardId: id, path, diagnostic: "Card header unavailable; inspect raw" });
+          items.push({
+            cardId: id,
+            path,
+            diagnostic: "Card header unavailable; inspect raw",
+            ...(uncaptured ? { uncaptured: true } : {}),
+          });
         }
       }
     }),
@@ -826,8 +849,13 @@ export async function listCardDocumentHeaders(
       }
     } catch {
       for (let i = 0; i < items.length; i++) {
-        const { cardId, path } = items[i]!;
-        items[i] = { cardId, path, diagnostic: "Card header unavailable; inspect raw" };
+        const { cardId, path, uncaptured } = items[i]!;
+        items[i] = {
+          cardId,
+          path,
+          diagnostic: "Card header unavailable; inspect raw",
+          ...(uncaptured ? { uncaptured: true } : {}),
+        };
       }
     }
   }
@@ -850,22 +878,33 @@ export async function listCardDocumentHeaders(
 
 export async function listCardDocuments(
   fs: FsAdapter,
-  options: Parameters<typeof listCardDocumentHeaders>[1] = {},
+  options: Parameters<typeof listCardDocumentHeaders>[1] & { retainedState?: boolean } = {},
   currentInspections?: Promise<readonly import("./node-sync.js").NodeSyncInspection[]>,
   currentCatalog?: NodeCatalog | Promise<NodeCatalog | undefined>,
   currentHeaders?: Awaited<ReturnType<typeof listCardDocumentHeaders>>,
 ) {
   const { items: visible, sourceSets } =
-    currentHeaders ?? (await listCardDocumentHeaders(fs, options));
+    currentHeaders ??
+    (await listCardDocumentHeaders(fs, {
+      ...options,
+      uncaptured: options.retainedState || options.uncaptured,
+    }));
   if (visible.some((item) => !item.diagnostic)) {
+    const stateFs = options.retainedState ? await retainedDocumentFs(fs) : fs;
+    const progressHeaders = options.retainedState
+      ? await listCardDocumentHeaders(stateFs, {
+          cardIds: visible.filter((item) => !item.diagnostic).map((item) => String(item.cardId)),
+          includeDeprecated: true,
+        })
+      : { items: visible, sourceSets };
     const progress = await readCardProgress(
-      fs,
-      visible
+      stateFs,
+      progressHeaders.items
         .filter((item) => !item.diagnostic)
         .map((item) => ({
           cardId: String(item.cardId),
           state: item.state as CardDocumentState,
-          sources: sourceSets.get(String(item.cardId)) ?? [],
+          sources: progressHeaders.sourceSets.get(String(item.cardId)) ?? [],
         })),
       currentInspections,
       currentCatalog,

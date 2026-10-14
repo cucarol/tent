@@ -22,6 +22,9 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
       { id: "node-readerb", name: "B", type: "output", body: "reader peer" },
     ],
   });
+  await git(path.join(workspace, ".tent"), "init");
+  await git(path.join(workspace, ".tent"), "add", ".");
+  await git(path.join(workspace, ".tent"), "commit", "-m", "retained relation fixture");
   {
     const globals = { workspace, json: true };
     const parse = (result: { exitCode: number; stdout: string; stderr: string }) => {

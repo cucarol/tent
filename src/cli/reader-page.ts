@@ -103,19 +103,23 @@ export function compactItem<T>(item: T): T {
   output.metadataRead ??= exactRead(original);
   if (fits(output, 8 * 1024)) return output as T;
   const identity = Object.fromEntries(
-    ["nodeId", "cardId", "roleId", "commit", "etag", "version", "read"]
+    ["nodeId", "cardId", "roleId", "commit", "etag", "version", "read", "uncaptured"]
       .filter((key) => key in original)
       .map((key) => [key, original[key]]),
   );
   return { ...identity, metadataOmitted: true, metadataRead: exactRead(original) } as T;
 }
+export const uncapturedNotice = "有未收录的改动，下一次写命令、brief 或 hook 时收录。";
+
 export function formatTextPage(value: unknown): string {
   const result = value as {
     text: string;
     page?: { hasMore: boolean; next?: unknown; nextCursor?: string };
     version?: unknown;
+    uncaptured?: boolean;
   };
   return (
+    (result.uncaptured ? `${uncapturedNotice}\n` : "") +
     result.text +
     (result.page?.hasMore
       ? `\n\n[Partial text]\nNext: ${JSON.stringify(result.page.next)}${result.page.nextCursor ? `\nCursor: ${result.page.nextCursor}` : ""}${result.version ? `\nVersion: ${JSON.stringify(result.version)}` : ""}`

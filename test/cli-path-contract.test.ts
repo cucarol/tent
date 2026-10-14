@@ -239,15 +239,17 @@ test("confirm names the missing ETag, node get shows it and role create prints o
   const etag = parse(await runNodeCommand("get", ["node-goal"], globals)).etag as string;
   const paged = await runNodeCommand("get", ["node-goal"], text);
   assert.equal(paged.exitCode, 0, paged.stderr);
-  assert.deepEqual(paged.stdout.split("\n").slice(0, 3), [
+  assert.deepEqual(paged.stdout.trimEnd().split("\n"), [
     "node-goal",
     `ETag: ${etag}`,
+    "有未收录的改动，下一次写命令、brief 或 hook 时收录。",
     "Deliver evidence.",
   ]);
   const full = await runNodeCommand("get", ["node-goal", "--full"], text);
-  assert.deepEqual(full.stdout.split("\n").slice(0, 3), [
+  assert.deepEqual(full.stdout.trimEnd().split("\n"), [
     "node-goal",
     `ETag: ${etag}`,
+    "有未收录的改动，下一次写命令、brief 或 hook 时收录。",
     "Deliver evidence.",
   ]);
 

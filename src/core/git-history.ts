@@ -526,18 +526,8 @@ export class GitDocumentHistory {
     if (!pending) {
       pending = (async () => {
         const file = path.join(this.root, ".git", `tent-derived-${name}.json`);
-        try {
-          const saved = JSON.parse(await fs.readFile(file, "utf8"));
-          if (
-            saved.version === schemaVersion &&
-            saved.head === head &&
-            "value" in saved &&
-            saved.digest === createHash("sha256").update(JSON.stringify(saved.value)).digest("hex")
-          )
-            return saved.value as T;
-        } catch {
-          /* A missing or damaged disposable cache is rebuilt. */
-        }
+        const saved = await this.readDerivedCache<T>(file, schemaVersion, head);
+        if (saved !== undefined) return saved;
         const value = await this.derivedScope.run({ head }, () => compute(head));
         await this.saveCache(file, {
           version: schemaVersion,
@@ -554,6 +544,22 @@ export class GitDocumentHistory {
     }
     // Private indexes are read-only. Public methods copy the values they expose.
     return pending;
+  }
+
+  private async readDerivedCache<T>(file: string, schemaVersion: number, head: string | null) {
+    try {
+      const saved = JSON.parse(await fs.readFile(file, "utf8"));
+      if (
+        saved.version === schemaVersion &&
+        saved.head === head &&
+        "value" in saved &&
+        saved.digest === createHash("sha256").update(JSON.stringify(saved.value)).digest("hex")
+      )
+        return saved.value as T;
+    } catch {
+      /* Optional indexes never replace their authoritative source when unavailable. */
+    }
+    return undefined;
   }
 
   private async saveCache(file: string, value: unknown) {
@@ -1233,13 +1239,40 @@ export class GitDocumentHistory {
     });
   }
 
-  /** Read a committed directory without replaying history or writing derived caches. */
-  async readDirectory(commit: string, directory: string): Promise<Map<string, string>> {
+  /** Current identity-document blobs, without replaying history or writing caches. */
+  async documentBlobs(): Promise<Map<string, string>> {
+    const head = await this.retainedHead();
+    if (!head) return new Map();
+    const saved = await this.readDerivedCache<Array<[string, string]>>(
+      path.join(this.root, ".git", "tent-derived-retained-document-blobs.json"),
+      1,
+      head,
+    );
+    if (saved) return new Map(saved.filter(([file]) => isHistoryDocument(file)));
+    const rows = (await runGit(this.root, ["ls-tree", "-r", "-z", head]))
+      .toString("utf8")
+      .split("\0");
+    return new Map(
+      rows.flatMap((row): Array<[string, string]> => {
+        const match = /^[0-7]{6} blob ([a-f0-9]+)\t(.+)$/.exec(row);
+        return match && isHistoryDocument(match[2]!) ? [[match[2]!, oid(match[1]!)]] : [];
+      }),
+    );
+  }
+
+  /** Read committed documents without replaying history or writing derived caches. */
+  async readDirectory(commit: string, directory?: string): Promise<Map<string, string>> {
     oid(commit);
-    documentPath(directory);
+    if (directory !== undefined) documentPath(directory);
     await this.ensureRepository();
     const entries = (
-      await runGit(this.root, ["ls-tree", "-r", "-z", commit, "--", `${directory}/`])
+      await runGit(this.root, [
+        "ls-tree",
+        "-r",
+        "-z",
+        commit,
+        ...(directory === undefined ? [] : ["--", `${directory}/`]),
+      ])
     )
       .toString("utf8")
       .split("\0")
@@ -1248,7 +1281,8 @@ export class GitDocumentHistory {
         const match = /^[0-7]{6} blob ([a-f0-9]+)\t(.+)$/.exec(row);
         if (!match) throw new Error("Invalid Git directory entry");
         return { blob: oid(match[1]!), path: documentPath(match[2]!) };
-      });
+      })
+      .filter((entry) => directory !== undefined || isHistoryDocument(entry.path));
     const blobs = await readBlobs(
       this.root,
       new Set(entries.map((entry) => entry.blob)),

@@ -283,8 +283,7 @@ export async function observeNodeMaterials(
           const locator = materialLocator(resource, documentPath, field === "sources");
           local =
             locator.kind === "path" || (locator.kind === "uri" && locator.uri.startsWith("file:"));
-          const key = JSON.stringify([identity, locator, repository]);
-          const observeOnce = async () => {
+          const observeOnce = async (retained: RepositoryMaterial | undefined) => {
             const targetNode =
               locator.kind === "path" && !isDirectoryMaterial(locator) && nodes
                 ? [...nodes.values()].find((node) => nodeNotePath(node.path) === locator.target)
@@ -305,25 +304,39 @@ export async function observeNodeMaterials(
                 field === "sources",
                 nodes,
                 finalDocuments,
-                repository,
+                retained,
                 track,
               );
-            if (isDirectoryMaterial(locator) && !directories.has(identity))
-              directories.set(identity, observe());
+            const directoryKey = JSON.stringify([identity, retained]);
+            if (isDirectoryMaterial(locator) && !directories.has(directoryKey))
+              directories.set(directoryKey, observe());
             return nodeRaw !== undefined
               ? {
                   version: nodeMaterialFingerprint(nodeRaw, locator, nodes),
                 }
               : finalRaw === undefined
-                ? await (directories.get(identity) ?? observe())
+                ? await (directories.get(directoryKey) ?? observe())
                 : {
                     version: createHash("sha256")
                       .update(materialContent(finalRaw, locator).replace(/\r\n?/g, "\n"))
                       .digest("hex"),
                   };
           };
-          if (observations && !observations.has(key)) observations.set(key, observeOnce());
-          observed = await (observations?.get(key) ?? observeOnce());
+          if (!observations) observed = await observeOnce(repository);
+          else {
+            // Current bytes do not depend on which historical blob a caller
+            // retained. Share that observation across bases; only a missing or
+            // unreadable current material needs its own relocation attempt.
+            const currentKey = JSON.stringify(["current", identity, locator]);
+            if (!observations.has(currentKey)) observations.set(currentKey, observeOnce(undefined));
+            observed = await observations.get(currentKey)!;
+            if (!observed.version && repository) {
+              const retainedKey = JSON.stringify(["retained", identity, locator, repository]);
+              if (!observations.has(retainedKey))
+                observations.set(retainedKey, observeOnce(repository));
+              observed = await observations.get(retainedKey)!;
+            }
+          }
         } catch (error) {
           // Existing invalid or unreadable declarations remain editable, with an honest diagnostic.
           observed = { reason: error instanceof Error ? error.message : String(error) };

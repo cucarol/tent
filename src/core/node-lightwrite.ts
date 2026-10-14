@@ -57,9 +57,14 @@ export function appendNodeBody(fs: FsAdapter, nodeId: string, input: NodeAppendI
 }
 
 /** Read the complete selected section, including its heading and nested subsections. */
-export async function readNodeSection(fs: FsAdapter, nodeId: string, heading: string) {
+export async function readNodeSection(
+  fs: FsAdapter,
+  nodeId: string,
+  heading: string,
+  options: { uncaptured?: boolean } = {},
+) {
   const title = headingText(heading);
-  const current = await readNodeForEdit(fs, nodeId);
+  const current = await readNodeForEdit(fs, nodeId, options);
   const section = selectSection(current.body, title);
   return {
     nodeId,
@@ -68,6 +73,7 @@ export async function readNodeSection(fs: FsAdapter, nodeId: string, heading: st
     depth: section.depth,
     text: section.text,
     sectionEtag: sectionEtag(nodeId, title, section.text),
+    ...(current.uncaptured ? { uncaptured: true as const } : {}),
   };
 }
 

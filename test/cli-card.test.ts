@@ -7,7 +7,7 @@ import { runCardCommand, cardHelpText } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { readCardDocument } from "../src/core/card-document.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "../src/core/scaffold.js";
 import { git } from "./helpers.js";
@@ -244,6 +244,65 @@ function value(result: { exitCode: number; stdout: string; stderr: string }) {
   assert.equal(result.exitCode, 0, result.stderr);
   return JSON.parse(result.stdout);
 }
+
+test("Card list reads live headers and diagnostics while retaining progress without capture", async (t) => {
+  const { root, globals } = await fixture(t);
+  const goal = value(
+    await runNodeCommand("create", ["Goal", "--type", "goal", "--body", "Deliver"], globals),
+  ).node;
+  const card = value(
+    await runCardCommand(
+      "create",
+      ["--title", "Recorded title", "--prompt", "Deliver", "--source", goal.nodeId],
+      globals,
+    ),
+  );
+  const adapter = new NodeFs(path.join(root, ".tent"));
+  const file = path.join(root, card.path);
+  const original = parseFrontmatter(await fs.readFile(file, "utf8"));
+  const head = await adapter.history.currentCommit();
+  const records = await adapter.history.nodeRecords();
+  const edited = serializeFrontmatter(
+    { ...original.data, title: "Live title", state: "consumed" },
+    original.body,
+    original.keyOrder,
+  );
+  await fs.writeFile(file, edited);
+  const mtime = (await fs.stat(file)).mtimeMs;
+  const listed = value(await runCardCommand("list", ["--state", "consumed"], globals));
+  assert.equal(listed.items.length, 1);
+  assert.equal(listed.items[0].title, "Live title");
+  assert.equal(listed.items[0].state, "consumed");
+  assert.equal(listed.items[0].progress, "pending");
+  assert.equal(listed.items[0].uncaptured, true);
+  assert.equal(
+    value(await runCardCommand("list", ["--state", "pending"], globals)).items.length,
+    0,
+  );
+  assert.equal(await fs.readFile(file, "utf8"), edited);
+  assert.equal((await fs.stat(file)).mtimeMs, mtime);
+
+  const invalid = serializeFrontmatter(
+    { ...original.data, schemaVersion: 999 },
+    original.body,
+    original.keyOrder,
+  );
+  await fs.writeFile(file, invalid);
+  const invalidMtime = (await fs.stat(file)).mtimeMs;
+  const unavailable = value(await runCardCommand("list", [], globals)).items[0];
+  assert.match(unavailable.diagnostic, /header unavailable/);
+  assert.equal(unavailable.title, undefined);
+  assert.equal(unavailable.progress, undefined);
+  assert.equal(unavailable.uncaptured, true);
+  const text = await runCardCommand("list", [], { workspace: root });
+  assert.equal(text.exitCode, 0, text.stderr);
+  assert.match(text.stdout, /header unavailable/);
+  assert.match(text.stdout, /有未收录的改动/);
+  assert.equal(await fs.readFile(file, "utf8"), invalid);
+  assert.equal((await fs.stat(file)).mtimeMs, invalidMtime);
+  assert.equal(await adapter.history.currentCommit(), head);
+  assert.deepEqual(await adapter.history.nodeRecords(), records);
+});
 
 test("Card CLI deprecates tasks with CAS, filters them and displays a reception notice", async (t) => {
   const { root, globals } = await fixture(t);

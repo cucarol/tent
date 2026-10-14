@@ -45,11 +45,14 @@ export async function loadTent(fs: FsAdapter): Promise<LoadedTent> {
       (entry) => entry.isDir && !isOperationalPath(entry.name) && !isSystemNoteName(entry.name),
     )
     .map((entry) => ({ path: entry.name, parent: null, target: roots }));
-  // Bound filesystem work across the whole tree, including ordinary grouping
-  // directories. Final sorting below makes completion order irrelevant.
-  while (pending.length) {
-    await Promise.all(
-      pending.splice(0, 16).map(async ({ path, parent, target }) => {
+  // Keep at most 16 directories active, refilling whenever one finishes instead
+  // of waiting for a whole batch. Final sorting makes completion order irrelevant.
+  const active = new Set<Promise<void>>();
+  const failures: unknown[] = [];
+  while (pending.length || active.size) {
+    while (pending.length && active.size < 16) {
+      const { path, parent, target } = pending.shift()!;
+      const task = (async () => {
         if (isOperationalPath(path)) return;
         const [node, entries] = await Promise.all([loadNode(fs, path, parent), fs.listDir(path)]);
         if (node) target.push(node);
@@ -61,8 +64,17 @@ export async function loadTent(fs: FsAdapter): Promise<LoadedTent> {
             target: node?.children ?? target,
           });
         }
-      }),
-    );
+      })()
+        .catch((error) => {
+          failures.push(error);
+        })
+        .finally(() => {
+          active.delete(task);
+        });
+      active.add(task);
+    }
+    await Promise.race(active);
+    if (failures.length) throw failures[0];
   }
 
   // 排序:隐藏 order 表优先;缺省时根与子框均按稳定名称排序

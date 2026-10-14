@@ -230,6 +230,56 @@ test("batched first timestamps retain publication across edits, removal and re-a
   }
 });
 
+test("document blob reads reuse exact-HEAD indexes without creating or repairing them", async (t) => {
+  const { root, history } = await fixture(t);
+  const file = "Goal/Goal.md";
+  const raw = "---\nid: node-blobcache\ntype: goal\n---\nfirst\n";
+  await history.captureUnlocked([{ path: file, raw }]);
+  const cache = path.join(root, ".git/tent-derived-retained-document-blobs.json");
+  const calls: string[][] = [];
+  const original = childProcess.spawn;
+  const mocked = t.mock.method(childProcess, "spawn", (...args: Parameters<typeof original>) => {
+    calls.push(args[1] as string[]);
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  const query = async () => {
+    calls.length = 0;
+    return new GitDocumentHistory(root).documentBlobs();
+  };
+  const cold = await query();
+  assert.ok(cold.has(file));
+  assert.equal(calls.filter((args) => args.includes("ls-tree")).length, 1);
+  await assert.rejects(fs.stat(cache), { code: "ENOENT" });
+
+  await history.changedRetainedDocuments([{ path: file, raw }]);
+  const retained = await fs.readFile(cache, "utf8");
+  const stamp = (await fs.stat(cache)).mtimeMs;
+  assert.deepEqual(await query(), cold);
+  assert.equal(calls.length, 0);
+  assert.equal(await fs.readFile(cache, "utf8"), retained);
+  assert.equal((await fs.stat(cache)).mtimeMs, stamp);
+
+  const damaged = JSON.parse(retained);
+  damaged.digest = "damaged";
+  const invalid = JSON.stringify(damaged);
+  await fs.writeFile(cache, invalid);
+  assert.deepEqual(await query(), cold);
+  assert.equal(calls.filter((args) => args.includes("ls-tree")).length, 1);
+  assert.equal(await fs.readFile(cache, "utf8"), invalid);
+
+  await fs.writeFile(cache, retained);
+  await history.captureUnlocked([{ path: file, raw: raw + "second\n" }]);
+  const current = await query();
+  assert.notEqual(current.get(file), cold.get(file));
+  assert.equal(calls.filter((args) => args.includes("ls-tree")).length, 1);
+  assert.equal(await fs.readFile(cache, "utf8"), retained);
+});
+
 test("one HEAD shares a single history traversal, durable hits skip replay, and resets invalidate", async (t) => {
   const { root, git, history } = await fixture(t);
   const file = "Goal/Goal.md",

@@ -21,6 +21,8 @@ test("separate CLI processes continue discovery, live and Git reads and diffs wi
   });
   const tent = path.join(root, ".tent");
   await git(tent, "init");
+  await git(tent, "add", ".");
+  await git(tent, "commit", "-m", "retained relation fixture");
   const run = (...args: string[]) => cli(root, "node", ...args, "--workspace", root, "--json");
   const read = async (...args: string[]) => {
     const result = await run(...args);

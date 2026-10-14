@@ -32,6 +32,10 @@ import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { createHash } from "node:crypto";
 import childProcess from "node:child_process";
 import { directoryFingerprint } from "../src/core/directory-material.js";
+import {
+  DirectoryObservationCache,
+  observeSourceDirectory,
+} from "../src/fs/directory-observation.js";
 import { nodeBasisRecordSchema } from "../src/core/node-basis-record.js";
 
 async function observeMaterialResource(workspace: string, owner: string, resource: string) {
@@ -388,6 +392,140 @@ test("a Git traversal warning cannot become a successfully observed empty direct
     /Permission denied/,
   );
 });
+
+test("overlapping directory reads share pending Git listings and cache loads with exact scope boundaries", async (t) => {
+  const workspace = await fixture(t, true);
+  await fs.mkdir(path.join(workspace, "src-other"));
+  await fs.writeFile(path.join(workspace, "src-other/file.txt"), "other\n");
+  await fs.writeFile(path.join(workspace, "src/forced.tmp"), "tracked but ignored\n");
+  await git(workspace, "add", "src-other");
+  await git(workspace, "add", "-f", "src/forced.tmp");
+  const cache = new DirectoryObservationCache();
+  const cacheDir = path.join(workspace, ".tent/.git/tent-material-cache");
+  const scopes = ["src", "src/nested", "src-other"];
+  let arrived = 0;
+  const callbacks: Array<() => void> = [];
+  const originalGet = cache.listings.get.bind(cache.listings);
+  t.mock.method(cache.listings, "get", (key: string) => {
+    const pending = originalGet(key);
+    if (++arrived === scopes.length) for (const callback of callbacks.splice(0)) callback();
+    return pending;
+  });
+  const execute = childProcess.execFile;
+  const listings: string[][] = [];
+  const mocked = t.mock.method(childProcess, "execFile", (...args: Parameters<typeof execute>) => {
+    const listing = args[1]?.includes("ls-files") && args[1]?.includes(workspace);
+    if (listing) listings.push([...(args[1] ?? [])]);
+    return execute(args[0], args[1], args[2], (error, stdout, stderr) => {
+      const finish = () => args[3]?.(error, stdout, stderr);
+      if (listing && arrived < scopes.length) callbacks.push(finish);
+      else finish();
+    });
+  });
+  const originalRead = fs.readFile;
+  const cacheLoads: string[] = [];
+  const mockedRead = t.mock.method(fs, "readFile", (...args: Parameters<typeof originalRead>) => {
+    if (String(args[0]).startsWith(cacheDir + path.sep)) cacheLoads.push(String(args[0]));
+    return originalRead(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    mockedRead.mock.restore();
+    syncBuiltinESMExports();
+  });
+  const results = await Promise.all(
+    scopes.map((scope) =>
+      observeSourceDirectory(workspace, path.join(workspace, scope), cacheDir, cache),
+    ),
+  );
+  assert.equal(listings.length, 2);
+  assert.ok(listings.every((args) => args.at(-1) === ":(literal)."));
+  assert.deepEqual(
+    results.map((result) => result.directoryFiles.map((file) => file.path)),
+    [["a.txt", "nested/b.txt"], ["b.txt"], ["file.txt"]],
+  );
+  for (const name of ["directory-working.json", "directory-blobs.json"])
+    assert.equal(cacheLoads.filter((filename) => filename === path.join(cacheDir, name)).length, 1);
+  assert.equal(cache.listings.size, 0);
+  assert.equal(cache.loading.size, 0);
+  await fs.writeFile(path.join(workspace, "src/new.txt"), "new\n");
+  const added = await observeSourceDirectory(
+    workspace,
+    path.join(workspace, "src"),
+    cacheDir,
+    cache,
+  );
+  assert.notEqual(added.observedVersion, results[0]!.observedVersion);
+  await fs.appendFile(path.join(workspace, ".gitignore"), "src/new.txt\n");
+  const ignored = await observeSourceDirectory(
+    workspace,
+    path.join(workspace, "src"),
+    cacheDir,
+    cache,
+  );
+  assert.equal(ignored.observedVersion, results[0]!.observedVersion);
+  await fs.unlink(path.join(workspace, "src/nested/b.txt"));
+  const deleted = await observeSourceDirectory(
+    workspace,
+    path.join(workspace, "src"),
+    cacheDir,
+    cache,
+  );
+  assert.deepEqual(
+    deleted.directoryFiles.map((file) => file.path),
+    ["a.txt"],
+  );
+  assert.equal(listings.length, 8);
+});
+
+for (const failure of ["warning", "invalid index"])
+  test(`whole-repository ${failure} falls back to the requested directory scope`, async (t) => {
+    const workspace = await fixture(t, true);
+    const execute = childProcess.execFile;
+    const scopes: string[] = [];
+    const mocked = t.mock.method(
+      childProcess,
+      "execFile",
+      (...args: Parameters<typeof execute>) => {
+        const listing = args[1]?.includes("ls-files");
+        const scope = args[1]?.at(-1);
+        if (listing && scope) scopes.push(scope);
+        return execute(args[0], args[1], args[2], (error, stdout, stderr) =>
+          args[3]?.(
+            error,
+            listing &&
+              scope === ":(literal)." &&
+              failure === "invalid index" &&
+              args[1]?.includes("--debug")
+              ? Buffer.from("invalid index\0")
+              : stdout,
+            listing && scope === ":(literal)." && failure === "warning"
+              ? Buffer.from("warning: could not open directory 'unrelated/': Permission denied\n")
+              : stderr,
+          ),
+        );
+      },
+    );
+    syncBuiltinESMExports();
+    t.after(() => {
+      mocked.mock.restore();
+      syncBuiltinESMExports();
+    });
+    const cache = new DirectoryObservationCache();
+    const result = await observeSourceDirectory(
+      workspace,
+      path.join(workspace, "src"),
+      undefined,
+      cache,
+    );
+    assert.deepEqual(
+      result.directoryFiles.map((file) => file.path),
+      ["a.txt", "nested/b.txt"],
+    );
+    assert.deepEqual(scopes, [":(literal).", ":(literal).", ":(literal)src", ":(literal)src"]);
+    assert.equal(cache.listings.size, 0);
+  });
 
 test("directory declarations preserve slash, reject fragments and enforce safe source types", async (t) => {
   const workspace = await fixture(t);

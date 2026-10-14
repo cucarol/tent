@@ -174,6 +174,14 @@ test("batch, create, read-back and excerpt outputs expose no unrestricted replac
     search.items.find((item: { nodeId: string }) => item.nodeId === "node-alpha"),
     raw,
   );
+  // Relations use retained documents; excerpts still cannot authorize full replacement.
+  await adapter.history.captureUnlocked(
+    [
+      { path: "A/A.md", raw },
+      { path: "B/B.md", raw: await adapter.readFile("B/B.md") },
+    ],
+    { operation: "test.fixture" },
+  );
   const incoming = await cli("relations", ["node-bravo", "--direction", "incoming"]);
   assertIncomplete(incoming.items[0], raw);
   const full = await cli("get", ["node-alpha", "--full"]);
@@ -241,7 +249,9 @@ test("complete bounded body and raw reads retain their ordinary replacement basi
   const raw = await adapter.readFile("B/B.md");
   for (const view of ["body", "raw"]) {
     const node = await cli("get", ["node-bravo", "--view", view]);
-    assert.deepEqual(Object.keys(node).sort(), ["etag", "nodeId", "text"]);
+    assert.deepEqual(Object.keys(node).sort(), ["etag", "nodeId", "text", "uncaptured"]);
+    assert.equal(node.uncaptured, true);
+    assert.equal(node.text, view === "raw" ? raw : parseFrontmatter(raw).body);
     assert.equal(node.etag, contentEtag(raw));
     assert.doesNotThrow(() =>
       prepareNodeDocumentWrite({ id: "node-bravo", path: "B" }, raw, {

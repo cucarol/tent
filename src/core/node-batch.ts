@@ -4,20 +4,35 @@ import { captureReadDocuments } from "./document-history.js";
 import { loadNodeCatalog, readCatalogDocument } from "./node-catalog.js";
 import { nodeNotePath } from "./paths.js";
 import { readerBatchSchema, type ReaderBatch } from "./reader-batch.js";
+import { uncapturedChecker } from "./retained-read.js";
 
 export type SelectedBatchDocument = { document: ReaderDocument; view: "body" | "raw" };
 
 /** One header scan; each requested body is read exactly once. */
-export async function prepareNodeBatch(fs: FsAdapter, workspaceId: string) {
+export async function prepareNodeBatch(
+  fs: FsAdapter,
+  workspaceId: string,
+  options: { uncaptured?: boolean } = {},
+) {
   const source = { kind: "live" as const, workspaceId };
   const catalog = await loadNodeCatalog(fs);
+  const uncaptured = options.uncaptured ? await uncapturedChecker(fs) : undefined;
   const read = async (nodeId: string, view: "body" | "raw") => {
     const node = catalog.byId.get(nodeId);
     if (!node) throw new ReaderError("NOT_FOUND", `Node is not readable in this source: ${nodeId}`);
     const document = await readCatalogDocument(fs, node);
     const item = new ContextReader(source, [document], [nodeId]).read({ nodeId, view });
     if (!("text" in item)) throw new Error("Body/raw selection was not delivered");
-    return { document, view, item };
+    return {
+      document,
+      view,
+      item: {
+        ...item,
+        ...(uncaptured?.(nodeNotePath(document.path), document.raw)
+          ? { uncaptured: true as const }
+          : {}),
+      },
+    };
   };
   const capture = async (selected: SelectedBatchDocument[]) => {
     const versions = await captureReadDocuments(

@@ -12,6 +12,29 @@ export class DirectoryObservationCache {
   blobs = new Map<string, string>();
   working = new Map<string, { signature: string; version: string; oid?: string }>();
   loaded = new Set<string>();
+  loading = new Map<string, Promise<void>>();
+  listings = new Map<string, Promise<DirectoryListing>>();
+}
+
+async function loadCache(
+  filename: string,
+  cache: DirectoryObservationCache,
+  load: (saved: unknown) => void,
+) {
+  if (cache.loaded.has(filename)) return;
+  let pending = cache.loading.get(filename);
+  if (!pending) {
+    pending = readFile(filename, "utf8")
+      .then(JSON.parse)
+      .catch(() => undefined)
+      .then((saved) => {
+        load(saved);
+        cache.loaded.add(filename);
+      })
+      .finally(() => cache.loading.delete(filename));
+    cache.loading.set(filename, pending);
+  }
+  await pending;
 }
 
 function fileSignature(info: Awaited<ReturnType<typeof lstat>>) {
@@ -210,6 +233,67 @@ function indexEntries(bytes: Buffer) {
     });
   }
   return { entries, live };
+}
+
+type DirectoryListing = ReturnType<typeof indexEntries> & { ignored: Set<string> };
+
+async function listRepositoryDirectory(root: string, relative: string): Promise<DirectoryListing> {
+  const scope = `:(literal)${relative || "."}`;
+  const [staged, excluded] = await Promise.all([
+    git(root, [
+      "ls-files",
+      "-v",
+      "--stage",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--debug",
+      "-z",
+      "--",
+      scope,
+    ]),
+    git(root, ["ls-files", "--cached", "--ignored", "--exclude-standard", "-z", "--", scope]),
+  ]);
+  return { ...indexEntries(staged), ignored: new Set(names(excluded)) };
+}
+
+async function directoryListing(root: string, relative: string, cache: DirectoryObservationCache) {
+  let pending = cache.listings.get(root);
+  if (!pending) {
+    // Share only overlapping reads. A later observation must ask Git again for
+    // new files, index changes and ignore rules, even when mtimes are unchanged.
+    pending = listRepositoryDirectory(root, "").finally(() => cache.listings.delete(root));
+    cache.listings.set(root, pending);
+  }
+  let listing: DirectoryListing;
+  try {
+    listing = await pending;
+  } catch (error) {
+    // Unrelated traversal warnings or a large whole-repository listing must not
+    // make an otherwise readable scoped material unavailable.
+    if (!relative) throw error;
+    return listRepositoryDirectory(root, relative);
+  }
+  if (!relative)
+    return {
+      entries: new Map(listing.entries),
+      live: new Set(listing.live),
+      ignored: new Set(listing.ignored),
+    };
+  // A pathspec inside a Gitlink can expose live children that a root listing
+  // omits. Keep Git itself authoritative for that special traversal.
+  if (
+    [...listing.entries].some(
+      ([name, entry]) => entry.mode === "160000" && relative.startsWith(name + "/"),
+    )
+  )
+    return listRepositoryDirectory(root, relative);
+  const within = (name: string) => name === relative || name.startsWith(relative + "/");
+  return {
+    entries: new Map([...listing.entries].filter(([name]) => within(name))),
+    live: new Set([...listing.live].filter(within)),
+    ignored: new Set([...listing.ignored].filter(within)),
+  };
 }
 
 async function matchesIndexStat(filename: string, stat: IndexStat) {
@@ -415,29 +499,26 @@ export async function observeSourceDirectory(
   let cacheHit = true;
   let workingChanged = false;
   const workingCache = cacheDir ? path.join(cacheDir, "directory-working.json") : undefined;
-  if (workingCache && !cache.loaded.has(workingCache)) {
-    const saved = await readFile(workingCache, "utf8")
-      .then(JSON.parse)
-      .catch(() => undefined);
-    if (saved && typeof saved === "object")
-      for (const [filename, entry] of Object.entries(saved)) {
-        const value = entry as { signature?: unknown; version?: unknown; oid?: unknown } | null;
-        if (
-          value &&
-          typeof value.signature === "string" &&
-          typeof value.version === "string" &&
-          /^[a-f0-9]{64}$/.test(value.version)
-        )
-          cache.working.set(filename, {
-            signature: value.signature,
-            version: value.version,
-            ...(typeof value.oid === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value.oid)
-              ? { oid: value.oid }
-              : {}),
-          });
-      }
-    cache.loaded.add(workingCache);
-  }
+  if (workingCache)
+    await loadCache(workingCache, cache, (saved) => {
+      if (saved && typeof saved === "object")
+        for (const [filename, entry] of Object.entries(saved)) {
+          const value = entry as { signature?: unknown; version?: unknown; oid?: unknown } | null;
+          if (
+            value &&
+            typeof value.signature === "string" &&
+            typeof value.version === "string" &&
+            /^[a-f0-9]{64}$/.test(value.version)
+          )
+            cache.working.set(filename, {
+              signature: value.signature,
+              version: value.version,
+              ...(typeof value.oid === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value.oid)
+                ? { oid: value.oid }
+                : {}),
+            });
+        }
+    });
   const checkedDirectories = new Map<string, ReturnType<typeof checkedSourceFile>>();
   const physicalDirectories = new Map<
     string,
@@ -544,31 +625,11 @@ export async function observeSourceDirectory(
   } else {
     const relative = path.relative(repo.root, directory).split(path.sep).join("/");
     const scope = `:(literal)${relative || "."}`;
-    const [staged, excluded] = await Promise.all([
-      git(repo.root, [
-        "ls-files",
-        "-v",
-        "--stage",
-        "--cached",
-        "--others",
-        "--exclude-standard",
-        "--debug",
-        "-z",
-        "--",
-        scope,
-      ]),
-      git(repo.root, [
-        "ls-files",
-        "--cached",
-        "--ignored",
-        "--exclude-standard",
-        "-z",
-        "--",
-        scope,
-      ]),
-    ]);
-    const { entries, live } = indexEntries(staged);
-    const ignoredFiles = new Set(names(excluded));
+    const {
+      entries,
+      live,
+      ignored: ignoredFiles,
+    } = await directoryListing(repo.root, relative, cache);
     if (entries.get(relative)?.mode === "160000") {
       // A gitlink whose nested Git metadata is absent still has ordinary live
       // files. List them with the owning repository's ignore rules and no index.
@@ -588,20 +649,17 @@ export async function observeSourceDirectory(
       for (const name of names(members)) live.add(name);
     }
     const blobCache = cacheDir ? path.join(cacheDir, "directory-blobs.json") : undefined;
-    if (blobCache && !cache.loaded.has(blobCache)) {
-      const saved = await readFile(blobCache, "utf8")
-        .then(JSON.parse)
-        .catch(() => undefined);
-      if (saved && typeof saved === "object")
-        for (const [oid, version] of Object.entries(saved))
-          if (
-            /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid) &&
-            typeof version === "string" &&
-            /^[a-f0-9]{64}$/.test(version)
-          )
-            cache.blobs.set(oid, version);
-      cache.loaded.add(blobCache);
-    }
+    if (blobCache)
+      await loadCache(blobCache, cache, (saved) => {
+        if (saved && typeof saved === "object")
+          for (const [oid, version] of Object.entries(saved))
+            if (
+              /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid) &&
+              typeof version === "string" &&
+              /^[a-f0-9]{64}$/.test(version)
+            )
+              cache.blobs.set(oid, version);
+      });
     const clean: Array<{ name: string; oid: string }> = [];
     for (const [name, entry] of entries) {
       if (ignoredFiles.has(name) || name.split("/").includes(".git")) continue;

@@ -84,8 +84,9 @@ export async function runRoleCommand(
       cwd: globals.cwd,
       workspace: value("workspace") ?? globals.workspace,
     });
-    const fs = new NodeFs(systemRoot, "cli");
-    await captureNativeNodeEdits(fs);
+    const mutation = ["create", "write", "delete"].includes(sub);
+    const fs = new NodeFs(systemRoot, "cli", mutation ? "record" : "inspect");
+    if (mutation) await captureNativeNodeEdits(fs);
     let result: unknown;
     if (sub === "list")
       result = pageItems(await listRoleContexts(fs), "role.list", {
@@ -97,6 +98,7 @@ export async function runRoleCommand(
       const options = {
         view: value("view") as "body" | "raw" | undefined,
         expectedEtag: value("expected-etag"),
+        uncaptured: true,
       };
       const observed = workspaceReadPaths(
         await readRolePage(fs, positionals[0]!, options),
@@ -112,7 +114,6 @@ export async function runRoleCommand(
           await readRolePage(fs, positionals[0]!, {
             ...options,
             expectedEtag: observed.etag,
-            capture: true,
           }),
           workspaceRoot,
         ),
@@ -142,7 +143,6 @@ export async function runRoleCommand(
     }
     result = workspaceReadPaths(result, workspaceRoot);
     const json = values.json === true || globals.json === true;
-    const mutation = ["create", "write", "delete"].includes(sub);
     return {
       exitCode: 0,
       stdout:
@@ -171,7 +171,7 @@ export function roleHelpText() {
   tent role write role-ID --base-etag HASH [--raw TEXT|- | --body TEXT|-]
                   [--title TEXT] [--status draft|stable|deprecated]
   tent role delete role-ID --base-etag HASH
-All commands accept --workspace PATH and --json. list reads headers; show captures the selected document in Tent Git.
+All commands accept --workspace PATH and --json. list reads headers; show reads the selected document without capturing history.
 Use the returned page.next range and ETag to continue a long read. Writes reject stale ETags.
 Reading never imports a Node or creates a Role. Legacy documents require explicit conversion.
 Delete removes the Role document; Tent Git keeps its history and its id is never reused. Move or deprecate pending Cards that target it first.

@@ -18,7 +18,7 @@ import {
   deprecateCardDocument,
   type CardDocumentState,
 } from "../core/card-document.js";
-import { pageItems, pageText, formatTextPage } from "./reader-page.js";
+import { pageItems, pageText, formatTextPage, uncapturedNotice } from "./reader-page.js";
 import { cliErrorText, type ErrorContext } from "./error-text.js";
 
 export type CardCommandOptions = {
@@ -108,7 +108,8 @@ export async function runCardCommand(
       cwd: globals.cwd,
       workspace: value("workspace") ?? globals.workspace,
     });
-    const fs = new NodeFs(systemRoot, "cli"),
+    const mutation = ["create", "move", "deprecate", "take"].includes(sub);
+    const fs = new NodeFs(systemRoot, "cli", mutation ? "record" : "inspect"),
       id = positionals[0]!;
     let result: unknown;
     let warnings: string[] = [];
@@ -135,7 +136,7 @@ export async function runCardCommand(
         stderr: "",
       };
     }
-    await captureNativeNodeEdits(fs);
+    if (mutation) await captureNativeNodeEdits(fs);
     if (sub === "create") {
       let prompt = value("prompt") ?? "";
       if (prompt === "-") {
@@ -175,6 +176,7 @@ export async function runCardCommand(
     else if (sub === "list")
       result = pageItems(
         await listCardDocuments(fs, {
+          retainedState: true,
           roleId: value("role"),
           state: value("state") as CardDocumentState | undefined,
           includeOpen: values["include-open"] === true,
@@ -191,6 +193,7 @@ export async function runCardCommand(
       const options = {
         view: value("view") as "body" | "raw" | undefined,
         expectedEtag: value("expected-etag"),
+        retainedState: true,
       };
       const observed = workspaceReadPaths(await readCardDocument(fs, id, options), workspaceRoot);
       pageText(observed, `card.${sub}:${id}`, {
@@ -203,7 +206,6 @@ export async function runCardCommand(
           await readCardDocument(fs, id, {
             ...options,
             expectedEtag: observed.etag,
-            capture: true,
           }),
           workspaceRoot,
         ),
@@ -219,7 +221,6 @@ export async function runCardCommand(
         `card.get:${id}`,
       );
     const json = values.json === true || globals.json === true;
-    const mutation = ["create", "move", "deprecate", "take"].includes(sub);
     const sourceLines =
       !json && ["show", "get", "take"].includes(sub)
         ? await cardSourceLines(fs, workspaceRoot, result as { path?: string; sources?: unknown })
@@ -398,6 +399,7 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
         title?: string;
         publishedAt?: string;
         diagnostic?: string;
+        uncaptured?: boolean;
       }>;
       page: { hasMore: boolean; next?: unknown };
     };
@@ -413,6 +415,7 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
             item.title,
             item.publishedAt,
             item.diagnostic,
+            item.uncaptured ? uncapturedNotice : undefined,
           ]
             .filter(Boolean)
             .join("  "),

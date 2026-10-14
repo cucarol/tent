@@ -46,6 +46,8 @@ async function fixture(t: TestContext) {
     ],
   });
   await git(path.join(root, ".tent"), "init");
+  await git(path.join(root, ".tent"), "add", ".");
+  await git(path.join(root, ".tent"), "commit", "-m", "retained relation fixture");
   const globals = { workspace: root };
   const node = (sub: string, args: string[]) => runNodeCommand(sub, args, globals);
   const card = (sub: string, args: string[]) => runCardCommand(sub, args, globals);
@@ -300,7 +302,7 @@ test("recovery targets come from parsed command operands, not ID-like body or na
   ok(await role("create", ["--id", "role-target", "--title", "Target", "--body", "Role body"]));
   const oldRole = etag(ok(await role("show", ["role-target"])));
   ok(await role("write", ["role-target", "--body", "Latest role body", "--base-etag", oldRole]));
-  // A full-list recovery may capture previously unread scaffold Nodes. Establish that read first.
+  // Discovery remains read-only, including recovery through the full list.
   ok(await node("list", ["--full"]));
   const before = await adapter.readFile("Peer/Peer.md");
   const beforeRole = await adapter.readFile("roles/role-target.md");

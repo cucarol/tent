@@ -15,7 +15,7 @@ import { SystemClock } from "../src/fs/node-fs.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { git } from "./helpers.js";
 
-test("goal get exposes bounded live context without changing document bytes or capturing neighbours", async (t) => {
+test("goal get exposes bounded HEAD context without changing document bytes or capturing neighbours", async (t) => {
   await fs.mkdir(path.resolve(".scratch"), { recursive: true });
   const workspace = await fs.mkdtemp(path.resolve(".scratch/goal-context-"));
   t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
@@ -128,10 +128,17 @@ test("goal get exposes bounded live context without changing document bytes or c
   });
   assert.equal(text.exitCode, 0, text.stderr);
   assert.match(text.stdout, /Context/);
+  const beforeCrowding = await node("node-goal", "--view", "summary");
+  const headBeforeCrowding = await adapter.history.currentCommit();
   for (let i = 0; i < 30; i++)
     await write(`Scope/Rule${i}`, `node-extra${i}`, "prompt", "large description", {
       description: "超长描述".repeat(1000),
     });
+  const uncaptured = await node("node-goal", "--view", "summary");
+  assert.equal(uncaptured.context, beforeCrowding.context);
+  assert.equal(await adapter.history.currentCommit(), headBeforeCrowding);
+  await git(system, "add", ...Array.from({ length: 30 }, (_, i) => `Scope/Rule${i}`));
+  await git(system, "commit", "-m", "retain crowded context fixture");
   const crowded = await node("node-goal", "--view", "summary");
   assert.ok(Buffer.byteLength(JSON.stringify({ context: crowded.context })) <= 1024);
   assert.match(
@@ -324,8 +331,16 @@ test("all Node types disclose complete live association categories and incoming 
     ),
   );
   assert.equal(historical.context, undefined);
+  const headBeforeCrowding = await adapter.history.currentCommit();
   for (let i = 0; i < 45; i++)
     await write(`Goal/Renamed/Extra${i}`, `node-extra${i}`, "prompt", "More");
+  const uncaptured = parse(
+    await runNodeCommand("get", ["node-subj00", "--view", "summary", "--context"], globals),
+  );
+  assert.equal(uncaptured.context, first.context);
+  assert.equal(await adapter.history.currentCommit(), headBeforeCrowding);
+  await git(system, "add", ...Array.from({ length: 45 }, (_, i) => `Goal/Renamed/Extra${i}`));
+  await git(system, "commit", "-m", "retain crowded child fixture");
   const crowded = parse(
     await runNodeCommand("get", ["node-subj00", "--view", "summary", "--context"], globals),
   );

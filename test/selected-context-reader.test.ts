@@ -99,6 +99,114 @@ test("staggered catalog reads preserve explicit order, grouping and duplicate is
   assert.equal(catalog.byId.has("node-quarantined"), false);
 });
 
+test("catalog refills its 16-directory pool while one earlier header is blocked", async (t) => {
+  const { adapter } = await fixture(t);
+  const names = Array.from({ length: 20 }, (_, index) => `N${String(index).padStart(2, "0")}`);
+  adapter.listDir = async (directory) =>
+    directory === ""
+      ? names.map((name) => ({ name, isDir: true }))
+      : [{ name: `${directory}.md`, isDir: false }];
+  adapter.exists = async (file) => file.endsWith(".md");
+  let releaseSlow!: () => void, releaseFast!: () => void, first16Ready!: () => void;
+  const slow = new Promise<void>((resolve) => {
+    releaseSlow = resolve;
+  });
+  const fast = new Promise<void>((resolve) => {
+    releaseFast = resolve;
+  });
+  const first16 = new Promise<void>((resolve) => {
+    first16Ready = resolve;
+  });
+  const started: string[] = [];
+  let active = 0,
+    peak = 0,
+    slowFinished = false;
+  adapter.readFrontmatter = async (file) => {
+    started.push(file);
+    peak = Math.max(peak, ++active);
+    if (started.length === 16) first16Ready();
+    try {
+      if (file === "N00/N00.md") {
+        await slow;
+        slowFinished = true;
+      } else await fast;
+      return raw(`node-${file.slice(0, 3).toLowerCase()}`, "");
+    } finally {
+      active--;
+    }
+  };
+  const loading = loadNodeCatalog(adapter);
+  try {
+    await first16;
+    assert.equal(started.length, 16);
+    assert.equal(peak, 16);
+    releaseFast();
+    // These fake I/O calls settle in microtasks. One event-loop turn gives the
+    // scheduler room to refill without releasing the blocked first directory.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(started.includes("N16/N16.md"));
+    assert.equal(slowFinished, false);
+    assert.equal(peak, 16);
+    releaseSlow();
+    const catalog = await loading;
+    assert.deepEqual(
+      catalog.tree.roots.map((node) => node.path),
+      names,
+    );
+    assert.equal(catalog.byId.size, names.length);
+  } finally {
+    releaseFast();
+    releaseSlow();
+    await loading;
+  }
+});
+
+test("catalog fills the same 16-directory pool after discovering children of one group", async (t) => {
+  const { adapter } = await fixture(t);
+  const names = Array.from({ length: 20 }, (_, index) => `N${String(index).padStart(2, "0")}`);
+  adapter.listDir = async (directory) =>
+    directory === ""
+      ? [{ name: "Group", isDir: true }]
+      : directory === "Group"
+        ? names.map((name) => ({ name, isDir: true }))
+        : [{ name: `${directory.slice(6)}.md`, isDir: false }];
+  adapter.exists = async (file) => file !== "Group/Group.md" && file.endsWith(".md");
+  let active = 0,
+    peak = 0;
+  adapter.readFrontmatter = async (file) => {
+    peak = Math.max(peak, ++active);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return raw(`node-${file.slice(6, 9).toLowerCase()}`, "");
+    } finally {
+      active--;
+    }
+  };
+  const catalog = await loadNodeCatalog(adapter);
+  assert.equal(peak, 16);
+  assert.deepEqual(
+    catalog.tree.roots.map((node) => node.path),
+    names.map((name) => `Group/${name}`),
+  );
+  assert.ok([...catalog.byId.values()].every((node) => node.parentNodeId === null));
+});
+
+test("catalog propagates a failed header even when neighbouring pool tasks finish", async (t) => {
+  const { adapter } = await fixture(t);
+  const names = Array.from({ length: 20 }, (_, index) => `N${String(index).padStart(2, "0")}`);
+  adapter.listDir = async (directory) =>
+    directory === ""
+      ? names.map((name) => ({ name, isDir: true }))
+      : [{ name: `${directory}.md`, isDir: false }];
+  adapter.exists = async (file) => file.endsWith(".md");
+  const failure = Object.assign(new Error("Header I/O failed"), { code: "EIO" });
+  adapter.readFrontmatter = async (file) => {
+    if (file === "N01/N01.md") throw failure;
+    return raw(`node-${file.slice(0, 3).toLowerCase()}`, "");
+  };
+  await assert.rejects(loadNodeCatalog(adapter), (error) => error === failure);
+});
+
 test("selected exact reads see edits and moves; changed lookup metadata fails", async (t) => {
   const { adapter } = await fixture(t);
   const original = raw("node-selected", "😀正文\r\n".repeat(6000));

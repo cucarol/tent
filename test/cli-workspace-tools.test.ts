@@ -111,6 +111,9 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
       name: "CLI tools",
       nodes: [{ id: "node-fact", name: "Fact", type: "prompt", body: "Original fact" }],
     });
+    await git(path.join(workspace, ".tent"), "init");
+    await git(path.join(workspace, ".tent"), "add", ".");
+    await git(path.join(workspace, ".tent"), "commit", "-m", "retained relation fixture");
     const globals = { workspace, json: true };
     const result = (value: { exitCode: number; stdout: string; stderr: string }) => {
       assert.equal(value.exitCode, 0, value.stderr);

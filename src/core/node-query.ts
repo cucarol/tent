@@ -30,9 +30,15 @@ import { materialFields } from "./material.js";
 import { isNodeId } from "./id.js";
 import { NODE_TYPES } from "./node-type.js";
 import { NODE_TAG_PRESETS, countNodeTags, normalizeTagName } from "./tags.js";
+import { uncapturedChecker } from "./retained-read.js";
 
 /** Short-lived callers share these queries; no mount, registry, watcher or read-time repair. */
-export async function readNode(fs: FsAdapter, workspaceId: string, input: unknown) {
+export async function readNode(
+  fs: FsAdapter,
+  workspaceId: string,
+  input: unknown,
+  options: { uncaptured?: boolean } = {},
+) {
   const request = readerReadSchema.parse(input);
   if (request.version) {
     if (!isHistoryDocument(request.version.path) || !fs.history)
@@ -63,26 +69,44 @@ export async function readNode(fs: FsAdapter, workspaceId: string, input: unknow
     );
     return { workspaceId, node: reader.read(request) };
   }
-  if (request.view === "summary")
+  if (request.view === "summary") {
+    const catalog = await loadNodeCatalog(fs);
+    const node = catalogSummary(catalog, { kind: "live", workspaceId }, request.nodeId);
+    const document = options.uncaptured
+      ? await readCatalogDocument(fs, catalog.byId.get(request.nodeId)!)
+      : undefined;
     return {
       workspaceId,
-      node: catalogSummary(
-        await loadNodeCatalog(fs),
-        { kind: "live", workspaceId },
-        request.nodeId,
-      ),
+      node: {
+        ...node,
+        ...(document && (await uncapturedChecker(fs))(nodeNotePath(document.path), document.raw)
+          ? { uncaptured: true as const }
+          : {}),
+      },
     };
+  }
   const reader = await selectedContextReader(fs, { kind: "live", workspaceId }, [request.nodeId]);
   const node = reader.read(request); // Validate the selected range before retaining bytes.
   const bytes = request.capture ? reader.documentBytes(request.nodeId) : undefined;
   const version = bytes ? await captureReadDocument(fs, bytes.path, bytes.raw) : undefined;
-  return { workspaceId, node: version ? reader.read(request, version) : node };
+  const delivered = version ? reader.read(request, version) : node;
+  const document =
+    options.uncaptured && !request.capture ? reader.documentBytes(request.nodeId) : undefined;
+  return {
+    workspaceId,
+    node: {
+      ...delivered,
+      ...(document && (await uncapturedChecker(fs))(document.path, document.raw)
+        ? { uncaptured: true as const }
+        : {}),
+    },
+  };
 }
 
 export async function readNodeForEdit(
   fs: FsAdapter,
   nodeId: string,
-  options: { capture?: boolean } = {},
+  options: { capture?: boolean; uncaptured?: boolean } = {},
 ) {
   if (!isNodeId(nodeId)) throw new ReaderError("INVALID_INPUT", "Expected a canonical Node id");
   const node = (await loadNodeCatalog(fs)).byId.get(nodeId);
@@ -103,6 +127,11 @@ export async function readNodeForEdit(
     raw: document.raw,
     etag: document.etag,
     frontmatter: data,
+    ...(options.uncaptured &&
+    !options.capture &&
+    (await uncapturedChecker(fs))(nodeNotePath(node.path), document.raw)
+      ? { uncaptured: true as const }
+      : {}),
     ...(version ? { version } : {}),
   };
 }
@@ -116,20 +145,34 @@ export const nodeListSchema = readerListSchema.extend({
     .optional(),
 });
 
-export async function listNodes(fs: FsAdapter, workspaceId: string, input: unknown) {
+export async function listNodes(
+  fs: FsAdapter,
+  workspaceId: string,
+  input: unknown,
+  options: { uncaptured?: boolean } = {},
+) {
   const { type, tags, ...request } = nodeListSchema.parse(input);
   const catalog = await loadNodeCatalog(fs);
   const source = { kind: "live" as const, workspaceId };
-  return {
-    workspaceId,
-    ...(type === undefined && !tags?.length
+  const result =
+    type === undefined && !tags?.length
       ? catalogRelations(catalog, source, {
           nodeId: request.parentNodeId ?? null,
           direction: "children",
           ...request,
         })
-      : catalogMatches(catalog, source, { ...request, type, tags })),
-  };
+      : catalogMatches(catalog, source, { ...request, type, tags });
+  if (!options.uncaptured) return { workspaceId, ...result };
+  const changed = await uncapturedChecker(fs);
+  const items = [];
+  for (const item of result.items) {
+    const document = await readCatalogDocument(fs, catalog.byId.get(item.nodeId)!);
+    items.push({
+      ...item,
+      ...(changed(nodeNotePath(document.path), document.raw) ? { uncaptured: true as const } : {}),
+    });
+  }
+  return { workspaceId, ...result, items };
 }
 
 /** Tags in use with their counts, plus the suggested presets; no registry is consulted. */
@@ -147,11 +190,27 @@ export async function listNodeTags(
   };
 }
 
-export async function searchNodes(fs: FsAdapter, workspaceId: string, input: unknown) {
+export async function searchNodes(
+  fs: FsAdapter,
+  workspaceId: string,
+  input: unknown,
+  options: { uncaptured?: boolean } = {},
+) {
   const request = readerSearchSchema.parse(input);
+  const reader = await liveContextReader(fs, { kind: "live", workspaceId });
+  const result = reader.search(request);
+  if (!options.uncaptured) return { workspaceId, ...result };
+  const changed = await uncapturedChecker(fs);
   return {
     workspaceId,
-    ...(await liveContextReader(fs, { kind: "live", workspaceId })).search(request),
+    ...result,
+    items: result.items.map((item) => {
+      const document = reader.documentBytes(item.nodeId)!;
+      return {
+        ...item,
+        ...(changed(document.path, document.raw) ? { uncaptured: true as const } : {}),
+      };
+    }),
   };
 }
 
@@ -168,7 +227,10 @@ export async function relatedNodes(fs: FsAdapter, workspaceId: string, input: un
 }
 
 /** Explicit whole-tree export; ordinary list/get never calls this unbounded operation. */
-export async function readFullNodeTree(fs: FsAdapter, options: { capture?: boolean } = {}) {
+export async function readFullNodeTree(
+  fs: FsAdapter,
+  options: { capture?: boolean; uncaptured?: boolean } = {},
+) {
   const observed = new Map<string, string>();
   const readonly = readOnlyFs(fs);
   const source = new Proxy(readonly, {
@@ -193,8 +255,10 @@ export async function readFullNodeTree(fs: FsAdapter, options: { capture?: boole
   // The loader already read exact raw bytes. Capture those bytes together, without reading the tree again.
   const versions = options.capture ? await captureReadDocuments(fs, documents) : [];
   const byPath = new Map(versions.map((version) => [version.path, version]));
+  const changed = options.uncaptured && !options.capture ? await uncapturedChecker(fs) : undefined;
   const project = (node: (typeof tree.roots)[number]): Record<string, unknown> => {
     const data = node.fm;
+    const raw = observed.get(nodeNotePath(node.path));
     const version = byPath.get(nodeNotePath(node.path));
     return {
       nodeId: node.id,
@@ -208,6 +272,9 @@ export async function readFullNodeTree(fs: FsAdapter, options: { capture?: boole
       text: node.body,
       etag: node.etag,
       ...materialFields(data),
+      ...(raw !== undefined && changed?.(nodeNotePath(node.path), raw)
+        ? { uncaptured: true as const }
+        : {}),
       ...(version ? { version } : {}),
       children: node.children.map(project),
     };

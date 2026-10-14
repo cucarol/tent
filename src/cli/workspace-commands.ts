@@ -180,10 +180,13 @@ export async function runWorkspaceCommand(
       };
     }
     const captureFs = new NodeFs(roots.systemRoot, "cli");
-    const nodes = captureNativeNodeEdits(captureFs).then((result) => {
-      fs.invalidNodeEdits = captureFs.invalidNodeEdits;
-      return result;
-    });
+    const nodes =
+      sub === "changes"
+        ? Promise.resolve({ invalidNodes: [] })
+        : captureNativeNodeEdits(captureFs).then((result) => {
+            fs.invalidNodeEdits = captureFs.invalidNodeEdits;
+            return result;
+          });
     if (sub === "brief") {
       const brief = makeContextBrief(
         await inspectCurrentContext(fs, roots.workspaceRoot, {
