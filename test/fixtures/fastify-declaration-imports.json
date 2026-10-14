@@ -1,0 +1,417 @@
+{
+  "repository": "https://github.com/fastify/fastify",
+  "commit": "5c081d4b7237f0eb2db9f1204dc6400e3aa1325e",
+  "description": "82 unresolved declaration-import tuples from the init v3 trial; paths only, with synthetic import statements in the test.",
+  "imports": [
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/content-type-parser",
+      "target": "types/content-type-parser.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/context",
+      "target": "types/context.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/errors",
+      "target": "types/errors.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/hooks",
+      "target": "types/hooks.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/instance",
+      "target": "types/instance.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/logger",
+      "target": "types/logger.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/plugin",
+      "target": "types/plugin.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/register",
+      "target": "types/register.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/reply",
+      "target": "types/reply.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/request",
+      "target": "types/request.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/route",
+      "target": "types/route.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/schema",
+      "target": "types/schema.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/server-factory",
+      "target": "types/server-factory.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/type-provider",
+      "target": "types/type-provider.d.ts"
+    },
+    {
+      "file": "fastify.d.ts",
+      "specifier": "./types/utils",
+      "target": "types/utils.d.ts"
+    },
+    {
+      "file": "types/content-type-parser.d.ts",
+      "specifier": "./request",
+      "target": "types/request.d.ts"
+    },
+    {
+      "file": "types/content-type-parser.d.ts",
+      "specifier": "./route",
+      "target": "types/route.d.ts"
+    },
+    {
+      "file": "types/content-type-parser.d.ts",
+      "specifier": "./schema",
+      "target": "types/schema.d.ts"
+    },
+    {
+      "file": "types/content-type-parser.d.ts",
+      "specifier": "./type-provider",
+      "target": "types/type-provider.d.ts"
+    },
+    {
+      "file": "types/content-type-parser.d.ts",
+      "specifier": "./utils",
+      "target": "types/utils.d.ts"
+    },
+    {
+      "file": "types/hooks.d.ts",
+      "specifier": "./instance",
+      "target": "types/instance.d.ts"
+    },
+    {
+      "file": "types/hooks.d.ts",
+      "specifier": "./logger",
+      "target": "types/logger.d.ts"
+    },
+    {
+      "file": "types/hooks.d.ts",
+      "specifier": "./plugin",
+      "target": "types/plugin.d.ts"
+    },
+    {
+      "file": "types/hooks.d.ts",
+      "specifier": "./register",
+      "target": "types/register.d.ts"
+    },
+    {
+      "file": "types/hooks.d.ts",
+      "specifier": "./reply",
+      "target": "types/reply.d.ts"
+    },
+    {
+      "file": "types/hooks.d.ts",
+      "specifier": "./request",
+      "target": "types/request.d.ts"
+    },
+    {
+      "file": "types/hooks.d.ts",
+      "specifier": "./route",
+      "target": "types/route.d.ts"
+    },
+    {
+      "file": "types/hooks.d.ts",
+      "specifier": "./schema",
+      "target": "types/schema.d.ts"
+    },
+    {
+      "file": "types/hooks.d.ts",
+      "specifier": "./type-provider",
+      "target": "types/type-provider.d.ts"
+    },
+    {
+      "file": "types/hooks.d.ts",
+      "specifier": "./utils",
+      "target": "types/utils.d.ts"
+    },
+    {
+      "file": "types/instance.d.ts",
+      "specifier": "./content-type-parser",
+      "target": "types/content-type-parser.d.ts"
+    },
+    {
+      "file": "types/instance.d.ts",
+      "specifier": "./hooks",
+      "target": "types/hooks.d.ts"
+    },
+    {
+      "file": "types/instance.d.ts",
+      "specifier": "./logger",
+      "target": "types/logger.d.ts"
+    },
+    {
+      "file": "types/instance.d.ts",
+      "specifier": "./register",
+      "target": "types/register.d.ts"
+    },
+    {
+      "file": "types/instance.d.ts",
+      "specifier": "./reply",
+      "target": "types/reply.d.ts"
+    },
+    {
+      "file": "types/instance.d.ts",
+      "specifier": "./request",
+      "target": "types/request.d.ts"
+    },
+    {
+      "file": "types/instance.d.ts",
+      "specifier": "./route",
+      "target": "types/route.d.ts"
+    },
+    {
+      "file": "types/instance.d.ts",
+      "specifier": "./schema",
+      "target": "types/schema.d.ts"
+    },
+    {
+      "file": "types/instance.d.ts",
+      "specifier": "./type-provider",
+      "target": "types/type-provider.d.ts"
+    },
+    {
+      "file": "types/instance.d.ts",
+      "specifier": "./utils",
+      "target": "types/utils.d.ts"
+    },
+    {
+      "file": "types/logger.d.ts",
+      "specifier": "./instance",
+      "target": "types/instance.d.ts"
+    },
+    {
+      "file": "types/logger.d.ts",
+      "specifier": "./reply",
+      "target": "types/reply.d.ts"
+    },
+    {
+      "file": "types/logger.d.ts",
+      "specifier": "./request",
+      "target": "types/request.d.ts"
+    },
+    {
+      "file": "types/logger.d.ts",
+      "specifier": "./route",
+      "target": "types/route.d.ts"
+    },
+    {
+      "file": "types/logger.d.ts",
+      "specifier": "./schema",
+      "target": "types/schema.d.ts"
+    },
+    {
+      "file": "types/logger.d.ts",
+      "specifier": "./type-provider",
+      "target": "types/type-provider.d.ts"
+    },
+    {
+      "file": "types/logger.d.ts",
+      "specifier": "./utils",
+      "target": "types/utils.d.ts"
+    },
+    {
+      "file": "types/plugin.d.ts",
+      "specifier": "./instance",
+      "target": "types/instance.d.ts"
+    },
+    {
+      "file": "types/plugin.d.ts",
+      "specifier": "./logger",
+      "target": "types/logger.d.ts"
+    },
+    {
+      "file": "types/plugin.d.ts",
+      "specifier": "./type-provider",
+      "target": "types/type-provider.d.ts"
+    },
+    {
+      "file": "types/plugin.d.ts",
+      "specifier": "./utils",
+      "target": "types/utils.d.ts"
+    },
+    {
+      "file": "types/register.d.ts",
+      "specifier": "./instance",
+      "target": "types/instance.d.ts"
+    },
+    {
+      "file": "types/register.d.ts",
+      "specifier": "./logger",
+      "target": "types/logger.d.ts"
+    },
+    {
+      "file": "types/register.d.ts",
+      "specifier": "./plugin",
+      "target": "types/plugin.d.ts"
+    },
+    {
+      "file": "types/register.d.ts",
+      "specifier": "./utils",
+      "target": "types/utils.d.ts"
+    },
+    {
+      "file": "types/reply.d.ts",
+      "specifier": "./instance",
+      "target": "types/instance.d.ts"
+    },
+    {
+      "file": "types/reply.d.ts",
+      "specifier": "./logger",
+      "target": "types/logger.d.ts"
+    },
+    {
+      "file": "types/reply.d.ts",
+      "specifier": "./request",
+      "target": "types/request.d.ts"
+    },
+    {
+      "file": "types/reply.d.ts",
+      "specifier": "./route",
+      "target": "types/route.d.ts"
+    },
+    {
+      "file": "types/reply.d.ts",
+      "specifier": "./schema",
+      "target": "types/schema.d.ts"
+    },
+    {
+      "file": "types/reply.d.ts",
+      "specifier": "./type-provider",
+      "target": "types/type-provider.d.ts"
+    },
+    {
+      "file": "types/reply.d.ts",
+      "specifier": "./utils",
+      "target": "types/utils.d.ts"
+    },
+    {
+      "file": "types/request.d.ts",
+      "specifier": "./context",
+      "target": "types/context.d.ts"
+    },
+    {
+      "file": "types/request.d.ts",
+      "specifier": "./instance",
+      "target": "types/instance.d.ts"
+    },
+    {
+      "file": "types/request.d.ts",
+      "specifier": "./logger",
+      "target": "types/logger.d.ts"
+    },
+    {
+      "file": "types/request.d.ts",
+      "specifier": "./route",
+      "target": "types/route.d.ts"
+    },
+    {
+      "file": "types/request.d.ts",
+      "specifier": "./schema",
+      "target": "types/schema.d.ts"
+    },
+    {
+      "file": "types/request.d.ts",
+      "specifier": "./type-provider",
+      "target": "types/type-provider.d.ts"
+    },
+    {
+      "file": "types/request.d.ts",
+      "specifier": "./utils",
+      "target": "types/utils.d.ts"
+    },
+    {
+      "file": "types/route.d.ts",
+      "specifier": "./context",
+      "target": "types/context.d.ts"
+    },
+    {
+      "file": "types/route.d.ts",
+      "specifier": "./hooks",
+      "target": "types/hooks.d.ts"
+    },
+    {
+      "file": "types/route.d.ts",
+      "specifier": "./instance",
+      "target": "types/instance.d.ts"
+    },
+    {
+      "file": "types/route.d.ts",
+      "specifier": "./logger",
+      "target": "types/logger.d.ts"
+    },
+    {
+      "file": "types/route.d.ts",
+      "specifier": "./reply",
+      "target": "types/reply.d.ts"
+    },
+    {
+      "file": "types/route.d.ts",
+      "specifier": "./request",
+      "target": "types/request.d.ts"
+    },
+    {
+      "file": "types/route.d.ts",
+      "specifier": "./schema",
+      "target": "types/schema.d.ts"
+    },
+    {
+      "file": "types/route.d.ts",
+      "specifier": "./type-provider",
+      "target": "types/type-provider.d.ts"
+    },
+    {
+      "file": "types/route.d.ts",
+      "specifier": "./utils",
+      "target": "types/utils.d.ts"
+    },
+    {
+      "file": "types/server-factory.d.ts",
+      "specifier": "./utils",
+      "target": "types/utils.d.ts"
+    },
+    {
+      "file": "types/type-provider.d.ts",
+      "specifier": "./route",
+      "target": "types/route.d.ts"
+    },
+    {
+      "file": "types/type-provider.d.ts",
+      "specifier": "./schema",
+      "target": "types/schema.d.ts"
+    },
+    {
+      "file": "types/type-provider.d.ts",
+      "specifier": "./utils",
+      "target": "types/utils.d.ts"
+    }
+  ]
+}

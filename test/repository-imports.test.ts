@@ -1,9 +1,56 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { extractRepositoryImports, type RepositorySource } from "../src/core/repository-imports.js";
 import { repositoryFacts, repositoryDirectoryGraph } from "../src/core/repository-facts.js";
 
 const source = (path: string, content = ""): RepositorySource => ({ path, content });
+
+test("extensionless imports prefer TS source, then declarations, before JavaScript for files and directory indexes", () => {
+  for (const stem of ["dep", "dep/index"]) {
+    const candidates = [".ts", ".tsx", ".d.ts", ".js"];
+    for (let first = 0; first < candidates.length; first++) {
+      const result = extractRepositoryImports([
+        source("entry.ts", 'import "./dep";'),
+        ...candidates.slice(first).map((extension) => source(stem + extension)),
+      ]);
+      assert.deepEqual(result.issues, []);
+      assert.deepEqual(result.edges, [
+        { from: "entry.ts", to: stem + candidates[first], kind: "file", specifier: "./dep" },
+      ]);
+    }
+  }
+  const missing = extractRepositoryImports([source("entry.d.ts", 'export * from "./missing";')]);
+  assert.deepEqual(missing.edges, []);
+  assert.deepEqual(missing.issues, [
+    {
+      file: "entry.d.ts",
+      specifier: "./missing",
+      reason: "Relative script import is absent from tracked files",
+    },
+  ]);
+});
+
+test("Fastify's 82 recorded extensionless declaration imports resolve to their tracked targets", () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("./fixtures/fastify-declaration-imports.json", import.meta.url), "utf8"),
+  ) as { imports: { file: string; specifier: string; target: string }[] };
+  assert.equal(fixture.imports.length, 82);
+  const contents = new Map<string, string>();
+  for (const { file, specifier, target } of fixture.imports) {
+    contents.set(file, (contents.get(file) ?? "") + `import type {} from '${specifier}';\n`);
+    if (!contents.has(target)) contents.set(target, "");
+  }
+  const files = [...contents].map(([file, content]) => source(file, content));
+  const result = extractRepositoryImports(files);
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(
+    result.edges.map(({ from, to, specifier }) => `${from} -> ${specifier} -> ${to}`).sort(),
+    fixture.imports.map(({ file, specifier, target }) => `${file} -> ${specifier} -> ${target}`).sort(),
+  );
+  assert.deepEqual(extractRepositoryImports([...files].reverse()), result);
+});
+
 test("script imports resolve relative paths, export/require/dynamic and scoped TS aliases without comment/string examples", () => {
   const files = [
     source(

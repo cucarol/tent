@@ -260,6 +260,7 @@ export function extractRepositoryImports(input: readonly RepositorySource[]) {
     "",
     ".ts",
     ".tsx",
+    ".d.ts",
     ".mts",
     ".cts",
     ".js",
@@ -269,6 +270,7 @@ export function extractRepositoryImports(input: readonly RepositorySource[]) {
     ".json",
     "/index.ts",
     "/index.tsx",
+    "/index.d.ts",
     "/index.js",
     "/index.mjs",
   ];
