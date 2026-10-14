@@ -92,6 +92,12 @@ test("coverage excludes deprecated and invalid Nodes, keeps file-only Nodes, and
   assert.match(JSON.stringify(uncovered), /c\.ts/);
   assert.match(JSON.stringify(uncovered), /d\.ts/);
   assert.doesNotMatch(JSON.stringify(uncovered), /a\.ts/);
+  assert.deepEqual(
+    parsed.issues
+      .filter((issue: { code: string }) => issue.code === "map.unowned")
+      .map((issue: { facts: { files: string[] } }) => issue.facts.files),
+    [["a.ts"]],
+  );
   assert.deepEqual(await snapshot(root), before);
 });
 
@@ -163,10 +169,64 @@ test("ordinary directories and files cover without becoming modules, structure t
   assert.equal(result.inspectionErrors.length, 1);
   assert.equal(result.inspectionErrors[0]!.node, "badfile");
   assert.deepEqual(
-    result.issues.flatMap((issue) => issue.facts.files ?? []),
+    result.issues
+      .filter((issue) => issue.code === "map.uncovered")
+      .flatMap((issue) => issue.facts.files ?? []),
     ["bad.ts", "old/a.ts"],
   );
+  assert.deepEqual(
+    result.issues
+      .filter((issue) => issue.code === "map.unowned")
+      .map((issue) => ({ directory: issue.object, files: issue.facts.files })),
+    [
+      { directory: ".", files: ["single.ts"] },
+      { directory: "legacy", files: ["legacy/a.ts"] },
+      { directory: "normal", files: ["normal/a.ts"] },
+    ],
+  );
   assert.deepEqual(await snapshot(root), before);
+});
+
+test("module command reports covered root code without ownership and clears it only after module attachment", async (t) => {
+  const { root, write, node } = await fixture(t);
+  await write("build.rs", "fn main() {}\n");
+  await write("src/entry.ts", "export {};\n");
+  await write("package.json", "{}\n");
+  await git(root, "add", "build.rs", "src", "package.json");
+  await node(
+    "setup1",
+    { sources: [{ resource: "../../build.rs" }, { resource: "../../package.json" }] },
+    "allow:map.unowned",
+  );
+  await node("source", structure("../../src/"));
+  const before = await snapshot(root);
+  const result = await runWorkspaceCommand("check-modules", ["--json"], { workspace: root });
+  assert.equal(result.exitCode, 1);
+  const findings = JSON.parse(result.stdout);
+  assert.equal(findings.modules.length, 1);
+  assert.deepEqual(
+    findings.issues.map((issue: { code: string; facts: { files: string[] } }) => ({
+      code: issue.code,
+      files: issue.facts.files,
+    })),
+    [{ code: "map.unowned", files: ["build.rs"] }],
+  );
+  const text = await runWorkspaceCommand("check-modules", [], { workspace: root });
+  assert.equal(text.exitCode, 1);
+  assert.match(text.stdout, /map\.unowned/);
+  assert.match(text.stdout, /build\.rs/);
+  assert.match(text.stdout, /structure source/);
+  assert.deepEqual(await snapshot(root), before);
+  await node("source", {
+    sources: [{ resource: "../../src/", track: "structure" }, { resource: "../../build.rs" }],
+  });
+  const repaired = await snapshot(root);
+  assert.deepEqual(await runWorkspaceCommand("check-modules", [], { workspace: root }), {
+    exitCode: 0,
+    stdout: "",
+    stderr: "",
+  });
+  assert.deepEqual(await snapshot(root), repaired);
 });
 
 test("module history follows first-parent while scan keeps all selected commits", async (t) => {

@@ -120,11 +120,79 @@ test("only structure-tracked directories or prefixes define modules; ordinary an
       { ...node("single"), materials: [{ path: "single.ts", kind: "file" }] },
     ]),
   );
-  assert.deepEqual(result.issues, []);
+  assert.deepEqual(
+    result.issues.map(({ code, object, facts }) => ({ code, object, files: facts.files })),
+    [
+      { code: "map.unowned", object: ".", files: ["single.ts"] },
+      { code: "map.unowned", object: "old", files: ["old/a.ts"] },
+    ],
+  );
   assert.deepEqual(
     result.modules.map(({ id }) => id),
     ["tracked"],
   );
+});
+
+test("covered production code without a module is grouped, cannot be excepted, and excludes size-rule nonproduction files", () => {
+  const productionFiles = [
+    "build.rs",
+    "index.ts",
+    "index.d.ts",
+    "scripts/build.py",
+    "src/api.ts",
+    "src/api.h",
+  ];
+  const excluded = [
+    "package.json",
+    "README.md",
+    "tests/a.ts",
+    "src/a.test.ts",
+    "src/test_a.py",
+    "src/a_test.go",
+    "src/generated/a.ts",
+    "src/a.pb.go",
+    "vendor/a.ts",
+    "third_party/a.ts",
+    "node_modules/a.ts",
+  ];
+  const tracked = [...productionFiles, ...excluded, "uncovered.ts"];
+  const coverage = {
+    ...coverageOnly([...productionFiles, ...excluded]),
+    body: "allow:map.unowned",
+    exceptions: [{ code: "map.unowned" as const }],
+  };
+  const result = checkModuleMap(input(tracked, [coverage]));
+  assert.deepEqual(
+    result.issues.map(({ code, object, facts }) => ({
+      code,
+      object,
+      count: facts.count,
+      files: facts.files,
+    })),
+    [
+      { code: "map.uncovered", object: ".", count: 1, files: ["uncovered.ts"] },
+      { code: "map.unowned", object: ".", count: 3, files: ["build.rs", "index.d.ts", "index.ts"] },
+      { code: "map.unowned", object: "scripts", count: 1, files: ["scripts/build.py"] },
+      { code: "map.unowned", object: "src", count: 2, files: ["src/api.h", "src/api.ts"] },
+    ],
+  );
+  assert.deepEqual(result.modules, []);
+  const repaired = checkModuleMap(
+    input(tracked, [
+      coverage,
+      node("api", { materials: [{ path: "src/api", kind: "prefix" }] }),
+      node("tools", {
+        materials: [
+          { path: "scripts", kind: "directory" },
+          ...productionFiles
+            .filter((file) => !file.includes("/"))
+            .map((path) => ({ path, kind: "file" as const })),
+        ],
+      }),
+    ]),
+  );
+  assert.deepEqual(codes(repaired), ["map.uncovered"]);
+  assert.equal(repaired.modules.length, 2);
 });
 
 test("directory and prefix membership use the shared coverage authority", () => {
@@ -237,18 +305,19 @@ test("size uses strict share and mathematical sibling median, with oversized tak
   const big = [...files("a", 11, "alpha-"), ...files("a", 10, "beta-")];
   const others = [...files("b", 6), ...files("c", 8), ...files("filler", 165)];
   const nodes = [node("a"), node("b"), node("c"), coverageOnly(files("filler", 165))];
-  assert.deepEqual(codes(checkModuleMap(input([...big, ...others], nodes))), []);
+  assert.deepEqual(codes(checkModuleMap(input([...big, ...others], nodes))), ["map.unowned"]);
   const skewed = checkModuleMap(input([...big, "a/beta-extra.ts", ...others], nodes));
-  assert.deepEqual(codes(skewed), ["module.skewed"]);
-  assert.equal(skewed.issues[0]!.facts.siblingMedian, 7);
+  assert.deepEqual(codes(skewed), ["map.unowned", "module.skewed"]);
+  assert.equal(skewed.issues[1]!.facts.siblingMedian, 7);
   const total100 = [
     ...files("a", 10, "alpha-"),
     ...files("a", 10, "beta-"),
     ...files("filler", 80),
   ];
   const shareNodes = [node("a"), coverageOnly(files("filler", 80))];
-  assert.deepEqual(codes(checkModuleMap(input(total100, shareNodes))), []);
+  assert.deepEqual(codes(checkModuleMap(input(total100, shareNodes))), ["map.unowned"]);
   assert.deepEqual(codes(checkModuleMap(input([...total100, "a/beta-extra.ts"], shareNodes))), [
+    "map.unowned",
     "module.oversized",
   ]);
   assert.deepEqual(codes(checkModuleMap(input(big, [node("a"), node("b")]))), ["module.oversized"]);
@@ -369,7 +438,8 @@ test("package directory targets retain their directory and diagnose ambiguous me
   const filesOnlyTarget = checkModuleMap(
     input(tracked, [nodes[0]!, coverageOnly(files("pkg/b", 3))], { imports: edges }),
   );
-  assert.deepEqual(filesOnlyTarget.issues, []);
+  assert.deepEqual(codes(filesOnlyTarget), ["map.unowned"]);
+  assert.deepEqual(filesOnlyTarget.issues[0]!.facts.files, files("pkg/b", 3));
   assert.deepEqual(filesOnlyTarget.unassignedImports, []);
 });
 
@@ -389,7 +459,8 @@ test("a Go package whose production files share one module has that owner even t
         { path: "server/cors.go", kind: "file" },
       ],
     }),
-    coverageOnly(["server/server_test.go", "other/file.go"]),
+    coverageOnly(["server/server_test.go"]),
+    node("other"),
   ];
   const edges: RepositoryImport[] = [
     { from: "cmd/main.go", to: "server", kind: "directory", specifier: "example/server" },
@@ -436,7 +507,7 @@ test("cycles between ancestor and descendant modules are internal", () => {
 
 test("history thresholds use eligible first-parent commits and one touch per module per commit", () => {
   const tracked = ["a/file.ts", "b/file.ts", "other/file.ts"];
-  const nodes = [node("a"), node("b"), coverageOnly(["other/file.ts"])];
+  const nodes = [node("a"), node("b"), node("other")];
   const commits = [...history(), commit("bulk", tracked, 51)];
   commits[0]!.files.push("a/file.ts", "a/deleted.ts");
   const result = checkModuleMap(input(tracked, nodes, { commits }));
@@ -466,9 +537,7 @@ test("generated-apart requires a strict majority of the module's tracked members
       ...c,
       files: c.files.map((f) => (f === "b/file.ts" ? "b/generated/file-0.ts" : f)),
     }));
-    return checkModuleMap(
-      input(tracked, [node("a"), node("b"), coverageOnly(["other/file.ts"])], { commits }),
-    );
+    return checkModuleMap(input(tracked, [node("a"), node("b"), node("other")], { commits }));
   };
   assert.deepEqual(codes(run(2, 2)), ["history.always-together"]);
   assert.deepEqual(codes(run(3, 1)), ["history.generated-apart"]);
@@ -480,7 +549,7 @@ test("a resolved pair exception on either side suppresses only that pair and rul
     imports: [...imports("a", "b", 3), ...imports("b", "a", 3)],
     commits: history(),
   };
-  const setup = coverageOnly(["other/file.ts"]);
+  const setup = node("other");
   const noTarget = node("a", { body: "deps.cycle", exceptions: [{ code: "deps.cycle" }] });
   assert.deepEqual(codes(checkModuleMap(input(tracked, [noTarget, node("b"), setup], overrides))), [
     "deps.cycle",
