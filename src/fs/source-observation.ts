@@ -142,6 +142,7 @@ export async function observeMaterialResource(
   resource: string,
   cacheDir?: string,
   track?: "structure",
+  structureResources?: readonly string[],
 ): Promise<{
   canonicalPath: string;
   observedVersion?: string;
@@ -155,7 +156,13 @@ export async function observeMaterialResource(
   if (filename === undefined)
     throw new Error("Mechanical checks require an explicit local path or file: URI");
   if (track === "structure") {
-    return observeStructureMaterial(workspaceRoot, documentPath, resource, cacheDir);
+    return observeStructureMaterial(
+      workspaceRoot,
+      documentPath,
+      resource,
+      cacheDir,
+      structureResources,
+    );
   }
   // An absolute file URI explicitly addresses another location. Check every path
   // segment from its filesystem root; relative addresses remain in this workspace.

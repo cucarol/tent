@@ -17,6 +17,7 @@ export interface FsAdapter {
     resource: string,
     documentPath: string,
     track?: "structure",
+    structureResources?: readonly string[],
   ): Promise<{
     observedVersion?: string;
     coverage?: true;

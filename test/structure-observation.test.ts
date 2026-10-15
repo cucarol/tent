@@ -336,3 +336,36 @@ test("canonical dependencies validate sorted unique targets and bounded added/de
   assert.equal(changed.changedDependencies.length, 20);
   assert.equal(changed.changedDependenciesOverflow, 3);
 });
+
+test("Node union excludes complete Go packages without mixing other sources' outgoing edges", () => {
+  const coverage = { kind: "prefix" as const, prefix: "pkg/card-" };
+  const files = ["pkg/card-main.go", "pkg/role-main.go", "outside/api.go"];
+  const members = new Set(["pkg/card-main.go", "pkg/role-main.go"]);
+  assert.deepEqual(
+    externalStructureDependencies(
+      coverage,
+      [
+        { from: "pkg/card-main.go", to: "pkg", kind: "directory", specifier: "example/pkg" },
+        {
+          from: "pkg/role-main.go",
+          to: "outside",
+          kind: "directory",
+          specifier: "example/outside",
+        },
+      ],
+      files,
+      members,
+    ),
+    [],
+  );
+  assert.throws(
+    () =>
+      externalStructureDependencies(
+        coverage,
+        [{ from: "pkg/card-main.go", to: "pkg", kind: "directory", specifier: "example/pkg" }],
+        [...files, "pkg/nonmember.go"],
+        members,
+      ),
+    /partly covered/,
+  );
+});

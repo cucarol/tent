@@ -276,3 +276,65 @@ test("same directory with coverage and structure declarations retains only the s
   assert.equal(check.materials[0].state, "current");
   assert.equal(check.materials[0].track, "structure");
 });
+
+test("one Node excludes its structure-source union while retaining each material basis", async (t) => {
+  const { root, adapter, run, confirm } = await fixture(t);
+  await fs.writeFile(path.join(root, "src/core/role-a.ts"), "export const role = 1;\n");
+  const goal = (
+    await run("create", [
+      "Union",
+      "--type",
+      "goal",
+      "--sources-json",
+      JSON.stringify([
+        { resource: "src/core/card-*", track: "structure" },
+        { resource: "src/core/role-*", track: "structure" },
+        { resource: "src/other/" },
+      ]),
+    ])
+  ).node.nodeId;
+  const separate = (
+    await run("create", [
+      "Separate",
+      "--type",
+      "prompt",
+      "--sources-json",
+      JSON.stringify([{ resource: "src/core/card-*", track: "structure" }]),
+    ])
+  ).node.nodeId;
+  const output = (await run("link-output", [goal, "--resource", "result.txt"])).nodeId;
+  await fs.writeFile(path.join(root, "src/core/card-a.ts"), 'import "./role-a.js";\n');
+  await fs.writeFile(path.join(root, "src/core/role-a.ts"), 'import "./card-a.js";\n');
+  let check = await run("check", [goal]);
+  assert.equal(check.state, "synced");
+  assert.equal(check.materials.length, 2);
+  assert.ok(check.materials.every((material: any) => material.state === "current"));
+  assert.equal((await run("check", [output])).state, "synced");
+  assert.equal((await run("check", [separate])).state, "behind");
+
+  await fs.writeFile(
+    path.join(root, "src/core/card-a.ts"),
+    'import "./role-a.js"; import "./shared.js"; import "../other/api.js";\n',
+  );
+  check = await run("check", [goal]);
+  assert.equal(check.state, "behind");
+  const cardMaterial = check.materials.find((material: any) =>
+    material.resource.endsWith("card-*"),
+  );
+  assert.deepEqual(cardMaterial.changedDependencies, [
+    { target: "src/core/shared.ts", state: "added" },
+    { target: "src/other/", state: "added" },
+  ]);
+  assert.equal(
+    check.materials.find((material: any) => material.resource.endsWith("role-*")).state,
+    "current",
+  );
+  const current = await readNodeForEdit(adapter, goal);
+  await writeNodeDocument(adapter, goal, { baseEtag: current.etag, body: "Keep existing bases\n" });
+  assert.equal((await run("check", [goal])).state, "behind");
+  await confirm(goal);
+  check = await run("check", [goal]);
+  assert.equal(check.state, "ahead");
+  assert.ok(check.materials.every((material: any) => material.state === "current"));
+  assert.equal((await run("check", [output])).state, "behind");
+});

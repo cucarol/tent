@@ -117,3 +117,29 @@ test("shared observations keep different sections and unavailable sources distin
   assert.match(result[2]!.reason!, /heading not found/);
   assert.equal(calls.length, 3);
 });
+
+test("shared structure observations distinguish the owning Node's structure-source union", async () => {
+  const fs = observer();
+  const scopes: Array<readonly string[] | undefined> = [];
+  fs.observeMaterial = async (_resource, _owner, _track, resources) => {
+    scopes.push(resources);
+    return { observedVersion: (resources?.length === 2 ? "a" : "b").repeat(64) };
+  };
+  const observations = new Map();
+  const source = { resource: "../../src/card-*", track: "structure" };
+  const union = { sources: [source, { resource: "../../src/role-*", track: "structure" }] };
+  const a = await observeNodeMaterials(fs, union, "A/A.md", undefined, undefined, observations);
+  const b = await observeNodeMaterials(
+    fs,
+    { sources: [source] },
+    "B/B.md",
+    undefined,
+    undefined,
+    observations,
+  );
+  const again = await observeNodeMaterials(fs, union, "A/A.md", undefined, undefined, observations);
+  assert.equal(a[0]!.version, "a".repeat(64));
+  assert.equal(b[0]!.version, "b".repeat(64));
+  assert.deepEqual(again, a);
+  assert.equal(scopes.length, 3);
+});

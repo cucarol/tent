@@ -183,6 +183,7 @@ export async function observeSyncMaterial(
   nodes?: Map<string, CatalogNode>,
   finalDocuments?: Map<string, string>,
   track?: "structure",
+  structureResources?: readonly string[],
 ): Promise<{
   version?: string;
   reason?: string;
@@ -221,7 +222,12 @@ export async function observeSyncMaterial(
       locator.kind === "path" && !/^(?:\.{1,2}\/|\/)/.test(resource.trim())
         ? `./${resource.trim()}`
         : resource;
-    const observation = await fs.observeMaterial(explicitResource, documentPath, track);
+    const observation = await fs.observeMaterial(
+      explicitResource,
+      documentPath,
+      track,
+      structureResources,
+    );
     const materialNode =
       !isDirectoryMaterial(locator) &&
       observation.systemPath &&
@@ -266,6 +272,17 @@ export async function observeNodeMaterials(
   observations?: Map<string, ReturnType<typeof observeSyncMaterial>>,
 ) {
   const directories = new Map<string, ReturnType<typeof observeSyncMaterial>>();
+  const occurrences = materialOccurrences(data);
+  const structureResources = occurrences
+    .filter(({ track }) => track === "structure")
+    .map(({ resource }) => resource);
+  const structureScope = [
+    ...new Set(
+      structureResources.map((resource) =>
+        syncMaterialIdentity(resource, documentPath, nodes, "structure"),
+      ),
+    ),
+  ].sort();
   const nativeNodes =
     nodes &&
     new Map(
@@ -275,7 +292,7 @@ export async function observeNodeMaterials(
     );
   const nodePaths = nativeNodes && new Set(nativeNodes.keys());
   return Promise.all(
-    materialOccurrences(data)
+    occurrences
       .filter(
         ({ resource, field }) =>
           field !== "sources" || !isCardResponseSource(resource, documentPath, fs.workspaceRoot),
@@ -312,6 +329,7 @@ export async function observeNodeMaterials(
                 nodes,
                 finalDocuments,
                 track,
+                track ? structureResources : undefined,
               );
             const directoryKey = identity;
             if (isDirectoryMaterial(locator) && !directories.has(directoryKey))
@@ -331,7 +349,12 @@ export async function observeNodeMaterials(
           if (!observations) observed = await observeOnce();
           else {
             // Share current observations across bases, including unavailable addresses.
-            const currentKey = JSON.stringify(["current", identity, locator]);
+            const currentKey = JSON.stringify([
+              "current",
+              identity,
+              locator,
+              ...(track ? [structureScope] : []),
+            ]);
             if (!observations.has(currentKey)) observations.set(currentKey, observeOnce());
             observed = await observations.get(currentKey)!;
           }

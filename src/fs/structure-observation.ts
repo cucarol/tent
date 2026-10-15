@@ -29,10 +29,14 @@ export async function observeStructureMaterial(
   documentPath: string,
   resource: string,
   cacheDir?: string,
+  structureResources: readonly string[] = [resource],
 ) {
   const coverage = structureMaterialCoverage(resource, documentPath, workspaceRoot);
   if (!coverage)
     throw new Error("Structure observation requires a Workspace directory or prefix material");
+  const nodeCoverage = structureResources
+    .map((address) => structureMaterialCoverage(address, documentPath, workspaceRoot))
+    .filter((item) => item !== undefined);
   const physical = path.resolve(
     workspaceRoot,
     coverage.prefix + (coverage.kind === "prefix" ? "*" : ""),
@@ -100,7 +104,7 @@ export async function observeStructureMaterial(
     new Set(
       memberPaths
         .map((filename) => path.relative(workspaceRoot, filename).split(path.sep).join("/"))
-        .filter((file) => materialCoverageContains(coverage, file)),
+        .filter((file) => nodeCoverage.some((item) => materialCoverageContains(item, file))),
     ),
   );
   await checkedSourceFile(workspaceRoot, directory, true);

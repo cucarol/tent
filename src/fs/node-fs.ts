@@ -48,7 +48,12 @@ export class NodeFs implements FsAdapter {
       : undefined;
   }
 
-  async observeMaterial(resource: string, documentPath: string, track?: "structure") {
+  async observeMaterial(
+    resource: string,
+    documentPath: string,
+    track?: "structure",
+    structureResources?: readonly string[],
+  ) {
     const workspaceRoot = workspaceRootFromSystemRoot(this.root);
     if (!workspaceRoot) throw new Error("Material observation requires a Workspace .tent root");
     await assertSystemMaterial(this, materialLocator(resource, documentPath, true));
@@ -59,6 +64,7 @@ export class NodeFs implements FsAdapter {
       resource,
       cacheDir,
       track,
+      structureResources,
     );
     const relative = nodePath.relative(this.root, observed.canonicalPath);
     const inside =

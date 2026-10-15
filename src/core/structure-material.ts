@@ -48,7 +48,7 @@ export function changedStructureDependencies(before: readonly string[], after: r
   };
 }
 
-/** Collapse resolved external files to directories, retaining nonmember sibling files. */
+/** Observe one source's outgoing edges against all structure members of its Node. */
 export function externalStructureDependencies(
   coverage: MaterialCoverage,
   edges: readonly RepositoryImport[],
@@ -56,9 +56,14 @@ export function externalStructureDependencies(
   members: ReadonlySet<string>,
 ): string[] {
   const targets = new Set<string>();
-  const isMember = (file: string) => materialCoverageContains(coverage, file) && members.has(file);
+  const isMember = (file: string) => members.has(file);
   for (const edge of edges) {
-    if (!isMember(edge.from) || isTestSource(edge.from)) continue;
+    if (
+      !materialCoverageContains(coverage, edge.from) ||
+      !isMember(edge.from) ||
+      isTestSource(edge.from)
+    )
+      continue;
     if (edge.kind === "file") {
       if (isMember(edge.to)) continue;
       const directory = path.posix.dirname(edge.to);
