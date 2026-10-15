@@ -183,7 +183,6 @@ test("both native envelopes merge all questions and keep fixed text within 2 KiB
         question: "问题".repeat(2000),
         answers: question.answers.map(() => "回答".repeat(2000)),
       })),
-      true,
     )!;
     assert.ok(huge.includes(TURN_REVIEW_RULE));
     assert.ok(huge.includes(TURN_REVIEW_ACTION));

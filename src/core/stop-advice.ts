@@ -37,6 +37,5 @@ export function stopAdvice(
     host,
     modulesForIndexedTurn(index, event),
     questionsForIndexedTurn(index, event),
-    event.uncertain,
   );
 }

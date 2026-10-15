@@ -1,4 +1,4 @@
-import { open } from "node:fs/promises";
+import { readTranscriptTurnTail } from "./transcript-turn-tail.js";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as z from "zod/v4";
@@ -100,23 +100,16 @@ export async function readClaudeTurnActivity(
     });
   };
   try {
-    const handle = await open(transcriptPath, "r");
-    let lines: string[];
-    try {
-      const stat = await handle.stat();
-      if (!stat.isFile()) return { ...activity, uncertain: true };
-      const start = Math.max(0, stat.size - 1024 * 1024);
-      const bytes = Buffer.alloc(stat.size - start);
-      const { bytesRead } = await handle.read(bytes, 0, bytes.length, start);
-      if (bytesRead !== bytes.length) return { ...activity, uncertain: true };
-      lines = bytes.toString("utf8").split(/\r?\n/);
-      if (start) {
-        lines.shift();
-        activity.uncertain = true;
-      }
-    } finally {
-      await handle.close();
-    }
+    const { lines, complete } = await readTranscriptTurnTail(transcriptPath, (value) => {
+      const parsed = entrySchema.safeParse(value);
+      if (!parsed.success) return;
+      const row = parsed.data;
+      if (row.isSidechain === true || row.type !== "user" || !row.promptId) return;
+      const content = row.message?.content;
+      if (Array.isArray(content) && content.some((part) => part.type === "tool_result")) return;
+      return row.promptId === requestedPromptId ? "start" : "other";
+    });
+    activity.uncertain ||= !complete;
     for (const line of lines) {
       if (!line.trim()) continue;
       let parsed;

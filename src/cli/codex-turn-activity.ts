@@ -1,4 +1,4 @@
-import { open } from "node:fs/promises";
+import { readTranscriptTurnTail } from "./transcript-turn-tail.js";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as z from "zod/v4";
@@ -82,6 +82,7 @@ export async function readCodexTurnActivity(
     cancelled = false,
     hasFileChanges = false,
     nodeOrCardChanged = false;
+  let complete = false;
   const resolver = await createTurnPathResolver(workspaceRoot, sessionCwd);
   const paths = new Set<string>();
   const observations: SessionFileObservation[] = [];
@@ -186,20 +187,17 @@ export async function readCodexTurnActivity(
     }
   };
   try {
-    const handle = await open(transcriptPath, "r");
-    let lines: string[];
-    try {
-      const stat = await handle.stat();
-      if (!stat.isFile()) return unknownActivity;
-      const start = Math.max(0, stat.size - 1024 * 1024),
-        bytes = Buffer.alloc(stat.size - start);
-      const { bytesRead } = await handle.read(bytes, 0, bytes.length, start);
-      if (bytesRead !== bytes.length) return unknownActivity;
-      lines = bytes.toString("utf8").split(/\r?\n/);
-      if (start) lines.shift();
-    } finally {
-      await handle.close();
-    }
+    const tail = await readTranscriptTurnTail(transcriptPath, (row) => {
+      const parsed = entrySchema.safeParse(row);
+      if (!parsed.success) return;
+      const { type, payload } = parsed.data;
+      const started = type === "event_msg" && payload.type === "task_started";
+      if ((!started && type !== "turn_context") || !payload.turn_id) return;
+      if (payload.turn_id !== requestedTurnId) return "other";
+      return started ? "start" : "same";
+    });
+    const { lines } = tail;
+    complete = tail.complete;
     for (const line of lines) {
       if (!line.trim()) continue;
       let parsed;
@@ -378,7 +376,7 @@ export async function readCodexTurnActivity(
     paths: [...paths],
     observations,
     signals: [...signals],
-    uncertain: uncertain || calls.size > 0,
+    uncertain: !complete || uncertain || calls.size > 0,
     ...(cancelled ? { cancelled: true as const } : {}),
     ...(hasFileChanges ? { hasFileChanges: true as const } : {}),
     ...(nodeOrCardChanged ? { nodeOrCardChanged: true as const } : {}),

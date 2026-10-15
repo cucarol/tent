@@ -475,7 +475,7 @@ test("missing turn/transcript and a turn outside the bounded tail never claim ev
     start(),
     item({ type: "FileChange", status: "completed", changes: { "early.ts": { type: "update" } } }),
   ]);
-  await fs.appendFile(log, " ".repeat(1024 * 1024 + 1));
+  await fs.appendFile(log, " ".repeat(8 * 1024 * 1024 + 1));
   assert.deepEqual(await readCodexTurnActivity(log, workspace, "turn"), {
     paths: [],
     observations: [],

@@ -49,7 +49,7 @@ export function modulesForIndexedTurn(
   }
   return modules
     .filter((module) => module.files.size)
-    .sort((a, b) => a.node.path.localeCompare(b.node.path))
+    .sort((a, b) => b.files.size - a.files.size || a.node.path.localeCompare(b.node.path))
     .map(({ node, files }) => ({
       nodeId: node.nodeId,
       path: node.path,
@@ -76,14 +76,12 @@ export function formatStopTurnReview(
   host: StopHost,
   modules: TurnReviewModule[],
   questions: StopQuestion[],
-  uncertain = false,
 ): string | undefined {
   if (!modules.length) return undefined;
   const selected = modules
     .slice(0, 5)
     .map((module) => ({ ...module, files: module.files.slice(0, 8) }));
   let questionLimit = 180;
-  let includeUncertain = uncertain;
   const render = () =>
     [
       "Tent turn review. This turn changed files that these Nodes cover:",
@@ -102,9 +100,6 @@ export function formatStopTurnReview(
           (question, index) =>
             `${index + 1}. ${shorten(question.question, questionLimit)}\nOptions: ${question.answers.map((answer) => shorten(answer, questionLimit)).join("; ")}.`,
         ),
-      ...(includeUncertain
-        ? ["Some observations are incomplete; workspace brief shows the current state."]
-        : []),
     ].join("\n");
   const fits = () =>
     Buffer.byteLength(JSON.stringify(stopReviewEnvelope(host, render())) + "\n", "utf8") <= 2048;
@@ -115,6 +110,5 @@ export function formatStopTurnReview(
       .files.pop();
   while (!fits() && selected.length) selected.pop();
   while (!fits() && questionLimit > 8) questionLimit = Math.max(8, Math.floor(questionLimit / 2));
-  if (!fits()) includeUncertain = false;
   return fits() ? render() : undefined;
 }
