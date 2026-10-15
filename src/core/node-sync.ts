@@ -115,7 +115,19 @@ function currentNodes(catalog: Awaited<ReturnType<typeof loadNodeCatalog>>) {
 }
 
 /** Selected bodies only; output checks may additionally read their implicit goal basis. */
-async function inspectCatalogNodes(
+function inspectCatalogNodes(
+  fs: FsAdapter,
+  catalog: NodeCatalog,
+  selected: CatalogNode[],
+  now: string,
+  explicitNodeId?: string,
+) {
+  // One inspection shares one material observation scope, never a later one.
+  const run = () => inspectCatalogNodesInScope(fs, catalog, selected, now, explicitNodeId);
+  return fs.observationScope ? fs.observationScope(run) : run();
+}
+
+async function inspectCatalogNodesInScope(
   fs: FsAdapter,
   catalog: NodeCatalog,
   selected: CatalogNode[],

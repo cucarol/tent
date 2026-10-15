@@ -12,6 +12,7 @@ import { GitDocumentHistory, type CaptureMetadata } from "../core/git-history.js
 import { isHistoryDocument, isHistoryFile } from "../core/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 import { observeMaterialResource } from "./source-observation.js";
+import { withStructureSnapshot } from "./structure-observation.js";
 import { workspaceRootFromSystemRoot } from "../core/paths.js";
 import {
   prepareNodeSyncSave,
@@ -38,6 +39,10 @@ export class NodeFs implements FsAdapter {
     this.root = nodePath.resolve(root);
     this.workspaceRoot = workspaceRootFromSystemRoot(this.root);
     this.history = new GitDocumentHistory(this.root, entry);
+  }
+
+  observationScope<T>(action: () => Promise<T>): Promise<T> {
+    return withStructureSnapshot(action);
   }
 
   async observeMaterial(

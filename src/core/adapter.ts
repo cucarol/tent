@@ -22,6 +22,8 @@ export interface FsAdapter {
     structureDependencies?: string[];
     systemPath?: string;
   }>;
+  /** Share one Workspace observation among the materials of a single inspection. */
+  observationScope?<T>(action: () => Promise<T>): Promise<T>;
   readonly history?: GitDocumentHistory;
   /** File paths in the independent Tent Git HEAD tree; undefined without Tent Git. */
   retainedDocumentPaths?(): Promise<string[] | undefined>;

@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import path from "node:path";
+import fs from "node:fs/promises";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import type { FsAdapter } from "../src/core/adapter.js";
 import { observeNodeMaterials } from "../src/core/node-sync-record.js";
+import { inspectWorkspaceSync } from "../src/core/node-sync.js";
+import { serializeFrontmatter } from "../src/core/frontmatter.js";
+import { structureFingerprint } from "../src/core/structure-material.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
+import { git } from "./helpers.js";
 
 const observer = (): FsAdapter =>
   new NodeFs(path.join(testScratchRoot(), "observation-unit", ".tent"));
@@ -142,4 +150,91 @@ test("shared structure observations distinguish the owning Node's structure-sour
   assert.equal(b[0]!.version, "b".repeat(64));
   assert.deepEqual(again, a);
   assert.equal(scopes.length, 3);
+});
+
+test("structure inspections keep Git listings constant as materials grow and refresh the next inspection", async (t) => {
+  const scratch = path.resolve(testScratchRoot());
+  const root = await fs.mkdtemp(path.join(scratch, "structure-inspection-"));
+  t.after(async () => {
+    assert.equal(path.dirname(root), scratch);
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+  });
+  const write = async (file: string, text: string) => {
+    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await fs.writeFile(path.join(root, file), text);
+  };
+  await write(".gitignore", ".tent/\n");
+  await write("src/shared/api.ts", "export const api = true;\n");
+  await write("src/other/api.ts", "export const other = true;\n");
+  await git(root, "init", "--quiet");
+  await scaffoldInWorkspace(new NodeFs(root), { name: "Shared inspection" });
+  const addMaterial = async (index: number) => {
+    await write(`src/module-${index}/file-main.ts`, "export const value = true;\n");
+    await write(
+      `.tent/Module${index}/Module${index}.md`,
+      serializeFrontmatter(
+        {
+          id: `node-module${index}`,
+          type: "prompt",
+          sources: [
+            {
+              resource: `../../src/module-${index}/${index % 2 ? "file-*" : ""}`,
+              track: "structure",
+            },
+          ],
+        },
+        "Module structure\n",
+      ),
+    );
+  };
+  await addMaterial(0);
+  await git(root, "add", ".");
+  const adapter = new NodeFs(path.join(root, ".tent"));
+  const original = childProcess.execFile;
+  const listings: string[][] = [];
+  const mocked = t.mock.method(childProcess, "execFile", (...args: Parameters<typeof original>) => {
+    const commandArgs = args[1] as string[];
+    if (args[0] === "git" && commandArgs.includes("ls-files")) listings.push([...commandArgs]);
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    const inspect = async (count: number) => {
+      listings.length = 0;
+      const result = await inspectWorkspaceSync(adapter);
+      assert.deepEqual(result.invalidNodes, []);
+      assert.equal(result.nodes.length, count);
+      for (const node of result.nodes) {
+        assert.equal(node.materials.length, 1);
+        assert.equal(node.materials[0]!.track, "structure");
+        assert.equal(node.materials[0]!.state, "unanchored");
+        assert.match(node.materials[0]!.currentVersion!, /^[a-f0-9]{64}$/);
+      }
+      assert.equal(
+        listings.length,
+        3,
+        "one live, one ignored and one tracked listing per inspection",
+      );
+      assert.equal(listings.filter((args) => args.includes("--stage")).length, 1);
+      assert.equal(listings.filter((args) => args.includes("--ignored")).length, 1);
+      assert.equal(listings.filter((args) => args.includes("--others")).length, 1);
+      return result;
+    };
+    const first = await inspect(1);
+    assert.equal(first.nodes[0]!.materials[0]!.currentVersion, structureFingerprint([]));
+    for (let index = 1; index < 8; index++) await addMaterial(index);
+    await inspect(8);
+    // Reuse the adapter: neither old file contents nor the old listing may survive a check.
+    await write("src/module-0/file-main.ts", 'import "../shared/api.js";\n');
+    await write("src/module-0/file-new.ts", 'import "../other/api.js";\n');
+    const refreshed = await inspect(8);
+    const module = refreshed.nodes.find((node) => node.nodeId === "node-module0")!;
+    assert.equal(
+      module.materials[0]!.currentVersion,
+      structureFingerprint(["src/other/", "src/shared/"]),
+    );
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
 });

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -14,6 +15,37 @@ import { sourceDirectoryPaths } from "./directory-observation.js";
 import { observeSourceFile } from "./source-observation.js";
 import { checkedSourceFile } from "./checked-source-file.js";
 import { directoryRepository } from "./repository-material.js";
+
+/**
+ * One inspection observes the Workspace listing and each structure source once.
+ * Every structure material in that inspection shares this snapshot; a later
+ * inspection always starts empty, so no observation outlives its inspection.
+ */
+type StructureSnapshot = {
+  repository?: ReturnType<typeof directoryRepository>;
+  listings: Map<string, Promise<string[]>>;
+  sources: Map<string, Promise<string>>;
+  directories: Map<string, Promise<boolean>>;
+};
+const structureSnapshot = new AsyncLocalStorage<StructureSnapshot>();
+
+export function withStructureSnapshot<T>(action: () => Promise<T>): Promise<T> {
+  if (structureSnapshot.getStore()) return action();
+  return structureSnapshot.run(
+    { listings: new Map(), sources: new Map(), directories: new Map() },
+    action,
+  );
+}
+
+function shared<T>(map: Map<string, Promise<T>> | undefined, key: string, read: () => Promise<T>) {
+  if (!map) return read();
+  let pending = map.get(key);
+  if (!pending) {
+    pending = read();
+    map.set(key, pending);
+  }
+  return pending;
+}
 
 function aggregateBlobs(value: unknown) {
   const bytes = Buffer.from(JSON.stringify(value));
@@ -50,11 +82,16 @@ export async function observeStructureMaterial(
       : path.join(canonicalDirectory, path.basename(physical));
   // Both aggregate kinds use nonignored live members. Tracked paths additionally
   // let the resolver identify ignored targets without making them members.
-  const repository = await directoryRepository(workspaceRoot);
-  const livePaths = await sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir);
-  const trackedPaths = repository
-    ? await sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir, true)
-    : undefined;
+  const snapshot = structureSnapshot.getStore();
+  const repository = snapshot
+    ? await (snapshot.repository ??= directoryRepository(workspaceRoot))
+    : await directoryRepository(workspaceRoot);
+  const listing = (trackedOnly: boolean) =>
+    shared(snapshot?.listings, JSON.stringify([workspaceRoot, cacheDir ?? null, trackedOnly]), () =>
+      sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir, trackedOnly),
+    );
+  const livePaths = await listing(false);
+  const trackedPaths = repository ? await listing(true) : undefined;
   const memberPaths = livePaths;
   const paths = [...new Set([...livePaths, ...(trackedPaths ?? [])])].sort();
   const memberSources = memberPaths
@@ -63,6 +100,7 @@ export async function observeStructureMaterial(
       (file) =>
         materialCoverageContains(coverage, file) && isImportSource(file) && !isTestSource(file),
     );
+  const members = new Set(memberSources);
   const neededConfig = (file: string) => {
     if (!isImportConfig(file)) return false;
     const configDirectory = path.posix.dirname(file);
@@ -76,17 +114,26 @@ export async function observeStructureMaterial(
   for (const filename of paths) {
     const workspacePath = path.relative(workspaceRoot, filename).split(path.sep).join("/");
     const file: RepositorySource = { path: workspacePath };
-    if (memberSources.includes(workspacePath) || neededConfig(workspacePath)) {
-      await observeSourceFile(workspaceRoot, filename, undefined, {
-        key: "structure-source-v1",
-        content: (bytes) => {
-          file.content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-          if (file.content.includes("\0"))
-            throw new Error(`Structure source is not valid text: ${workspacePath}`);
-          return bytes;
-        },
+    if (members.has(workspacePath) || neededConfig(workspacePath)) {
+      file.content = await shared(snapshot?.sources, filename, async () => {
+        let content: string | undefined;
+        await observeSourceFile(workspaceRoot, filename, undefined, {
+          key: "structure-source-v1",
+          content: (bytes) => {
+            content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+            if (content.includes("\0"))
+              throw new Error(`Structure source is not valid text: ${workspacePath}`);
+            return bytes;
+          },
+        });
+        return content!;
       });
-    } else if ((await lstat(filename)).isDirectory()) continue;
+    } else if (
+      await shared(snapshot?.directories, filename, async () =>
+        (await lstat(filename)).isDirectory(),
+      )
+    )
+      continue;
     files.push(file);
   }
   const imports = extractRepositoryImports(files);
