@@ -32,6 +32,8 @@ export function fileOf(node: SnapshotNode): NodeFile | null {
   const own = node.materials.find((m) => m.field === "resource");
   if (own?.kind === "uri" && own.uri) return { kind: "uri", uri: own.uri };
   if (own?.kind !== "file" || !own.workspacePath) return null;
+  // A folder (written with a closing slash) is where the Node's code lives, not a file it can show.
+  if (own.resource.split(/[?#]/)[0]!.endsWith("/")) return null;
   const path = own.workspacePath;
   const name = path.split("/").pop() ?? path;
   const dot = name.lastIndexOf(".");

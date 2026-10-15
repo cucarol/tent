@@ -35,8 +35,26 @@ export function useDragState(): DragState | null {
 /** Start watching a press; it becomes a drag once the pointer has moved a few pixels. */
 export function beginDrag(e: ReactPointerEvent, item: Dragged) {
   if (e.button !== 0 || (e.target as HTMLElement).closest("button, textarea, input, a")) return;
-  const start = { x: e.clientX, y: e.clientY };
-  let active = false;
+  watch(item, { x: e.clientX, y: e.clientY }, false);
+}
+
+/** Carry on a drag that is already moving, such as a card leaving the map for a lane. */
+export function continueDrag(item: Dragged, at: { x: number; y: number }) {
+  watch(item, at, true);
+  // Already over a lane when it arrives: letting go at once still drops there.
+  set({ item, ...at, over: targetAt(item, at.x, at.y) });
+}
+
+/** The drop target under a point that takes this item, or null. */
+function targetAt(item: Dragged, x: number, y: number) {
+  const target =
+    document.elementFromPoint(x, y)?.closest("[data-drop]")?.getAttribute("data-drop") ?? null;
+  return target && handler?.accepts(item, target) ? target : null;
+}
+
+function watch(item: Dragged, start: { x: number; y: number }, moving: boolean) {
+  let active = moving;
+  if (moving) document.body.classList.add("is-dragging");
   const move = (ev: PointerEvent) => {
     if (!active) {
       if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 5) return;
@@ -44,17 +62,7 @@ export function beginDrag(e: ReactPointerEvent, item: Dragged) {
       document.body.classList.add("is-dragging");
       window.getSelection()?.removeAllRanges();
     }
-    const target =
-      document
-        .elementFromPoint(ev.clientX, ev.clientY)
-        ?.closest("[data-drop]")
-        ?.getAttribute("data-drop") ?? null;
-    set({
-      item,
-      x: ev.clientX,
-      y: ev.clientY,
-      over: target && handler?.accepts(item, target) ? target : null,
-    });
+    set({ item, x: ev.clientX, y: ev.clientY, over: targetAt(item, ev.clientX, ev.clientY) });
   };
   const end = (drop: boolean) => {
     window.removeEventListener("pointermove", move);

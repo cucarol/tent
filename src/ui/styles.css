@@ -1,50 +1,54 @@
-/* Tent Web UI: a quiet, precise interface that keeps out of the way of the content (after Linear and Claude Desktop).
+/* Tent Web UI: a quiet, precise interface that keeps out of the way of the content (after Claude and Linear):
+   ivory and warm greys, Claude's clay orange as the one accent, warm charcoal in the dark.
    The sidebar sits on the window frame; the map and the details share one inset surface.
    Colour carries meaning only: prompt and output have their own hue, goal is ink,
    the accent (the orange of the mark) marks the user's own focus and actions,
    and status colours follow common conventions (blue new, amber warning, red error). */
 :root {
-  --bg: #FCFBF8;
-  --bg-subtle: #F7F5F0;
-  --bg-muted: #EFEDE6;
-  --bg-emphasis: #E7E4DB;
-  --border: #E7E3D9;
-  --border-strong: #D4CFC3;
-  --text: #23211D;
-  --text-2: #5E5A52;
-  --text-3: #8A867C;
-  --frame: #F2F0E9; --canvas: #F8F6F1; --line: #D6D1C5;
-  --hover: rgba(60, 45, 20, .045); --press: rgba(60, 45, 20, .075);
-  --accent: #C4613A; --accent-hover: #AE5230; --accent-soft: color-mix(in srgb, #C4613A 11%, #FCFBF8); --accent-line: color-mix(in srgb, #C4613A 60%, transparent); --on-accent: #FFFFFF;
-  --goal: #2B3935; --goal-soft: color-mix(in srgb, #2B3935 11%, #FCFBF8);
-  --prompt: #1E6A6B; --prompt-soft: color-mix(in srgb, #1E6A6B 12%, #FCFBF8);
-  --output: #4C7D59; --output-soft: color-mix(in srgb, #4C7D59 13%, #FCFBF8);
+  --bg: #FFFFFF;
+  --bg-subtle: #FAF9F5;
+  --bg-muted: #F2F0E8;
+  --bg-emphasis: #E8E6DC;
+  --border: #E8E6DC;
+  --border-strong: #D6D3C7;
+  --text: #141413;
+  --text-2: #5E5D59;
+  --text-3: #8D8B83;
+  --frame: #F0EEE6; --canvas: #FAF9F5; --line: #D6D3C7;
+  --hover: rgba(31, 30, 29, .045); --press: rgba(31, 30, 29, .08);
+  --accent: #D2582B; --accent-hover: #BA4B22; --accent-soft: color-mix(in srgb, #D2582B 10%, #FFFFFF); --accent-line: color-mix(in srgb, #D2582B 60%, transparent); --on-accent: #FFFFFF;
+  --goal: #3B534E; --goal-soft: color-mix(in srgb, #3B534E 9%, #FFFFFF);
+  --prompt: #246F70; --prompt-soft: color-mix(in srgb, #246F70 10%, #FFFFFF);
+  --output: #4E7A5C; --output-soft: color-mix(in srgb, #86A48E 18%, #FFFFFF);
   --new: #3D6BCB; --new-soft: #E8EDF7;
   --warn: #A45F00; --warn-soft: #FAF0DD;
   --add-bg: #E7F5EB; --add-ink: #1B6B38; --del-bg: #FDECEA; --del-ink: #B42318;
   --danger: #B42318; --danger-hover: #9A1D13; --on-danger: #FFFFFF;
-  --tip-bg: #23211D; --tip-text: #F6F4EE;
+  --tip-bg: #141413; --tip-text: #FAF9F5;
   --shadow-xs: 0 1px 1px rgba(40, 30, 15, .04);
   --shadow-sm: 0 1px 2px rgba(40, 30, 15, .06);
   --shadow-md: 0 0 0 1px rgba(40, 30, 15, .02), 0 2px 4px rgba(40, 30, 15, .04), 0 8px 24px rgba(40, 30, 15, .08);
   --shadow-lg: 0 0 0 1px rgba(40, 30, 15, .03), 0 12px 32px rgba(40, 30, 15, .14);
   --scrim: rgba(40, 30, 15, .28);
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  /* System faces only. Source Han / Noto comes before YaHei where installed: it has every weight between. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  /* Documents read in a serif, as Claude's replies do; the interface stays sans. */
+  --font-reading: ui-serif, Charter, "Noto Serif SC", "Source Han Serif SC", "Songti SC", Cambria, "Microsoft YaHei UI", "Microsoft YaHei", serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Cascadia Code", Menlo, Consolas, monospace;
   color-scheme: light;
 }
 :root[data-theme="dark"] {
-  --bg: #1C1C1C; --bg-subtle: #181818; --bg-muted: #242424; --bg-emphasis: #2D2D2D;
-  --border: #2A2A2A; --border-strong: #3B3B3B;
-  --text: #ECEBE8; --text-2: #B9B8B6; --text-3: #8E8D8C;
-  --frame: #121212; --canvas: #151515; --line: #383838;
+  --bg: #222221; --bg-subtle: #1E1E1D; --bg-muted: #2A2A28; --bg-emphasis: #333331;
+  --border: #31302E; --border-strong: #42413D;
+  --text: #F2F1EC; --text-2: #B8B6AD; --text-3: #8A8880;
+  --frame: #212120; --canvas: #1A1A19; --line: #3E3D39;
   --hover: rgba(255, 255, 255, .05); --press: rgba(255, 255, 255, .085);
-  --accent: #DC7A52; --accent-hover: #E68D68; --accent-soft: color-mix(in srgb, #DC7A52 17%, #1C1C1C); --accent-line: color-mix(in srgb, #DC7A52 65%, transparent); --on-accent: #FFFFFF;
-  --goal: #D3DDD9; --goal-soft: color-mix(in srgb, #D3DDD9 14%, #1C1C1C);
-  --prompt: #6AB5B1; --prompt-soft: color-mix(in srgb, #6AB5B1 18%, #1C1C1C); --output: #92C09D; --output-soft: color-mix(in srgb, #92C09D 16%, #1C1C1C);
-  --new: #7EA2EA; --new-soft: #1A2532; --warn: #E3A544; --warn-soft: #2A2318;
+  --accent: #E46F3D; --accent-hover: #EC8457; --accent-soft: color-mix(in srgb, #E46F3D 18%, #222221); --accent-line: color-mix(in srgb, #E46F3D 65%, transparent); --on-accent: #FFFFFF;
+  --goal: #C9D6D1; --goal-soft: color-mix(in srgb, #C9D6D1 12%, #222221);
+  --prompt: #6FB5B2; --prompt-soft: color-mix(in srgb, #6FB5B2 16%, #222221); --output: #98C1A3; --output-soft: color-mix(in srgb, #98C1A3 15%, #222221);
+  --new: #7EA2EA; --new-soft: #22293A; --warn: #E3A544; --warn-soft: #33291A;
   --add-bg: #172C1C; --add-ink: #9AD7AE; --del-bg: #3A1E19; --del-ink: #F4A393; --danger: #C93A28; --danger-hover: #D84B37; --on-danger: #FFFFFF;
-  --tip-bg: #ECEBE8; --tip-text: #1C1C1C;
+  --tip-bg: #F5F4EF; --tip-text: #1F1E1D;
   --shadow-xs: 0 1px 1px rgba(0, 0, 0, .25);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .35);
   --shadow-md: 0 0 0 1px rgba(255, 255, 255, .03), 0 2px 4px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .4);
@@ -54,17 +58,17 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --bg: #1C1C1C; --bg-subtle: #181818; --bg-muted: #242424; --bg-emphasis: #2D2D2D;
-    --border: #2A2A2A; --border-strong: #3B3B3B;
-    --text: #ECEBE8; --text-2: #B9B8B6; --text-3: #8E8D8C;
-    --frame: #121212; --canvas: #151515; --line: #383838;
+    --bg: #222221; --bg-subtle: #1E1E1D; --bg-muted: #2A2A28; --bg-emphasis: #333331;
+    --border: #31302E; --border-strong: #42413D;
+    --text: #F2F1EC; --text-2: #B8B6AD; --text-3: #8A8880;
+    --frame: #212120; --canvas: #1A1A19; --line: #3E3D39;
     --hover: rgba(255, 255, 255, .05); --press: rgba(255, 255, 255, .085);
-    --accent: #DC7A52; --accent-hover: #E68D68; --accent-soft: color-mix(in srgb, #DC7A52 17%, #1C1C1C); --accent-line: color-mix(in srgb, #DC7A52 65%, transparent); --on-accent: #FFFFFF;
-    --goal: #D3DDD9; --goal-soft: color-mix(in srgb, #D3DDD9 14%, #1C1C1C);
-    --prompt: #6AB5B1; --prompt-soft: color-mix(in srgb, #6AB5B1 18%, #1C1C1C); --output: #92C09D; --output-soft: color-mix(in srgb, #92C09D 16%, #1C1C1C);
-    --new: #7EA2EA; --new-soft: #1A2532; --warn: #E3A544; --warn-soft: #2A2318;
+    --accent: #E46F3D; --accent-hover: #EC8457; --accent-soft: color-mix(in srgb, #E46F3D 18%, #222221); --accent-line: color-mix(in srgb, #E46F3D 65%, transparent); --on-accent: #FFFFFF;
+    --goal: #C9D6D1; --goal-soft: color-mix(in srgb, #C9D6D1 12%, #222221);
+    --prompt: #6FB5B2; --prompt-soft: color-mix(in srgb, #6FB5B2 16%, #222221); --output: #98C1A3; --output-soft: color-mix(in srgb, #98C1A3 15%, #222221);
+    --new: #7EA2EA; --new-soft: #22293A; --warn: #E3A544; --warn-soft: #33291A;
     --add-bg: #172C1C; --add-ink: #9AD7AE; --del-bg: #3A1E19; --del-ink: #F4A393; --danger: #C93A28; --danger-hover: #D84B37; --on-danger: #FFFFFF;
-    --tip-bg: #ECEBE8; --tip-text: #1C1C1C;
+    --tip-bg: #F5F4EF; --tip-text: #1F1E1D;
     --shadow-xs: 0 1px 1px rgba(0, 0, 0, .25);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, .35);
     --shadow-md: 0 0 0 1px rgba(255, 255, 255, .03), 0 2px 4px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .4);
@@ -144,7 +148,7 @@ kbd { display: inline-grid; place-items: center; min-width: 18px; height: 18px; 
 .vsep { flex: none; width: 1px; height: 16px; margin: 0 4px; background: var(--border); }
 /* Type tiles: an icon standing for the object itself sits on a pale block of its type colour. */
 .tile { display: inline-grid; place-items: center; flex: none; border-radius: 27%; }
-.tile.k-goal { background: var(--goal-soft); } .tile.k-prompt { background: var(--prompt-soft); } .tile.k-output { background: var(--output-soft); }
+.tile.k-goal { --type-ink: var(--goal); background: var(--goal-soft); } .tile.k-prompt { --type-ink: var(--prompt); background: var(--prompt-soft); } .tile.k-output { --type-ink: var(--output); background: var(--output-soft); }
 .tile.k-card { background: var(--bg-muted); color: var(--text-2); }
 .tile.k-draft { background: var(--bg-subtle); color: var(--text-3); box-shadow: inset 0 0 0 1.5px var(--border-strong); }
 .p-goal { color: var(--goal); } .p-prompt { color: var(--prompt); } .p-output { color: var(--output); }
@@ -407,6 +411,8 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .map .react-flow__node { transition: opacity .25s ease; }
 /* A node under the pointer or holding focus rises above its neighbours, so its tips and chips are not drawn under the next card. */
 .map .react-flow__node:is(:hover, :focus-within) { z-index: 1000 !important; }
+/* A card folding into its parent, or about to come out of it, sits on the parent, faded. */
+.map .react-flow__node.is-tucked { opacity: 0; pointer-events: none; z-index: -1 !important; }
 /* Cards outside the lens keep their place, invisible, so they glide back when it closes. */
 .map .react-flow__node.is-away { opacity: 0; pointer-events: none; }
 .map .react-flow__node-label { pointer-events: none !important; cursor: default; }
@@ -414,37 +420,59 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .map.is-morphing .react-flow__node { transition: transform .42s cubic-bezier(.215, .61, .355, 1), opacity .25s ease; }
 .map .react-flow__edges { transition: opacity .2s ease; }
 .map.is-morphing .react-flow__edges { opacity: 0; transition: none; }
+/* While cards are dragged, their lines wait for them to land. */
+.map.is-moving .react-flow__edges { opacity: 0; transition: none; }
+.map.is-moving .react-flow__node { transition: none; }
+.map-marquee { position: absolute; z-index: 5; border: 1px solid var(--accent); border-radius: 3px; background: color-mix(in srgb, var(--accent) 8%, transparent); pointer-events: none; }
 
 .edge-handle { width: 1px !important; height: 1px !important; min-width: 0 !important; min-height: 0 !important; opacity: 0; border: 0 !important; background: none !important; pointer-events: none; }
 
 /* A card is one line: its type on a small tile, name, then what sets it apart (new, its place in an opened
    Card, tag, the lanes it went to). A top-level card stands taller, as the head of its group. */
-.mcard { position: relative; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 7px; border-radius: 9px; background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow-xs); cursor: pointer; transition: border-color .12s ease, box-shadow .12s ease; }
+.mcard { position: relative; display: flex; align-items: center; gap: 9px; padding: 0 13px 0 9px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow-xs); cursor: pointer; transition: border-color .12s ease, box-shadow .12s ease; }
 .mcard:hover { border-color: var(--border-strong); box-shadow: var(--shadow-sm), 0 4px 12px rgba(16, 16, 20, .05); }
 /* Dimmed cards stay opaque so lines behind them stay hidden; only their content fades. */
 .mcard.is-dim { box-shadow: none; }
 /* Your own draft's numbers never fade. */
 .mcard.is-dim > :not(.edge-handle, .mcard-pin, .mcard-fold) { opacity: .38; }
 .mcard.is-dim .mcard-fold.is-folded { opacity: .38; }
+.mcard.is-picked { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line); }
 .mcard.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 0 5px color-mix(in srgb, var(--accent) 16%, transparent); }
-.mcard.is-top { padding-left: 8px; border-radius: 11px; }
-.mcard.is-top .mcard-name { font-size: 14.5px; font-weight: 650; }
+.mcard.is-top { padding-left: 10px; border-radius: 12px; }
+.mcard.is-top .mcard-name { font-size: 16.5px; font-weight: 650; }
 .mcard > .tile { border-radius: 7px; } .mcard.is-top > .tile { border-radius: 8px; }
-.mcard > .tile svg { width: 13px; height: 13px; } .mcard.is-top > .tile svg { width: 15px; height: 15px; }
+.mcard > .tile svg { width: 14px; height: 14px; } .mcard.is-top > .tile svg { width: 17px; height: 17px; }
 /* In time replay, the cards the chosen commit wrote. */
 .mcard.is-touched { border-color: var(--new); box-shadow: 0 0 0 3px color-mix(in srgb, var(--new) 18%, transparent); }
 .t-goal { --type-ink: var(--goal); }
 .t-prompt { --type-ink: var(--prompt); }
 .t-output { --type-ink: var(--output); }
-.mcard-name { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mcard-tag { flex: 0 1 auto; max-width: 76px; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.mcard-name { flex: 1; min-width: 0; font-size: 15px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A tag shows on hover and on the selected card; the name has the room otherwise. A file's suffix stays. */
+.mcard-tag:not(.is-ext) { display: none; }
+.mcard:is(:hover, .is-selected) .mcard-tag { display: inline; }
+.mcard-tag { flex: 0 1 auto; max-width: 84px; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; color: var(--text-3); white-space: nowrap; }
+/* Close up, a second line of facts under the title row (DETAIL_H in MapView); links still meet the row. */
+.mcard.has-detail { padding-bottom: 18px; }
+.mcard.has-detail .mcard-fold { top: calc(var(--head) / 2); }
+.mcard-detail { position: absolute; left: 42px; right: 14px; bottom: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; line-height: 17px; color: var(--text-3); }
+.mcard.is-top .mcard-detail { left: 49px; }
+/* Far out, a card is its type and its name: the small marks go, and the name grows a size, then two. */
+.map[data-far] .mcard :is(.mcard-faces, .mcard-more, .mcard-tag:not(.is-ext), .mcard-outputs, .mcard-fold, .mcard-changed, .mcard-rel, .new-dot, .mcard-detail) { display: none; }
+.map[data-far] .mcard.has-detail { padding-bottom: 0; }
+.map[data-far="1"] .mcard-name { font-size: 18px; } .map[data-far="1"] .mcard.is-top .mcard-name { font-size: 19.5px; }
+.map[data-far="2"] .mcard-name { font-size: 23px; } .map[data-far="2"] .mcard.is-top .mcard-name { font-size: 24px; }
+.mcard-detail b { margin-right: 6px; font-weight: 550; }
+.mcard-detail b.is-behind { color: var(--warn); }
+.mcard-detail b.is-ahead { color: var(--new); }
 .mcard.is-deprecated .mcard-name { text-decoration: line-through; color: var(--text-3); }
 .mcard.is-deprecated > .tile { filter: grayscale(1); opacity: .55; }
 /* Only Nodes that need attention are marked. Ahead: intent with no output yet, a dashed blue outline. Behind: its materials moved on, amber with a bar. */
-.mcard.is-ahead { border: 1.5px dashed var(--new); }
-.mcard.is-behind { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); background: var(--warn-soft); box-shadow: inset 3px 0 0 var(--warn), var(--shadow-xs); }
-.mcard.is-behind:hover { border-color: var(--warn); }
-.mcard.is-behind.is-gap { border-color: var(--border); background: var(--bg); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 45%, transparent), var(--shadow-xs); }
+/* Ahead and behind are marks, not fills: a light dashed outline, and the amber edge the legend shows. */
+.mcard.is-ahead { border: 1px dashed color-mix(in srgb, var(--new) 70%, var(--border)); }
+.mcard.is-behind { box-shadow: inset 3px 0 0 var(--warn), var(--shadow-xs); }
+.mcard.is-behind:hover { border-color: color-mix(in srgb, var(--warn) 60%, var(--border)); }
+.mcard.is-behind.is-gap { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 45%, transparent), var(--shadow-xs); }
 .mcard.is-ahead.is-behind:not(.is-selected) { border-color: var(--new); }
 .mcard.is-behind.is-dim { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 40%, transparent); }
 .mcard.is-ahead.is-selected, .mcard.is-behind.is-selected { border-color: var(--accent); }
@@ -479,7 +507,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .mpreview.is-audio > .mpreview-audio { pointer-events: auto; width: 100%; height: 34px; }
 /* Markdown reads as the page renders it, at a card's size. */
 .mpreview-md { height: 100%; padding: 8px 12px; overflow: hidden; background: var(--bg); color: var(--text-2); font-size: 11.5px; line-height: 1.5; mask-image: linear-gradient(to bottom, #000 72%, transparent); }
-.mpreview .mpreview-md .doc { max-width: none; font-size: 11.5px; line-height: 1.5; }
+.mpreview .mpreview-md .doc { max-width: none; font-family: var(--font-sans); font-size: 11.5px; line-height: 1.5; }
 .mpreview .mpreview-md .doc :is(h1, h2, h3, h4, h5, h6) { margin: 4px 0; font-size: 12.5px; line-height: 1.35; color: var(--text); }
 .mpreview .mpreview-md .doc :is(p, ul, ol, pre, table, blockquote) { margin: 0 0 6px; }
 .mpreview .mpreview-md :is(ul, ol) { padding-left: 16px; }
@@ -524,17 +552,14 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .glyph.is-muted { filter: grayscale(1); opacity: .5; }
 .lens-label { padding-left: 2px; font-size: 12px; font-weight: 600; color: var(--text-3); }
 
-/* Semantic zoom. Zoomed out, a card keeps its name, readable at any scale, and a coloured edge for its type;
-   far out, only top-level names remain. --z is the current zoom. */
-.map:is(.zoom-compact, .zoom-far) .mcard { padding-left: 14px; }
-.map:is(.zoom-compact, .zoom-far) .mcard::before { content: ""; position: absolute; left: -1px; top: -1px; bottom: -1px; width: 5px; border-radius: 8px 0 0 8px; background: var(--type-ink); }
-.map:is(.zoom-compact, .zoom-far) :is(.mcard > .tile, .mcard-tag, .mcard-faces, .mcard-changed, .mcard > .num) { display: none; }
-.map:is(.zoom-compact, .zoom-far) .mcard-pin { transform: scale(min(calc(1 / var(--z, 1)), 2.2)); transform-origin: right bottom; }
-.map.zoom-compact .mcard-name { font-size: min(calc(12px / var(--z, 1)), 26px); }
-.map.zoom-far .mcard:not(.is-top) .mcard-name { visibility: hidden; }
-.map.zoom-far .mcard.is-top .mcard-name { font-size: min(calc(12px / var(--z, 1)), 34px); }
-.map:is(.zoom-compact, .zoom-far) .new-dot { transform: scale(min(calc(1 / var(--z, 1)), 2.6)); }
-.map:is(.zoom-compact, .zoom-far) .mcard-fold.is-folded { transform: translateY(-50%) scale(min(calc(1 / var(--z, 1)), 2.2)); transform-origin: left center; }
+/* A folded branch is a stack: a second sheet under the card, and how much is under it and how much of that
+   is behind beside the name. Zooming out past the minimum folds the deepest layer into stacks like these. */
+.mcard-sum { display: none; }
+.mcard.is-stack .mcard-sum { display: inline; flex: none; font-size: 11.5px; color: var(--text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mcard-sum-behind { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; font-style: normal; color: var(--warn); }
+.mcard-sum-behind::before { content: ""; width: 3px; height: 10px; border-radius: 1.5px; background: var(--warn); }
+.mcard.is-stack::after { content: ""; position: absolute; inset: 4px -5px -5px 4px; z-index: -1; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--bg); pointer-events: none; }
+.mcard.is-stack .mcard-tag:not(.is-ext) { display: none; }
 
 /* Lines never take the pointer, so they cannot steal hover from the cards they cross. */
 .map .react-flow__edge { pointer-events: none; }
@@ -566,6 +591,8 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .map-flags { top: 12px; left: 12px; display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 4px; white-space: nowrap; }
 .map-flag { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: 7px; font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .map-flag:hover { background: var(--hover); color: var(--text); }
+.map-flag[aria-disabled] { cursor: default; color: var(--text-3); }
+.map-flag[aria-disabled]:hover { background: none; color: var(--text-3); }
 .map-flag-sw { flex: none; width: 13px; height: 10px; border-radius: 3px; }
 .map-flag.is-behind .map-flag-sw { background: var(--warn-soft); border: 1px solid var(--warn); box-shadow: inset 3px 0 0 var(--warn); }
 .map-flag.is-ahead .map-flag-sw { background: var(--new-soft); border: 1.5px dashed var(--new); }
@@ -605,7 +632,10 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .mapkey dd { margin: 0; font-size: 12px; color: var(--text-2); }
 .key-dot { display: block; width: 7px; height: 7px; border-radius: 50%; background: var(--new); }
 .key-line { display: block; width: 28px; border-top: 1.5px solid var(--line); }
-.mapkey div.mapkey-keys { margin-top: 4px; padding-top: 9px; border-top: 1px solid var(--border); }
+.mapkey { max-height: calc(100vh - 140px); overflow-y: auto; }
+.mapkey .mapkey-head { display: block; grid-column: 1 / -1; margin-top: 4px; padding-top: 9px; border-top: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--text); }
+.mapkey .mapkey-key dt { justify-items: start; }
+.mapkey .mapkey-key kbd { font: 500 11.5px var(--font-sans); white-space: nowrap; color: var(--text); }
 
 /* Drawings: pencil marks over the cards, for looking at only. They never take the pointer; while drawing
    is on, the pad above the map does. */
@@ -861,13 +891,13 @@ button.pg-crumb:hover { background: var(--hover); color: var(--text); }
 .pill-draft { background: transparent; box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--text-2); }
 
 /* ---------- text ---------- */
-.doc { font-size: 15px; line-height: 1.75; max-width: 42em; }
+.doc { font-family: var(--font-reading); font-size: 15px; line-height: 1.75; max-width: 42em; }
 .doc > :first-child { margin-top: 0; }
 .doc p, .doc ul, .doc ol { margin: 0 0 .95em; }
 .doc ul, .doc ol { padding-left: 1.35em; }
 .doc li { margin: .3em 0; padding-left: .15em; }
 .doc li::marker { color: var(--text-3); }
-.doc h1, .doc h2, .doc h3 { margin: 1.7em 0 .55em; line-height: 1.4; font-weight: 650; letter-spacing: -.01em; text-wrap: balance; }
+.doc h1, .doc h2, .doc h3 { margin: 1.7em 0 .55em; line-height: 1.4; font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
 .doc h1 { font-size: 20px; } .doc h2 { font-size: 17px; } .doc h3 { font-size: 15px; }
 .doc strong { font-weight: 600; }
 .doc a { color: var(--text); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 4px; }
@@ -876,7 +906,7 @@ button.pg-crumb:hover { background: var(--hover); color: var(--text); }
 .doc pre { padding: 12px 14px; border-radius: 8px; background: var(--bg-subtle); border: 1px solid var(--border); overflow-x: auto; line-height: 1.6; }
 .doc pre code { padding: 0; background: none; }
 .doc blockquote { margin: 0 0 1em; padding-left: 14px; border-left: 2px solid var(--border-strong); color: var(--text-2); }
-.doc table { display: block; overflow-x: auto; border-collapse: collapse; font-size: 13.5px; line-height: 1.55; margin-bottom: 1.2em; }
+.doc table { display: block; overflow-x: auto; border-collapse: collapse; font-family: var(--font-sans); font-size: 13.5px; line-height: 1.55; margin-bottom: 1.2em; }
 .doc th, .doc td { padding: 7px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
 .doc th { font-weight: 600; background: var(--bg-subtle); }
 .doc-ref { display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; vertical-align: -2px; color: var(--text); font-weight: 500; line-height: 1.4; text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 4px; border-radius: 4px; }
@@ -1072,11 +1102,13 @@ button.now-pet:hover { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--border
 
 /* A Node's own file (by its resource suffix): previews on the Node page, a file mark in lists and on the map. */
 .file-glyph { display: inline-grid; place-items: center; flex: none; color: var(--output); }
+/* A file is drawn in its Node's type colour: a file is where a Node lives, not what kind of Node it is. */
+.file-glyph.p-goal:not(.is-missing) { color: var(--goal); } .file-glyph.p-prompt:not(.is-missing) { color: var(--prompt); } .file-glyph.p-output:not(.is-missing) { color: var(--output); }
 .file-glyph.is-missing { color: var(--warn); }
 .file-glyph.is-remote { color: var(--text-3); }
 a.btn { text-decoration: none; }
 .row > .file-glyph { margin-right: 6px; }
-.tile.is-file { border-radius: 4px 9px 4px 4px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--output) 22%, transparent); }
+.tile.is-file { border-radius: 4px 9px 4px 4px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--type-ink, var(--output)) 22%, transparent); }
 .mcard.is-file .mcard-tag.is-ext { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 5px; border-radius: 4px; background: var(--bg-muted); color: var(--text-2); }
 .mcard.is-missing { border-style: dashed; border-color: var(--warn); }
 .mcard.is-missing .mcard-name { color: var(--text-3); }

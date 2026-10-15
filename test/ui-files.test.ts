@@ -56,7 +56,12 @@ test("the file is the Node's resource, whatever its type or tags", () => {
     { kind: "file", resource: "../Makefile", workspacePath: "Makefile", field: "resource" },
   ]);
   assert.equal((fileOf(noSuffix) as { ext: string }).ext, "");
-  const snapshot = { nodes: [output, goal, remote, noSuffix, output] } as unknown as Snapshot;
+  // A folder is not a file: the card keeps its type, never shown as a missing file.
+  const folder = node("node-d", "prompt", [
+    { kind: "file", resource: "../../src/cli/", workspacePath: "src/cli", field: "resource" },
+  ]);
+  assert.equal(fileOf(folder), null);
+  const snapshot = { nodes: [output, goal, remote, noSuffix, folder, output] } as unknown as Snapshot;
   assert.deepEqual(filePaths(snapshot), ["out/r.html", "Makefile"]);
 });
 

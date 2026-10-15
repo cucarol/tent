@@ -71,7 +71,7 @@ const editorTheme = EditorView.theme({
     borderColor: "var(--border-strong)",
     boxShadow: "0 0 0 3px var(--bg-muted)",
   },
-  ".cm-scroller": { fontFamily: "var(--font-sans)", lineHeight: "1.8" },
+  ".cm-scroller": { fontFamily: "var(--font-reading)", lineHeight: "1.8" },
   ".cm-content": { padding: "14px 0", minHeight: "60vh", caretColor: "var(--text)" },
   ".cm-line": { padding: "0 18px" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--text)" },

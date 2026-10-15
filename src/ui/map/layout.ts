@@ -1,15 +1,16 @@
 import { hierarchy, tree, type HierarchyNode } from "d3-hierarchy";
 import { primaryOf, type Graph } from "../data/store.js";
+import type { SnapshotNode, SyncFlag, SyncFlags } from "../data/types.js";
 import { t } from "../i18n.js";
 
 // One line per card, wide enough for a bold name of eight Chinese characters, its tag and three Role faces;
 // a top-level card stands a little taller, as the head of its group.
-export const CARD = { w: 264, h: 38, top: 44 };
+export const CARD = { w: 296, h: 44, top: 52 };
 // The gap between columns holds the elbow of the links; tree links turn halfway across it.
 export const GAP = 56;
 const COLUMN = CARD.w + GAP;
 // Rows leave a gap wide enough for a reference line to pass between two cards.
-const ROW = CARD.h + 14;
+const ROW = CARD.h + 16;
 
 /**
  * Position of a card's left-centre point, its height and width. A card showing a preview has a `head`,
@@ -36,22 +37,86 @@ export const isResult = (graph: Graph, id: string) => {
   return !!n && primaryOf(n.type) === "output" && graph.childrenOf(id).length === 0;
 };
 
+/** The tree as the type switches show it: what hangs from each shown card, and what each hangs from. */
+export type Shown = {
+  kidsOf: (id: string | null) => SnapshotNode[];
+  upOf: (id: string) => string | null;
+};
+
+/** A switched-off card drops out and what is shown under it hangs from its nearest shown ancestor. */
+export function shownTree(graph: Graph, visible: (id: string) => boolean): Shown {
+  const kids = new Map<string | null, SnapshotNode[]>();
+  const kidsOf = (id: string | null): SnapshotNode[] => {
+    let out = kids.get(id);
+    if (!out) {
+      out = graph.childrenOf(id).flatMap((c) => (visible(c.id) ? [c] : kidsOf(c.id)));
+      kids.set(id, out);
+    }
+    return out;
+  };
+  const upOf = (id: string): string | null => {
+    let up = graph.nodes.get(id)?.parentId ?? null;
+    while (up && !(graph.nodes.has(up) && visible(up))) up = graph.nodes.get(up)?.parentId ?? null;
+    return up;
+  };
+  return { kidsOf, upOf };
+}
+
+/**
+ * The behind and ahead Nodes in outline order, each kind with any at all: `ids` keeps only the visible
+ * ones, to count and step through, and `all` counts every one.
+ */
+export function flagRuns(
+  graph: Graph,
+  flags: SyncFlags,
+  visible: (id: string) => boolean,
+): { state: keyof SyncFlag; ids: string[]; all: number }[] {
+  const order: string[] = [];
+  const walk = (parentId: string | null) => {
+    for (const n of graph.childrenOf(parentId)) {
+      order.push(n.id);
+      walk(n.id);
+    }
+  };
+  walk(null);
+  return (["behind", "ahead"] as const).flatMap((state) => {
+    const all = order.filter((id) => flags[id]?.[state]);
+    return all.length ? [{ state, ids: all.filter(visible), all: all.length }] : [];
+  });
+}
+
+/** How far each card moved by hand from where the tree puts it, in map units. */
+export type Moves = Record<string, readonly [number, number]>;
+
+/** The layout with cards moved by hand where they were left; each card moves alone, its children stay. */
+export function moveCards(layout: Layout, moves: Moves): Layout {
+  if (!Object.keys(moves).some((id) => layout.placed.has(id))) return layout;
+  const placed = new Map(layout.placed);
+  for (const [id, [dx, dy]] of Object.entries(moves)) {
+    const p = placed.get(id);
+    if (p) placed.set(id, { ...p, x: p.x + dx, y: p.y + dy });
+  }
+  return { ...layout, placed };
+}
+
 type TreeDatum = { id: string; children: TreeDatum[] };
 
 /**
  * The folder hierarchy read left to right. Top-level branches get extra room so each reads as one group.
  * A card's result outputs fold into a count on it unless its id is in `open`. A card showing a preview of
- * its file is `grown` that much taller below its title row, and the card under it makes room.
+ * its file is `grown` that much taller below its title row, and the card under it makes room. `kidsOf`
+ * gives the tree to lay out, by default all of it.
  */
 export function treeLayout(
   graph: Graph,
   collapsed: ReadonlySet<string>,
   open: ReadonlySet<string> = new Set(),
   grown: (id: string) => number = () => 0,
+  kidsOf: (id: string | null) => SnapshotNode[] = graph.childrenOf,
 ): Layout {
   const folds = new Map<string, string[]>();
   const build = (parentId: string | null): TreeDatum[] => {
-    const kids = graph.childrenOf(parentId);
+    const kids = kidsOf(parentId);
     const results =
       parentId && !open.has(parentId) ? kids.filter((c) => isResult(graph, c.id)) : [];
     if (parentId && results.length)

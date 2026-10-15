@@ -60,7 +60,7 @@ import type { SnapshotNode } from "../data/types.js";
 
 /**
  * Type icons from Lucide, so they sit with the interface icons: goal is a flag, prompt the prompt `>_`,
- * output a package. Role is an id card (a direction of work, not a person) and Card an envelope.
+ * output the return `↵` that answers it. Role is an id card (a direction of work, not a person) and Card an envelope.
  * The outer <svg> sets the line; see `glyphSvg`.
  */
 export const TYPE_ICON_SVG: Record<Primary | "role" | "card", string> = {
@@ -68,7 +68,7 @@ export const TYPE_ICON_SVG: Record<Primary | "role" | "card", string> = {
   prompt:
     '<path d="M12 19h8" stroke="var(--prompt)"/><path d="m4 17 6-6-6-6" stroke="var(--prompt)"/>',
   output:
-    '<g stroke="var(--output)"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></g>',
+    '<g stroke="var(--output)"><path d="M20 4v7a4 4 0 0 1-4 4H4"/><path d="m9 10-5 5 5 5"/></g>',
   role: '<g stroke="currentColor"><path d="M13 19a4 4 0 0 0-8 0"/><path d="M16 10h2"/><path d="M16 14h2"/><circle cx="9" cy="12" r="3"/><rect x="2" y="5" width="20" height="14" rx="2"/></g>',
   card: '<path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7" stroke="currentColor"/><rect x="2" y="4" width="20" height="16" rx="2" stroke="currentColor"/>',
 };
@@ -213,18 +213,20 @@ const FILE_ICONS: Record<FileKind, IconName> = {
   text: "fileText",
   other: "file",
 };
-/** A Node's own file, drawn by what its suffix shows; a missing file is crossed out. */
+/** A Node's own file, drawn by what its suffix shows in the Node's type colour; a missing file is crossed out. */
 export function FileGlyph({
   show,
   missing,
   size = 14,
+  kind,
 }: {
   show: FileKind;
   missing?: boolean;
   size?: number;
+  kind?: Primary;
 }) {
   return (
-    <span className={`file-glyph${missing ? " is-missing" : ""}`}>
+    <span className={`file-glyph${kind ? ` p-${kind}` : ""}${missing ? " is-missing" : ""}`}>
       <Icon name={missing ? "fileMissing" : FILE_ICONS[show]} size={size} />
     </span>
   );
@@ -241,5 +243,12 @@ export function NodeGlyph({ node, size = 14 }: { node: SnapshotNode; size?: numb
       </span>
     );
   if (file?.kind !== "file") return <TypeGlyph type={node.type} size={size} />;
-  return <FileGlyph show={file.show} missing={infoOf(files, file.path) === null} size={size} />;
+  return (
+    <FileGlyph
+      show={file.show}
+      missing={infoOf(files, file.path) === null}
+      size={size}
+      kind={primaryOf(node.type)}
+    />
+  );
 }
