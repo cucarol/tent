@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { INDEX_PATH } from "./paths.js";
 import { isValidTentIndexMarker } from "./scaffold.js";
 import { parseFrontmatter } from "./frontmatter.js";
+import { linkedMainCheckout, readGitCheckout } from "./git-checkout.js";
 
 export const NOT_INSIDE_TENT_MESSAGE = "Not inside a Tent (no .tent/index.md marker found).";
 
@@ -22,10 +23,13 @@ export async function findTentSystemRoot(
     if (await isSystemRoot(dir)) return dir;
     const nested = path.join(dir, ".tent");
     if (await isSystemRoot(nested)) return nested;
+    if (await fs.lstat(path.join(dir, ".git")).catch(() => undefined)) {
+      const checkout = await readGitCheckout(dir);
+      const main = checkout ? await linkedMainCheckout(checkout) : undefined;
+      const shared = main ? path.join(main, ".tent") : undefined;
+      return shared && (await isSystemRoot(shared)) ? shared : undefined;
+    }
     if (boundary && dir === boundary) return undefined;
-    // A clone or worktree owns its workspace boundary even without a Tent.
-    // .git can be a directory (checkout) or a file (linked worktree).
-    if (await fs.lstat(path.join(dir, ".git")).catch(() => undefined)) return undefined;
     const parent = path.dirname(dir);
     if (parent === dir) return undefined;
     dir = parent;

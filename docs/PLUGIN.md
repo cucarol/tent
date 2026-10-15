@@ -46,7 +46,7 @@ node "<插件目录>/skill-resources/scripts/tent.mjs" new "<工作区目录>"
 node "<插件目录>/skill-resources/scripts/tent.mjs" node list --workspace "<工作区目录>" --json
 ```
 
-Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.tent/` 的目录是唯一工作区；其他 cwd 通过 `--workspace` 明确指定。路径从声明它的 Markdown 解析。真实文件、图片、网页等由宿主已有工具读取，Tent 不提供应用或格式适配。
+Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.tent/` 的目录是工作区。CLI 与 Hook 从同仓 linked worktree 通过 Git 指针文件找到主检出的 `.tent/`，不启动 Git；子模块、独立仓库及没有主检出的 bare 仓库不继承外层工作区。其他 cwd 通过 `--workspace` 明确指定。路径从声明它的 Markdown 解析。真实文件、图片、网页等由宿主已有工具读取，Tent 不提供应用或格式适配。
 
 需要画草图时，用 Excalidraw 本身保存工作区文件，再由 Node 引用该文件。
 
@@ -66,7 +66,7 @@ Node 名称在所有平台按 Windows 文件名校验：不得含 `< > : " / \ |
 
 落后（behind）：已记录的材料变化或缺失、`stale_after` 到期，或任一祖先 goal 的内容或材料相对该 output 的记录发生变化。领先（ahead）：goal 子树下没有未作废的 output，或者 goal 的内容或材料在其 output 复核之后又变了。output 只是自己的材料变了时，只有它落后，goal 不领先。一个 goal 可同时落后和领先。读完整 Node 和变化的材料后，判断仍成立用 `node confirm`，需要修正用 `node write --confirm`。整体重写 output 正文且规范化后的正文确有变化时，也会刷新其依赖；append、节编辑和元数据修改保留原基线。确认 goal 不会确认它的 output。Tent 在保存时把材料版本记入 Git，不需要手填哈希。
 
-`node link-output` 在 goal 下新建 output，名称默认取文件名，只带 `--tags` 给出的标签；文件须已在 Workspace checkout 中，候选分支或 worktree 应先集成。已跟踪材料保留仓库相对位置；本地文件缺失时，可按 SPEC「Node synchronization and outputs」的规则从同一仓库存活的检出读取，主检出当前缺少该文件且其 HEAD 历史删除过该路径时观察不可用；主检出存在该文件时，历史删除不影响读取。`status` 为 `draft`、`stable`（默认）或 `deprecated`，只作用于本文档；`node archive` 弃用子树，`node restore --archive-commit` 撤销；`node delete` 永久删除子树，只在用户要求时使用。`node rename` 与 `node move` 保持 id 并更新指向它的链接。
+`node link-output` 在 goal 下新建 output，名称默认取文件名，只带 `--tags` 给出的标签；文件须已在 Workspace checkout 中，候选分支或 worktree 应先集成。从 linked worktree 调用仍写入主检出的 `.tent/`；材料、漂移和 brief 读取主检出文件，未合入的分支变化不使 Node 落后。本地材料按声明的地址读取，缺失时不从其他检出回退。`status` 为 `draft`、`stable`（默认）或 `deprecated`，只作用于本文档；`node archive` 弃用子树，`node restore --archive-commit` 撤销；`node delete` 永久删除子树，只在用户要求时使用。`node rename` 与 `node move` 保持 id 并更新指向它的链接。
 
 显式 `--context` 的首页与 `--full` 实时读取附带独立于 `text` 的 `context`（不超过 1 KiB）：祖先、按类型分组的子 Node、入链与出链（正文中 Markdown 链接以外的已知 Node id 记为 `mention`）、钉住该 Node 的 Card 及其状态、接收者和进度；output 另列 goal 链与同步状态，goal 保留范围内的 prompt 与子树 output。省略的计数可用 `node relations` 展开；历史读取保留钉住的内容，但没有 `context`。`node history` 跨移动列出已捕获的版本；用其中的 `version: {commit, path}` 和 `node get --version-json` 读取历史字节，再由 Agent 自己比较。Tent 只保存材料地址，材料由宿主已有工具读取。
 
@@ -92,7 +92,7 @@ Node 正文或语义元数据变化时记录 OKF 原生 `generated: {by, at}`；
 
 ## Hook 边界
 
-SessionStart 以事实陈述注入约 300 B：`Tent Workspace`、`Tent CLI`、`workspace brief` 提示与构建身份各一行，源码 checkout 提交不一致时再加一行；不注入完整简报。Stop 同步运行，只从转录尾部确定本轮写入的文件、用材料索引点名模块并检测廉价的决定正则；不收录原生 Node 编辑、不算 behind、不观察文件哈希、不写会话观察、不等 `mutation.lock`。原生编辑留到下一次正常 Tent 命令收录，落后状态由输入一侧的 brief 报告。只有本轮写入的文件被模块覆盖才续作：模块是 `sources` 中持有 `track: structure` 目录或前缀材料的有效 Node，不看标签，普通证据目录不参与。Core 统一解析成员；前缀只允许最后一段末尾的一个 `*`。每个文件只点名最具体的覆盖模块，同样具体的都保留，带祖先名字链和可打开的 Node 文件路径而不展开正文。最多五个模块、每模块八个文件，多出模块写 `+N more modules`。
+SessionStart 以事实陈述注入约 300 B：`Tent Workspace`、`Tent CLI`、`workspace brief` 提示与构建身份各一行，源码 checkout 提交不一致时再加一行；不注入完整简报。Stop 同步运行：同仓各 linked worktree 的写入先换算为相对该检出顶层的路径，匹配主检出的模块；相对 Codex patch 路径从会话检出顶层解析，其他仓库不匹配。返回只问规则和决定，不要求先合入代码。它只从转录尾部确定本轮写入的文件、用材料索引点名模块并检测廉价的决定正则；不收录原生 Node 编辑、不算 behind、不观察文件哈希、不写会话观察、不等 `mutation.lock`。原生编辑留到下一次正常 Tent 命令收录，落后状态由输入一侧的 brief 报告。只有本轮写入的文件被模块覆盖才续作：模块是 `sources` 中持有 `track: structure` 目录或前缀材料的有效 Node，不看标签，普通证据目录不参与。Core 统一解析成员；前缀只允许最后一段末尾的一个 `*`。每个文件只点名最具体的覆盖模块，同样具体的都保留，带祖先名字链和可打开的 Node 文件路径而不展开正文。最多五个模块、每模块八个文件，多出模块写 `+N more modules`。
 
 点名采用 SPEC 的固定英文文案，合并可能的新决定。未关联产出全部交给输入一侧的 brief；Stop 不查询文件存在性或 ignore，模块点名只按声明地址，不因文件被忽略、已跟踪或不可用而过滤。意图信号只认“决定、确认、改成、新增需求”等明确表述，普通“请、需要、fix”不触发；本轮有明确 Node 或 Card 写入证据时不再提示意图。包含宿主信封的完整 JSON 不超过 2 KiB，溢出先删文件名、再删模块，保留固定文案和问题类别。Codex 用 `decision: block` 与 `reason`；Claude Code 用 `hookSpecificOutput` 的 `hookEventName: Stop` 与 `additionalContext`。`stop_hook_active: true` 立即静默，包括续作执行工具后的 Stop；取消、没有覆盖写入的轮次也静默，不自动执行 check 或 confirm。有效提问投递前，在 `.tent/temp/stop-reviews/` 以宿主、会话和轮次的 SHA-256 建独占空 claim，重复事件最多投递一次，无全局锁或重试；claim 写失败不续作，claim 后崩溃可能丢失该次投递。claim 不存转录或文件内容，也不压制不同轮次的相同文件。
 

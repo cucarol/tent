@@ -2,6 +2,7 @@ import { open } from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as z from "zod/v4";
+import { createTurnPathResolver } from "../core/git-checkout.js";
 import { isHistoryDocument } from "../core/document-history.js";
 import {
   sessionFileObservationSchema,
@@ -10,7 +11,7 @@ import {
   type SessionSignal,
 } from "../core/session-observations.js";
 
-const ARTIFACT_EXCLUDED = [".git", ".tent", ".worktrees", ".scratch", "node_modules", ".venv"];
+const ARTIFACT_EXCLUDED = [".git", ".tent", ".scratch", "node_modules", ".venv"];
 const entrySchema = z.object({
   type: z.string(),
   timestamp: z.string().optional(),
@@ -61,6 +62,7 @@ export async function readCodexTurnActivity(
   transcriptPath: unknown,
   workspaceRoot: string | undefined,
   requestedTurnId: unknown,
+  sessionCwd = workspaceRoot,
 ): Promise<CodexTurnActivity> {
   const unknownActivity: CodexTurnActivity = {
     paths: [],
@@ -80,16 +82,17 @@ export async function readCodexTurnActivity(
     cancelled = false,
     hasFileChanges = false,
     nodeOrCardChanged = false;
+  const resolver = await createTurnPathResolver(workspaceRoot, sessionCwd);
   const paths = new Set<string>();
   const observations: SessionFileObservation[] = [];
   const signals = new Set<SessionSignal>();
   const seen = new Set<string>();
   const calls = new Map<string, { name: string; input: string; observed: boolean }>();
-  const addPath = (
+  const addPath = async (
     kind: SessionFileObservation["kind"] | undefined,
     file: string,
     eventAt?: string,
-    sourceRoot = workspaceRoot,
+    sourceRoot = resolver.checkoutRoot,
     actualWrite = kind === "written",
   ) => {
     try {
@@ -108,9 +111,7 @@ export async function readCodexTurnActivity(
       }
       if (!uri && /^[a-z][a-z\d+.-]*:/i.test(file) && !path.isAbsolute(file)) return;
       const filename = uri ? fileURLToPath(uri) : path.resolve(sourceRoot ?? "", file);
-      const relative = workspaceRoot
-        ? path.relative(workspaceRoot, filename).replace(/\\/g, "/")
-        : undefined;
+      const relative = await resolver.relative(filename);
       const inside =
         relative !== undefined &&
         relative !== ".." &&
@@ -165,23 +166,23 @@ export async function readCodexTurnActivity(
     )
       signals.add("possible-decision");
   };
-  const userContent = (content: unknown, eventAt?: string) => {
+  const userContent = async (content: unknown, eventAt?: string) => {
     if (!Array.isArray(content)) return;
     for (const part of content) {
       if (!part || typeof part !== "object") continue;
       const p = part as Record<string, unknown>;
       if (p.type === "input_text" && typeof p.text === "string") userText(p.text);
       if (p.type === "input_file") {
-        if (typeof p.file_path === "string") addPath("provided", p.file_path, eventAt);
+        if (typeof p.file_path === "string") await addPath("provided", p.file_path, eventAt);
         else if (typeof p.file_url === "string" && p.file_url.startsWith("file:"))
-          addPath("provided", p.file_url, eventAt);
+          await addPath("provided", p.file_url, eventAt);
       }
       if (
         p.type === "input_image" &&
         typeof p.image_url === "string" &&
         p.image_url.startsWith("file:")
       )
-        addPath("provided", p.image_url, eventAt);
+        await addPath("provided", p.image_url, eventAt);
     }
   };
   try {
@@ -240,10 +241,10 @@ export async function readCodexTurnActivity(
       if (type === "event_msg" && payload.type === "turn_aborted") cancelled = true;
       if (type === "event_msg" && payload.type === "user_message") {
         userText(payload.message);
-        for (const file of payload.local_images ?? []) addPath("provided", file, eventAt);
+        for (const file of payload.local_images ?? []) await addPath("provided", file, eventAt);
       }
       if (type === "response_item" && payload.type === "message" && payload.role === "user")
-        userContent(payload.content, eventAt);
+        await userContent(payload.content, eventAt);
       if (type === "event_msg" && payload.type === "item_completed") {
         const result = itemSchema.safeParse(payload.item);
         if (!result.success) {
@@ -272,16 +273,16 @@ export async function readCodexTurnActivity(
           if (item.status !== "completed" || !item.changes) uncertain = true;
           else
             for (const [file, change] of Object.entries(item.changes)) {
-              addPath(
+              await addPath(
                 undefined,
                 file,
                 eventAt,
-                workspaceRoot,
+                resolver.checkoutRoot,
                 ["add", "update", "delete"].includes(change.type ?? ""),
               );
-              if (change.type === "add") addPath("written", file, eventAt);
+              if (change.type === "add") await addPath("written", file, eventAt);
               else if (change.type === "update")
-                addPath("written", change.move_path ?? file, eventAt);
+                await addPath("written", change.move_path ?? file, eventAt);
               else if (change.type !== "delete") uncertain = true;
             }
         } else if (item.type === "CommandExecution") {
@@ -306,16 +307,17 @@ export async function readCodexTurnActivity(
             for (const command of item.parsed_cmd ?? [])
               if (command.type === "read" && command.path) {
                 if (item.cwd && !path.isAbsolute(item.cwd)) uncertain = true;
-                else addPath("read", command.path, eventAt, item.cwd ?? workspaceRoot);
+                else
+                  await addPath("read", command.path, eventAt, item.cwd ?? resolver.checkoutRoot);
               }
         } else if (item.type === "ImageView") {
           if ((item.status !== undefined && item.status !== "completed") || !item.path)
             uncertain = true;
-          else addPath("read", item.path, eventAt);
+          else await addPath("read", item.path, eventAt);
         } else if (item.type === "UserMessage") {
           userText(item.text);
-          userContent(item.content, eventAt);
-          for (const file of item.local_images ?? []) addPath("provided", file, eventAt);
+          await userContent(item.content, eventAt);
+          for (const file of item.local_images ?? []) await addPath("provided", file, eventAt);
         } else if (item.type === "McpToolCall") {
           if (!nonArtifactTool(item.tool ?? "")) uncertain = true;
         } else if (!["AgentMessage", "Reasoning", "HookPrompt", "WebSearch"].includes(item.type))
@@ -343,8 +345,8 @@ export async function readCodexTurnActivity(
           if (!changes) uncertain = true;
           else
             for (const change of changes) {
-              addPath(undefined, change.path, eventAt, workspaceRoot, true);
-              if (change.written) addPath("written", change.written, eventAt);
+              await addPath(undefined, change.path, eventAt, resolver.checkoutRoot, true);
+              if (change.written) await addPath("written", change.written, eventAt);
             }
           call.observed = true;
         }
@@ -355,7 +357,7 @@ export async function readCodexTurnActivity(
         ) {
           try {
             const args = z.object({ path: z.string() }).parse(JSON.parse(call.input));
-            addPath("read", args.path, eventAt);
+            await addPath("read", args.path, eventAt);
             call.observed = true;
           } catch {
             uncertain = true;

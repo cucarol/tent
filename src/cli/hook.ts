@@ -84,8 +84,8 @@ export async function runHookCommand(
     if (await hasStopReviewClaim(systemRoot, host, event.session_id, turnId)) return silent;
     const activity =
       host === "codex"
-        ? await readCodexTurnActivity(event.transcript_path, workspaceRoot, turnId)
-        : await readClaudeTurnActivity(event.transcript_path, workspaceRoot, turnId);
+        ? await readCodexTurnActivity(event.transcript_path, workspaceRoot, turnId, event.cwd)
+        : await readClaudeTurnActivity(event.transcript_path, workspaceRoot, turnId, event.cwd);
     if (activity.cancelled || !activity.observations.some((file) => file.kind === "written"))
       return silent;
     const observedAt = new Date().toISOString();

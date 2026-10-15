@@ -2,6 +2,7 @@ import { open } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as z from "zod/v4";
+import { createTurnPathResolver } from "../core/git-checkout.js";
 import { isHistoryDocument } from "../core/document-history.js";
 import type {
   SessionObservationActivity,
@@ -49,6 +50,7 @@ export async function readClaudeTurnActivity(
   transcriptPath: unknown,
   workspaceRoot: string,
   requestedPromptId: unknown,
+  sessionCwd = workspaceRoot,
 ): Promise<SessionObservationActivity> {
   const activity: SessionObservationActivity = { observations: [], signals: [], uncertain: false };
   if (
@@ -57,11 +59,12 @@ export async function readClaudeTurnActivity(
     !requestedPromptId
   )
     return { ...activity, uncertain: true };
+  const resolver = await createTurnPathResolver(workspaceRoot, sessionCwd);
   const calls = new Map<string, { name: string; input: Record<string, unknown>; cwd: string }>();
   const signals = new Set<SessionSignal>();
   let active = false,
     found = false;
-  const add = (
+  const add = async (
     kind: SessionFileObservation["kind"],
     file: unknown,
     cwd: string,
@@ -72,7 +75,7 @@ export async function readClaudeTurnActivity(
       return;
     }
     const filename = path.resolve(cwd, file);
-    const relative = path.relative(workspaceRoot, filename).split(path.sep).join("/");
+    const relative = await resolver.relative(filename);
     const inside =
       relative && relative !== ".." && !relative.startsWith("../") && !path.isAbsolute(relative);
     if (
@@ -87,9 +90,7 @@ export async function readClaudeTurnActivity(
       inside &&
       relative
         .split("/")
-        .some((part) =>
-          [".git", ".tent", ".worktrees", ".scratch", "node_modules", ".venv"].includes(part),
-        )
+        .some((part) => [".git", ".tent", ".scratch", "node_modules", ".venv"].includes(part))
     )
       return;
     activity.observations.push({
@@ -143,7 +144,7 @@ export async function readClaudeTurnActivity(
         } else if (active) break;
       }
       if (!active) continue;
-      const cwd = typeof row.cwd === "string" ? row.cwd : workspaceRoot;
+      const cwd = typeof row.cwd === "string" ? row.cwd : (resolver.checkoutRoot ?? workspaceRoot);
       if (row.type === "user" && !results.length) {
         let text =
           typeof content === "string"
@@ -198,18 +199,18 @@ export async function readClaudeTurnActivity(
             (row.toolUseResult?.type === "create" || row.toolUseResult?.type === "update") &&
             row.toolUseResult.filePath === call.input.file_path
           )
-            add("written", call.input.file_path, call.cwd, row.timestamp);
+            await add("written", call.input.file_path, call.cwd, row.timestamp);
           else activity.uncertain = true;
         } else if (call.name === "Edit") {
           if (
             row.toolUseResult?.filePath === call.input.file_path &&
             Array.isArray(row.toolUseResult?.structuredPatch)
           )
-            add("written", call.input.file_path, call.cwd, row.timestamp);
+            await add("written", call.input.file_path, call.cwd, row.timestamp);
           else activity.uncertain = true;
         } else if (call.name === "Read") {
           if (row.toolUseResult?.file?.filePath === call.input.file_path)
-            add("read", call.input.file_path, call.cwd, row.timestamp);
+            await add("read", call.input.file_path, call.cwd, row.timestamp);
           else activity.uncertain = true;
         } else activity.uncertain = true;
       }
