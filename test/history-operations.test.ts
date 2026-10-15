@@ -7,7 +7,7 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { createNode, deleteNode, renameNode } from "../src/core/ops.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { listNodeVersions, listHistoryChanges } from "../src/core/history-query.js";
+import { listHistoryChanges } from "../src/core/history-query.js";
 import { testScratchRoot } from "./scratch.js";
 
 test("public saves and observed edits retain distinct history operations across locations", async (t) => {
@@ -27,7 +27,7 @@ test("public saves and observed edits retain distinct history operations across 
     type: "prompt",
     body: "Initial",
   });
-  const first = (await listNodeVersions(adapter, id))[0]!;
+  const first = (await adapter.history.nodeVersions(id))[0]!;
   assert.equal(first.operation, "node.create");
   assert.equal(first.entry, "cli");
 
@@ -37,12 +37,12 @@ test("public saves and observed edits retain distinct history operations across 
     original.replace("Initial", "Editor input"),
   );
   await readNodeForEdit(adapter, id);
-  assert.equal((await listNodeVersions(adapter, id)).length, 1);
+  assert.equal((await adapter.history.nodeVersions(id)).length, 1);
   const basis = await readNodeForEdit(adapter, id, { capture: true });
   await writeNodeDocument(adapter, id, { baseEtag: basis.etag, body: "Saved fact" });
   await renameNode(env, id, "Beta");
   await deleteNode(env, id);
-  const rows = await listNodeVersions(adapter, id);
+  const rows = await adapter.history.nodeVersions(id);
   assert.deepEqual(
     rows.map((row) => row.operation),
     ["node.create", "document.external-capture", "node.write", "node.rename", "node.delete"],

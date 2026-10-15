@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { readDocumentDiff } from "../src/core/document-diff.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { cli, git } from "./helpers.js";
 
 test("separate CLI processes continue discovery, live and Git reads with checked cursor addresses", async (t) => {

@@ -137,9 +137,6 @@ export function TypeTile({ kind, size = 30 }: { kind: string; size?: number }) {
     </span>
   );
 }
-export function RoleGlyph({ size = 15 }: { size?: number }) {
-  return <Svg kind="role" size={size} />;
-}
 export function CardGlyph({ size = 15 }: { size?: number }) {
   return <Svg kind="card" size={size} />;
 }

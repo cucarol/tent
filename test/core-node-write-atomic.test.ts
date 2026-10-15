@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { createNode, renameNode, moveNode } from "../src/core/ops.js";
 import { nodeNotePath } from "../src/core/tree.js";

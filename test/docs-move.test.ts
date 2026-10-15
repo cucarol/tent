@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { injectWriteFailure } from "./helpers.js";
 import type { FsAdapter } from "../src/core/adapter.js";
-import { createNode, moveNode, placeNode } from "../src/core/ops.js";
+import { createNode, moveNode } from "../src/core/ops.js";
 import { loadTent } from "../src/core/tree.js";
 import { loadOrder, saveOrder, ROOT_KEY } from "../src/core/order.js";
 import { scaffoldTent } from "../src/core/scaffold.js";
@@ -74,7 +74,7 @@ test("moveNode preserves the directory stem when title differs from its filename
   }
 });
 
-test("moveNode and placeNode: keep system basenames nested and preserve rejected moves", async (t) => {
+test("moveNode: keep system basenames nested and preserve rejected moves", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-reserved-"));
   t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const fsa = new NodeFs(dir);
@@ -89,7 +89,6 @@ test("moveNode and placeNode: keep system basenames nested and preserve rejected
     const orderBefore = await fsa.readFile("order.json");
     const pathsBefore = await fs.readdir(dir, { recursive: true });
     await assert.rejects(moveNode(env, child, null, { mode: "inside" }), /reserved or excluded/);
-    await assert.rejects(placeNode(env, childPath, "", { mode: "inside" }), /reserved or excluded/);
     assert.deepEqual(await fs.readdir(dir, { recursive: true }), pathsBefore);
     assert.equal(await fsa.readFile(`${childPath}/${name}.md`), original);
     assert.equal(await fsa.readFile("order.json"), orderBefore);
@@ -98,7 +97,7 @@ test("moveNode and placeNode: keep system basenames nested and preserve rejected
     await moveNode(env, child, dest, { mode: "inside" });
     assert.equal((await loadTent(fsa)).byId.get(child)?.path, `dest/${name}`);
     assert.equal(await fsa.readFile(`dest/${name}/${name}.md`), original);
-    await placeNode(env, `dest/${name}`, "parent", { mode: "inside" });
+    await moveNode(env, child, parent, { mode: "inside" });
     assert.equal((await loadTent(fsa)).byId.get(child)?.path, childPath);
     assert.equal(await fsa.readFile(`${childPath}/${name}.md`), original);
   }
@@ -420,7 +419,7 @@ test("attachments is an ordinary indexed Node name through move, place and renam
   assert.equal((await loadTent(fsa)).byId.get("node-attachments")?.path, "attachments");
   await moveNode(env, "node-attachments", parent, { mode: "inside" });
   assert.equal((await loadTent(fsa)).byId.get("node-attachments")?.path, "parent/attachments");
-  await placeNode(env, "parent/attachments", "", { mode: "inside" });
+  await moveNode(env, "node-attachments", null, { mode: "inside" });
   await renameNode(env, "node-attachments", "renamed");
   await renameNode(env, "node-attachments", "attachments");
   assert.equal((await loadTent(fsa)).byId.get("node-attachments")?.path, "attachments");

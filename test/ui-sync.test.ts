@@ -49,7 +49,7 @@ test("sync reads changed materials without a revision change and agrees with bri
   const flags = await sync();
   assert.ok(flags[goal]?.ahead);
   assert.ok(flags[goal]?.behind?.reasons.length);
-  const brief = makeContextBrief(await inspectCurrentContext(tent, root));
+  const brief = makeContextBrief(await inspectCurrentContext(tent));
   for (const kind of ["ahead", "behind"] as const) {
     assert.equal(Object.values(flags).filter((flag) => flag[kind]).length, brief.counts[kind]);
     assert.ok(brief[kind].some((item) => item.nodeId === goal));

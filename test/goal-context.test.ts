@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { serializeFrontmatter } from "../src/core/frontmatter.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";

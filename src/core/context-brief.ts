@@ -1,7 +1,6 @@
 import type { InvalidNativeNode } from "./node-native-capture.js";
 import { loadNodeCatalog, type NodeCatalog } from "./node-catalog.js";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { FsAdapter } from "./adapter.js";
 import {
   listCardDocumentHeaders,
@@ -9,93 +8,12 @@ import {
   inspectReceivedCardSourceChanges,
 } from "./card-document.js";
 import { inspectWorkspaceSync } from "./node-sync.js";
-import { readSessionObservations, type SessionObservationEvent } from "./session-observations.js";
 import { nodeNotePath } from "./paths.js";
-import { buildStopMaterialIndex, type StopMaterialIndex } from "./stop-material-index.js";
-import { unlinkedWrittenFiles } from "./unlinked-outputs.js";
 
 export type WorkspaceSync = Awaited<ReturnType<typeof inspectWorkspaceSync>>;
-export type ObservedFile = {
-  sessionId: string;
-  address: string;
-  kind: "provided" | "read" | "written";
-  observedAt: string;
-  versionKnown: boolean;
-};
-export type UnlinkedOutput = {
-  address?: string;
-  observedAt?: string;
-  sessionId?: string;
-};
-
-const localKey = (filename: string) => {
-  const value = path.resolve(filename);
-  return process.platform === "win32" ? value.toLowerCase() : value;
-};
-
-export function observationAddressKey(workspaceRoot: string, address: string): string | undefined {
-  try {
-    return address.startsWith("file:")
-      ? `file:${localKey(fileURLToPath(address))}`
-      : `file:${localKey(path.resolve(workspaceRoot, address))}`;
-  } catch {
-    return undefined;
-  }
-}
-
-/** A later observation of one file replaces an earlier version in this current view, not in the log. */
-export function observedFiles(events: SessionObservationEvent[]): ObservedFile[] {
-  const files: ObservedFile[] = [];
-  const seen = new Set<string>();
-  for (const event of [...events].sort((a, b) => b.observedAt.localeCompare(a.observedAt))) {
-    for (const file of event.files) {
-      const identity = JSON.stringify([file.kind, file.address]);
-      if (seen.has(identity)) continue;
-      seen.add(identity);
-      files.push({
-        sessionId: event.sessionId,
-        address: file.address,
-        kind: file.kind,
-        observedAt: file.version.observedAt,
-        versionKnown: file.version.state === "observed",
-      });
-    }
-  }
-  return files;
-}
-
-export async function findUnlinkedOutputs(
-  sync: WorkspaceSync,
-  events: SessionObservationEvent[],
-  workspaceRoot: string,
-  index: StopMaterialIndex,
-  fs: FsAdapter,
-): Promise<UnlinkedOutput[]> {
-  // A racing Node may hold the very association we would otherwise call missing.
-  if (sync.nodes.some((node) => node.uncertain)) return [];
-  const result: UnlinkedOutput[] = [];
-  const seen = new Map<string, UnlinkedOutput>();
-  for (const file of await unlinkedWrittenFiles(fs, index, observedFiles(events), workspaceRoot)) {
-    const key = observationAddressKey(workspaceRoot, file.address);
-    if (!key) continue;
-    const existing = seen.get(key);
-    if (existing) {
-      if (!existing.observedAt || file.observedAt > existing.observedAt) {
-        existing.observedAt = file.observedAt;
-        existing.sessionId = file.sessionId;
-      }
-      continue;
-    }
-    const item = { address: file.address, observedAt: file.observedAt, sessionId: file.sessionId };
-    seen.set(key, item);
-    result.push(item);
-  }
-  return result;
-}
 
 export async function inspectCurrentContext(
   fs: FsAdapter,
-  workspaceRoot: string,
   options: {
     roleId?: string;
     nodes?: Promise<{ invalidNodes: InvalidNativeNode[]; catalog?: NodeCatalog }>;
@@ -116,9 +34,8 @@ export async function inspectCurrentContext(
   const cardsPromise = headersPromise.then((headers) =>
     listCardDocuments(fs, cardOptions, inspections, catalog, headers),
   );
-  const [sync, observations, cards, sourceChanges, currentCatalog] = await Promise.all([
+  const [sync, cards, sourceChanges, currentCatalog] = await Promise.all([
     syncPromise,
-    readSessionObservations(fs),
     cardsPromise,
     headersPromise.then((cards) => inspectReceivedCardSourceChanges(fs, options, cards, catalog)),
     catalog,
@@ -137,17 +54,6 @@ export async function inspectCurrentContext(
         ]
       : [];
   });
-  const unlinkedOutputs = await findUnlinkedOutputs(
-    sync,
-    observations.events,
-    workspaceRoot,
-    buildStopMaterialIndex(
-      currentCatalog,
-      workspaceRoot,
-      sync.invalidNodes.map((node) => node.path),
-    ),
-    fs,
-  );
   const aheadIds = new Set(sync.nodes.filter((node) => node.ahead).map((node) => node.nodeId));
   const changedCardSources = {
     ...sourceChanges,
@@ -155,10 +61,8 @@ export async function inspectCurrentContext(
   };
   return {
     sync,
-    observations,
     cards,
     changedCardSources,
-    unlinkedOutputs,
     roots,
   };
 }
@@ -206,12 +110,10 @@ export type ContextBrief = {
   baselineOnlyBehind: number;
   behind: BriefItem[];
   ahead: BriefItem[];
-  unlinkedOutputs: BriefItem[];
   cardInputs: BriefItem[];
   changedCardSources: BriefItem[];
   roots: CurrentContext["roots"];
   omitted: Record<string, number>;
-  observationUncertain?: true;
   synchronizationUncertain?: true;
   cardSourcesUncertain?: true;
   roleId?: string;
@@ -226,30 +128,6 @@ export function makeContextBrief(
   context: CurrentContext,
   options: { roleId?: string } = {},
 ): ContextBrief {
-  const latestWrite = context.observations.events
-    .flatMap((event) => event.files)
-    .filter((file) => file.kind === "written")
-    .reduce((latest, file) => Math.max(latest, Date.parse(file.version.observedAt)), -Infinity);
-  const recentSessions = new Set(
-    [
-      ...new Set(
-        [...context.observations.events]
-          .sort((a, b) => b.observedAt.localeCompare(a.observedAt))
-          .map((event) => event.sessionId),
-      ),
-    ].slice(0, 3),
-  );
-  const cutoff = latestWrite - 7 * 24 * 60 * 60 * 1000;
-  const recentUnlinked = context.unlinkedOutputs
-    .filter(
-      (output) =>
-        output.observedAt &&
-        Date.parse(output.observedAt) >= cutoff &&
-        Date.parse(output.observedAt) <= latestWrite &&
-        output.sessionId &&
-        recentSessions.has(output.sessionId),
-    )
-    .sort((a, b) => Date.parse(b.observedAt ?? "") - Date.parse(a.observedAt ?? ""));
   const baselineOnly = (node: WorkspaceSync["nodes"][number]) => {
     const missing = node.materials.filter(
       (material) => material.state !== "current" && material.state !== "unanchored",
@@ -302,7 +180,6 @@ export function makeContextBrief(
         goalCount: Number(card.goalCount ?? 0),
         totalGoalCount: Number(card.totalGoalCount ?? 0),
       })),
-    unlinkedOutputs: recentUnlinked.map(({ sessionId: _sessionId, ...output }) => ({ ...output })),
     changedCardSources: context.changedCardSources.items
       .filter((item) =>
         context.sync.nodes.some((node) => node.nodeId === item.nodeId && node.ahead),
@@ -321,12 +198,10 @@ export function makeContextBrief(
     cardInputs: candidates.cardInputs.filter((item) => item.state === "pending"),
     ahead: [],
     changedCardSources: [],
-    unlinkedOutputs: [],
     behind: [],
     roots: [],
     baselineOnlyBehind: context.sync.nodes.filter(baselineOnly).length,
     omitted: { roots: 0 },
-    ...(context.observations.uncertain ? { observationUncertain: true } : {}),
     ...(context.changedCardSources.diagnostics.length ? { cardSourcesUncertain: true } : {}),
     ...(context.sync.nodes.some((node) => node.uncertain)
       ? { synchronizationUncertain: true }
@@ -335,15 +210,8 @@ export function makeContextBrief(
   };
   candidates.cardInputs = candidates.cardInputs.filter((item) => item.state !== "pending");
   for (const [key, items] of Object.entries(candidates)) brief.omitted[key] = items.length;
-  brief.omitted.unlinkedOutputs = context.unlinkedOutputs.length;
   // Keep room for every category before spending the remaining budget by priority.
-  const keys: (keyof typeof candidates)[] = [
-    "ahead",
-    "changedCardSources",
-    "cardInputs",
-    "unlinkedOutputs",
-    "behind",
-  ];
+  const keys: (keyof typeof candidates)[] = ["ahead", "changedCardSources", "cardInputs", "behind"];
   const indices = Object.fromEntries(keys.map((key) => [key, 0])) as Record<
     keyof typeof candidates,
     number
@@ -378,16 +246,12 @@ export function formatContextBrief(brief: ContextBrief): string {
     for (const node of brief.invalidNodes) lines.push(`- ${node.path}: ${node.reason}`);
   }
   const sections: [
-    keyof Pick<
-      ContextBrief,
-      "behind" | "ahead" | "unlinkedOutputs" | "cardInputs" | "changedCardSources"
-    >,
+    keyof Pick<ContextBrief, "behind" | "ahead" | "cardInputs" | "changedCardSources">,
     string,
   ][] = [
     ["cardInputs", "Input Cards (reception does not mean completion)"],
     ["ahead", "Ahead"],
     ["changedCardSources", "Received Card sources changed; reread current requirements"],
-    ["unlinkedOutputs", "Recent unrecorded files"],
     ["behind", "Behind"],
   ];
   for (const [key, title] of sections) {
@@ -418,15 +282,11 @@ export function formatContextBrief(brief: ContextBrief): string {
     lines.push(
       `${omitted} items omitted; use node check, workspace drift or the referenced address.`,
     );
-  if (brief.omitted.unlinkedOutputs)
-    lines.push(`${brief.omitted.unlinkedOutputs} older or omitted unrecorded files.`);
-  if (brief.observationUncertain)
-    lines.push("Session observations are incomplete; only evidenced addresses are shown.");
   if (brief.cardSourcesUncertain)
     lines.push("Some received Card sources could not be compared; inspect their published inputs.");
   if (brief.synchronizationUncertain)
     lines.push(
-      "Some Nodes changed during inspection; synchronization and unlinked-output findings are incomplete. Retry workspace brief.",
+      "Some Nodes changed during inspection; synchronization findings are incomplete. Retry workspace brief.",
     );
   if (brief.roleId)
     lines.push(`Card filter: ${brief.roleId}; synchronization counts cover the whole Workspace.`);

@@ -2,26 +2,22 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { git } from "./helpers.js";
-import { appendSessionObservations } from "../src/core/session-observations.js";
-import { observeSessionFile } from "../src/fs/session-observations.js";
 import { parseFrontmatter } from "../src/core/frontmatter.js";
 import {
   inspectCurrentContext,
   makeContextBrief,
   formatContextBrief,
-  findUnlinkedOutputs,
   contextDriftItems,
   type CurrentContext,
 } from "../src/core/context-brief.js";
 import type { FsAdapter } from "../src/core/adapter.js";
 import { loadNodeCatalog } from "../src/core/node-catalog.js";
-import type { StopMaterialIndex } from "../src/core/stop-material-index.js";
 
 test("brief reports native capture failure without unhandled unused Card query promises", async () => {
   const adapter = {
@@ -30,7 +26,7 @@ test("brief reports native capture failure without unhandled unused Card query p
   } as unknown as FsAdapter;
   const failure = new Error("capture failed");
   await assert.rejects(
-    inspectCurrentContext(adapter, ".", { nodes: Promise.reject(failure) }),
+    inspectCurrentContext(adapter, { nodes: Promise.reject(failure) }),
     (error) => error === failure,
   );
   // Node's test runner reports any unhandled rejection from unused query branches.
@@ -79,10 +75,8 @@ test("brief never hides invalid files or pending Cards and folds only missing-ba
       outputNodes: [],
       requirementsWithoutOutputs: [],
     },
-    observations: { events: [], uncertain: false },
     cards: { revision: "fixture", items: pending },
     changedCardSources: { items: [], diagnostics: [] },
-    unlinkedOutputs: [],
   };
   const brief = makeContextBrief(context);
   const withoutRoots = makeContextBrief({ ...context, roots: [] });
@@ -140,6 +134,29 @@ async function fixture(t: TestContext) {
   return { root, options, node, workspace };
 }
 
+test("brief ignores retained session logs and has no unrecorded-file section", async (t) => {
+  const f = await fixture(t);
+  const adapter = new NodeFs(path.join(f.root, ".tent"));
+  const legacy = `temp/observations/${"a".repeat(64)}.jsonl`;
+  await adapter.writeFile(legacy, "invalid old session log\n");
+  const read = NodeFs.prototype.readFile;
+  const list = NodeFs.prototype.listDir;
+  t.mock.method(NodeFs.prototype, "readFile", async function (this: NodeFs, filename: string) {
+    assert.ok(!filename.startsWith("temp/observations"));
+    return read.call(this, filename);
+  });
+  t.mock.method(NodeFs.prototype, "listDir", async function (this: NodeFs, directory: string) {
+    assert.ok(!directory.startsWith("temp/observations"));
+    return list.call(this, directory);
+  });
+  const brief = (await f.workspace("brief")).value;
+  assert.equal("unlinkedOutputs" in brief, false);
+  assert.equal("observationUncertain" in brief, false);
+  assert.equal("unlinkedOutputs" in brief.omitted, false);
+  assert.doesNotMatch(formatContextBrief(brief), /unrecorded|Session observations/);
+  assert.equal(await read.call(adapter, legacy), "invalid old session log\n");
+});
+
 test("brief exposes live root entry files without drift or another catalog scan", async (t) => {
   const f = await fixture(t);
   const created = await f.node("write-many", ["--input-json", "-"], {
@@ -170,7 +187,7 @@ test("brief exposes live root entry files without drift or another catalog scan"
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  const context = await inspectCurrentContext(observed, f.root, {
+  const context = await inspectCurrentContext(observed, {
     nodes: Promise.resolve({ catalog, invalidNodes: [] }),
   });
   const brief = makeContextBrief(context);
@@ -272,39 +289,6 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   ]);
   assert.equal((await f.node("check", [id])).state, "synced");
   assert.equal((await f.node("check", [linked.nodeId])).state, "synced");
-  await fs.writeFile(path.join(f.root, "loose.svg"), "<svg/>");
-  const adapter = new NodeFs(path.join(f.root, ".tent"));
-  await appendSessionObservations(
-    adapter,
-    "output-session",
-    "one",
-    {
-      observations: [{ kind: "written", address: "loose.svg" }],
-      signals: [],
-      uncertain: false,
-    },
-    (address) => observeSessionFile(f.root, address),
-  );
-  brief = await f.workspace("brief");
-  assert.ok(
-    brief.value.unlinkedOutputs.some((item: { address?: string }) => item.address === "loose.svg"),
-  );
-  await f.node("create", [
-    "Loose output",
-    "--type",
-    "output",
-    "--tags",
-    "asset",
-    "--resource",
-    "loose.svg",
-  ]);
-  brief = await f.workspace("brief");
-  assert.deepEqual(brief.value.unlinkedOutputs, []);
-  drift = (await f.workspace("drift")).value;
-  assert.equal(
-    drift.items.some((item: { kind: string }) => item.kind === "unlinked-output"),
-    false,
-  );
   const decision = await f.node("create", [
     "Conversation decision",
     "--type",
@@ -475,31 +459,6 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
       outputNodes: [],
       requirementsWithoutOutputs: [],
     },
-    observations: {
-      events: [
-        {
-          schema: 1,
-          type: "turn",
-          sessionId: "large",
-          turnId: "one",
-          observedAt: "2026-02-01T00:00:00.000Z",
-          files: [
-            {
-              kind: "written",
-              address: "输出".repeat(5000),
-              version: {
-                state: "uncertain",
-                phase: "stop",
-                observedAt: "2026-02-01T00:00:00.000Z",
-              },
-            },
-          ],
-          signals: [],
-          uncertain: false,
-        },
-      ],
-      uncertain: false,
-    },
     cards: { revision: "r", items: [] },
     changedCardSources: {
       items: Array.from({ length: 50 }, (_, i) => ({
@@ -512,9 +471,6 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
       })),
       diagnostics: [],
     },
-    unlinkedOutputs: [
-      { address: "输出".repeat(5000), observedAt: "2026-02-01T00:00:00.000Z", sessionId: "large" },
-    ],
   };
   const brief = makeContextBrief(context);
   assert.deepEqual(brief.counts, { ahead: 50, behind: 50 });
@@ -524,11 +480,6 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
   assert.ok(brief.omitted.behind > 0 && brief.omitted.ahead > 0);
   assert.ok(brief.omitted.changedCardSources > 0);
   assert.match(formatContextBrief(brief), /Received Card sources changed/);
-  assert.equal(
-    brief.unlinkedOutputs.length,
-    0,
-    "an address never becomes a misleading truncated path",
-  );
   assert.equal(brief.ahead[0].reason, "No output");
   assert.equal("since" in brief.ahead[0], false);
   assert.equal("sinceUnknown" in brief.ahead[0], false);
@@ -598,160 +549,6 @@ test("CLI discovery text and JSON stay byte-identical when the clock advances on
   assert.equal(await git(path.join(f.root, ".tent"), "rev-parse", "HEAD"), head);
 });
 
-test("brief counts historical unrecorded files but only lists three recent sessions", () => {
-  const times = ["2026-02-01", "2026-01-31", "2026-01-30", "2026-01-29", "2026-01-01"];
-  const events = times.map((day, index) => ({
-    schema: 1 as const,
-    type: "turn" as const,
-    sessionId: `session-${index}`,
-    turnId: "turn-1",
-    observedAt: `${day}T00:00:00.000Z`,
-    files: [
-      {
-        kind: "written" as const,
-        address: `file-${index}.md`,
-        version: {
-          state: "uncertain" as const,
-          phase: "stop" as const,
-          observedAt: `${day}T00:00:00.000Z`,
-        },
-      },
-    ],
-    signals: [],
-    uncertain: false,
-  }));
-  const context: CurrentContext = {
-    roots: [],
-    sync: {
-      invalidNodes: [],
-      nodes: [],
-      counts: { synced: 0, ahead: 0, behind: 0, unanchored: 0 },
-      outputNodes: [],
-      requirementsWithoutOutputs: [],
-    },
-    observations: { events, uncertain: false },
-    cards: { revision: "r", items: [] },
-    changedCardSources: { items: [], diagnostics: [] },
-    unlinkedOutputs: [
-      ...events.map((event, index) => ({
-        address: `file-${index}.md`,
-        observedAt: event.observedAt,
-        sessionId: event.sessionId,
-      })),
-    ],
-  };
-  const brief = makeContextBrief(context);
-  assert.deepEqual(
-    new Set(brief.unlinkedOutputs.map((item) => item.nodeId ?? item.address)),
-    new Set(["file-0.md", "file-1.md", "file-2.md"]),
-  );
-  assert.equal(brief.omitted.unlinkedOutputs, 2);
-  assert.match(formatContextBrief(brief), /2 older or omitted unrecorded files/);
-  assert.equal(context.unlinkedOutputs.length, 5, "the full observation source remains intact");
-});
-
-test("brief's inclusive seven-day window follows the latest observed write, not the clock or reads", async (t) => {
-  const interpreter = {
-    nonignoredFiles: async (addresses: readonly string[]) => [...addresses],
-  } as FsAdapter;
-  const index: StopMaterialIndex = {
-    nodes: [
-      {
-        nodeId: "node-linked",
-        path: ".tent/Linked/Linked.md",
-        names: ["Linked"],
-        type: "output",
-        materials: [{ file: "latest-linked.md" }],
-        moduleCoverage: [],
-      },
-    ],
-  };
-  const observedAt = "2026-02-20T00:00:00.000Z";
-  const files = [
-    { address: "latest-linked.md", kind: "written" as const, at: "2026-02-08T00:00:00.000Z" },
-    { address: "middle.md", kind: "written" as const, at: "2026-02-03T00:00:00.000Z" },
-    { address: "boundary.md", kind: "written" as const, at: "2026-02-01T00:00:00.000Z" },
-    { address: "too-old.md", kind: "written" as const, at: "2026-01-31T23:59:59.999Z" },
-    { address: "latest-read.md", kind: "read" as const, at: observedAt },
-  ];
-  const context: CurrentContext = {
-    roots: [],
-    sync: {
-      invalidNodes: [],
-      nodes: [],
-      counts: { synced: 0, ahead: 0, behind: 0, unanchored: 0 },
-      outputNodes: [{ nodeId: "node-linked", path: "Linked", resource: "../../latest-linked.md" }],
-      requirementsWithoutOutputs: [],
-    },
-    observations: {
-      events: [
-        {
-          schema: 1,
-          type: "turn",
-          sessionId: "boundary",
-          turnId: "one",
-          observedAt,
-          files: files.map(({ address, kind, at }) => ({
-            address,
-            kind,
-            version: { state: "uncertain", phase: "stop", observedAt: at },
-          })),
-          signals: [],
-          uncertain: false,
-        },
-      ],
-      uncertain: false,
-    },
-    cards: { revision: "r", items: [] },
-    changedCardSources: { items: [], diagnostics: [] },
-    unlinkedOutputs: [],
-  };
-  context.unlinkedOutputs = await findUnlinkedOutputs(
-    context.sync,
-    context.observations.events,
-    process.cwd(),
-    index,
-    interpreter,
-  );
-  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-02-08T00:00:00.000Z") - 1000 });
-  const before = makeContextBrief(context);
-  assert.deepEqual(
-    before.unlinkedOutputs.map((item) => item.address),
-    ["middle.md", "boundary.md"],
-  );
-  assert.equal(before.omitted.unlinkedOutputs, 1);
-  t.mock.timers.tick(2000);
-  const after = makeContextBrief(context);
-  assert.equal(JSON.stringify(after), JSON.stringify(before));
-  assert.equal(formatContextBrief(after), formatContextBrief(before));
-  context.sync.outputNodes = [];
-  index.nodes = [];
-  context.unlinkedOutputs = await findUnlinkedOutputs(
-    context.sync,
-    context.observations.events,
-    process.cwd(),
-    index,
-    interpreter,
-  );
-  assert.deepEqual(
-    makeContextBrief(context).unlinkedOutputs.map((item) => item.address),
-    ["latest-linked.md", "middle.md", "boundary.md"],
-  );
-  context.observations.events[0]!.files = context.observations.events[0]!.files.filter(
-    (file) => file.kind === "read",
-  );
-  context.unlinkedOutputs = await findUnlinkedOutputs(
-    context.sync,
-    context.observations.events,
-    process.cwd(),
-    index,
-    interpreter,
-  );
-  assert.deepEqual(makeContextBrief(context).unlinkedOutputs, []);
-  context.observations.events = [];
-  assert.deepEqual(makeContextBrief(context).unlinkedOutputs, []);
-});
-
 test("brief and drift both show a dual-status goal and leave neutral recorded output quiet", () => {
   const context: CurrentContext = {
     roots: [],
@@ -786,10 +583,8 @@ test("brief and drift both show a dual-status goal and leave neutral recorded ou
       outputNodes: [{ nodeId: "node-quiet", path: "Evidence", resource: "../../evidence.svg" }],
       requirementsWithoutOutputs: ["node-goal"],
     },
-    observations: { events: [], uncertain: false },
     cards: { revision: "r", items: [] },
     changedCardSources: { items: [], diagnostics: [] },
-    unlinkedOutputs: [],
   };
   const brief = makeContextBrief(context);
   assert.deepEqual(brief.counts, { ahead: 1, behind: 1 });
@@ -815,72 +610,4 @@ test("brief and drift both show a dual-status goal and leave neutral recorded ou
       ["node-ahead", "node-goal"],
     ],
   );
-});
-
-test("uncertain Node associations never become a definite unlinked file claim", async () => {
-  const context: CurrentContext = {
-    roots: [],
-    sync: {
-      invalidNodes: [],
-      nodes: [
-        {
-          nodeId: "node-racing",
-          path: "Racing",
-          type: "goal",
-          state: "unanchored",
-          trustTier: "unverified",
-          stale: false,
-          uncertain: true,
-          materials: [],
-          reasons: ["Node changed during inspection"],
-        },
-      ],
-      counts: { synced: 0, ahead: 0, behind: 0, unanchored: 1 },
-      outputNodes: [],
-      requirementsWithoutOutputs: [],
-    },
-    observations: {
-      events: [
-        {
-          schema: 1,
-          type: "turn",
-          sessionId: "one",
-          turnId: "one",
-          observedAt: "2026-02-01T00:00:00.000Z",
-          files: [
-            {
-              kind: "written",
-              address: "already-linked.txt",
-              version: {
-                state: "observed",
-                sha256: "a".repeat(64),
-                phase: "stop",
-                observedAt: "2026-02-01T00:00:00.000Z",
-              },
-            },
-          ],
-          signals: [],
-          uncertain: false,
-        },
-      ],
-      uncertain: false,
-    },
-    cards: { revision: "r", items: [] },
-    changedCardSources: { items: [], diagnostics: [] },
-    unlinkedOutputs: [],
-  };
-  assert.deepEqual(
-    await findUnlinkedOutputs(
-      context.sync,
-      context.observations.events,
-      process.cwd(),
-      { nodes: [] },
-      {} as FsAdapter,
-    ),
-    [],
-  );
-  const brief = makeContextBrief(context);
-  assert.equal(brief.synchronizationUncertain, true);
-  assert.match(formatContextBrief(brief), /findings are incomplete/);
-  assert.ok(Buffer.byteLength(formatContextBrief(brief) + "\n") <= 4096);
 });

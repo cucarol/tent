@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { git } from "./helpers.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 

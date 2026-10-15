@@ -10,8 +10,6 @@ export interface FsAdapter {
   readonly workspaceRoot?: string;
   /** Native edits rejected at this command boundary; never persisted or used as a cache. */
   invalidNodeEdits?: ReadonlyMap<string, string>;
-  /** Existing regular files after one batch ignore lookup; undefined without a trusted interpreter. */
-  nonignoredFiles?(addresses: readonly string[]): Promise<string[] | undefined>;
   /** Observe explicit content or safely validate a coverage address without reading members. */
   observeMaterial?(
     resource: string,

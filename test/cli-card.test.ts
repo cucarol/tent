@@ -9,7 +9,7 @@ import { runNodeCommand } from "../src/cli/node-commands.js";
 import { readCardDocument } from "../src/core/card-document.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { git } from "./helpers.js";
 
 async function fileSnapshot(root: string): Promise<Record<string, string>> {

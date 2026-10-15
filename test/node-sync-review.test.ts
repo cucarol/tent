@@ -119,7 +119,7 @@ test("review fix: a batch URI confirmation uses final upstream sections and reco
 });
 
 test("current root Nodes have no parent and independent outputs have no goal", async (t) => {
-  const { nearestGoal } = await import("../src/core/node-sync-record.js");
+  const { goalAncestors } = await import("../src/core/node-sync-record.js");
   const adapter = new NodeFs(await scratch(t));
   for (const [nodePath, raw] of [
     ["Root", "---\nid: node-root\ntype: prompt\n---\ngroup"],
@@ -133,6 +133,6 @@ test("current root Nodes have no parent and independent outputs have no goal", a
   const catalog = (await loadNodeCatalog(adapter)).byId;
   assert.equal(catalog.get("node-root")!.parentNodeId, null);
   assert.equal(catalog.get("node-out")!.parentNodeId, null);
-  assert.equal(nearestGoal(catalog.get("node-out")!, catalog), undefined);
-  assert.equal(nearestGoal(catalog.get("node-child")!, catalog), undefined);
+  assert.deepEqual(goalAncestors(catalog.get("node-out")!, catalog), []);
+  assert.deepEqual(goalAncestors(catalog.get("node-child")!, catalog), []);
 });

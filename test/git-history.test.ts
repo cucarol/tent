@@ -222,13 +222,11 @@ test("batched first timestamps retain publication across edits, removal and re-a
   );
   for (const name of [a, b, unicode]) {
     const first = (await history.pathVersions(name)).first!;
-    assert.equal(result.get(name), await history.commitTime(first.commit));
+    assert.equal(
+      result.get(name),
+      new Date(git("show", "-s", "--format=%cI", first.commit)).toISOString(),
+    );
   }
-  const latest = await history.latestCommitTimes([a, b, unicode, "missing.md", "nodes/*.md"]);
-  assert.equal(latest.size, 3);
-  assert.equal(latest.get(a), "2025-12-31T02:00:00.000Z");
-  assert.equal(latest.get(b), "2026-01-02T02:00:00.000Z");
-  assert.equal(latest.get(unicode), "2026-01-01T02:00:00.000Z");
   assert.equal(git("rev-parse", "HEAD"), before);
   assert.equal(git("status", "--porcelain"), "");
   await assert.rejects(history.firstCommitTimes(["../outside.md"]), /Invalid Git document path/);
@@ -249,12 +247,13 @@ test("batched first timestamps retain publication across edits, removal and re-a
     branchHead,
   );
   const merged = await history.firstCommitTimes([a, b, unicode, branchPath]);
-  const latestMerged = await history.latestCommitTimes([a, b, unicode, branchPath]);
   for (const name of [a, b, unicode, branchPath]) {
     const first = (await history.pathVersions(name)).first!;
-    assert.equal(merged.get(name), await history.commitTime(first.commit));
+    assert.equal(
+      merged.get(name),
+      new Date(git("show", "-s", "--format=%cI", first.commit)).toISOString(),
+    );
     const last = (await history.pathVersions(name)).latest!;
-    assert.equal(latestMerged.get(name), await history.commitTime(last.commit));
     assert.equal(
       last.commit,
       git("--literal-pathspecs", "log", "--full-history", "-1", "--format=%H", "--", name),
@@ -268,7 +267,10 @@ test("batched first timestamps retain publication across edits, removal and re-a
   assert.equal(afterRename.get(renamed), "2026-01-06T02:00:00.000Z");
   for (const name of [b, renamed]) {
     const first = (await history.pathVersions(name)).first!;
-    assert.equal(afterRename.get(name), await history.commitTime(first.commit));
+    assert.equal(
+      afterRename.get(name),
+      new Date(git("show", "-s", "--format=%cI", first.commit)).toISOString(),
+    );
   }
 });
 

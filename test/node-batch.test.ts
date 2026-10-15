@@ -6,7 +6,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { prepareNodeBatch, readNodeBatch } from "../src/core/node-batch.js";
+import { prepareNodeBatch } from "../src/core/node-batch.js";
+import { captureReadDocuments } from "../src/core/document-history.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 
@@ -56,14 +57,17 @@ async function tentFiles(workspace: string) {
   return files;
 }
 
-test("Core batch returns every selected body and captures only on explicit request", async (t) => {
+test("prepared batch returns each selected body without capturing", async (t) => {
   const { adapter, git } = await fixture(t);
   const body = "😀\r\n正文".repeat(8000);
   await adapter.writeFile("A/A.md", raw("node-alpha", "Short A"));
   await adapter.writeFile("B/B.md", raw("node-bravo", body));
   await adapter.writeFile("C/C.md", raw("node-charlie", "Short C"));
   const ids = ["node-alpha", "node-bravo", "node-charlie"];
-  const ordinary = await readNodeBatch(adapter, "ws-batch", { nodeIds: ids });
+  const prepared = await prepareNodeBatch(adapter, "ws-batch");
+  const ordinary = {
+    items: await Promise.all(ids.map(async (id) => (await prepared.read(id, "body")).item)),
+  };
   assert.deepEqual(
     ordinary.items.map((item) => item.nodeId),
     ids,
@@ -71,12 +75,6 @@ test("Core batch returns every selected body and captures only on explicit reque
   assert.ok("text" in ordinary.items[1]!);
   assert.equal(ordinary.items[1]!.text, body);
   await assert.rejects(git("rev-parse", "--verify", "HEAD"));
-  const retained = await readNodeBatch(adapter, "ws-batch", { nodeIds: ids, capture: true });
-  assert.deepEqual(
-    retained.items.map((item) => ("version" in item ? item.version?.path : undefined)),
-    ["A/A.md", "B/B.md", "C/C.md"],
-  );
-  assert.equal(await git("rev-list", "--count", "HEAD"), "1");
 });
 
 for (const view of ["body", "raw"] as const) {
@@ -84,10 +82,10 @@ for (const view of ["body", "raw"] as const) {
     const { workspace, adapter, git } = await fixture(t);
     await adapter.writeFile("A/A.md", raw("node-alpha", "Retained body"));
     await adapter.writeFile("B/B.md", raw("node-bravo", "B"));
-    await readNodeBatch(adapter, "ws-batch", {
-      nodeIds: ["node-alpha", "node-bravo"],
-      capture: true,
-    });
+    await captureReadDocuments(adapter, [
+      { path: "A/A.md", raw: await adapter.readFile("A/A.md") },
+      { path: "B/B.md", raw: await adapter.readFile("B/B.md") },
+    ]);
     const beforeHead = await git("rev-parse", "HEAD");
     const beforeRecords = await adapter.history.nodeRecords();
     const body = "😀\r\n正文".repeat(8000);
@@ -204,18 +202,6 @@ for (const view of ["body", "raw"] as const) {
     assert.deepEqual(await adapter.history.nodeRecords(), beforeRecords);
   });
 }
-
-test("prepared batch capture retains the exact bytes selected before an external edit", async (t) => {
-  const { adapter } = await fixture(t);
-  const original = raw("node-alpha", "observed");
-  await adapter.writeFile("A/A.md", original);
-  const prepared = await prepareNodeBatch(adapter, "ws-batch");
-  const selected = await prepared.read("node-alpha", "body");
-  await adapter.writeFile("A/A.md", raw("node-alpha", "changed later"));
-  const [captured] = await prepared.capture([selected]);
-  assert.equal(captured!.text, "observed");
-  assert.equal(await adapter.history.read(captured!.version!), original);
-});
 
 test("CLI summaries and creation responses stay bounded for large documents", async (t) => {
   const { workspace, adapter } = await fixture(t);

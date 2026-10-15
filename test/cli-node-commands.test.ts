@@ -7,7 +7,7 @@ import { nodeHelpText, runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand, workspaceHelpText } from "../src/cli/workspace-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { NodeFs, SystemClock } from "../src/fs/node-fs.js";
 import { parseFrontmatter } from "../src/core/frontmatter.js";
 import { moveNode } from "../src/core/move-ops.js";

@@ -135,7 +135,6 @@ export class PropagationMemoryFs implements FsAdapter {
         ),
       );
     history.derived = async (_name, _version, compute) => compute(head());
-    history.commitTime = async (commit) => events.find((x) => x.commit === commit)!.time;
     const times = async (files: readonly string[], latest: boolean) =>
       new Map(
         files.flatMap((file) => {
@@ -145,7 +144,6 @@ export class PropagationMemoryFs implements FsAdapter {
         }),
       );
     history.firstCommitTimes = (files) => times(files, false);
-    history.latestCommitTimes = (files) => times(files, true);
     history.commitChanges = async (commit) => ({
       commit,
       parent: events.find((x) => x.commit === commit)!.parent!,

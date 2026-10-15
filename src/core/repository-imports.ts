@@ -200,7 +200,6 @@ function jsonConfig(text: string): unknown {
 
 const inWorkspace = (file: string) =>
   file !== ".." && !file.startsWith("../") && !path.posix.isAbsolute(file);
-const ordered = (items: Iterable<string>) => [...new Set(items)].sort(comparePaths);
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 

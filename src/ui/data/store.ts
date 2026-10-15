@@ -1,5 +1,4 @@
 import type {
-  RefKind,
   Snapshot,
   SnapshotCard,
   SnapshotCommit,
@@ -233,12 +232,6 @@ export const cardTitle = (c: SnapshotCard) => c.title || t.card.contextOnly(c.so
 
 export function refKey(ref: SnapshotRef) {
   return `${ref.kind}:${ref.id}`;
-}
-export function parseRef(key: string): SnapshotRef | null {
-  const [kind, id] = key.split(":");
-  return kind === "node" || kind === "role" || kind === "card"
-    ? { kind: kind as RefKind, id: id! }
-    : null;
 }
 
 export async function loadSnapshot(): Promise<Snapshot> {

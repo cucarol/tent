@@ -4,7 +4,7 @@ import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { test } from "node:test";
 import { contentEtag } from "../src/core/etag.js";
-import { loadTent, nodeNotePath, reloadLoadedNode } from "../src/core/tree.js";
+import { loadTent, nodeNotePath } from "../src/core/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 test("Node load and reload retain the exact raw document etag", async (t) => {
@@ -24,8 +24,7 @@ test("Node load and reload retain the exact raw document etag", async (t) => {
 
   const updatedRaw = "---\nid: node-etagnode\ntype: prompt\n---\n# updated\n";
   await nodeFs.writeFile(notePath, updatedRaw);
-  const reloaded = await reloadLoadedNode(nodeFs, tent, nodePath);
-  assert.equal(reloaded, node);
+  const reloaded = (await loadTent(nodeFs)).byPath.get(nodePath)!;
   assert.equal(reloaded.etag, contentEtag(updatedRaw));
   assert.notEqual(reloaded.etag, contentEtag(initialRaw));
 });

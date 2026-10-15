@@ -10,8 +10,9 @@ import {
   parseFrontmatter,
   serializeFrontmatter,
 } from "../src/core/frontmatter.js";
-import { scaffoldInWorkspace, scaffoldTent } from "../src/core/scaffold.js";
-import { findNodesByTag, collectNodeTags } from "../src/core/tags.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
+import { scaffoldTent } from "../src/core/scaffold.js";
+import { countNodeTags } from "../src/core/tags.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
 import { makeTent } from "./helpers.js";
@@ -242,15 +243,24 @@ test("tags are derived from Node documents and unchanged edits keep the bytes", 
   await saveTags(fsa, "node-o1", ["backend-hardening"]);
   assert.equal(await fsa.readFile(note), before);
   let tent = await loadTent(fsa);
-  assert.deepEqual(collectNodeTags(tent), ["backend-hardening"]);
   assert.deepEqual(
-    findNodesByTag(tent, "backend-hardening").map((node) => node.id),
+    countNodeTags(tent.byId.values()).map((item) => item.tag),
+    ["backend-hardening"],
+  );
+  assert.deepEqual(
+    [...tent.byId.values()]
+      .filter((node) => node.tags.includes("backend-hardening"))
+      .map((node) => node.id)
+      .sort(),
     ["node-o1", "node-p1"],
   );
   await saveTags(fsa, "node-p1", []);
   tent = await loadTent(fsa);
   assert.deepEqual(
-    findNodesByTag(tent, "backend-hardening").map((node) => node.id),
+    [...tent.byId.values()]
+      .filter((node) => node.tags.includes("backend-hardening"))
+      .map((node) => node.id)
+      .sort(),
     ["node-o1"],
   );
   assert.equal(await fsa.readFile("tags.json"), "{not-json");
@@ -260,9 +270,15 @@ test("Node write tags change only the document", async (t) => {
   const dir = await makeTent(t);
   const fsa = new NodeFs(dir);
   await saveTags(fsa, "node-p1", ["from-write"]);
-  assert.deepEqual(collectNodeTags(await loadTent(fsa)), ["from-write"]);
+  assert.deepEqual(
+    countNodeTags((await loadTent(fsa)).byId.values()).map((item) => item.tag),
+    ["from-write"],
+  );
   await saveTags(fsa, "node-p1", []);
-  assert.deepEqual(collectNodeTags(await loadTent(fsa)), []);
+  assert.deepEqual(
+    countNodeTags((await loadTent(fsa)).byId.values()).map((item) => item.tag),
+    [],
+  );
   assert.equal(await fsa.exists("tags.json"), false);
 });
 

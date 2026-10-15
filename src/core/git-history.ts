@@ -3,7 +3,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import * as z from "zod/v4";
 import { parseFrontmatter } from "./frontmatter.js";
 import { isCardId, isNodeId, isRoleId } from "./id.js";
@@ -409,8 +408,6 @@ export class GitDocumentHistory {
   private knownEntries = new Map<string, string>();
   private recordHead: string | null | undefined;
   private records: Record<string, NodeBasisRecord | null> = {};
-  private firstTimesHead: string | null | undefined;
-  private firstTimes = new Map<string, string>();
   private snapshotHead?: string;
   private snapshotPromise?: Promise<HistorySnapshot>;
   private snapshotRecordsPromise?: Promise<RawHistoryCommit[]>;
@@ -790,52 +787,9 @@ export class GitDocumentHistory {
     return [...ids];
   }
 
-  /** First retained identity event, independent of its current filename. */
-  async firstNodeTime(nodeId: string): Promise<string | undefined> {
-    if (!isNodeId(nodeId)) throw new Error("Invalid Node id");
-    await this.ensureRepository();
-    const head = await this.retainedHead();
-    if (!head) return undefined;
-    if (this.firstTimesHead !== head) {
-      this.firstTimes = new Map(
-        Object.entries(
-          await this.derivedAtHead("identity-times", 1, head, async () => {
-            const times: Record<string, string> = {};
-            for (const event of await this.changesInRange())
-              for (const change of event.changes)
-                if (change.objectId && !(change.objectId in times))
-                  times[change.objectId] = event.time;
-            return times;
-          }),
-        ),
-      );
-      this.firstTimesHead = head;
-    }
-    return this.firstTimes.get(nodeId);
-  }
-
   constructor(systemRoot: string, entry: CaptureMetadata["entry"] = "core") {
     this.root = path.resolve(systemRoot);
     this.defaultEntry = entry;
-  }
-
-  /** Exact independent-repository boundary, never a filename-suffix identity guess. */
-  localFileUriDocumentPath(uri: string): string | undefined {
-    try {
-      const url = new URL(uri);
-      if (url.protocol !== "file:") return undefined;
-      const relative = path.relative(this.root, fileURLToPath(url));
-      if (
-        !relative ||
-        relative === ".." ||
-        relative.startsWith(`..${path.sep}`) ||
-        path.isAbsolute(relative)
-      )
-        return undefined;
-      return documentPath(relative.split(path.sep).join("/"));
-    } catch {
-      return undefined;
-    }
   }
 
   async available(): Promise<boolean> {
@@ -1402,30 +1356,8 @@ export class GitDocumentHistory {
     ).toString("utf8");
   }
 
-  async commitTime(commit: string): Promise<string> {
-    oid(commit);
-    await this.ensureRepository();
-    await runGit(this.root, ["merge-base", "--is-ancestor", commit, "HEAD"]);
-    const time = (await runGit(this.root, ["show", "-s", "--format=%cI", commit]))
-      .toString("ascii")
-      .trim();
-    return new Date(time).toISOString();
-  }
-
   /** First retained timestamps for selected paths, from one reachable history walk. */
   async firstCommitTimes(files: readonly string[]): Promise<Map<string, string>> {
-    return this.pathCommitTimes(files, true);
-  }
-
-  /** Latest retained change per path; does not capture live files or consult filename dates. */
-  async latestCommitTimes(files: readonly string[]): Promise<Map<string, string>> {
-    return this.pathCommitTimes(files, false);
-  }
-
-  private async pathCommitTimes(
-    files: readonly string[],
-    first: boolean,
-  ): Promise<Map<string, string>> {
     const selected = new Set(files.map(documentPath));
     const times = new Map<string, string>();
     if (!selected.size) return times;
@@ -1435,7 +1367,7 @@ export class GitDocumentHistory {
     const entries = await this.pathIndex(head);
     for (const file of selected) {
       const entry = entries[file];
-      if (entry) times.set(file, first ? entry.firstTime : entry.latestTime);
+      if (entry) times.set(file, entry.firstTime);
     }
     return times;
   }

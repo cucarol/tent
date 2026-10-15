@@ -5,7 +5,8 @@ import { readDocumentDiff } from "../src/core/document-diff.js";
 import {
   createRoleContext,
   editRoleContext,
-  readRoleContext,
+  requireRoleDocument,
+  readRolePage,
   listRoleContexts,
 } from "../src/core/role-context.js";
 import { inspectNodeSync, confirmNodeSync } from "../src/core/node-sync.js";
@@ -343,11 +344,13 @@ test("batch writes share a commit, Role reads capture explicitly, and Git failur
   const head = await git("rev-parse", "HEAD");
   await listRoleContexts(adapter);
   assert.equal(await git("rev-parse", "HEAD"), head);
-  await readRoleContext(adapter, role.roleId);
+  await requireRoleDocument(adapter, role.roleId);
   assert.equal(await git("rev-parse", "HEAD"), head);
-  const roleRead = { document: await readRoleContext(adapter, role.roleId, { capture: true }) };
+  const roleRead = {
+    document: await readRolePage(adapter, role.roleId, { capture: true, view: "raw" }),
+  };
   assert.ok(roleRead.document.version);
-  assert.equal(await adapter.history!.read(roleRead.document.version), roleRead.document.raw);
+  assert.equal(await adapter.history!.read(roleRead.document.version), roleRead.document.text);
   const original = await readNodeForEdit(adapter, "node-alpha");
   const capture = adapter.history!.captureUnlocked.bind(adapter.history);
   adapter.history!.captureUnlocked = async (changes, metadata) => {

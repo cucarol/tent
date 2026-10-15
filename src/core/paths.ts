@@ -70,13 +70,6 @@ export function workspaceRootFromSystemRoot(systemRoot: string): string | undefi
   return separator ? parent + separator : undefined;
 }
 
-/** 从 workspace 根得到 system root 路径（字符串拼接，不访问磁盘）。 */
-export function systemRootFromWorkspace(workspaceRoot: string): string {
-  const root = workspaceRoot.replace(/[\\/]+$/, "");
-  const sep = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  return `${root}${sep}${TENT_SYSTEM_DIR}`;
-}
-
 /** 路径是否落在 operational pipeline（相对 system root，posix 风格）。 */
 export function isOperationalPath(relativePath: string): boolean {
   const path = relativePath.replace(/\\/g, "/").replace(/^\.\/+/, "");

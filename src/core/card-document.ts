@@ -161,14 +161,6 @@ async function checkUnchanged(fs: FsAdapter, card: CardDocument) {
       "Card changed during checks; reread before saving",
     );
 }
-async function liveCard(fs: FsAdapter, id: string) {
-  return parseCardDocument(
-    id,
-    new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-      await fs.readBinary(cardPath(id)),
-    ),
-  );
-}
 async function historyOf(fs: FsAdapter) {
   if (!fs.history || !(await fs.history.available()))
     throw new CardDocumentError(

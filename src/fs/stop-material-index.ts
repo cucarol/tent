@@ -24,12 +24,6 @@ const indexSchema = z.strictObject({
       path: z.string(),
       names: z.array(z.string()),
       type: z.string().optional(),
-      materials: z.array(
-        z.union([
-          z.strictObject({ coverage: coverageSchema, scope: z.string().optional() }),
-          z.strictObject({ file: z.string() }),
-        ]),
-      ),
       moduleCoverage: z.array(coverageSchema),
     }),
   ),
@@ -100,7 +94,7 @@ export async function loadStopMaterialIndex(
     try {
       const cached = JSON.parse(await fs.readFile(cacheFile, "utf8"));
       if (
-        cached.schema === 2 &&
+        cached.schema === 3 &&
         cached.workspaceRoot === workspaceRoot &&
         cached.sourceDigest === sourceDigest &&
         cached.indexDigest === hash(JSON.stringify(cached.index))
@@ -132,7 +126,7 @@ export async function loadStopMaterialIndex(
       await fs.writeFile(
         temp,
         JSON.stringify({
-          schema: 2,
+          schema: 3,
           workspaceRoot,
           sourceDigest,
           indexDigest: hash(JSON.stringify(index)),

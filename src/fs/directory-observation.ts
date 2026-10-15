@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { checkedSourceFile } from "./checked-source-file.js";
 import { directoryRepository } from "./repository-material.js";
 import { isTentWorkspacePath } from "../core/material-coverage.js";
@@ -50,72 +49,6 @@ async function git(
     );
     child.stdin?.end(input);
   });
-}
-
-/** Read only ignore rules, using one subprocess for all uncovered local writes. */
-export async function nonignoredLocalFiles(
-  workspaceRoot: string,
-  addresses: readonly string[],
-  tentGit: string,
-): Promise<string[] | undefined> {
-  try {
-    const repository = await directoryRepository(workspaceRoot);
-    if (!repository && !(await lstat(path.join(tentGit, "HEAD"))).isFile()) return undefined;
-    const root = repository?.root ?? workspaceRoot;
-    const candidates: Array<{ address: string; relative: string }> = [];
-    for (const address of addresses) {
-      const filename = address.startsWith("file:")
-        ? fileURLToPath(address)
-        : path.resolve(workspaceRoot, address);
-      const relative = path.relative(root, filename).split(path.sep).join("/");
-      if (
-        !isTentWorkspacePath(path.relative(workspaceRoot, filename).split(path.sep).join("/")) &&
-        relative &&
-        relative !== ".." &&
-        !relative.startsWith("../") &&
-        !path.isAbsolute(relative) &&
-        (await checkedSourceFile(root, filename).then(
-          () => true,
-          () => false,
-        ))
-      )
-        candidates.push({ address, relative });
-    }
-    if (!candidates.length) return [];
-    if (!repository) {
-      const present = new Set(
-        (
-          await borrowedFiles(
-            root,
-            tentGit,
-            candidates.map((file) => file.relative),
-          )
-        ).map((filename) => (process.platform === "win32" ? filename.toLowerCase() : filename)),
-      );
-      return candidates.flatMap((file) =>
-        present.has(process.platform === "win32" ? file.relative.toLowerCase() : file.relative)
-          ? [file.address]
-          : [],
-      );
-    }
-    const output = await git(
-      root,
-      ["check-ignore", "--no-index", "--verbose", "--non-matching", "-z", "--stdin"],
-      candidates.map((file) => file.relative).join("\0") + "\0",
-      { GIT_CEILING_DIRECTORIES: path.dirname(root) },
-      [0, 1],
-    );
-    // Unlike ls-files, verbose non-matches have three meaningful empty fields.
-    const fields = output.toString("utf8").split("\0");
-    if (fields.pop() !== "" || fields.length !== candidates.length * 4) return undefined;
-    return candidates.flatMap((file, index) => {
-      const [source, , pattern, filename] = fields.slice(index * 4, index * 4 + 4);
-      if (filename !== file.relative) throw new Error("Invalid Git ignore listing");
-      return !source || pattern?.startsWith("!") ? [file.address] : [];
-    });
-  } catch {
-    return undefined;
-  }
 }
 function names(bytes: Buffer) {
   return bytes.toString("utf8").split("\0").filter(Boolean);

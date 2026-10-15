@@ -121,30 +121,6 @@ function applyDuplicateInvalid(
   for (const child of node.children) applyDuplicateInvalid(child, duplicateIds, invalid);
 }
 
-/** 单框内容落盘后的增量重载。结构与 id 不变时避免重扫整顶帐。 */
-export async function reloadLoadedNode(
-  fs: FsAdapter,
-  tent: LoadedTent,
-  path: string,
-): Promise<Node> {
-  const node = tent.byPath.get(path);
-  if (!node) throw new Error(`Node not found: ${path}.`);
-  const raw = await fs.readFile(nodeNotePath(path));
-  const { data, body } = parseFrontmatter(raw);
-  const schemaError = fs.invalidNodeEdits?.get(nodeNotePath(path)) ?? canonicalIdentityError(data);
-  if (schemaError) throw new Error(schemaError);
-  const identity = normalizeIdentity(data);
-  if (identity.fm.id !== node.id) throw new Error("Incremental reload cannot change node id.");
-  node.type = identity.fm.type;
-  node.tags = identity.tags;
-  node.fm = identity.fm;
-  node.name = baseName(path);
-  node.etag = contentEtag(raw);
-  node.body = body;
-  for (const root of tent.roots) resolveSubtree(root);
-  return node;
-}
-
 function sortChildren(node: Node, order: OrderMap): void {
   node.children = sortByOrder(node.children, order[node.id], compareNodes);
   for (const c of node.children) sortChildren(c, order);

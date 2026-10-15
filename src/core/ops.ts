@@ -11,7 +11,6 @@ import { assertContentMutable, isContentMutable } from "./tree.js";
 import { normalizeTagList } from "./tags.js";
 import { normalizeOptionalNodeType } from "./node-type.js";
 import { validateNodeName } from "./scaffold.js";
-import { moveNodeUnlocked } from "./move-ops.js";
 import type { OpsEnv } from "./ops-context.js";
 import { ORDER_PATH } from "./paths.js";
 import { executeDeleteUnlocked, type DeleteWrite } from "./delete-recovery.js";
@@ -125,48 +124,6 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
     throw error;
   }
   return id;
-}
-
-/** 落点:成为某框子框(inside)/ 插到某兄弟之前(before)/ 之后(after)。 */
-export type DropPosition =
-  { mode: "inside" } | { mode: "before"; siblingId: string } | { mode: "after"; siblingId: string };
-
-// 统一的换爹 + 换序:把 fromPath 放到 newParentPath 下的指定位置。
-// 顺序记进隐藏的 .tent/order.json(对 user 不显式),不碰任何框身份文件 frontmatter。
-export async function placeNode(
-  env: OpsEnv,
-  fromPath: string,
-  newParentPath: string,
-  position: DropPosition,
-): Promise<void> {
-  await withMutation(
-    env.fs,
-    async () => placeNodeUnlocked(env, fromPath, newParentPath, position),
-    { operation: "node.move" },
-  );
-}
-
-async function placeNodeUnlocked(
-  env: OpsEnv,
-  fromPath: string,
-  newParentPath: string,
-  position: DropPosition,
-): Promise<void> {
-  assertNotTempPath(newParentPath);
-  const before = await loadTent(env.fs);
-  const moved = before.byPath.get(fromPath);
-  if (!moved) throw new Error(`Node not found: ${fromPath}.`);
-  if (!isContentMutable(moved)) throw new Error("Invalid nodes cannot be moved.");
-  assertContentMutable(moved, "moved");
-  const parent = newParentPath ? before.byPath.get(newParentPath) : null;
-  if (newParentPath && !parent) throw new Error("Target parent node is invalid.");
-  const siblings = parent ? parent.children : before.roots;
-  const effectivePosition =
-    position.mode !== "inside" &&
-    !siblings.some((node) => node.id !== moved.id && node.id === position.siblingId)
-      ? { mode: "inside" as const }
-      : position;
-  await moveNodeUnlocked(env, moved.id, parent?.id ?? null, effectivePosition);
 }
 
 export async function deleteNode(

@@ -19,7 +19,8 @@ import {
 import { readCardGoalIds } from "../src/core/card-progress.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { readNode } from "../src/core/node-query.js";
-import { scaffoldInWorkspace, scaffoldTent } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
+import { scaffoldTent } from "../src/core/scaffold.js";
 import { canonicalIdentityError, loadTent } from "../src/core/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { git } from "./helpers.js";

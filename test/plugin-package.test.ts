@@ -215,16 +215,7 @@ test(
     assert.ok(Buffer.byteLength(stop) <= 2048);
     assert.deepEqual(JSON.parse(stop), {});
     const observationDir = path.join(workspace, ".tent", "temp", "observations");
-    const entries = await fs.readdir(observationDir);
-    const logs = entries.filter((name) => name.endsWith(".jsonl"));
-    const baselines = entries.filter((name) => name.endsWith(".baseline.json"));
-    assert.equal(logs.length, 0);
-    assert.equal(baselines.length, 1);
-    const baseline = JSON.parse(
-      await fs.readFile(path.join(observationDir, baselines[0]!), "utf8"),
-    );
-    assert.deepEqual(Object.keys(baseline), ["historyCommit"]);
-    assert.match(baseline.historyCommit, /^[a-f0-9]{40,64}$/);
+    await assert.rejects(fs.access(observationDir), { code: "ENOENT" });
     assert.deepEqual(JSON.parse(await hook("Stop", stopInput)), {});
     await assert.rejects(fs.access(path.join(workspace, ".tent", "temp", "stop-reviews")), {
       code: "ENOENT",

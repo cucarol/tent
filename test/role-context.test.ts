@@ -5,11 +5,11 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import {
   createRoleContext,
   editRoleContext,
-  readRoleContext,
+  requireRoleDocument,
   readRolePage,
   listRoleContexts,
 } from "../src/core/role-context.js";
@@ -56,9 +56,9 @@ test("Role reads use only the selected document, never registry, Node imports or
     writes.push(p);
     await write(p, raw);
   };
-  const document = await readRoleContext(adapter, "role-review", { capture: true });
-  assert.equal(document.body, "Independent instructions.");
-  assert.equal(await adapter.history.read(document.version!), document.raw);
+  const document = await readRolePage(adapter, "role-review", { capture: true, view: "raw" });
+  assert.match(document.text, /Independent instructions./);
+  assert.equal(await adapter.history.read(document.version!), document.text);
   const listed = await listRoleContexts(adapter);
   assert.deepEqual(
     listed.items.map((r) => r.roleId),
@@ -66,7 +66,7 @@ test("Role reads use only the selected document, never registry, Node imports or
   );
   assert.deepEqual(writes, []);
   assert.equal(await read("roles.json"), "invalid legacy registry");
-  await assert.rejects(() => readRoleContext(adapter, "role-missing"), /not found/);
+  await assert.rejects(() => requireRoleDocument(adapter, "role-missing"), /not found/);
 });
 
 test("Role no-op retains exact bytes and explicit edits preserve unknown YAML and local status", async (t) => {
@@ -91,7 +91,7 @@ test("Role no-op retains exact bytes and explicit edits preserve unknown YAML an
     body: "new text\r\n",
     baseEtag: noop.etag,
   });
-  const after = await readRoleContext(adapter, "role-review");
+  const after = await requireRoleDocument(adapter, "role-review");
   assert.equal(after.etag, saved.etag);
   assert.equal(after.raw, raw.replace("old text", "new text"));
   assert.equal(parseFrontmatter(after.raw).data.status, "deprecated");
@@ -184,7 +184,7 @@ test("two CLI processes cannot both save a Role against the same observed bytes"
     results.find((r) => r.exitCode !== 0).stderr,
     /changed|already running another write operation/i,
   );
-  const latest = await readRoleContext(adapter, "role-shared");
+  const latest = await requireRoleDocument(adapter, "role-shared");
   assert.ok(["first", "second"].includes(latest.body));
   assert.match(await adapter.history.read(created.version!), /initial/);
 });
@@ -204,7 +204,7 @@ test("Role CLI works without Service and legacy or missing Roles never become em
   assert.equal(await adapter.readFile("roles.json"), registry);
   const legacy = "---\ntype: role\nroleId: role-old\n---\noriginal\n";
   await adapter.writeFile("roles/role-old.md", legacy);
-  await assert.rejects(() => readRoleContext(adapter, "role-old"), /identity.*path mismatch/);
+  await assert.rejects(() => requireRoleDocument(adapter, "role-old"), /identity.*path mismatch/);
   assert.equal(await adapter.readFile("roles/role-old.md"), legacy);
   assert.ok(
     (await listRoleContexts(adapter)).items.find((r) => r.roleId === "role-old")!.diagnostic,
@@ -257,5 +257,8 @@ test("Role writes canonicalize known Node ids in Markdown links", async (t) => {
     title: "Links",
     body: "[fact](node-fact)",
   });
-  assert.equal((await readRoleContext(adapter, created.roleId)).body, "[fact](../Fact/Fact.md)");
+  assert.equal(
+    (await requireRoleDocument(adapter, created.roleId)).body,
+    "[fact](../Fact/Fact.md)",
+  );
 });

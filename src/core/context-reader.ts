@@ -93,7 +93,6 @@ export class ReaderError extends Error {
   }
 }
 
-const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 export function boundary(text: string, end: number): number {
   if (
     end > 0 &&

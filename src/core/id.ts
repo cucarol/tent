@@ -35,10 +35,6 @@ function makeUniquePrefixedId(
   return id;
 }
 
-export function makeNodeId(rand: RandomSource = Math.random, len = 6): string {
-  return makePrefixedId(NODE_ID_PREFIX, rand, len);
-}
-
 export function makeCardId(rand: RandomSource = Math.random, len = 8): string {
   return makePrefixedId(CARD_ID_PREFIX, rand, len);
 }

@@ -5,7 +5,7 @@ import test, { type TestContext } from "node:test";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {

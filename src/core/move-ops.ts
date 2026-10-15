@@ -61,7 +61,7 @@ export async function moveNode(
   );
 }
 
-// 兼容路径入口 placeNode 复用此实现；调用者必须已持有 Workspace 写锁。
+// 调用者必须已持有 Workspace 写锁。
 export async function moveNodeUnlocked(
   env: OpsEnv,
   nodeId: string,

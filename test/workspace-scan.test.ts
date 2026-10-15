@@ -8,7 +8,7 @@ import { scanWorkspace, formatWorkspaceScan } from "../src/core/workspace-scan.j
 import { readWorkspaceScanRepository, scanFileKind } from "../src/fs/workspace-scan.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { serializeFrontmatter } from "../src/core/frontmatter.js";
 import { git } from "./helpers.js";
 import { testScratchRoot } from "./scratch.js";

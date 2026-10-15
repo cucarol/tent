@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { createNode } from "../src/core/ops.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import {
   materialLocator,
@@ -19,7 +19,11 @@ import { testScratchRoot } from "./scratch.js";
 import type { FsAdapter } from "../src/core/adapter.js";
 import { observeNodeMaterials, nodeSemanticFingerprint } from "../src/core/node-sync-record.js";
 import { writeNodesBatch } from "../src/core/node-write-batch.js";
-import { createRoleContext, editRoleContext, readRoleContext } from "../src/core/role-context.js";
+import {
+  createRoleContext,
+  editRoleContext,
+  requireRoleDocument,
+} from "../src/core/role-context.js";
 import { createCardDocument, verifyCardSourceVersion } from "../src/core/card-document.js";
 import { renameNode } from "../src/core/rename-ops.js";
 import { git } from "./helpers.js";
@@ -297,7 +301,7 @@ test("ordinary .tent files are rejected consistently by new declarations and liv
   await git(path.join(root, ".tent"), "init", "--quiet");
   await adapter.writeFile("attachments/ordinary.md", "ordinary bytes");
   await createRoleContext(adapter, { roleId: "role-review", title: "Review", body: "direction" });
-  const role = await readRoleContext(adapter, "role-review");
+  const role = await requireRoleDocument(adapter, "role-review");
   const live = await readNodeForEdit(adapter, id);
   for (const resource of [
     "/attachments/ordinary.md",

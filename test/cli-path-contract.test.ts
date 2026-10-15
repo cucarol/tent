@@ -5,7 +5,7 @@ import test, { type TestContext } from "node:test";
 import { nodeHelpText, runNodeCommand } from "../src/cli/node-commands.js";
 import { cardHelpText, runCardCommand } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter } from "../src/core/frontmatter.js";
 import { materialLocator } from "../src/core/material.js";
 import { NodeFs } from "../src/fs/node-fs.js";

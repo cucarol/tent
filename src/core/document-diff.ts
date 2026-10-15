@@ -25,7 +25,5 @@ export async function readDocumentDiff(fs: FsAdapter, input: unknown) {
     to,
     pathChanged: from.path !== to.path,
     text,
-    range: { unit: "utf16" as const, start: 0, end: text.length },
-    length: text.length,
   };
 }

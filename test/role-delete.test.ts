@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
-import { createRoleContext, readRoleContext } from "../src/core/role-context.js";
-import { deleteRole, RoleDeleteError } from "../src/core/index.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
+import { createRoleContext, requireRoleDocument } from "../src/core/role-context.js";
+import { deleteRole, RoleDeleteError } from "../src/core/role-delete.js";
 import {
   createCardDocument,
   deprecateCardDocument,
@@ -195,7 +195,7 @@ for (const point of [
     await assert.rejects(deleteRole(adapter, role.roleId, { baseEtag: role.etag }), /injected/);
     assert.equal(await adapter.exists(DELETE_PENDING_PATH), true);
     if (point === "before-move")
-      assert.equal((await readRoleContext(adapter, role.roleId)).etag, role.etag);
+      assert.equal((await requireRoleDocument(adapter, role.roleId)).etag, role.etag);
     else assert.equal(await adapter.exists(role.path), false);
     const restarted = new NodeFs(systemRoot);
     await deleteRole(restarted, role.roleId, { baseEtag: role.etag });

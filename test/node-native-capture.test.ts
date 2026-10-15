@@ -524,20 +524,57 @@ test("an unretained invalid descendant cannot be moved or captured through its v
   assert.equal(await adapter.history.currentCommit(), head);
 });
 
-test("SessionStart records native edits before its history baseline", async (t) => {
+test("SessionStart records pending native edits without writing a session baseline", async (t) => {
   const { workspace, adapter } = await fixture(t);
   const file = "需求/需求.md";
-  const raw = (await adapter.readFile(file)) + "\nNative before hook";
-  await adapter.writeFile(file, raw);
-  const result = await runHookCommand("start", ["--host", "codex"], {
-    packageRoot: path.resolve("."),
-    stdin: JSON.stringify({
-      hook_event_name: "SessionStart",
-      cwd: workspace,
-      session_id: "native-test",
-    }),
+  for (const host of ["codex", "claude-code"]) {
+    const beforeHead = await adapter.history.currentCommit();
+    const raw = (await adapter.readFile(file)) + `\nNative before ${host} hook`;
+    await adapter.writeFile(file, raw);
+    const result = await runHookCommand("start", ["--host", host], {
+      packageRoot: path.resolve("."),
+      stdin: JSON.stringify({
+        hook_event_name: "SessionStart",
+        cwd: workspace,
+        session_id: `native-${host}`,
+      }),
+    });
+    assert.equal(result.exitCode, 0);
+    assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /workspace brief/);
+    const head = await adapter.history.currentCommit();
+    assert.notEqual(head, beforeHead);
+    assert.equal(await adapter.history.read({ commit: head!, path: file }), raw);
+    assert.equal(await adapter.readFile(file), raw);
+    assert.equal(await adapter.exists("temp/observations"), false);
+  }
+});
+
+test("SessionStart takes no write lock and writes no files when no native edits are pending", async (t) => {
+  const { workspace, adapter } = await fixture(t);
+  const file = "需求/需求.md";
+  const beforeHead = await adapter.history.currentCommit();
+  const retained = await adapter.history.read({ commit: beforeHead!, path: file });
+  const raw = await adapter.readFile(file);
+  t.mock.method(NodeFs.prototype, "withLock", () => {
+    throw new Error("SessionStart must not acquire a write lock");
   });
-  assert.equal(result.exitCode, 0);
-  const head = await adapter.history.currentCommit();
-  assert.equal(await adapter.history.read({ commit: head!, path: file }), raw);
+  t.mock.method(NodeFs.prototype, "writeFile", () => {
+    throw new Error("SessionStart must not write files");
+  });
+  for (const host of ["codex", "claude-code"]) {
+    const result = await runHookCommand("start", ["--host", host], {
+      packageRoot: path.resolve("."),
+      stdin: JSON.stringify({
+        hook_event_name: "SessionStart",
+        cwd: workspace,
+        session_id: "native-test",
+      }),
+    });
+    assert.equal(result.exitCode, 0);
+    assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /workspace brief/);
+    assert.equal(await adapter.history.currentCommit(), beforeHead);
+    assert.equal(await adapter.history.read({ commit: beforeHead!, path: file }), retained);
+    assert.equal(await adapter.readFile(file), raw);
+    assert.equal(await adapter.exists("temp/observations"), false);
+  }
 });

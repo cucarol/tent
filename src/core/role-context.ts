@@ -16,19 +16,6 @@ export async function requireRoleDocument(fs: FsAdapter, roleId: string): Promis
   return readRoleDocument(fs, roleId);
 }
 
-/** Selected reads never import a Node, repair files, or resume a pending mutation. */
-export async function readRoleContext(
-  fs: FsAdapter,
-  roleId: string,
-  options: { capture?: boolean } = {},
-): Promise<RoleDocument> {
-  const document = await requireRoleDocument(fs, roleId);
-  const version = options.capture
-    ? await captureReadDocument(fs, document.path, document.raw)
-    : undefined;
-  return { ...document, ...(version ? { version } : {}) };
-}
-
 /** Metadata discovery reads only Role headers; malformed entries remain visible as diagnostics. */
 export async function roleSummaries(fs: FsAdapter) {
   const roles: Array<{
@@ -225,10 +212,6 @@ export function editRoleContext(fs: FsAdapter, roleId: string, input: RoleEdit) 
     },
     { operation: "role.write" },
   );
-}
-
-export function writeRoleContext(fs: FsAdapter, roleId: string, body: string, baseEtag: string) {
-  return editRoleContext(fs, roleId, { body, baseEtag });
 }
 
 async function saveRole(

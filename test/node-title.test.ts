@@ -6,7 +6,7 @@ import { createNode, renameNode } from "../src/core/ops.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
 import { parseFrontmatter } from "../src/core/frontmatter.js";
-import { loadTent, reloadLoadedNode } from "../src/core/tree.js";
+import { loadTent } from "../src/core/tree.js";
 import { scaffoldTent } from "../src/core/scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
@@ -31,7 +31,7 @@ test("Node names follow filenames; writes synchronize existing titles and retain
   await adapter.writeFile("Scoped/Scoped.md", original);
   const tent = await loadTent(adapter);
   assert.equal(tent.byId.get(id)?.name, "Scoped");
-  assert.equal((await reloadLoadedNode(adapter, tent, "Scoped")).name, "Scoped");
+  assert.equal((await loadTent(adapter)).byPath.get("Scoped")!.name, "Scoped");
   assert.equal(await adapter.readFile("Scoped/Scoped.md"), original);
   let edit = await readNodeForEdit(adapter, id);
   await writeNodeDocument(adapter, id, { baseEtag: edit.etag, body: "fact" });

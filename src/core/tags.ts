@@ -38,20 +38,6 @@ export function countNodeTags(
     .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 }
 
-/** Tags are derived from documents; there is no separate vocabulary to update. */
-export function collectNodeTags(tent: { byId: Map<string, Node> }): string[] {
-  return [...new Set([...tent.byId.values()].flatMap((node) => node.tags))].sort((a, b) =>
-    a.localeCompare(b),
-  );
-}
-
-export function findNodesByTag(tent: { byId: Map<string, Node> }, name: string): Node[] {
-  const tag = normalizeTagName(name);
-  return [...tent.byId.values()]
-    .filter((node) => node.tags.includes(tag))
-    .sort((a, b) => a.path.localeCompare(b.path));
-}
-
 /** A document's tags as every reader sees them: trimmed, non-empty, first occurrence kept. */
 export function normalizeNodeTags(value: unknown): string[] {
   if (!Array.isArray(value)) return [];

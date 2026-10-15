@@ -9,7 +9,7 @@ import * as esbuild from "esbuild";
 import { readBuildIdentity, sourceBuildMismatch } from "../src/cli/build-identity.js";
 import { testScratchRoot } from "./scratch.js";
 import { runHookCommand } from "../src/cli/hook.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 const run = promisify(execFile);

@@ -1,7 +1,6 @@
-import type { NodeCatalog } from "./node-catalog.js";
 import type { SessionObservationEvent } from "./session-observations.js";
 import { materialCoverageContains } from "./material-coverage.js";
-import { buildStopMaterialIndex, type StopMaterialIndex } from "./stop-material-index.js";
+import type { StopMaterialIndex } from "./stop-material-index.js";
 import type { StopQuestion } from "./stop-advice.js";
 
 export type StopHost = "codex" | "claude-code";
@@ -11,19 +10,6 @@ export function stopReviewEnvelope(host: StopHost, message: string) {
   return host === "codex"
     ? { decision: "block", reason: message }
     : { hookSpecificOutput: { hookEventName: "Stop", additionalContext: message } };
-}
-
-/** Only this turn's saved writes count; equally specific modules retain shared ownership. */
-export function modulesForObservedTurn(
-  catalog: NodeCatalog,
-  workspaceRoot: string,
-  event: SessionObservationEvent,
-  invalidNodePaths: readonly string[] = [],
-): TurnReviewModule[] {
-  return modulesForIndexedTurn(
-    buildStopMaterialIndex(catalog, workspaceRoot, invalidNodePaths),
-    event,
-  );
 }
 
 export function modulesForIndexedTurn(

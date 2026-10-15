@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { createNode, renameNode, moveNode, archiveNode } from "../src/core/ops.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
@@ -1301,7 +1301,7 @@ test("an issue-tagged output is enough for its goal and clears the brief's goal 
   const goal = await create("Goal", "goal");
   const lonely = await create("Lonely", "goal");
   await create("Question", "prompt", "Lonely");
-  let brief = makeContextBrief(await inspectCurrentContext(fs, workspace));
+  let brief = makeContextBrief(await inspectCurrentContext(fs));
   assert.deepEqual(brief.counts, { ahead: 2, behind: 0 });
   await createNode(env, {
     parentPath: "Goal",
@@ -1316,7 +1316,7 @@ test("an issue-tagged output is enough for its goal and clears the brief's goal 
   assert.deepEqual(sync.nodes.find((node) => node.nodeId === lonely)!.ahead?.reasons, [
     "Goal subtree has no current output Node",
   ]);
-  brief = makeContextBrief(await inspectCurrentContext(fs, workspace));
+  brief = makeContextBrief(await inspectCurrentContext(fs));
   assert.deepEqual(brief.counts, { ahead: 1, behind: 0 });
   assert.deepEqual(
     brief.ahead.map((item) => item.nodeId),

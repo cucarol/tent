@@ -6,7 +6,7 @@ import { nodeHelpText, runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { git } from "./helpers.js";

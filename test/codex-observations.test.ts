@@ -4,9 +4,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
 import { readCodexTurnActivity } from "../src/cli/codex-turn-activity.js";
-import { appendSessionObservations } from "../src/core/session-observations.js";
-import { NodeFs } from "../src/fs/node-fs.js";
-import { observeSessionFile } from "../src/fs/session-observations.js";
 
 const timestamp = "2026-10-04T03:00:00.000Z";
 const start = (turn = "turn") => ({
@@ -82,7 +79,6 @@ test("Codex structured user attachments, completed reads and writes produce only
   );
   assert.ok(activity.observations.every((observation) => observation.eventAt === timestamp));
   assert.deepEqual(activity.signals, ["possible-decision"]);
-  assert.deepEqual(activity.paths, ["src/old.ts", "src/new.ts"]);
   assert.equal(activity.uncertain, false);
   assert.equal(JSON.stringify(activity).includes("SECRET"), false);
   assert.equal(JSON.stringify(activity).includes("guessed.txt"), false);
@@ -114,7 +110,6 @@ test("raw Codex apply_patch custom tool events need a matched successful output;
       output: "Process exited with code 0\nSECRET",
     }),
   ]);
-  assert.deepEqual(activity.paths, ["src/new.ts"]);
   assert.equal(activity.uncertain, true);
   assert.equal(JSON.stringify(activity).includes("SECRET"), false);
   assert.equal(JSON.stringify(activity).includes("guessed.txt"), false);
@@ -157,14 +152,6 @@ test("structured deletions and move sources are activity paths, never written ou
       ["written", "updated.txt"],
     ],
   );
-  assert.deepEqual(activity.paths, [
-    "removed.txt",
-    "old.txt",
-    "moved.txt",
-    "added.txt",
-    "updated.txt",
-  ]);
-  assert.equal(activity.hasFileChanges, true);
   assert.equal(activity.uncertain, false);
   const deletion = await read([
     start(),
@@ -175,8 +162,6 @@ test("structured deletions and move sources are activity paths, never written ou
     }),
   ]);
   assert.deepEqual(deletion.observations, []);
-  assert.deepEqual(deletion.paths, ["only-deleted.txt"]);
-  assert.equal(deletion.hasFileChanges, true);
   assert.equal(deletion.uncertain, false);
   const unknown = await read([
     start(),
@@ -187,7 +172,6 @@ test("structured deletions and move sources are activity paths, never written ou
     }),
   ]);
   assert.deepEqual(unknown.observations, []);
-  assert.deepEqual(unknown.paths, ["unknown.txt", "future.txt"]);
   assert.equal(unknown.uncertain, true);
 });
 
@@ -223,13 +207,6 @@ test("successful raw patch operations record only add/update/move destinations a
     activity.observations.map((event) => event.address),
     ["moved.txt", "added.txt", "updated.txt"],
   );
-  assert.deepEqual(activity.paths, [
-    "removed.txt",
-    "old.txt",
-    "moved.txt",
-    "added.txt",
-    "updated.txt",
-  ]);
   assert.equal(activity.uncertain, false);
   const deletion = await read([
     start(),
@@ -246,44 +223,7 @@ test("successful raw patch operations record only add/update/move destinations a
     }),
   ]);
   assert.deepEqual(deletion.observations, []);
-  assert.deepEqual(deletion.paths, ["removed.txt"]);
-  assert.equal(deletion.hasFileChanges, true);
   assert.equal(deletion.uncertain, false);
-});
-
-test("a proven earlier write missing at Stop has an uncertain version, never a successful output hash", async (t) => {
-  const { workspace, read } = await fixture(t);
-  const filename = path.join(workspace, "later-deleted.txt");
-  await fs.writeFile(filename, "earlier written bytes");
-  const activity = await read([
-    start(),
-    item({
-      type: "FileChange",
-      status: "completed",
-      changes: { "later-deleted.txt": { type: "add" } },
-    }),
-    item({
-      type: "FileChange",
-      status: "completed",
-      changes: { "later-deleted.txt": { type: "delete" } },
-    }),
-  ]);
-  // Preserve the evidenced earlier write, but the final file no longer has observable bytes.
-  assert.deepEqual(
-    activity.observations.map((event) => event.address),
-    ["later-deleted.txt"],
-  );
-  await fs.unlink(filename);
-  const result = await appendSessionObservations(
-    new NodeFs(path.join(workspace, ".tent")),
-    "session",
-    "turn",
-    activity,
-    (address) => observeSessionFile(workspace, address),
-  );
-  assert.equal(result.event.files[0]!.version.state, "uncertain");
-  assert.equal("sha256" in result.event.files[0]!.version, false);
-  assert.equal(result.event.uncertain, true);
 });
 
 test("explicit view_image parameters and local_images are observed without using image bytes", async (t) => {
@@ -374,7 +314,6 @@ test("turn scope rejects foreign items/calls and retains proven files when cance
       "next",
     ),
   ]);
-  assert.deepEqual(activity.paths, ["known.ts"]);
   assert.equal(activity.cancelled, true);
   assert.equal(activity.uncertain, true);
   assert.equal(activity.observations.length, 1);
@@ -394,7 +333,6 @@ test("repeated structured rows dedupe and a clean aborted turn keeps proven even
     { type: "event_msg", payload: { type: "turn_aborted", turn_id: "turn" } },
   ]);
   assert.equal(activity.observations.length, 1);
-  assert.deepEqual(activity.paths, ["known.ts"]);
   assert.equal(activity.cancelled, true);
   assert.equal(activity.uncertain, false);
 });
@@ -456,7 +394,6 @@ test("failed, missing and malicious evidence stays uncertain while known events 
     }),
     response({ type: "function_call", call_id: "pending", name: "exec_command", arguments: "{}" }),
   ]);
-  assert.deepEqual(activity.paths, ["safe.txt"]);
   assert.deepEqual(
     activity.observations.map((file) => file.address),
     ["safe.txt"],
@@ -477,7 +414,6 @@ test("missing turn/transcript and a turn outside the bounded tail never claim ev
   ]);
   await fs.appendFile(log, " ".repeat(8 * 1024 * 1024 + 1));
   assert.deepEqual(await readCodexTurnActivity(log, workspace, "turn"), {
-    paths: [],
     observations: [],
     signals: [],
     uncertain: true,
@@ -489,7 +425,6 @@ test("missing turn/transcript and a turn outside the bounded tail never claim ev
   ]);
   const truncated = await readCodexTurnActivity(log, workspace, "turn");
   assert.equal(truncated.uncertain, true);
-  assert.deepEqual(truncated.paths, ["known.ts"]);
 });
 
 test("intent signals require explicit decisions or requirement changes, not ordinary work requests", async (t) => {
@@ -540,7 +475,6 @@ test("only completed Node/Card writes prove semantic mutation; reads and Role wr
     ]);
     assert.equal(activity.nodeOrCardChanged, true);
     assert.deepEqual(activity.observations, []);
-    assert.deepEqual(activity.paths, []);
   }
   for (const filename of [
     ".tent/roles/role-test.md",

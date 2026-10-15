@@ -15,7 +15,7 @@ import {
   type NodeWriteBatchInput,
 } from "../src/core/node-write-batch.js";
 import { createNode } from "../src/core/ops.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";
 

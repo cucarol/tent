@@ -4,21 +4,19 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { loadNodeCatalog } from "../src/core/node-catalog.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import {
   structureMaterialCoverage,
   materialCoverageContains,
 } from "../src/core/material-coverage.js";
 import {
   formatStopTurnReview,
-  modulesForObservedTurn,
   stopReviewEnvelope,
   TURN_REVIEW_ACTION,
   TURN_REVIEW_RULE,
 } from "../src/core/stop-turn-review.js";
 import type { SessionObservationEvent } from "../src/core/session-observations.js";
 import type { StopQuestion } from "../src/core/stop-advice.js";
-import { readSessionObservations } from "../src/core/session-observations.js";
 import { runHookCommand } from "../src/cli/hook.js";
 import { readClaudeTurnActivity } from "../src/cli/claude-turn-activity.js";
 import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
@@ -29,15 +27,10 @@ import { isUsableNode } from "../src/core/tree.js";
 import { questionsForIndexedTurn } from "../src/core/stop-advice.js";
 
 const event = (files: string[] = []): SessionObservationEvent => ({
-  schema: 1,
-  type: "turn",
-  sessionId: "session",
   turnId: "turn",
-  observedAt: "2026-10-10T00:00:00Z",
   files: files.map((address) => ({
     kind: "written",
     address,
-    version: { state: "uncertain", observedAt: "2026-10-10T00:00:00Z", phase: "stop" },
   })),
   signals: [],
   uncertain: false,
@@ -101,9 +94,8 @@ test("modules require explicit structure sources and retain all equally specific
     "status: deprecated\n",
   );
   const catalog = await loadNodeCatalog(adapter);
-  const modules = modulesForObservedTurn(
-    catalog,
-    root,
+  const modules = modulesForIndexedTurn(
+    buildStopMaterialIndex(catalog, root),
     event(["src/core/card-one.ts", "src/core/other.ts"]),
   );
   assert.deepEqual(modules.map((module) => module.nodeId).sort(), [
@@ -123,20 +115,29 @@ test("modules require explicit structure sources and retain all equally specific
     ".tent/Core/Card/Card.md",
   );
   assert.deepEqual(
-    modulesForObservedTurn(catalog, root, event(["src/core/card-one.ts"]), [
-      ".tent/Core/Card/Card.md",
-      ".tent/AlsoCard/AlsoCard.md",
-    ]).map((module) => module.nodeId),
+    modulesForIndexedTurn(
+      buildStopMaterialIndex(catalog, root, [
+        ".tent/Core/Card/Card.md",
+        ".tent/AlsoCard/AlsoCard.md",
+      ]),
+      event(["src/core/card-one.ts"]),
+    ).map((module) => module.nodeId),
     ["node-core"],
   );
-  assert.deepEqual(modulesForObservedTurn(catalog, root, event()), []);
-  assert.deepEqual(modulesForObservedTurn(catalog, root, event(["uncovered.ts"])), []);
+  assert.deepEqual(modulesForIndexedTurn(buildStopMaterialIndex(catalog, root), event()), []);
   assert.deepEqual(
-    modulesForObservedTurn(catalog, root, { ...event(["src/core/card-one.ts"]), cancelled: true }),
+    modulesForIndexedTurn(buildStopMaterialIndex(catalog, root), event(["uncovered.ts"])),
     [],
   );
   assert.deepEqual(
-    modulesForObservedTurn(catalog, root, {
+    modulesForIndexedTurn(buildStopMaterialIndex(catalog, root), {
+      ...event(["src/core/card-one.ts"]),
+      cancelled: true,
+    }),
+    [],
+  );
+  assert.deepEqual(
+    modulesForIndexedTurn(buildStopMaterialIndex(catalog, root), {
       ...event(["src/core/card-one.ts"]),
       files: event(["src/core/card-one.ts"]).files.map((file) => ({ ...file, kind: "read" })),
     }),
@@ -345,7 +346,7 @@ test("native Stop qualifies writes once, stays silent for active later tools, un
     assert.ok(Buffer.byteLength(first.stdout) <= 2048);
     assert.equal((await hook(host, "qualifies", "src/core/card-one.ts")).stdout, "{}\n");
     assert.equal((await hook(host, "later-tools", "src/core/card-one.ts", true)).stdout, "{}\n");
-    assert.equal((await readSessionObservations(adapter, { sessionId: host })).events.length, 0);
+    assert.equal(await adapter.exists("temp/observations"), false);
     const broken = await runHookCommand("stop", ["--host", host], {
       packageRoot: root,
       stdin: JSON.stringify({ hook_event_name: "Stop", cwd: root, stop_hook_active: true }),
@@ -391,7 +392,7 @@ test("Stop excludes unknown lifecycle from modules and ordinary materials across
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
   const cacheFile = path.join(systemRoot, ".git/tent-material-cache/stop-material-index.json");
   const legacy = JSON.parse(await fs.readFile(cacheFile, "utf8"));
-  legacy.schema = 1;
+  legacy.schema = 2;
   legacy.index.nodes.push({
     nodeId: "node-unknownmodule",
     path: `.tent/${unknownModulePath}`,
@@ -403,7 +404,7 @@ test("Stop excludes unknown lifecycle from modules and ordinary materials across
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 2);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 3);
   assert.deepEqual(modulesForIndexedTurn(expected, event(["unknown/a.ts"])), []);
   assert.deepEqual(questionsForIndexedTurn(expected, event(["only-unknown.txt"])), []);
   const transcript = path.join(root, "unknown-lifecycle.jsonl");

@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { exportGraph } from "../src/fs/graph-export.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { createNode, moveNode, renameNode } from "../src/core/ops.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
@@ -52,7 +52,7 @@ async function fixture(t: TestContext) {
   return { root, system, adapter, env, material, resource };
 }
 
-test("first intent time comes from retained identity history including manual commits and survives rename", async (t) => {
+test("manual intent remains ahead after rename", async (t) => {
   const { adapter, system, env } = await fixture(t);
   const id = "node-intent";
   await adapter.mkdir("Intent");
@@ -62,12 +62,8 @@ test("first intent time comes from retained identity history including manual co
   );
   await git(system, "-c", "core.autocrlf=false", "add", "--", "Intent/Intent.md");
   await git(system, "commit", "-m", "User intent");
-  const head = await adapter.history.currentCommit(),
-    expected = await adapter.history.commitTime(head!);
-  assert.equal(await adapter.history.firstNodeTime(id), expected);
   assert.ok((await inspectNodeSync(adapter, id)).ahead);
   await renameNode(env, id, "Renamed Intent");
-  assert.equal(await new NodeFs(system).history.firstNodeTime(id), expected);
   assert.ok((await inspectNodeSync(adapter, id)).ahead);
 });
 

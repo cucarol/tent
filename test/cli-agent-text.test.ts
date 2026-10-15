@@ -10,7 +10,7 @@ import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { pageItems } from "../src/cli/reader-page.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { createCardDocument, listCardDocuments } from "../src/core/card-document.js";
 import { createRoleContext } from "../src/core/role-context.js";
 import { MUTATION_LOCK_PATH } from "../src/core/paths.js";

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { deleteNode } from "../src/core/ops.js";
 import { loadTent } from "../src/core/tree.js";
 import { nodeNotePath } from "../src/core/paths.js";

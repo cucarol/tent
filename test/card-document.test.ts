@@ -703,7 +703,9 @@ test("Card list batches matching timestamps and excludes untracked handwritten f
     "cards/card-manual.md",
     "---\nid: card-manual\ntype: card\nschemaVersion: 3\nstate: pending\n---\nmanual",
   );
-  const expectedTime = await adapter.history.commitTime(card.version.commit);
+  const expectedTime = (await adapter.history.changesInRange()).find(
+    (entry) => entry.commit === card.version.commit,
+  )!.time;
   const actual = adapter.history.firstCommitTimes.bind(adapter.history);
   const batch = t.mock.method(
     adapter.history,

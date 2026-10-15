@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { runHookCommand } from "../src/cli/hook.js";
 import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
 import { questionsForIndexedTurn } from "../src/core/stop-advice.js";
@@ -72,9 +72,6 @@ async function fixture(t: TestContext) {
 
 test("Stop keeps module and intent review without inspecting unlinked writes", async (t) => {
   const { root, systemRoot, adapter, hook } = await fixture(t);
-  t.mock.method(NodeFs.prototype, "nonignoredFiles", () => {
-    throw new Error("Stop must never inspect unlinked writes");
-  });
   t.mock.method(NodeFs.prototype, "observeMaterial", () => {
     throw new Error("Stop must never observe file availability or versions");
   });
@@ -94,17 +91,11 @@ test("Stop keeps module and intent review without inspecting unlinked writes", a
   );
   assert.equal((notice.reason.match(/^[1-3]\. /gm) ?? []).length, 1);
   assert.equal(await adapter.readFile("Module/Module.md"), before);
-  const observedAt = new Date().toISOString();
   const event: SessionObservationEvent = {
-    schema: 1,
-    type: "turn",
-    sessionId: "session",
     turnId: "two",
-    observedAt,
     files: files.map((address) => ({
       kind: "written",
       address,
-      version: { state: "uncertain", observedAt, phase: "stop" },
     })),
     signals: [],
     uncertain: false,

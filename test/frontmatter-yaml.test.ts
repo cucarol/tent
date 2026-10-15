@@ -6,7 +6,8 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { createNode, moveNode, renameNode } from "../src/core/ops.js";
-import { scaffoldTent, scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
+import { scaffoldTent } from "../src/core/scaffold.js";
 import { nodeNotePath } from "../src/core/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 

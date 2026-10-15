@@ -152,7 +152,6 @@ export type CardDocument = {
 export type SavedCard = { cardId: string; path: string; etag: string };
 
 export const api = {
-  hasToken: () => !!token,
   /** Resolves to null when the snapshot still matches `revision`. */
   snapshot: (revision?: string) =>
     call<Snapshot | null>(

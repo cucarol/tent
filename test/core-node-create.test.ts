@@ -5,7 +5,7 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { loadTent } from "../src/core/tree.js";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter } from "../src/core/frontmatter.js";
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {

@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { GitDocumentHistory } from "../src/core/git-history.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { exportGraph } from "../src/fs/graph-export.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { createNode, renameNode } from "../src/core/ops.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";

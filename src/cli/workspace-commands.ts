@@ -155,7 +155,7 @@ export async function runWorkspaceCommand(
     });
     if (sub === "brief") {
       const brief = makeContextBrief(
-        await inspectCurrentContext(fs, roots.workspaceRoot, {
+        await inspectCurrentContext(fs, {
           roleId: values.role,
           nodes,
         }),

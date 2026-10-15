@@ -23,7 +23,7 @@ import { contentEtag } from "../src/core/etag.js";
 import { serializeFrontmatter, parseFrontmatter } from "../src/core/frontmatter.js";
 import { createCardDocument, verifyCardSourceVersion } from "../src/core/card-document.js";
 import { workspaceMaterialFields, linkOutputResource } from "../src/cli/material-input.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";

@@ -5,10 +5,7 @@ import { NodeFs } from "../fs/node-fs.js";
 import { findTentSystemRoot } from "../core/status.js";
 import { workspaceRootFromSystemRoot } from "../core/paths.js";
 import { stopAdvice } from "../core/stop-advice.js";
-import {
-  saveSessionHistoryBaseline,
-  type SessionObservationEvent,
-} from "../core/session-observations.js";
+import type { SessionObservationEvent } from "../core/session-observations.js";
 import { loadStopMaterialIndex } from "../fs/stop-material-index.js";
 import { claimStopReview, hasStopReviewClaim } from "../fs/stop-review-claim.js";
 import { readCodexTurnActivity } from "./codex-turn-activity.js";
@@ -57,11 +54,8 @@ export async function runHookCommand(
     if (!systemRoot) return silent;
     const workspaceRoot = workspaceRootFromSystemRoot(systemRoot);
     if (!workspaceRoot) throw new Error("Tent requires an in-workspace .tent layout");
-    const fs = new NodeFs(systemRoot);
     if (sub === "start") {
-      await captureNativeNodeEdits(fs);
-      if (typeof event.session_id === "string")
-        await saveSessionHistoryBaseline(fs, event.session_id);
+      await captureNativeNodeEdits(new NodeFs(systemRoot));
       const command = `node ${JSON.stringify(path.join(options.packageRoot, "cli.mjs"))}`;
       const identity = await readBuildIdentity(options.packageRoot);
       const mismatch = await sourceBuildMismatch(workspaceRoot, identity);
@@ -88,17 +82,9 @@ export async function runHookCommand(
         : await readClaudeTurnActivity(event.transcript_path, workspaceRoot, turnId, event.cwd);
     if (activity.cancelled || !activity.observations.some((file) => file.kind === "written"))
       return silent;
-    const observedAt = new Date().toISOString();
     const observed: SessionObservationEvent = {
-      schema: 1,
-      type: "turn",
-      sessionId: event.session_id,
       turnId,
-      observedAt,
-      files: activity.observations.map((file) => ({
-        ...file,
-        version: { state: "uncertain", observedAt, phase: "stop" },
-      })),
+      files: activity.observations,
       signals: activity.signals,
       uncertain: activity.uncertain,
       ...(activity.nodeOrCardChanged ? { nodeOrCardChanged: true } : {}),

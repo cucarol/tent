@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { serializeFrontmatter } from "../src/core/frontmatter.js";
 import { searchNodes } from "../src/core/node-query.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";

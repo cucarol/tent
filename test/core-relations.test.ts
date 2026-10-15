@@ -10,7 +10,7 @@ import { test, type TestContext } from "node:test";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
 import { readNodeForEdit } from "../src/core/node-query.js";
 import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import { loadTent, nodeNotePath } from "../src/core/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 

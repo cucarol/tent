@@ -51,11 +51,7 @@ const itemSchema = z.object({
     .optional(),
   parsed_cmd: z.array(z.object({ type: z.string(), path: z.string().optional() })).optional(),
 });
-export type CodexTurnActivity = SessionObservationActivity & {
-  /** Workspace-relative changed paths, including deletion/move sources, for material advice. */
-  paths: string[];
-  hasFileChanges?: true;
-};
+export type CodexTurnActivity = SessionObservationActivity;
 
 /** Codex transcript events are evidence, not a complete file authorship log. */
 export async function readCodexTurnActivity(
@@ -65,7 +61,6 @@ export async function readCodexTurnActivity(
   sessionCwd = workspaceRoot,
 ): Promise<CodexTurnActivity> {
   const unknownActivity: CodexTurnActivity = {
-    paths: [],
     observations: [],
     signals: [],
     uncertain: true,
@@ -80,11 +75,9 @@ export async function readCodexTurnActivity(
   let turnId: string | undefined,
     uncertain = false,
     cancelled = false,
-    hasFileChanges = false,
     nodeOrCardChanged = false;
   let complete = false;
   const resolver = await createTurnPathResolver(workspaceRoot, sessionCwd);
-  const paths = new Set<string>();
   const observations: SessionFileObservation[] = [];
   const signals = new Set<SessionSignal>();
   const seen = new Set<string>();
@@ -142,10 +135,6 @@ export async function readCodexTurnActivity(
       if (kind !== undefined && !seen.has(key)) {
         seen.add(key);
         observations.push(observation);
-      }
-      if (kind === "written" || kind === undefined) {
-        hasFileChanges = true;
-        if (inside) paths.add(relative!);
       }
     } catch {
       uncertain = true;
@@ -225,9 +214,7 @@ export async function readCodexTurnActivity(
           turnId = payload.turn_id;
           uncertain = false;
           cancelled = false;
-          hasFileChanges = false;
           nodeOrCardChanged = false;
-          paths.clear();
           calls.clear();
           observations.length = 0;
           signals.clear();
@@ -373,12 +360,10 @@ export async function readCodexTurnActivity(
   }
   if (requestedTurnId !== turnId) return unknownActivity;
   return {
-    paths: [...paths],
     observations,
     signals: [...signals],
     uncertain: !complete || uncertain || calls.size > 0,
     ...(cancelled ? { cancelled: true as const } : {}),
-    ...(hasFileChanges ? { hasFileChanges: true as const } : {}),
     ...(nodeOrCardChanged ? { nodeOrCardChanged: true as const } : {}),
   };
 }

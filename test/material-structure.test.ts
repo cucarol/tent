@@ -5,7 +5,7 @@ import path from "node:path";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldInWorkspace } from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 import {
   materialFields,
   materialLocator,

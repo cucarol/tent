@@ -47,12 +47,6 @@ export function isRequirementNode(data: { type?: unknown }): boolean {
 export function isOutputNode(data: { type?: unknown }): boolean {
   return data.type === "output";
 }
-export function nearestGoal(
-  node: CatalogNode,
-  byId: Map<string, CatalogNode>,
-): CatalogNode | undefined {
-  return goalAncestors(node, byId)[0];
-}
 export function goalAncestors(node: CatalogNode, byId: Map<string, CatalogNode>): CatalogNode[] {
   const goals: CatalogNode[] = [];
   let parent = node.parentNodeId ? byId.get(node.parentNodeId) : undefined;

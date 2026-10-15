@@ -4,11 +4,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import {
-  scaffoldInWorkspace,
-  isValidTentIndexMarker,
-  tentIndexMarker,
-} from "../src/core/scaffold.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
+import { isValidTentIndexMarker, tentIndexMarker } from "../src/core/scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 const execute = promisify(execFile);

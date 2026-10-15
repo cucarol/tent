@@ -53,7 +53,10 @@ test("Codex reads past one MiB and repeated contexts to the requested turn's fir
       start("next"),
     ]);
     const activity = await readCodexTurnActivity(f.log, f.root, "target");
-    assert.deepEqual(activity.paths, ["early.ts", "late.ts"]);
+    assert.deepEqual(
+      activity.observations.filter((file) => file.kind === "written").map((file) => file.address),
+      ["early.ts", "late.ts"],
+    );
     assert.equal(activity.uncertain, false);
   }
 });
@@ -68,7 +71,10 @@ test("Codex keeps uncertainty when eight MiB omits the start despite a later sam
     changed("late.ts"),
   ]);
   const activity = await readCodexTurnActivity(f.log, f.root, "target");
-  assert.deepEqual(activity.paths, ["late.ts"]);
+  assert.deepEqual(
+    activity.observations.filter((file) => file.kind === "written").map((file) => file.address),
+    ["late.ts"],
+  );
   assert.equal(activity.uncertain, true);
 });
 
@@ -114,7 +120,6 @@ test("Stop ranks distinct written files before module truncation and leaves unce
       nodeId: `node-${i}`,
       path: `.tent/${i}/${i}.md`,
       names: [`M${i}`],
-      materials: [],
       moduleCoverage: [{ kind: "directory", prefix: `src/${i}/` }],
     })),
   };
@@ -126,15 +131,10 @@ test("Stop ranks distinct written files before module truncation and leaves unce
     "src/0/a.ts",
   ];
   const event: SessionObservationEvent = {
-    schema: 1,
-    type: "turn",
-    sessionId: "session",
     turnId: "turn",
-    observedAt: "2026-10-15T00:00:00Z",
     files: addresses.map((address) => ({
       kind: "written",
       address,
-      version: { state: "uncertain", observedAt: "2026-10-15T00:00:00Z", phase: "stop" },
     })),
     signals: [],
     uncertain: true,

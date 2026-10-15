@@ -8,7 +8,7 @@ export type StopQuestion = {
   answers: string[];
 };
 
-/** Current-turn intent questions; unlinked writes belong to input-side brief. */
+/** Intent questions use only the current turn's explicit signals. */
 export function questionsForIndexedTurn(
   index: StopMaterialIndex,
   event: SessionObservationEvent,
