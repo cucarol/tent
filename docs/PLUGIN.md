@@ -4,7 +4,7 @@
 
 ## 构建与安装
 
-需要 Node.js 22.19+ 和 Git。可从 [0.1.2 Release](https://github.com/cucarol/tent/releases/tag/0.1.2) 下载 `tent-plugin-0.1.2.zip`，解压到准备保留的目录。交付根目录下应同时有 `.agents/plugins/marketplace.json` 和 `plugins/tent/`；使用下方 marketplace 命令安装，无需 npm install。插件运行时只使用 JavaScript、Node 内置模块与静态资源，同一个包可在支持的 Windows、macOS 和 Linux 环境运行。
+需要 Node.js 22.19+ 和 Git。一次构建生成 Codex 与 Claude Code 两个完整插件包，共享同一份 CLI、Web UI、四个 Skill、references 与 SPEC；宿主壳只提供清单、Hook 定义和启动脚本、界面描述与该宿主的 Hook 说明。插件运行时只使用 JavaScript、Node 内置模块与静态资源，可在支持的 Windows、macOS 和 Linux 环境运行，无需 npm install。
 
 从源码构建时执行：
 
@@ -13,18 +13,55 @@ npm ci --ignore-scripts
 npm run plugin:build
 ```
 
-`release/plugins/tent/` 是完整插件；`plugins/tent/` 是源模板。可指定另一个尚不存在的输出目录，如 `release/local/plugins/tent`。构建不会覆盖已有交付或注册全局配置。运行依赖随包携带，安装后不依赖源码仓库的 node_modules、全局 Tent 或下载媒体工具。
+默认交付到尚不存在的 `release/`；也可用 `npm run plugin:build -- .scratch/local-distribution` 指定新的交付根目录。目录结构是：
 
-交付根目录包含本地 marketplace，可通过宿主的插件流程安装：
+```text
+release/
+  codex/
+    .agents/plugins/marketplace.json
+    plugins/tent/
+      .codex-plugin/plugin.json
+      hooks/{hooks.json,session.mjs}
+      skills/<skill>/{SKILL.md,agents/openai.yaml}
+      skills/tent-init/references/host-hooks.md
+      skill-resources/
+      cli.mjs
+      ui-dist/
+      docs/
+  claude-code/
+    .claude-plugin/marketplace.json
+    plugins/tent/
+      .claude-plugin/plugin.json
+      hooks/{hooks.json,session.mjs}
+      skills/<skill>/SKILL.md
+      skills/tent-init/references/host-hooks.md
+      skill-resources/
+      cli.mjs
+      ui-dist/
+      docs/
+```
+
+共用源码在 `skills/`、`skill-resources/` 与 `src/`；宿主壳在 `plugins/codex/tent/` 和 `plugins/claude-code/tent/`。构建只编译一次运行时与 UI，再复制到两个包；共用内容逐字节相同。每个壳的 `host-hooks.md` 原样放入该包的 `skills/tent-init/references/host-hooks.md`，Codex 的 `agents/openai.yaml` 由壳提供。版本统一取自 `package.json`。构建不覆盖已有交付，也不注册全局配置。运行依赖随包携带，安装后不依赖源码仓库的 node_modules 或全局 Tent。
+
+Codex 安装交付中的 `codex/` marketplace：
 
 ```sh
-codex plugin marketplace add "<交付根目录的绝对路径>"
+codex plugin marketplace add "<交付根目录的绝对路径>/codex"
 codex plugin add tent@tent-local
 ```
 
-插件清单位于 `.codex-plugin/plugin.json`，Hook 定义位于 `hooks/hooks.json`。新安装或修改后的 Hook 需要宿主信任审查；不要手写信任值。安装后在实际宿主中检查发现、启用和事件投递，配置文件存在不代表已经生效。
+Claude Code 安装交付中的 `claude-code/` marketplace：
 
-npm 包 `vibe-tent`（Release 中附为 `vibe-tent-0.1.2.tgz`）是单独的 CLI 包，用 `npm install -g vibe-tent` 安装后使用 `tent` 命令。它不是完整的 Codex 插件交付目录。
+```sh
+claude plugin marketplace add "<交付根目录的绝对路径>/claude-code"
+claude plugin install tent@tent-local
+```
+
+两套 marketplace 的本地来源都相对各自根目录指向 `./plugins/tent`。清单分别是 `.codex-plugin/plugin.json` 和 `.claude-plugin/plugin.json`；Hook 定义都在包内的 `hooks/hooks.json`。Codex 使用 `PLUGIN_ROOT`，Claude Code 使用 `CLAUDE_PLUGIN_ROOT` 找到自己的启动脚本，各脚本固定传入自己的宿主名。结构与安装格式依据 [OpenAI 插件打包文档](https://developers.openai.com/plugins/build/plugins)和 [Claude Code marketplace 文档](https://code.claude.com/docs/en/plugin-marketplaces)；Claude Code 壳使用其[插件清单](https://code.claude.com/docs/en/plugins-reference)与 [Hook](https://code.claude.com/docs/en/hooks)标准目录。
+
+新安装或修改后的 Hook 按宿主流程启用和审查；Codex 已发布的 Hook 定义逐字节保留。安装后在实际宿主中检查发现、启用和事件投递，配置文件存在不代表已经生效。
+
+npm 包 `vibe-tent` 是单独的 CLI 包，用 `npm install -g vibe-tent` 安装后使用 `tent` 命令。它不包含完整的宿主插件安装结构。
 
 ## 按需入口
 
@@ -37,7 +74,7 @@ npm 包 `vibe-tent`（Release 中附为 `vibe-tent-0.1.2.tgz`）是单独的 CLI
 
 普通工作不要求创建 Role 或 Card。Role 可以独立建立；没有 Role 的 Session 也可接收无 target 的 Card，有 target 时必须指定对应 Role。初始化不分析项目或生成首批 Node；当前 Agent 在工作中按需维护相关事实，没有额外 Return。
 
-Skill 与 references 只给 Agent 一张清单：何时行动、运行哪条命令带哪些参数、读回执的哪个字段；机制、理由和概念写在本文与 SPEC。每个 SKILL.md 不超过 2 KB；四个 SKILL.md、`skill-resources/references/` 与 `skills/tent-init/references/host-hooks.md` 合计不超过 12 KB，由 `test/contract-docs.test.ts` 检查。reference 只从需要它的 SKILL.md 直接链接，不互相链接，也不链接本文。Skill 不要求每轮固定执行某条命令。
+Skill 与 references 只给 Agent 一张清单：何时行动、运行哪条命令带哪些参数、读回执的哪个字段；机制、理由和概念写在本文与 SPEC。遵循[官方 Skill 编写建议](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices)：每个 SKILL.md 正文少于 500 行；name 不超过 64 个字符，只用小写字母、数字和连字符；description 不超过 1024 个字符，用第三人称说明做什么、何时使用。reference 只从需要它的 SKILL.md 直接链接，不互相链接，也不链接本文；超过 100 行的 reference 开头提供目录。共用 Agent 文字不含宿主名。每次构建和 `test/contract-docs.test.ts` 按两个宿主分别检查这些规则，构建还检查 Hook 指向的包内文件。Skill 不要求每轮固定执行某条命令。
 
 Agent 从 Skill 的实际安装位置调用同包入口：
 

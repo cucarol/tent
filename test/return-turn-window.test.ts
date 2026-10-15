@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { readCodexTurnActivity } from "../src/cli/codex-turn-activity.js";
-import { readClaudeTurnActivity } from "../src/cli/claude-turn-activity.js";
+import { readCodexTurnActivity, codexHookAdapter } from "../src/cli/codex-turn-activity.js";
+import { readClaudeTurnActivity, claudeHookAdapter } from "../src/cli/claude-turn-activity.js";
+import { stopReviewOutput } from "../src/cli/hook-adapter.js";
 import { modulesForIndexedTurn } from "../src/core/stop-turn-review.js";
 import { stopAdvice } from "../src/core/stop-advice.js";
 import type { StopMaterialIndex } from "../src/core/stop-material-index.js";
@@ -144,8 +145,13 @@ test("Stop ranks distinct written files before module truncation and leaves unce
     modulesForIndexedTurn(index, event).map((m) => m.nodeId),
     ["node-6", "node-5", "node-0", "node-1", "node-2", "node-3", "node-4"],
   );
-  for (const host of ["codex", "claude-code"] as const) {
-    const message = stopAdvice(index, event, host)!;
+  for (const adapter of [codexHookAdapter, claudeHookAdapter]) {
+    let message = "";
+    const output = stopReviewOutput(adapter, (budget) => {
+      message = stopAdvice(index, event, budget)!;
+      return message;
+    });
+    assert.ok(output);
     assert.deepEqual(
       [...message.matchAll(/^- .*\((node-\d),/gm)].map((m) => m[1]),
       ["node-6", "node-5", "node-0", "node-1", "node-2"],

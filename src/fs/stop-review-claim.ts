@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import type { StopHost } from "../core/stop-turn-review.js";
 
-function claimPath(systemRoot: string, host: StopHost, sessionId: string, turnId: string) {
+function claimPath(systemRoot: string, host: string, sessionId: string, turnId: string) {
   const key = createHash("sha256")
     .update(JSON.stringify([host, sessionId, turnId]))
     .digest("hex");
@@ -12,7 +11,7 @@ function claimPath(systemRoot: string, host: StopHost, sessionId: string, turnId
 
 export async function hasStopReviewClaim(
   systemRoot: string,
-  host: StopHost,
+  host: string,
   sessionId: string,
   turnId: string,
 ): Promise<boolean> {
@@ -28,7 +27,7 @@ export async function hasStopReviewClaim(
 /** One exclusive per-turn claim, no global lock or retry. A crash can lose a review, never repeat it. */
 export async function claimStopReview(
   systemRoot: string,
-  host: StopHost,
+  host: string,
   sessionId: string,
   turnId: string,
 ): Promise<boolean> {

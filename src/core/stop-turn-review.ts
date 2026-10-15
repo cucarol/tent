@@ -3,14 +3,7 @@ import { materialCoverageContains } from "./material-coverage.js";
 import type { StopMaterialIndex } from "./stop-material-index.js";
 import type { StopQuestion } from "./stop-advice.js";
 
-export type StopHost = "codex" | "claude-code";
 export type TurnReviewModule = { nodeId: string; path: string; names: string[]; files: string[] };
-
-export function stopReviewEnvelope(host: StopHost, message: string) {
-  return host === "codex"
-    ? { decision: "block", reason: message }
-    : { hookSpecificOutput: { hookEventName: "Stop", additionalContext: message } };
-}
 
 export function modulesForIndexedTurn(
   index: StopMaterialIndex,
@@ -57,9 +50,9 @@ const shorten = (value: string, limit: number) =>
         .join("") + "…"
     : value;
 
-/** Budget the complete native JSON. Drop filenames, then modules; keep every question kind. */
+/** Budget UTF-8 text. Drop filenames, then modules; keep every question kind. */
 export function formatStopTurnReview(
-  host: StopHost,
+  textByteLimit: number,
   modules: TurnReviewModule[],
   questions: StopQuestion[],
 ): string | undefined {
@@ -87,8 +80,7 @@ export function formatStopTurnReview(
             `${index + 1}. ${shorten(question.question, questionLimit)}\nOptions: ${question.answers.map((answer) => shorten(answer, questionLimit)).join("; ")}.`,
         ),
     ].join("\n");
-  const fits = () =>
-    Buffer.byteLength(JSON.stringify(stopReviewEnvelope(host, render())) + "\n", "utf8") <= 2048;
+  const fits = () => Buffer.byteLength(render(), "utf8") <= textByteLimit;
   while (!fits() && selected.some((module) => module.files.length))
     [...selected]
       .reverse()

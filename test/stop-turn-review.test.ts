@@ -11,7 +11,6 @@ import {
 } from "../src/core/material-coverage.js";
 import {
   formatStopTurnReview,
-  stopReviewEnvelope,
   TURN_REVIEW_ACTION,
   TURN_REVIEW_RULE,
 } from "../src/core/stop-turn-review.js";
@@ -24,7 +23,10 @@ import { modulesForIndexedTurn } from "../src/core/stop-turn-review.js";
 import { buildStopMaterialIndex } from "../src/core/stop-material-index.js";
 import { createHash } from "node:crypto";
 import { isUsableNode } from "../src/core/tree.js";
-import { questionsForIndexedTurn } from "../src/core/stop-advice.js";
+import { questionsForIndexedTurn, stopAdvice } from "../src/core/stop-advice.js";
+import { codexHookAdapter } from "../src/cli/codex-turn-activity.js";
+import { claudeHookAdapter } from "../src/cli/claude-turn-activity.js";
+import { stopReviewOutput } from "../src/cli/hook-adapter.js";
 
 const event = (files: string[] = []): SessionObservationEvent => ({
   turnId: "turn",
@@ -157,40 +159,64 @@ const questions: StopQuestion[] = [
     answers: ["Update", "Create", "Discussion"],
   },
 ];
+test("Core budgets UTF-8 text independently of any host envelope", () => {
+  const modules = [
+    { nodeId: "node-one", path: "模块/one.md", names: ["模块"], files: ["src/a.ts"] },
+  ];
+  const full = formatStopTurnReview(4096, modules, questions)!;
+  const bytes = Buffer.byteLength(full);
+  assert.ok(bytes > full.length);
+  assert.equal(formatStopTurnReview(bytes, modules, questions), full);
+  const bounded = formatStopTurnReview(bytes - 1, modules, questions)!;
+  assert.ok(Buffer.byteLength(bounded) <= bytes - 1);
+  assert.ok(bounded.includes(TURN_REVIEW_RULE));
+  assert.ok(bounded.includes(TURN_REVIEW_ACTION));
+  assert.equal(formatStopTurnReview(1, modules, questions), undefined);
+});
+
 test("both native envelopes merge all questions and keep fixed text within 2 KiB", () => {
   for (const host of ["codex", "claude-code"] as const) {
+    const adapter = host === "codex" ? codexHookAdapter : claudeHookAdapter;
     const modules = Array.from({ length: 7 }, (_, index) => ({
       nodeId: `node-${index}`,
       path: `Core/Module${index}`,
       names: ["Core", `Module${index}`],
       files: Array.from({ length: 10 }, (_, file) => `src/core/${index}-${file}.ts`),
     }));
-    const message = formatStopTurnReview(host, modules, questions)!;
+    let message = "";
+    const output = stopReviewOutput(adapter, (budget) => {
+      message = formatStopTurnReview(budget, modules, questions)!;
+      return message;
+    })!;
     assert.ok(message.includes(TURN_REVIEW_RULE));
     assert.ok(message.includes(TURN_REVIEW_ACTION));
     assert.equal((message.match(/^[1-3]\. /gm) ?? []).length, 2);
     assert.match(message, /\+\d+ more modules/);
     assert.ok((message.match(/^- /gm) ?? []).length <= 5);
-    assert.ok(Buffer.byteLength(JSON.stringify(stopReviewEnvelope(host, message)) + "\n") <= 2048);
-    const huge = formatStopTurnReview(
-      host,
-      modules.map((module) => ({
-        ...module,
-        path: '模块\\"'.repeat(2000),
-        names: ["名".repeat(2000)],
-      })),
-      questions.map((question) => ({
-        ...question,
-        question: "问题".repeat(2000),
-        answers: question.answers.map(() => "回答".repeat(2000)),
-      })),
-    )!;
+    assert.ok(Buffer.byteLength(output) <= 2048);
+    let huge = "";
+    const hugeOutput = stopReviewOutput(adapter, (budget) => {
+      huge = formatStopTurnReview(
+        budget,
+        modules.map((module) => ({
+          ...module,
+          path: '模块\\"'.repeat(2000),
+          names: ["名".repeat(2000)],
+        })),
+        questions.map((question) => ({
+          ...question,
+          question: '问题\\"\n'.repeat(2000),
+          answers: question.answers.map(() => '回答\\"\t'.repeat(2000)),
+        })),
+      )!;
+      return huge;
+    })!;
     assert.ok(huge.includes(TURN_REVIEW_RULE));
     assert.ok(huge.includes(TURN_REVIEW_ACTION));
     assert.equal((huge.match(/^[1-3]\. /gm) ?? []).length, 2);
-    assert.ok(Buffer.byteLength(JSON.stringify(stopReviewEnvelope(host, huge)) + "\n") <= 2048);
-    assert.equal(formatStopTurnReview(host, [], questions), undefined);
-    const envelope = stopReviewEnvelope(host, "review");
+    assert.ok(Buffer.byteLength(hugeOutput) <= 2048);
+    assert.equal(formatStopTurnReview(2048, [], questions), undefined);
+    const envelope = adapter.stopEnvelope("review");
     assert.deepEqual(
       envelope,
       host === "codex"
@@ -199,6 +225,44 @@ test("both native envelopes merge all questions and keep fixed text within 2 KiB
     );
   }
 });
+
+for (const host of ["codex", "claude-code"] as const) {
+  test(`${host} reclaims filename escaping overhead before dropping the only Node`, () => {
+    const adapter = host === "codex" ? codexHookAdapter : claudeHookAdapter;
+    const boundaryLengths = host === "codex" ? [158, 158, 158, 159] : [156, 154, 154, 153];
+    const cases = [
+      {
+        lengths: Array(4).fill(host === "codex" ? 137 : 132) as number[],
+        file: '"'.repeat(host === "codex" ? 193 : 200),
+        bytes: host === "codex" ? 1856 : 1849,
+      },
+      ...['"', "a", " "].map((file) => ({ lengths: boundaryLengths, file, bytes: 2048 })),
+    ];
+    for (const { lengths, file, bytes } of cases) {
+      const names = lengths.map((length, index) => `${index}${"x".repeat(length - 1)}`);
+      const node = {
+        nodeId: "node-one",
+        path: `.tent/${names.join("/")}/${names.at(-1)}.md`,
+        names,
+        moduleCoverage: [{ kind: "directory" as const, prefix: "" }],
+      };
+      const withoutFilename = formatStopTurnReview(4096, [{ ...node, files: [] }], [])!;
+      const expected = JSON.stringify(adapter.stopEnvelope(withoutFilename)) + "\n";
+      assert.equal(Buffer.byteLength(expected), bytes);
+      const output = stopReviewOutput(adapter, (budget) =>
+        stopAdvice({ nodes: [node] }, event([file]), budget),
+      )!;
+      assert.ok(Buffer.byteLength(output) <= 2048);
+      const envelope = JSON.parse(output);
+      const message =
+        host === "codex" ? envelope.reason : envelope.hookSpecificOutput.additionalContext;
+      assert.ok(message.includes(`(${node.nodeId}, ${node.path})`));
+      assert.ok(message.includes(TURN_REVIEW_RULE));
+      assert.ok(message.includes(TURN_REVIEW_ACTION));
+      assert.equal(output, expected);
+    }
+  });
+}
 
 function claudeTranscript(root: string, promptId: string, tool = "Write", error = false) {
   const file = path.join(root, "src/core/card-one.ts");

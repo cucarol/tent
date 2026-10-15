@@ -11,7 +11,11 @@ const flat = (text: string) => text.replace(/\s+/g, " ");
 
 // Agent-facing text: every SKILL.md, the shared references and the tent-init Hook reference.
 async function agentFacingFiles(): Promise<string[]> {
-  const files = ["skills/tent-init/references/host-hooks.md"];
+  const files = [
+    "plugins/codex/tent/host-hooks.md",
+    "plugins/claude-code/tent/host-hooks.md",
+    "skills/tent-init/references/modules.md",
+  ];
   for (const entry of await fs.readdir(path.join(repoRoot, "skills"), { withFileTypes: true }))
     if (entry.isDirectory()) files.push(`skills/${entry.name}/SKILL.md`);
   for (const name of await fs.readdir(path.join(repoRoot, "skill-resources", "references")))
@@ -19,19 +23,44 @@ async function agentFacingFiles(): Promise<string[]> {
   return files.sort();
 }
 
-test("Agent-facing Skill text stays within its byte budget and links one level deep", async () => {
-  let total = 0;
-  for (const file of await agentFacingFiles()) {
-    const text = await read(file);
-    const bytes = Buffer.byteLength(text, "utf8");
-    total += bytes;
-    if (file.endsWith("/SKILL.md")) assert.ok(bytes <= 2000, `${file}: ${bytes} bytes`);
-    assert.doesNotMatch(text, /Maintainer background|docs\/(?:PLUGIN|SPEC)\.md/, file);
-    assert.doesNotMatch(text, /\\\|/, `${file} escapes a table pipe`);
-    if (!file.endsWith("/SKILL.md"))
-      assert.doesNotMatch(text, /\]\((?![a-z]+:)[^)]*\.md(?:#[^)]*)?\)/, `${file} links a file`);
-  }
-  assert.ok(total <= 12200, `Agent-facing Skill text is ${total} bytes`);
+test("each host's Agent documents follow official Skill limits and reference depth", async () => {
+  const { validateSourceDocuments } = await import(
+    new URL("../scripts/validate-plugin.mjs", import.meta.url).href
+  );
+  for (const host of ["codex", "claude-code"]) await validateSourceDocuments(repoRoot, host);
+});
+
+test("Skill validation follows Markdown semantics and rejects actual nested references", async () => {
+  const { validateDocuments } = await import(
+    new URL("../scripts/validate-plugin.mjs", import.meta.url).href
+  );
+  const skill =
+    '---\nname: example\ndescription: "Reads useful context. Use when context is needed."\n---\n';
+  const file = "skills/example/SKILL.md",
+    reference = "skills/example/references/one.md";
+  const documents = new Map([
+    [file, skill + "[Read][guide]\n\n[guide]: references/one.md"],
+    [reference, "Example: `[Node](other.md)`\n\n```md\n[Node](other.md)\n```"],
+  ]);
+  validateDocuments(documents);
+  documents.set(reference, "[Next][other]\n\n[other]: two.md");
+  assert.throws(() => validateDocuments(documents), /references must not link/);
+  documents.set(reference, "# Guide\n" + "line\n".repeat(100));
+  assert.throws(() => validateDocuments(documents), /table of contents/);
+  documents.set(
+    reference,
+    "# Guide\n\n- [Details][contents]\n\n[contents]: #details\n\n## Details\n" +
+      "line\n".repeat(100),
+  );
+  validateDocuments(documents);
+  documents.set(file, skill + "line\n".repeat(500));
+  assert.throws(() => validateDocuments(documents), /below 500/);
+  documents.set(file, skill.replace("name: example", "name: Example"));
+  assert.throws(() => validateDocuments(documents), /name must use/);
+  documents.set(file, skill.replace("Reads useful context.", "Use this to read context."));
+  assert.throws(() => validateDocuments(documents), /third person/);
+  documents.set(file, skill.replace("Reads useful context.", "Reads " + "x".repeat(1024)));
+  assert.throws(() => validateDocuments(documents), /1024/);
 });
 
 test("material paths are defined once, in node-maintenance", async () => {

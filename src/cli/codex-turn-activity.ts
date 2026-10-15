@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import * as z from "zod/v4";
 import { createTurnPathResolver } from "../core/git-checkout.js";
 import { isHistoryDocument } from "../core/document-history.js";
+import type { HookAdapter } from "./hook-adapter.js";
 import {
   sessionFileObservationSchema,
   type SessionFileObservation,
@@ -52,6 +53,16 @@ const itemSchema = z.object({
   parsed_cmd: z.array(z.object({ type: z.string(), path: z.string().optional() })).optional(),
 });
 export type CodexTurnActivity = SessionObservationActivity;
+
+export const codexHookAdapter: HookAdapter = {
+  turnId(event) {
+    if (typeof event.turn_id !== "string")
+      throw new Error("Stop session and turn identities are required for observations");
+    return event.turn_id;
+  },
+  readActivity: readCodexTurnActivity,
+  stopEnvelope: (message) => ({ decision: "block", reason: message }),
+};
 
 /** Codex transcript events are evidence, not a complete file authorship log. */
 export async function readCodexTurnActivity(

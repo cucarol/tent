@@ -1,6 +1,6 @@
 import type { StopMaterialIndex } from "./stop-material-index.js";
 import type { SessionObservationEvent } from "./session-observations.js";
-import { formatStopTurnReview, modulesForIndexedTurn, type StopHost } from "./stop-turn-review.js";
+import { formatStopTurnReview, modulesForIndexedTurn } from "./stop-turn-review.js";
 
 export type StopQuestion = {
   kind: "possible-intent";
@@ -31,10 +31,10 @@ export function questionsForIndexedTurn(
 export function stopAdvice(
   index: StopMaterialIndex,
   event: SessionObservationEvent,
-  host: StopHost = "codex",
+  textByteLimit: number,
 ): string | undefined {
   return formatStopTurnReview(
-    host,
+    textByteLimit,
     modulesForIndexedTurn(index, event),
     questionsForIndexedTurn(index, event),
   );

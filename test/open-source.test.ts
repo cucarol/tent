@@ -183,12 +183,11 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   }
   assert.equal(pkg.scripts?.["test:grok-e2e"], undefined);
   assert.equal(pkg.scripts?.["test:foreground-e2e"], undefined);
-  // Both languages carry the same install path, the three-type Node model and no release number.
+  // Both languages carry the three-type Node model and no release number.
   assert.match(readme, /`type` is exactly `goal`, `prompt` or `output`/);
   assert.match(readmeZh, /`type` 只能是 `goal`、`prompt` 或 `output`/);
   for (const text of [readme, readmeZh]) {
     assert.match(text, /npm run plugin:build/);
-    assert.match(text, /release\/plugins\/tent/);
     assert.match(text, /codex plugin add tent@tent-local/);
     assert.match(text, /`tags`/);
     assert.match(text, /`decision`/);
@@ -197,6 +196,11 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
     assert.doesNotMatch(text, /\b\d+\.\d+\.\d+\b/, "the release version is set at tag time");
     assert.match(text, /https:\/\/github\.com\/cucarol\/tent\/releases\/latest/);
   }
+  const installation = await fs.readFile(path.join(repoRoot, "docs/PLUGIN.md"), "utf8");
+  for (const host of ["codex", "claude-code"])
+    assert.ok(installation.includes(`plugins/${host}/tent/`));
+  assert.match(installation, /codex plugin marketplace add "<交付根目录的绝对路径>\/codex"/);
+  assert.match(installation, /claude plugin marketplace add "<交付根目录的绝对路径>\/claude-code"/);
   assert.ok(pkg.files.includes("README.zh-CN.md"), "npm package carries the linked Chinese README");
   assert.match(spec, /three semantic concepts are Node, Role, and Card/i);
   assert.match(spec, /Retired commands and wire fields are removed rather than kept as aliases/);
@@ -209,7 +213,12 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
     assert.equal(metadata.name, name);
     assert.equal(typeof metadata.description, "string");
     assert.ok((metadata.description as string).trim());
-    assert.equal(await exists(path.join(repoRoot, "skills", name, "agents", "openai.yaml")), true);
+    assert.equal(
+      await exists(
+        path.join(repoRoot, "plugins", "codex", "tent", "skills", name, "agents", "openai.yaml"),
+      ),
+      true,
+    );
   }
   assert.ok(nodeMaintenance.trim(), "Node maintenance resource must be included");
   assert.ok(recipients.trim(), "Role command resource must be included");

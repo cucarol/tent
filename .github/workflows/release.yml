@@ -69,14 +69,14 @@ jobs:
           console.log(`Release version verified: ${tag}`);
           NODE
 
-      - name: Pack CLI and complete Codex plugin
+      - name: Pack CLI and both host plugins
         shell: bash
         run: |
           npm run plugin:build
           mkdir -p release/assets
           tarball="$(npm pack --ignore-scripts)"
           mv "$tarball" release/assets/
-          (cd release && zip -r "assets/tent-plugin-${{ steps.release.outputs.tag }}.zip" .agents plugins)
+          (cd release && zip -r "assets/tent-plugin-${{ steps.release.outputs.tag }}.zip" codex claude-code)
           cp docs/RELEASE.md release/assets/RELEASE_NOTES.md
 
       - uses: actions/upload-artifact@v4

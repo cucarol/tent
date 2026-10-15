@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import * as z from "zod/v4";
 import { createTurnPathResolver } from "../core/git-checkout.js";
 import { isHistoryDocument } from "../core/document-history.js";
+import type { HookAdapter } from "./hook-adapter.js";
 import type {
   SessionObservationActivity,
   SessionFileObservation,
@@ -44,6 +45,15 @@ const entrySchema = z.object({
     .nullable()
     .optional(),
 });
+
+export const claudeHookAdapter: HookAdapter = {
+  // Older hosts without native prompt identity cannot safely select a turn.
+  turnId: (event) => (typeof event.prompt_id === "string" ? event.prompt_id : undefined),
+  readActivity: readClaudeTurnActivity,
+  stopEnvelope: (message) => ({
+    hookSpecificOutput: { hookEventName: "Stop", additionalContext: message },
+  }),
+};
 
 /** Native Claude prompt_id/promptId, successful paired tool results, no shell inference. */
 export async function readClaudeTurnActivity(
