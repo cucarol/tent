@@ -13,7 +13,7 @@ import {
 } from "../src/core/graph/card-document.js";
 import { generate, replay, shrink, type Sequence } from "./propagation-sequence-model.js";
 
-test("frozen output: ancestor material change keeps the goal ahead and Card awaiting review after goal confirmation", async () => {
+test("frozen output: ancestor material change keeps the goal ahead while Card delivery stays consumed", async () => {
   const fs = new PropagationMemoryFs();
   await scaffoldTent(fs, { name: "Propagation" });
   const env = { fs, clock: { now: () => "2026-10-06T00:00:00.000Z" }, tentName: "Propagation" };
@@ -51,21 +51,21 @@ test("frozen output: ancestor material change keeps the goal ahead and Card awai
   assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
   assert.ok((await inspectNodeSync(fs, outer)).ahead);
   assert.equal(
-    (await listCardDocuments(fs)).items.find((card) => card.cardId === "card-ancestor")!.progress,
-    "needs-review",
+    (await listCardDocuments(fs)).items.find((card) => card.cardId === "card-ancestor")!.state,
+    "consumed",
   );
   await confirmNodeSync(fs, other, { baseEtag: (await readNodeForEdit(fs, other)).etag });
   assert.equal((await inspectNodeSync(fs, outer)).ahead, undefined);
   assert.equal(
-    (await listCardDocuments(fs)).items.find((card) => card.cardId === "card-ancestor")!.progress,
-    "has-output",
+    (await listCardDocuments(fs)).items.find((card) => card.cardId === "card-ancestor")!.state,
+    "consumed",
   );
   assert.ok(
     (await inspectNodeSync(fs, output)).materials.some((material) => material.state === "changed"),
   );
 });
 
-test("deprecated ancestor stays in output dependencies while Card excludes its direct request", async () => {
+test("deprecated ancestor stays in output dependencies without changing Card delivery", async () => {
   const fs = new PropagationMemoryFs();
   await scaffoldTent(fs, { name: "Propagation" });
   const env = { fs, clock: { now: () => "2026-10-06T00:00:00.000Z" }, tentName: "Propagation" };
@@ -105,10 +105,9 @@ test("deprecated ancestor stays in output dependencies while Card excludes its d
     ),
   );
   const card = (await listCardDocuments(fs)).items.find((c) => c.cardId === "card-request")!;
-  assert.equal(card.totalGoalCount, 1);
-  assert.equal(card.progress, "has-output");
-  assert.deepEqual(card.outputNodeIds, [output]);
-  assert.equal(card.reviewOutputNodeIds, undefined);
+  assert.equal(card.state, "consumed");
+  for (const field of ["progress", "totalGoalCount", "outputNodeIds", "reviewOutputNodeIds"])
+    assert.equal(field in card, false, field);
 });
 
 test("propagation oracle rejects explicit unreceived Cards", async () => {

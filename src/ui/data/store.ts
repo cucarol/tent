@@ -9,6 +9,7 @@ import type {
 import { t } from "../i18n.js";
 import { api, describe } from "./api.js";
 import { isDraft } from "./drafts.js";
+import { cardStage } from "./card-state.js";
 
 export type Primary = "goal" | "prompt" | "output";
 
@@ -100,10 +101,7 @@ export function buildGraph(snapshot: Snapshot, visits: Visits | null = null) {
         lane,
         cards: 0,
         waiting: 0,
-        outputs: 0,
-        reviews: 0,
-        goalCount: 0,
-        totalGoalCount: 0,
+        doing: 0,
         old: false,
       };
       byLane.set(lane, hand);
@@ -111,12 +109,7 @@ export function buildGraph(snapshot: Snapshot, visits: Visits | null = null) {
       if (!counted.has(s.id)) {
         if (waits) hand.waiting++;
         else hand.cards++;
-        if (c.progress === "has-output") hand.outputs++;
-        if (c.progress === "needs-review") hand.reviews++;
-        if (c.progress !== null) {
-          hand.goalCount += c.goalCount;
-          hand.totalGoalCount += c.totalGoalCount;
-        }
+        if (cardStage(c) === "doing") hand.doing++;
         counted.add(s.id);
       }
       if (waits && s.changedSince) hand.old = true;
@@ -220,11 +213,8 @@ export type Hand = {
   lane: string;
   cards: number;
   waiting: number;
-  outputs: number;
-  /** Cards whose responding outputs wait for review against a changed goal. */
-  reviews: number;
-  goalCount: number;
-  totalGoalCount: number;
+  /** Received Cards still being done: they are to be returned and have not been yet. */
+  doing: number;
   old: boolean;
 };
 

@@ -38,7 +38,7 @@ import { normalizeTagList } from "../base/tags.js";
 import { ReaderError } from "./context-reader.js";
 import { validateNodeName } from "../store/scaffold.js";
 import { listCardDocuments, readCardDocument } from "./card-document.js";
-import { readCardGoalIds, type CardProgressInput } from "./card-progress.js";
+import { readCardGoalIds, type CardSourceInput } from "./card-context.js";
 import { changedStructureDependencies } from "../base/structure-material.js";
 
 export type NodeSyncState = "synced" | "ahead" | "behind" | "unanchored";
@@ -641,7 +641,7 @@ export function linkNodeOutput(
       if (cardId) {
         let card: Record<string, unknown>;
         try {
-          card = await readCardDocument(fs, cardId, { includeProgress: false });
+          card = await readCardDocument(fs, cardId);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "ENOENT")
             throw new NodeWriteError("INVALID_INPUT", `Card ${cardId} does not exist.`);
@@ -653,9 +653,7 @@ export function linkNodeOutput(
             "Output response requires a current received Card",
           );
         const pinned = (
-          await readCardGoalIds(fs, [
-            { cardId, state: "consumed", sources: card.sources } as CardProgressInput,
-          ])
+          await readCardGoalIds(fs, [{ cardId, sources: card.sources } as CardSourceInput])
         ).get(cardId)!;
         if (
           pinned.diagnostics.length ||
@@ -670,22 +668,20 @@ export function linkNodeOutput(
       } else {
         const listed = await listCardDocuments(fs, { state: "consumed" });
         const candidates = listed.items.filter(
-          (card) =>
-            !card.diagnostic &&
-            (card.progress === "received-no-output" || card.progress === "needs-review"),
+          (card) => !card.diagnostic && typeof card.returnTo === "string",
         );
         const reads = await Promise.all(
           candidates.map(async (card) => {
-            const read = (await readCardDocument(fs, String(card.cardId), {
-              includeProgress: false,
-            })) as Record<string, unknown>;
+            const read = (await readCardDocument(fs, String(card.cardId))) as Record<
+              string,
+              unknown
+            >;
             if (read.diagnostic || !Array.isArray(read.sources)) return undefined;
             return {
               cardId: String(card.cardId),
-              state: "consumed",
               sources: read.sources,
               receivedBy: read.receivedBy,
-            } as CardProgressInput & { receivedBy?: string };
+            } as CardSourceInput & { receivedBy?: string };
           }),
         );
         const cards = reads.filter((card) => card !== undefined);

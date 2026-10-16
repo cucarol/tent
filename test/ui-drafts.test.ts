@@ -10,6 +10,7 @@ import {
   localDraftCards,
   moveCard,
   publishDraft,
+  setDraftReturn,
 } from "../src/ui/data/drafts.js";
 
 function browser(t: TestContext) {
@@ -50,16 +51,19 @@ test("unsent editing, source order, local retargeting and discard never call the
     { resource: "/B/B.md" },
   ];
   const id = createDraft(null, sources);
-  assert.equal(localDraftCards()[0]!.progress, null);
-  assert.equal(localDraftCards()[0]!.totalGoalCount, 0);
+  assert.equal(localDraftCards()[0]!.returnTo, undefined);
+  setDraftReturn(id, "role-ui");
+  assert.equal(localDraftCards()[0]!.returnTo, "role-ui");
   editDraft(id, (input) => ({
     ...input,
     prompt: "Local only",
     sources: [...input.sources].reverse(),
   }));
+  // A Card cannot return to its own receiver: going to the Role it returns to drops the return.
   await moveCard(localDraftCards()[0]!, "role-ui");
   assert.equal(localDraftCards()[0]!.body, "Local only");
   assert.equal(localDraftCards()[0]!.target, "role-ui");
+  assert.equal(localDraftCards()[0]!.returnTo, undefined);
   assert.deepEqual(
     JSON.parse([...data.values()][0]!).map((d: { input: CardInput }) => d.input.sources),
     [[sources[1], sources[0]]],

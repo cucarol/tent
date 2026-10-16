@@ -193,13 +193,22 @@ test("ordinary directories and files cover without becoming modules, structure t
 
 test("module command reports covered root code without ownership and clears it only after module attachment", async (t) => {
   const { root, write, node } = await fixture(t);
+  // A root build script still needs a valid Cargo context; this test isolates ownership.
+  await write("Cargo.toml", '[package]\nname = "fixture"\nversion = "0.1.0"\nedition = "2021"\n');
   await write("build.rs", "fn main() {}\n");
+  await write("src/lib.rs", "pub fn fixture() {}\n");
   await write("src/entry.ts", "export {};\n");
   await write("package.json", "{}\n");
-  await git(root, "add", "build.rs", "src", "package.json");
+  await git(root, "add", "build.rs", "src", "package.json", "Cargo.toml");
   await node(
     "setup1",
-    { sources: [{ resource: "../../build.rs" }, { resource: "../../package.json" }] },
+    {
+      sources: [
+        { resource: "../../build.rs" },
+        { resource: "../../package.json" },
+        { resource: "../../Cargo.toml" },
+      ],
+    },
     "allow:map.unowned",
   );
   await node("source", structure("../../src/"));

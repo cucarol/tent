@@ -61,14 +61,13 @@ const zh = {
     noBody: "正文是空的。",
     noSummary: "还没有简介。",
   },
-  cardProgress: {
+  cardState: {
     pending: "待接收",
-    "received-no-output": "已接收，还没有产出",
-    "needs-review": "待复核",
-    "has-output": "已有产出",
-    partial: "产出还不全",
+    received: "已接收",
+    doing: "在做",
+    returned: "已交回",
+    closed: "已收回",
   },
-  cardReception: { pending: "待接收", consumed: "已接收" },
   side: {
     nav: "导航",
     expand: "展开侧栏",
@@ -115,23 +114,12 @@ const zh = {
     role: (title: string) => `Role ${title}`,
   },
   map: {
-    handed: (
-      role: string | null,
-      cards: number,
-      waiting: number,
-      old: boolean,
-      outputs: number,
-      reviews: number,
-      goalCount: number,
-      totalGoalCount: number,
-    ) =>
+    handed: (role: string | null, cards: number, waiting: number, doing: number, old: boolean) =>
       [
         cards > 0 && (role ? `交给过 ${role} ${cards} 次` : `在公共区被接收 ${cards} 次`),
         waiting > 0 && (role ? `${waiting} 张等 ${role} 接收` : `${waiting} 张在公共区待认领`),
         old && "其中有 Card 固定的是它的旧版本",
-        outputs > 0 && `${outputs} 张 Card 已有产出`,
-        reviews > 0 && `${reviews} 张 Card 的产出待按新要求复核`,
-        totalGoalCount > 1 && `${goalCount}/${totalGoalCount} 个 goal 已有产出`,
+        doing > 0 && `其中 ${doing} 张还在做，做完交回`,
       ]
         .filter(Boolean)
         .join("；"),
@@ -372,13 +360,16 @@ const zh = {
     unfoldAll: "展开工位",
     doingN: (n: number) => `在做 ${n}`,
     waitingN: (n: number) => `待接 ${n}`,
-    reviewN: (n: number) => `复核 ${n}`,
+    returnedN: (n: number) => `待收回 ${n}`,
     draftsN: (n: number) => `草稿 ${n}`,
-    tally: (d: { doing: number; waiting: number; review: number; drafts: number }, role: boolean) =>
+    tally: (
+      d: { doing: number; waiting: number; returned: number; drafts: number },
+      role: boolean,
+    ) =>
       [
         role && `在做 ${d.doing}`,
         `待接 ${d.waiting}`,
-        role && `待复核 ${d.review}`,
+        role && `待收回 ${d.returned}`,
         d.drafts > 0 && `草稿 ${d.drafts}`,
       ]
         .filter(Boolean)
@@ -388,6 +379,13 @@ const zh = {
     emptyRole: (name: string) => `没有等 ${name} 接的 Card`,
     letterDraft: "草稿：点开接着写；可以拖到别的栏",
     letterPub: "已发布：点开看详情；接收之前可以拖到别的栏",
+    letterBack: "交回的结果：点开看详情",
+    toCollect: "待收回",
+    returnTo: "交回给",
+    noReturn: "不用交回",
+    returnTip: "做完把一句结果交回给谁；不选的话，接收就算完成",
+    notToReturner: (name: string) => `这张 Card 要交回给 ${name}，不能再交给 ${name} 做`,
+    returnDropped: (name: string) => `已换到 ${name}，不再交回给它`,
     dropIntoDraft: "松开，放进这张草稿",
     nth: (n: number) => `第 ${n} 个`,
     grab: "拖到别的栏里，交给那个 Role 或放回公共区",
@@ -411,7 +409,6 @@ const zh = {
   },
   page: {
     props: "属性",
-    outputs: "产出",
     versions: "版本",
     versionsNote: "点一个版本看它改了什么",
     attachTip: "放进正在写的草稿；没有草稿就在公共区写一张",
@@ -445,10 +442,13 @@ const zh = {
     canMove: "接收之前还能换",
     receive: "接收",
     thenFixed: "之后位置固定",
-    noOutputYet: "还没有回应它的产出",
-    toReview: (n: number) => `${n} 个产出要按新要求复核`,
-    reviewOutputs: "待复核的产出",
-    reviewOutputsNote: "它们回应过这张 Card，之后对应的 goal 又改了",
+    returnStep: (name: string) => `交回给 ${name}`,
+    doingSub: "正在做，做完交回",
+    toCollect: (name: string) => `等 ${name} 收回`,
+    collected: (name: string) => `${name} 已收回`,
+    result: "交回的结果",
+    returnWho: "回给谁",
+    returnNote: "做完把一句结果交回给这个 Role，它的工位会显示待收回；不选的话，接收就算完成",
     where: "放在哪一栏",
     whereLabel: "放在哪一栏",
     whereNote: "接收之前随时能换，也可以在左边拖",
@@ -537,7 +537,8 @@ const zh = {
     roleArchiveNote: "归档后它不再出现在图谱的工位里，已有的 Card 不变。",
     roleDeleteTitle: (name: string) => `删除 Role「${name}」？`,
     archiveInstead: "改为归档",
-    roleWaiting: (n: number) => `还有 ${n} 张 Card 等它接收。先转给别人或撤销，才能删除。`,
+    roleWaiting: (n: number) =>
+      `还有 ${n} 张 Card 没走完：等它接的、它在做的，或要交回给它的。等接的可以转给别人，其余的撤销后才能删除。`,
     moveTo: "转给…",
     withdrawShort: "撤销",
     withdrawSure: "确认撤销",
@@ -621,14 +622,13 @@ const en: Messages = {
     noBody: "No text yet.",
     noSummary: "No summary yet.",
   },
-  cardProgress: {
+  cardState: {
     pending: "Pending",
-    "received-no-output": "Received, no output yet",
-    "needs-review": "Needs review",
-    "has-output": "Has output",
-    partial: "Some outputs still missing",
+    received: "Received",
+    doing: "In progress",
+    returned: "Returned",
+    closed: "Collected",
   },
-  cardReception: { pending: "Pending", consumed: "Received" },
   side: {
     nav: "Navigation",
     expand: "Expand sidebar",
@@ -675,7 +675,7 @@ const en: Messages = {
     role: (title) => `Role ${title}`,
   },
   map: {
-    handed: (role, cards, waiting, old, outputs, reviews, goalCount, totalGoalCount) =>
+    handed: (role, cards, waiting, doing, old) =>
       [
         cards > 0 &&
           (role
@@ -686,9 +686,7 @@ const en: Messages = {
             ? `${count(waiting, "Card")} waiting for ${role}`
             : `${count(waiting, "Card")} unclaimed in the public area`),
         old && "one pins an older version",
-        outputs > 0 && `${count(outputs, "Card")} with output`,
-        reviews > 0 && `${count(reviews, "Card")} with output to review against a changed goal`,
-        totalGoalCount > 1 && `${goalCount}/${totalGoalCount} goals with output`,
+        doing > 0 && `${count(doing, "Card")} still being done, to be returned`,
       ]
         .filter(Boolean)
         .join("; "),
@@ -930,13 +928,13 @@ const en: Messages = {
     unfoldAll: "Unfold the desks",
     doingN: (n) => `${n} doing`,
     waitingN: (n) => `${n} waiting`,
-    reviewN: (n) => `${n} to review`,
+    returnedN: (n) => `${n} to collect`,
     draftsN: (n) => count(n, "draft"),
     tally: (d, role) =>
       [
         role && `${d.doing} doing`,
         `${d.waiting} waiting`,
-        role && `${d.review} to review`,
+        role && `${d.returned} to collect`,
         d.drafts > 0 && count(d.drafts, "draft"),
       ]
         .filter(Boolean)
@@ -946,6 +944,13 @@ const en: Messages = {
     emptyRole: (name) => `Nothing waiting for ${name}`,
     letterDraft: "Draft: click to keep writing; drag it to another lane",
     letterPub: "Published: click for details; drag it to another lane until it is received",
+    letterBack: "Returned result: click for details",
+    toCollect: "To collect",
+    returnTo: "Return to",
+    noReturn: "No return",
+    returnTip: "Who the one-line result goes back to; with none, receiving finishes the Card",
+    notToReturner: (name) => `This Card returns to ${name}, so it cannot go to ${name}`,
+    returnDropped: (name) => `Moved to ${name}; it no longer returns there`,
     dropIntoDraft: "Drop into this draft",
     nth: (n) => `source ${n}`,
     grab: "Drag to another lane to hand it to that Role or put it back in public",
@@ -971,7 +976,6 @@ const en: Messages = {
   },
   page: {
     props: "Properties",
-    outputs: "Outputs",
     versions: "Versions",
     versionsNote: "Open a version to see what it changed",
     attachTip: "Put it in the draft being written, or start one in the public area",
@@ -1006,10 +1010,14 @@ const en: Messages = {
     canMove: "Can move until received",
     receive: "Received",
     thenFixed: "Then its lane is fixed",
-    noOutputYet: "No output answers it yet",
-    toReview: (n) => `${count(n, "output")} to review against the changed goal`,
-    reviewOutputs: "Outputs to review",
-    reviewOutputsNote: "They answered this Card, then the goal they answer changed",
+    returnStep: (name) => `Return to ${name}`,
+    doingSub: "Being done, then returned",
+    toCollect: (name) => `Waiting for ${name} to collect`,
+    collected: (name) => `Collected by ${name}`,
+    result: "Returned result",
+    returnWho: "Return to",
+    returnNote:
+      "The receiver hands a one-line result back to this Role, whose desk shows it to collect; with none, receiving finishes the Card",
     where: "Lane",
     whereLabel: "Lane",
     whereNote: "Change it any time before it is received, or drag it on the left",
@@ -1102,9 +1110,7 @@ const en: Messages = {
     roleDeleteTitle: (name) => `Delete the Role “${name}”?`,
     archiveInstead: "Archive instead",
     roleWaiting: (n) =>
-      n === 1
-        ? "1 Card still waits for it. Hand it to someone else or withdraw it first."
-        : `${n} Cards still wait for it. Hand them to someone else or withdraw them first.`,
+      `${count(n, "Card")} not finished with it: waiting for it, being done by it, or returning to it. Hand pending ones to someone else; withdraw the rest first.`,
     moveTo: "Hand to…",
     withdrawShort: "Withdraw",
     withdrawSure: "Confirm",

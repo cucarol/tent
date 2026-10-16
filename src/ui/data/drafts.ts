@@ -36,10 +36,7 @@ function changed(save = true) {
         .find(Boolean) ??
       "",
     state: "pending",
-    progress: null,
-    goalCount: 0,
-    totalGoalCount: 0,
-    outputNodeIds: [],
+    ...(input.returnTo ? { returnTo: input.returnTo } : {}),
     target: input.target,
     receivedBy: null,
     status: "stable",
@@ -127,10 +124,25 @@ export function discardDraft(id: string) {
   changed();
 }
 
+/** Who the result comes back to; null means receiving finishes the Card. */
+export function setDraftReturn(id: string, returnTo: string | null) {
+  editDraft(id, (input) => {
+    const next = { ...input };
+    if (returnTo) next.returnTo = returnTo;
+    else delete next.returnTo;
+    return next;
+  });
+}
+
 /** Local targets can change while composing; sent Cards use their observed version. */
 export async function moveCard(card: SnapshotCard, target: string | null) {
   if (isDraft(card)) {
-    editDraft(card.id, (input) => ({ ...input, target }));
+    // A Card cannot return to its own receiver, so going to the Role it returns to drops the return.
+    editDraft(card.id, (input) => {
+      const next = { ...input, target };
+      if (next.returnTo === target) delete next.returnTo;
+      return next;
+    });
     return;
   }
   const doc = await api.card(card.id);

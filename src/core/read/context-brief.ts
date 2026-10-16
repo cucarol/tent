@@ -24,15 +24,13 @@ export async function inspectCurrentContext(
   const syncPromise = Promise.all([nativeNodes, catalog]).then(([nodes, currentCatalog]) =>
     inspectWorkspaceSync(fs, undefined, nodes?.invalidNodes, currentCatalog),
   );
-  const inspections = syncPromise.then((sync) => sync.nodes);
   // Card queries can finish without consuming these shared results. The main
   // syncPromise below remains responsible for reporting capture/sync failures.
   void catalog.catch(() => undefined);
-  void inspections.catch(() => undefined);
   const cardOptions = options.roleId ? { roleId: options.roleId, includeOpen: true } : {};
   const headersPromise = listCardDocumentHeaders(fs, cardOptions);
   const cardsPromise = headersPromise.then((headers) =>
-    listCardDocuments(fs, cardOptions, inspections, catalog, headers),
+    listCardDocuments(fs, cardOptions, headers),
   );
   const [sync, cards, sourceChanges, currentCatalog] = await Promise.all([
     syncPromise,
@@ -166,7 +164,8 @@ export function makeContextBrief(
         (card) =>
           card.status !== "deprecated" &&
           (card.state === "pending" ||
-            (!card.diagnostic && Number(card.goalCount ?? 0) < Number(card.totalGoalCount ?? 0))),
+            (card.state === "consumed" && typeof card.returnTo === "string") ||
+            (card.state === "returned" && (!options.roleId || card.returnTo === options.roleId))),
       )
       .sort((a, b) => String(b.publishedAt ?? "").localeCompare(String(a.publishedAt ?? "")))
       .map((card) => ({
@@ -175,10 +174,9 @@ export function makeContextBrief(
         title: shorten(String(card.title ?? card.cardId), 72),
         state: String(card.state),
         ...(typeof card.diagnostic === "string" ? { reason: card.diagnostic } : {}),
-        progress: typeof card.progress === "string" ? card.progress : undefined,
-        outputCount: Array.isArray(card.outputNodeIds) ? card.outputNodeIds.length : 0,
-        goalCount: Number(card.goalCount ?? 0),
-        totalGoalCount: Number(card.totalGoalCount ?? 0),
+        ...(typeof card.returnTo === "string" ? { returnTo: card.returnTo } : {}),
+        ...(typeof card.receivedBy === "string" ? { receivedBy: card.receivedBy } : {}),
+        ...(typeof card.result === "string" ? { result: card.result } : {}),
       })),
     changedCardSources: context.changedCardSources.items
       .filter((item) =>
@@ -195,7 +193,9 @@ export function makeContextBrief(
   const brief: ContextBrief = {
     counts: { ahead: context.sync.counts.ahead, behind: context.sync.counts.behind },
     invalidNodes: context.sync.invalidNodes ?? [],
-    cardInputs: candidates.cardInputs.filter((item) => item.state === "pending"),
+    cardInputs: candidates.cardInputs.filter(
+      (item) => item.state === "pending" || item.state === "returned",
+    ),
     ahead: [],
     changedCardSources: [],
     behind: [],
@@ -208,7 +208,9 @@ export function makeContextBrief(
       : {}),
     ...(options.roleId ? { roleId: options.roleId } : {}),
   };
-  candidates.cardInputs = candidates.cardInputs.filter((item) => item.state !== "pending");
+  candidates.cardInputs = candidates.cardInputs.filter(
+    (item) => item.state !== "pending" && item.state !== "returned",
+  );
   for (const [key, items] of Object.entries(candidates)) brief.omitted[key] = items.length;
   // Keep room for every category before spending the remaining budget by priority.
   const keys: (keyof typeof candidates)[] = ["ahead", "changedCardSources", "cardInputs", "behind"];
@@ -249,7 +251,7 @@ export function formatContextBrief(brief: ContextBrief): string {
     keyof Pick<ContextBrief, "behind" | "ahead" | "cardInputs" | "changedCardSources">,
     string,
   ][] = [
-    ["cardInputs", "Input Cards (reception does not mean completion)"],
+    ["cardInputs", "Input Cards"],
     ["ahead", "Ahead"],
     ["changedCardSources", "Received Card sources changed; reread current requirements"],
     ["behind", "Behind"],
@@ -267,7 +269,7 @@ export function formatContextBrief(brief: ContextBrief): string {
           ? `${String(item.name ?? "")}; ${String(item.reason ?? "")}`
           : String(item.reason ?? item.title ?? item.kind ?? item.at ?? item.address ?? "");
       lines.push(
-        `- ${identity}${item.path ? ` ${item.path}` : ""}${detail && detail !== identity ? ` ${detail}` : ""}${item.progress || item.state ? ` [${item.progress || item.state}${Number(item.totalGoalCount) > 0 ? ` ${item.goalCount}/${item.totalGoalCount}` : ""}]` : ""}`,
+        `- ${identity}${item.path ? ` ${item.path}` : ""}${detail && detail !== identity ? ` ${detail}` : ""}${item.state ? ` [${item.state}]` : ""}${item.receivedBy ? ` received by ${item.receivedBy}` : ""}${item.returnTo ? ` return to ${item.returnTo}` : ""}${item.result ? `: ${item.result}` : ""}`,
       );
     }
   }

@@ -245,7 +245,7 @@ function value(result: { exitCode: number; stdout: string; stderr: string }) {
   return JSON.parse(result.stdout);
 }
 
-test("Card list reads live headers and diagnostics while retaining progress without capture", async (t) => {
+test("Card list reads live headers and diagnostics without derived progress or capture", async (t) => {
   const { root, globals } = await fixture(t);
   const goal = value(
     await runNodeCommand("create", ["Goal", "--type", "goal", "--body", "Deliver"], globals),
@@ -273,7 +273,7 @@ test("Card list reads live headers and diagnostics while retaining progress with
   assert.equal(listed.items.length, 1);
   assert.equal(listed.items[0].title, "Live title");
   assert.equal(listed.items[0].state, "consumed");
-  assert.equal(listed.items[0].progress, "pending");
+  assert.equal("progress" in listed.items[0], false);
   assert.equal(listed.items[0].uncaptured, true);
   assert.equal(
     value(await runCardCommand("list", ["--state", "pending"], globals)).items.length,
@@ -292,7 +292,7 @@ test("Card list reads live headers and diagnostics while retaining progress with
   const unavailable = value(await runCardCommand("list", [], globals)).items[0];
   assert.match(unavailable.diagnostic, /header unavailable/);
   assert.equal(unavailable.title, undefined);
-  assert.equal(unavailable.progress, undefined);
+  assert.equal("progress" in unavailable, false);
   assert.equal(unavailable.uncaptured, true);
   const text = await runCardCommand("list", [], { workspace: root });
   assert.equal(text.exitCode, 0, text.stderr);

@@ -12,6 +12,7 @@ import {
   createCardDocument,
   readCardDocument,
   takeCardDocument,
+  returnCardDocument,
   listCardDocuments,
   watchCardDocuments,
   moveCardDocument,
@@ -38,23 +39,29 @@ export async function runCardCommand(
   if (!sub || ["help", "--help", "-h"].includes(sub) || args.includes("--help"))
     return { exitCode: 0, stdout: cardHelpText(sub), stderr: "" };
   try {
-    if (!["create", "move", "deprecate", "list", "get", "show", "take", "watch"].includes(sub))
+    if (
+      !["create", "move", "deprecate", "list", "get", "show", "take", "return", "watch"].includes(
+        sub,
+      )
+    )
       throw new Error(`Unknown card command: ${sub}`);
     const fields = [
       "workspace",
       ...(sub === "create"
-        ? ["prompt", "title", "target", "id"]
-        : sub === "move"
-          ? ["to", "base-etag"]
-          : sub === "deprecate"
-            ? ["base-etag"]
-            : sub === "list"
-              ? ["role", "state", "start", "limit", "expected-revision"]
-              : sub === "watch"
-                ? ["role", "timeout"]
-                : ["show", "get"].includes(sub)
-                  ? ["view", "start", "end", "expected-etag"]
-                  : ["role"]),
+        ? ["prompt", "title", "target", "return-to", "id"]
+        : sub === "return"
+          ? ["role", "result"]
+          : sub === "move"
+            ? ["to", "base-etag"]
+            : sub === "deprecate"
+              ? ["base-etag"]
+              : sub === "list"
+                ? ["role", "state", "start", "limit", "expected-revision"]
+                : sub === "watch"
+                  ? ["role", "timeout"]
+                  : ["show", "get"].includes(sub)
+                    ? ["view", "start", "end", "expected-etag"]
+                    : ["role"]),
     ];
     const { values, positionals } = parseArgs({
       args,
@@ -95,8 +102,15 @@ export async function runCardCommand(
       throw new Error("Supply both --start and --end");
     if (["get", "show"].includes(sub) && number("start")! > 0 && !value("expected-etag"))
       throw new Error("--start after zero requires --expected-etag from the previous page");
-    if (value("state") !== undefined && !["pending", "consumed"].includes(value("state")!))
+    if (
+      value("state") !== undefined &&
+      !["pending", "consumed", "returned", "closed"].includes(value("state")!)
+    )
       throw new Error("Invalid --state");
+    if (sub === "return" && value("result") === undefined)
+      throw new Error("Return requires --result TEXT");
+    if (sub === "return" && !value("role"))
+      throw new Error("Return requires --role role-ID, the Role that took the Card.");
     if (sub === "deprecate" && !value("base-etag"))
       throw new Error(`${sub} requires --base-etag from a raw read`);
     if (
@@ -108,7 +122,7 @@ export async function runCardCommand(
       cwd: globals.cwd,
       workspace: value("workspace") ?? globals.workspace,
     });
-    const mutation = ["create", "move", "deprecate", "take"].includes(sub);
+    const mutation = ["create", "move", "deprecate", "take", "return"].includes(sub);
     const fs = new NodeFs(systemRoot, "cli"),
       id = positionals[0]!;
     let result: unknown;
@@ -128,9 +142,11 @@ export async function runCardCommand(
               ? JSON.stringify(items)
               : items
                   .map((item) =>
-                    [item.cardId, item.title?.replace(/\s+/g, " "), item.take]
-                      .filter(Boolean)
-                      .join("  "),
+                    item.state === "returned"
+                      ? `${item.cardId} returned by ${item.receivedBy}: ${item.result}`
+                      : [item.cardId, item.title?.replace(/\s+/g, " "), item.take]
+                          .filter(Boolean)
+                          .join("  "),
                   )
                   .join("\n")) + "\n",
         stderr: "",
@@ -164,10 +180,15 @@ export async function runCardCommand(
         prompt,
         title: value("title"),
         target: value("target"),
+        returnTo: value("return-to"),
         ...material,
       });
-    } else if (sub === "deprecate")
-      result = await deprecateCardDocument(fs, id, value("base-etag")!);
+    } else if (sub === "return")
+      result = await returnCardDocument(fs, id, {
+        roleId: value("role")!,
+        result: value("result")!,
+      });
+    else if (sub === "deprecate") result = await deprecateCardDocument(fs, id, value("base-etag")!);
     else if (sub === "move")
       result = await moveCardDocument(fs, id, {
         target: values.public === true ? null : value("to")!,
@@ -246,13 +267,14 @@ export async function runCardCommand(
 
 export function cardHelpText(_sub?: string) {
   return `tent card — recorded prompt input with optional Role context
-  tent card create --prompt TEXT|- [--title TEXT] [--source NODE-ID|PATH|JSON ...] [--target role-ID] [--id card-ID]
-  tent card list [--role role-ID --include-open] [--state pending|consumed] [--include-deprecated]
+  tent card create --prompt TEXT|- [--title TEXT] [--source NODE-ID|PATH|JSON ...] [--target role-ID] [--return-to role-ID] [--id card-ID]
+  tent card list [--role role-ID --include-open] [--state pending|consumed|returned|closed] [--include-deprecated]
                  [--start N --expected-revision HASH] [--limit N]
   tent card show card-ID [--view body|raw] [--start N --end N --expected-etag HASH]
   tent card move card-ID (--to role-ID | --public) --base-etag HASH
   tent card deprecate card-ID --base-etag HASH
   tent card take card-ID [--role role-ID]
+  tent card return card-ID --role role-ID --result TEXT
   tent card watch --role role-ID [--timeout SECONDS]
 All commands accept --workspace PATH and --json. CLI output is paged; Core returns complete data.
 list prints newest first; --start N continues the same page set under --expected-revision.
@@ -264,11 +286,11 @@ Git Bash rewrites arguments that start with / (such as /docs/req.md) into Window
 A ./, / or .tent/ source that names no existing file, directory, Node or Role prints a warning on stderr; the Card still keeps it.
 Show is a preview; take records reception and returns an input page. A replay is not a new execution.
 Use page.next for long input. Put requirements in Nodes; a Card briefly points to them. Update Nodes when requirements change.
-Targeted Cards require their Role; untargeted Cards can be received without one.
-Watch reads committed pending Cards for exactly that Role, writes no files, and exits when input exists.
+Targeted Cards require their Role; untargeted Cards without returnTo can be received without one.
+Watch reads committed pending Cards addressed to that Role and returned Cards whose returnTo names it, writes no files, and exits when input exists.
 It checks HEAD every 3 seconds; omit --timeout to wait indefinitely, or use 0 for one immediate check.
 Watch exit codes: 0 = Cards (one line per Card, or a JSON array); 2 = timeout (no output); 1 = error.
-Progress counts current output Nodes, whatever their tags, whose sources explicitly name this Card. goalCount counts pinned goals containing those outputs; while a pinned goal is ahead, its responses stay in needs-review. Generated/verified timestamps on current outputs provide completion times. Progress reads current documents without replaying history.
+Cards track delivery only: pending, then consumed; with returnTo, then returned and closed. Without returnTo, take completes a Card. With returnTo, the receiving Role returns one line of at most 200 characters, details in Nodes, and the returnTo Role takes the Card again to close it. An identical return or take is a replay; a different result is rejected.
 Only published pending Cards can move. Requirements awaiting a decision belong in Nodes marked status: draft.
 Cancelled published tasks can be deprecated without changing their input or reception. Deprecated Cards are excluded from lists by default.
 `;
@@ -339,11 +361,14 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
     target?: string;
     state?: string;
     status?: string;
+    returnTo?: string;
+    result?: string;
+    replayed?: boolean;
     etag?: string;
     path?: string;
   };
   if (sub === "create")
-    return `cardId: ${identity.cardId}\ntarget: ${target ?? "public"}\nstate: ${identity.state}`;
+    return `cardId: ${identity.cardId}\ntarget: ${target ?? "public"}\nstate: ${identity.state}${identity.returnTo ? `\nreturnTo: ${identity.returnTo}` : ""}`;
   const header = [
     [identity.cardId, identity.title, identity.path].filter(Boolean).join("  "),
     "target" in identity ? `Target: ${identity.target ?? target ?? "public"}` : undefined,
@@ -354,9 +379,9 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
   if (["show", "get", "take"].includes(sub)) {
     const result = value as {
       state?: string;
-      progress?: string | null;
-      goalCount?: number;
-      totalGoalCount?: number;
+      returnTo?: string;
+      receivedBy?: string;
+      result?: string;
       diagnostic?: string | { code: string; message: string };
       notice?: string;
       replayed?: boolean;
@@ -366,15 +391,9 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
     return [
       header,
       result.replayed !== undefined ? `Replayed: ${result.replayed}` : undefined,
-      [
-        result.state,
-        result.progress,
-        (result.totalGoalCount ?? 0) > 1
-          ? `${result.goalCount}/${result.totalGoalCount}`
-          : undefined,
-      ]
-        .filter(Boolean)
-        .join("  "),
+      result.state,
+      result.returnTo ? `Return to: ${result.returnTo}` : undefined,
+      result.result ? `Result: ${result.result}` : undefined,
       result.notice,
       typeof result.diagnostic === "object"
         ? `${result.diagnostic.code}: ${result.diagnostic.message}`
@@ -393,9 +412,8 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
         cardId: string;
         state?: string;
         status?: string;
-        progress?: string | null;
-        goalCount?: number;
-        totalGoalCount?: number;
+        returnTo?: string;
+        result?: string;
         title?: string;
         publishedAt?: string;
         diagnostic?: string;
@@ -409,8 +427,8 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
           [
             item.cardId,
             item.state,
-            item.progress,
-            (item.totalGoalCount ?? 0) > 1 ? `${item.goalCount}/${item.totalGoalCount}` : undefined,
+            item.returnTo ? `returnTo: ${item.returnTo}` : undefined,
+            item.result,
             item.status === "deprecated" ? item.status : undefined,
             item.title,
             item.publishedAt,
@@ -423,5 +441,5 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
         .join("\n") + (result.page.hasMore ? `\nNext: ${JSON.stringify(result.page.next)}` : "")
     );
   }
-  return `${header}\nState: ${identity.state ?? sub}${identity.status ? `\nStatus: ${identity.status}` : ""}`;
+  return `${header}\nState: ${identity.state ?? sub}${identity.status ? `\nStatus: ${identity.status}` : ""}${identity.returnTo ? `\nReturn to: ${identity.returnTo}` : ""}${identity.result ? `\nResult: ${identity.result}` : ""}${identity.replayed !== undefined ? `\nReplayed: ${identity.replayed}` : ""}`;
 }

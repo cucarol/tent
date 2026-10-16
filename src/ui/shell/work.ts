@@ -3,6 +3,7 @@ import type { Mood } from "../components/Pet.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cardTitle, type Graph } from "../data/store.js";
 import type { SnapshotCard } from "../data/types.js";
+import { cardStage, resultParts } from "../data/card-state.js";
 import {
   createDraft,
   discardDraft,
@@ -10,6 +11,7 @@ import {
   isDraft,
   moveCard,
   publishDraft,
+  setDraftReturn,
   useDraft,
   type Draft,
 } from "../data/drafts.js";
@@ -23,28 +25,32 @@ export const PUBLIC = "";
 
 export type Work = ReturnType<typeof useWork>;
 
-/** What a robot has in hand: Cards it received and has not answered, waiting for it, awaiting review. */
-export type Desk = { doing: number; waiting: number; review: number; drafts: number };
+/** What a robot has in hand: Cards it is doing, Cards waiting for it, results returned to it, drafts. */
+export type Desk = { doing: number; waiting: number; returned: number; drafts: number };
 
 /**
- * The Cards on a lane's desk: received and not answered yet, or awaiting review, as the Card reads say.
- * Finished and withdrawn Cards are off it.
+ * A robot is doing while it holds a Card to return, waiting when only Cards to take or results to collect
+ * are left.
  */
-/** A robot is doing when it holds a received Card, waiting when only Cards to take are left. */
 export function moodOf(desk: Desk, gone: boolean): Mood | undefined {
   if (gone) return "gone";
   if (desk.doing > 0) return "doing";
-  if (desk.waiting > 0) return "waiting";
+  if (desk.waiting > 0 || desk.returned > 0) return "waiting";
   return undefined;
 }
 
-export function onDesk(card: SnapshotCard) {
-  return (
-    card.status !== "deprecated" &&
-    (card.state === "pending" ||
-      card.progress === "received-no-output" ||
-      card.progress === "needs-review")
-  );
+/**
+ * The lane whose desk holds a Card: pending Cards wait in their lane, Cards being done sit with their
+ * receiver, and returned ones wait for the Role they return to. Null once it is off every desk: received
+ * without a return, collected, or withdrawn.
+ */
+export function deskOf(card: SnapshotCard, laneOf: (card: SnapshotCard) => string) {
+  if (card.status === "deprecated") return null;
+  const stage = cardStage(card);
+  if (stage === "pending") return laneOf(card);
+  if (stage === "doing") return card.receivedBy;
+  if (stage === "returned") return card.returnTo ?? null;
+  return null;
 }
 
 /** A draft's sources as the Nodes and Roles they name, in order; addresses outside Tent are null. */
@@ -57,7 +63,7 @@ export function sourceIds(graph: Graph, card: SnapshotCard | undefined, draft: D
 export function carried(graph: Graph, laneOf: (card: SnapshotCard) => string, lane: string) {
   const ids = new Set<string>();
   for (const c of graph.snapshot.cards)
-    if (laneOf(c) === lane && onDesk(c)) for (const s of c.sources) if (s.id) ids.add(s.id);
+    if (deskOf(c, laneOf) === lane) for (const s of c.sources) if (s.id) ids.add(s.id);
   return ids;
 }
 
@@ -126,21 +132,24 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     },
     [graph, laneOf, openDraft],
   );
+  /** Results returned to a lane's Role and not collected yet, newest first. */
+  const laneReturned = useCallback(
+    (lane: string) =>
+      (graph?.snapshot.cards ?? [])
+        .filter((c) => c.status !== "deprecated" && c.state === "returned" && c.returnTo === lane)
+        .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")),
+    [graph],
+  );
   const desk = useCallback(
     (lane: string): Desk => {
       const here = laneCards(lane);
-      const mine = (graph?.snapshot.cards ?? []).filter(
-        (c) => c.receivedBy === lane && c.status !== "deprecated",
-      );
       const drafts = here.filter(isDraft).length;
-      return {
-        doing: mine.filter((c) => c.progress === "received-no-output").length,
-        waiting: here.length - drafts,
-        review: mine.filter((c) => c.progress === "needs-review").length,
-        drafts,
-      };
+      const doing = (graph?.snapshot.cards ?? []).filter(
+        (c) => c.status !== "deprecated" && c.receivedBy === lane && cardStage(c) === "doing",
+      ).length;
+      return { doing, waiting: here.length - drafts, returned: laneReturned(lane).length, drafts };
     },
-    [graph, laneCards],
+    [graph, laneCards, laneReturned],
   );
   // A Role deleted since keeps its id on the Cards it received, marked as gone.
   const laneName = (lane: string) =>
@@ -148,6 +157,9 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
       ? t.work.public
       : (graph?.roles.get(lane)?.title ?? (graph ? t.work.goneRole(lane) : lane));
   const resourceOf = (nodeId: string) => `/${graph!.nodes.get(nodeId)!.notePath}`;
+  /** Roles a draft's result can come back to: available ones other than the lane it is going to. */
+  const returnChoices = (card: SnapshotCard) =>
+    (graph?.snapshot.roles ?? []).filter((r) => r.status !== "deprecated" && r.id !== laneOf(card));
 
   const newCard = async (target: string | null, nodeIds: string[] = []) => {
     try {
@@ -199,6 +211,12 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
       toast(t.work.fixed);
       return;
     }
+    // A published Card cannot go to the Role it returns to; a draft drops the return instead.
+    if (card.returnTo === lane && !isDraft(card)) {
+      toast(t.work.notToReturner(laneName(lane)));
+      return;
+    }
+    const dropsReturn = card.returnTo === lane;
     setMoved((m) => new Map([...m, [cardId, lane]]));
     setLanded({ lane, at: Date.now() });
     try {
@@ -206,7 +224,9 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
       toast(
         lane === PUBLIC
           ? t.work.movedPublic(title(card))
-          : t.work.movedTo(title(card), laneName(lane)),
+          : dropsReturn
+            ? t.work.returnDropped(laneName(lane))
+            : t.work.movedTo(title(card), laneName(lane)),
       );
     } catch (error) {
       setMoved((m) => new Map([...m].filter(([id]) => id !== cardId)));
@@ -246,7 +266,7 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     }
   };
 
-  // An archived Role takes no new Cards; its lane stays only while a pending Card still waits there.
+  // An archived Role takes no new Cards; its lane stays only while a Card or a result still waits there.
   const lanes = useMemo(
     () =>
       graph
@@ -257,7 +277,10 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
                 (r) =>
                   r.status !== "deprecated" ||
                   graph.snapshot.cards.some(
-                    (c) => c.target === r.id && c.state === "pending" && c.status !== "deprecated",
+                    (c) =>
+                      c.status !== "deprecated" &&
+                      ((c.target === r.id && c.state === "pending") ||
+                        (c.returnTo === r.id && c.state === "returned")),
                   ),
               )
               .map((r) => r.id),
@@ -275,7 +298,13 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
         if (!lanes.includes(id)) return false;
         if (item.kind === "node") return true;
         const card = graph.cards.get(item.id);
-        return !!card && card.state === "pending" && !card.receivedBy && laneOf(card) !== id;
+        return (
+          !!card &&
+          card.state === "pending" &&
+          !card.receivedBy &&
+          laneOf(card) !== id &&
+          (isDraft(card) || card.returnTo !== id)
+        );
       }
       if (kind === "card" && item.kind === "node") {
         if (publishing === id) return false;
@@ -305,8 +334,16 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     lanes,
     laneOf,
     laneCards,
+    laneReturned,
     desk,
     laneName,
+    returnChoices,
+    setReturn: setDraftReturn,
+    /** A returned result with its Node ids read as the Nodes' names. */
+    resultText: (result: string) =>
+      resultParts(result)
+        .map((p) => ("nodeId" in p ? (graph?.nodes.get(p.nodeId)?.name ?? p.nodeId) : p.text))
+        .join(""),
     gone: (lane: string) => lane !== PUBLIC && !!graph && !graph.roles.has(lane),
     newCard,
     attach,

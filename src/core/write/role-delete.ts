@@ -12,7 +12,7 @@ export class RoleDeleteError extends Error {
   readonly code = "PENDING_CARDS";
   constructor(readonly details: { cardIds: string[] }) {
     super(
-      `Role has pending Cards: ${details.cardIds.join(", ")}. Move or deprecate them before deleting it.`,
+      `Role has unfinished Cards: ${details.cardIds.join(", ")}. Deprecate them, or move pending ones, before deleting it.`,
     );
     this.name = "RoleDeleteError";
   }
@@ -47,9 +47,12 @@ export async function deleteRole(fs: FsAdapter, roleId: string, input: { baseEta
           continue;
         }
         if (
-          card.data.state === "pending" &&
-          card.data.target === roleId &&
-          documentLifecycle(card.data).status !== "deprecated"
+          documentLifecycle(card.data).status !== "deprecated" &&
+          ((card.data.state === "pending" && card.data.target === roleId) ||
+            (card.data.state !== "closed" && card.data.returnTo === roleId) ||
+            (card.data.state === "consumed" &&
+              card.data.returnTo !== undefined &&
+              card.data.receivedBy === roleId))
         )
           cardIds.push(id);
       }

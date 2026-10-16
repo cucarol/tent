@@ -12,6 +12,7 @@ import {
   moveCardDocument,
   takeCardDocument,
   parseCardDocument,
+  returnCardDocument,
   verifyCardSourceVersion,
 } from "../src/core/graph/card-document.js";
 import { checkGraph } from "../src/core/check/graph-check.js";
@@ -130,6 +131,83 @@ test("pending targeted Cards list every blocker; moving and cancelling them perm
   assert.equal(await adapter.readFile(second.path), cancelled);
 });
 
+test("unfinished returns protect both Roles and release each at its delivery boundary", async (t) => {
+  const { adapter, role } = await fixture(t);
+  const worker = await createRoleContext(adapter, { roleId: "role-worker", title: "Worker" });
+  const cards = [];
+  for (const suffix of ["pending", "consumed", "returned", "closed"])
+    cards.push(
+      await createCardDocument(adapter, {
+        cardId: `card-${suffix}`,
+        prompt: suffix,
+        target: worker.roleId,
+        returnTo: role.roleId,
+      }),
+    );
+  for (const card of cards.slice(1)) await takeCardDocument(adapter, card.cardId, worker.roleId);
+  for (const card of cards.slice(2))
+    await returnCardDocument(adapter, card.cardId, { roleId: worker.roleId, result: "done" });
+  await takeCardDocument(adapter, cards[3]!.cardId, role.roleId);
+  const head = await adapter.history.currentCommit();
+  for (const [subject, blockers] of [
+    [role, ["card-consumed", "card-pending", "card-returned"]],
+    [worker, ["card-consumed", "card-pending"]],
+  ] as const) {
+    await assert.rejects(
+      deleteRole(adapter, subject.roleId, { baseEtag: subject.etag }),
+      (error) => {
+        assert.ok(error instanceof RoleDeleteError);
+        assert.deepEqual(error.details.cardIds, blockers);
+        assert.equal(
+          error.message,
+          `Role has unfinished Cards: ${blockers.join(", ")}. Deprecate them, or move pending ones, before deleting it.`,
+        );
+        return true;
+      },
+    );
+  }
+  assert.equal(await adapter.history.currentCommit(), head);
+  assert.equal(await adapter.exists(DELETE_PENDING_PATH), false);
+  await moveCardDocument(adapter, cards[0]!.cardId, { target: null, expectedEtag: cards[0]!.etag });
+  await returnCardDocument(adapter, cards[1]!.cardId, { roleId: worker.roleId, result: "done" });
+  await deleteRole(adapter, worker.roleId, { baseEtag: worker.etag });
+  // The return address remains protected even after its original target is moved.
+  await assert.rejects(deleteRole(adapter, role.roleId, { baseEtag: role.etag }), (error) => {
+    assert.ok(error instanceof RoleDeleteError);
+    assert.deepEqual(error.details.cardIds, ["card-consumed", "card-pending", "card-returned"]);
+    return true;
+  });
+  const pending = await adapter.readFile(cards[0]!.path);
+  await deprecateCardDocument(adapter, cards[0]!.cardId, contentEtag(pending));
+  for (const card of cards.slice(1, 3)) await takeCardDocument(adapter, card.cardId, role.roleId);
+  const before = await Promise.all(cards.map((card) => adapter.readFile(card.path)));
+  await deleteRole(adapter, role.roleId, { baseEtag: role.etag });
+  assert.deepEqual(await Promise.all(cards.map((card) => adapter.readFile(card.path))), before);
+});
+
+test("deprecated return Cards never block either Role in any delivery state", async (t) => {
+  const { adapter, role } = await fixture(t);
+  const worker = await createRoleContext(adapter, { roleId: "role-worker", title: "Worker" });
+  for (const state of ["pending", "consumed", "returned", "closed"]) {
+    const card = await createCardDocument(adapter, {
+      prompt: state,
+      target: worker.roleId,
+      returnTo: role.roleId,
+    });
+    if (state !== "pending") await takeCardDocument(adapter, card.cardId, worker.roleId);
+    if (state === "returned" || state === "closed")
+      await returnCardDocument(adapter, card.cardId, { roleId: worker.roleId, result: "done" });
+    if (state === "closed") await takeCardDocument(adapter, card.cardId, role.roleId);
+    await deprecateCardDocument(
+      adapter,
+      card.cardId,
+      contentEtag(await adapter.readFile(card.path)),
+    );
+  }
+  await deleteRole(adapter, worker.roleId, { baseEtag: worker.etag });
+  await deleteRole(adapter, role.roleId, { baseEtag: role.etag });
+});
+
 test("CLI Role delete requires its id and ETag and reports a JSON deletion receipt", async (t) => {
   const { root, adapter, role } = await fixture(t);
   const missing = await runRoleCommand("delete", [role.roleId], { workspace: root });
@@ -151,7 +229,7 @@ test("CLI Role delete requires its id and ETag and reports a JSON deletion recei
   assert.equal(await adapter.exists(role.path), false);
   assert.ok(
     roleHelpText().includes(
-      "Delete removes the Role document; Tent Git keeps its history and its id is never reused. Move or deprecate pending Cards that target it first.",
+      "Delete removes the Role document; Tent Git keeps its history and its id is never reused. Unfinished Cards block deletion: deprecate them, or move pending ones, first.",
     ),
   );
 });

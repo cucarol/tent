@@ -3,6 +3,7 @@ import { api, describe } from "../data/api.js";
 import type { Graph } from "../data/store.js";
 import type { SnapshotCard, SnapshotNode, SnapshotRole } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
+import { cardStage, cardStateLabel } from "../data/card-state.js";
 import { PUBLIC, type Work } from "../shell/work.js";
 import { Icon } from "../components/Glyph.js";
 import { t } from "../i18n.js";
@@ -323,11 +324,26 @@ export function NodeMenu({
 }
 
 /**
- * Pending Cards still addressed to this Role: Core refuses to delete it until each moves elsewhere or
- * is withdrawn. A Card moving right now already counts in its new lane.
+ * Cards that keep this Role from being deleted (judge 2026-10-17, node-cardreturnbounds17): pending ones
+ * addressed to it, and unfinished returns, those coming back to it and those it took and still owes.
+ * Pending ones can move elsewhere; withdrawing any of them lets the Role go. A Card moving right now
+ * already counts in its new lane.
  */
-export function waitingFor(work: Pick<Work, "laneCards">, role: SnapshotRole): SnapshotCard[] {
-  return work.laneCards(role.id).filter((c) => !isDraft(c));
+export function waitingFor(
+  work: Pick<Work, "laneCards">,
+  cards: readonly SnapshotCard[],
+  role: SnapshotRole,
+): SnapshotCard[] {
+  const here = work.laneCards(role.id).filter((c) => !isDraft(c));
+  const owed = cards.filter(
+    (c) =>
+      !isDraft(c) &&
+      c.status !== "deprecated" &&
+      !here.includes(c) &&
+      ((c.returnTo === role.id && c.state !== "closed") ||
+        (c.receivedBy === role.id && cardStage(c) === "doing")),
+  );
+  return [...here, ...owed];
 }
 
 export function RoleMenu({
@@ -353,7 +369,7 @@ export function RoleMenu({
       onToast(describe(error));
     }
   };
-  const waiting = waitingFor(work, role);
+  const waiting = waitingFor(work, graph.snapshot.cards, role);
   const received = graph.snapshot.cards.filter((c) => c.receivedBy === role.id).length;
   const links = role.incoming.filter((i) => i.from.kind !== "card").length;
   return (
@@ -436,28 +452,33 @@ function Waiting({
 }: Common & { card: SnapshotCard; role: SnapshotRole; work: Work }) {
   const [busy, run] = useRun(onToast);
   const [sure, setSure] = useState(false);
-  const lanes = work.lanes.filter((lane) => lane !== role.id);
+  // Only a pending Card can move, and never to the Role it returns to.
+  const movable = card.state === "pending" && card.returnTo !== role.id;
+  const lanes = work.lanes.filter((lane) => lane !== role.id && lane !== card.returnTo);
   return (
     <li className="ask-wait-row">
       <span className="ask-wait-title">{work.title(card)}</span>
-      <select
-        className="ask-pick"
-        aria-label={t.manage.moveTo}
-        value=""
-        disabled={busy || work.publishing === card.id}
-        onChange={(e) =>
-          void work.move(card.id, e.target.value === PUBLIC_KEY ? PUBLIC : e.target.value)
-        }
-      >
-        <option value="" disabled>
-          {t.manage.moveTo}
-        </option>
-        {lanes.map((lane) => (
-          <option key={lane || PUBLIC_KEY} value={lane || PUBLIC_KEY}>
-            {work.laneName(lane)}
+      {!movable && <span className="ask-wait-state">{cardStateLabel(card)}</span>}
+      {movable && (
+        <select
+          className="ask-pick"
+          aria-label={t.manage.moveTo}
+          value=""
+          disabled={busy || work.publishing === card.id}
+          onChange={(e) =>
+            void work.move(card.id, e.target.value === PUBLIC_KEY ? PUBLIC : e.target.value)
+          }
+        >
+          <option value="" disabled>
+            {t.manage.moveTo}
           </option>
-        ))}
-      </select>
+          {lanes.map((lane) => (
+            <option key={lane || PUBLIC_KEY} value={lane || PUBLIC_KEY}>
+              {work.laneName(lane)}
+            </option>
+          ))}
+        </select>
+      )}
       <button
         type="button"
         className={`btn ${sure ? "danger" : "plain"}`}

@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const INTEGRATION_TEST_FILES = Object.freeze([
   "test/card-document.test.ts",
+  "test/card-return.test.ts",
   "test/cli-agent-hooks-help.test.ts",
   "test/cli-agent-role-routing.test.ts",
   "test/cli-build-identity.test.ts",

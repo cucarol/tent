@@ -66,7 +66,7 @@ for (const tag of ["asset", "evidence", "analysis", "issue"]) {
     await fs.writeFile("../result.txt", "second");
     assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
     assert.ok((await inspectNodeSync(fs, prompt)).behind);
-    assert.equal((await listCardDocuments(fs)).items[0]!.progress, "has-output");
+    assert.equal((await listCardDocuments(fs)).items[0]!.state, "consumed");
     await fs.writeFile("../outer.txt", "second");
     await fs.writeFile("../inner.txt", "second");
     await confirm(outer);
@@ -79,7 +79,7 @@ for (const tag of ["asset", "evidence", "analysis", "issue"]) {
       [outer, inner].sort(),
     );
     assert.equal(sync.nodes.find((node) => node.nodeId === output)!.behind, undefined);
-    assert.equal((await listCardDocuments(fs)).items[0]!.progress, "needs-review");
+    assert.equal((await listCardDocuments(fs)).items[0]!.state, "consumed");
     const head = await fs.history.currentCommit();
     const raw = await fs.readFile("Outer/Inner/Result/Result.md");
     const read = await readNode(fs, "ws-test", { nodeId: output });
@@ -100,14 +100,14 @@ for (const tag of ["asset", "evidence", "analysis", "issue"]) {
     assert.deepEqual((await readNodeForEdit(fs, output, { changes: true })).changedSince, changes);
     await confirm(output);
     assert.equal((await readNodeForEdit(fs, output, { changes: true })).changedSince, undefined);
-    assert.equal((await listCardDocuments(fs)).items[0]!.progress, "has-output");
+    assert.equal((await listCardDocuments(fs)).items[0]!.state, "consumed");
     assert.equal((await inspectNodeSync(fs, outer)).ahead, undefined);
     assert.equal((await inspectNodeSync(fs, inner)).ahead, undefined);
   });
 }
 
 for (const evidence of ["confirmation", "new output"] as const) {
-  test(`one matching ${evidence} clears goal ahead while older Card responses retain their changes`, async () => {
+  test(`one matching ${evidence} clears goal ahead while older outputs retain their changes and Card delivery stays complete`, async () => {
     const { fs, env, output, outer, inner, confirm } = await fixture("evidence");
     const other = await createNode(env, {
       parentPath: "Outer/Inner",
@@ -123,7 +123,7 @@ for (const evidence of ["confirmation", "new output"] as const) {
     await confirm(outer);
     assert.ok((await inspectNodeSync(fs, outer)).ahead);
     assert.ok((await inspectNodeSync(fs, inner)).ahead);
-    assert.equal((await listCardDocuments(fs)).items[0]!.progress, "needs-review");
+    assert.equal((await listCardDocuments(fs)).items[0]!.state, "consumed");
     const olderChanges = (await readNodeForEdit(fs, output, { changes: true })).changedSince;
     assert.equal(olderChanges?.length, 2);
     let matching: string;
@@ -141,8 +141,9 @@ for (const evidence of ["confirmation", "new output"] as const) {
     assert.equal((await inspectNodeSync(fs, outer)).ahead, undefined);
     assert.equal((await inspectNodeSync(fs, inner)).ahead, undefined);
     const card = (await listCardDocuments(fs)).items[0]!;
-    assert.equal(card.progress, "has-output");
-    assert.deepEqual(card.outputNodeIds, [output]);
+    assert.equal(card.state, "consumed");
+    assert.equal("progress" in card, false);
+    assert.equal("outputNodeIds" in card, false);
     assert.deepEqual(
       (await readNodeForEdit(fs, output, { changes: true })).changedSince,
       olderChanges,
@@ -153,7 +154,7 @@ for (const evidence of ["confirmation", "new output"] as const) {
     });
     assert.ok((await inspectNodeSync(fs, outer)).ahead);
     assert.ok((await inspectNodeSync(fs, inner)).ahead);
-    assert.equal((await listCardDocuments(fs)).items[0]!.progress, "needs-review");
+    assert.equal((await listCardDocuments(fs)).items[0]!.state, "consumed");
   });
 }
 
@@ -177,10 +178,10 @@ test("partial matches from different outputs cannot combine into current evidenc
   });
   assert.ok((await inspectNodeSync(fs, outer)).ahead);
   assert.equal((await inspectNodeSync(fs, inner)).ahead, undefined);
-  assert.equal((await listCardDocuments(fs)).items[0]!.progress, "needs-review");
+  assert.equal((await listCardDocuments(fs)).items[0]!.state, "consumed");
   await confirm(output);
   assert.equal((await inspectNodeSync(fs, outer)).ahead, undefined);
-  assert.equal((await listCardDocuments(fs)).items[0]!.progress, "has-output");
+  assert.equal((await listCardDocuments(fs)).items[0]!.state, "consumed");
   assert.deepEqual((await readNodeForEdit(fs, other, { changes: true })).changedSince, [
     { kind: "ancestor-goal", nodeId: outer, name: "Outer" },
   ]);
@@ -208,10 +209,10 @@ test("unavailable goal material cannot establish a match or claim a known change
   assert.ok((await inspectNodeSync(fs, outer)).ahead);
   assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
   assert.equal((await readNodeForEdit(fs, output, { changes: true })).changedSince, undefined);
-  assert.equal((await listCardDocuments(fs)).items[0]!.progress, "needs-review");
+  assert.equal((await listCardDocuments(fs)).items[0]!.state, "consumed");
   await fs.writeFile("../outer.txt", "first");
   assert.equal((await inspectNodeSync(fs, outer)).ahead, undefined);
-  assert.equal((await listCardDocuments(fs)).items[0]!.progress, "has-output");
+  assert.equal((await listCardDocuments(fs)).items[0]!.state, "consumed");
   assert.equal(await fs.history.currentCommit(), head);
 });
 

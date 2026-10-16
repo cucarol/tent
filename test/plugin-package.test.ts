@@ -256,7 +256,7 @@ test(
     assert.equal(historical.text, "Original input\n");
     const taken = await json(["card", "take", card.cardId, "--role", role.roleId]);
     assert.equal(taken.state, "consumed");
-    assert.equal(taken.progress, null);
+    assert.equal("progress" in taken, false);
     assert.equal((await json(["card", "take", card.cardId, "--role", role.roleId])).replayed, true);
     await assert.rejects(cli(["card", "interrupt", card.cardId]), /Unknown card command/);
     await assert.rejects(

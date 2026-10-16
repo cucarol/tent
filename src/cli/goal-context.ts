@@ -27,9 +27,7 @@ export async function goalContextText(fs: FsAdapter, nodeId: string): Promise<st
   const selected: GoalContextItem[] = [];
   const render = (entries: GoalContextItem[], length = 12) => {
     const lines = entries.map((item) => {
-      const counts =
-        item.goalCount === undefined ? "" : ` ${item.goalCount}/${item.totalGoalCount}`;
-      return `${labels[item.kind]}${item.kind === "child" ? `(${clip(item.type ?? "", 12)})` : ""}${item.relationKinds ? `(${item.relationKinds.join("/")})` : ""} ${clip(item.name, length)} ${item.id}${counts}${item.state ? ` [${item.state}${item.progress !== undefined ? `/${item.progress ?? "—"}` : ""}]` : ""}${item.receiver ? ` ${clip(item.receiver, 12)}` : ""}`;
+      return `${labels[item.kind]}${item.kind === "child" ? `(${clip(item.type ?? "", 12)})` : ""}${item.relationKinds ? `(${item.relationKinds.join("/")})` : ""} ${clip(item.name, length)} ${item.id}${item.state ? ` [${item.state}]` : ""}${item.receivedBy ? ` received by ${item.receivedBy}` : item.target ? ` target ${item.target}` : ""}${item.returnTo ? ` return to ${item.returnTo}` : ""}${item.result ? `: ${item.result}` : ""}`;
     });
     const omitted = Object.keys(labels).flatMap((kind) => {
       const count =

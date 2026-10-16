@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildGraph } from "../src/ui/data/store.js";
-import type { Snapshot, SnapshotCard, SnapshotNode } from "../src/ui/data/types.js";
-import { deleteImpact } from "../src/ui/panel/Manage.js";
+import type { Snapshot, SnapshotCard, SnapshotNode, SnapshotRole } from "../src/ui/data/types.js";
+import { deleteImpact, waitingFor } from "../src/ui/panel/Manage.js";
 
 const node = (id: string, extra: Partial<SnapshotNode> = {}): SnapshotNode => ({
   id,
@@ -28,10 +28,6 @@ const card = (id: string, source: string): SnapshotCard => ({
   id,
   title: id,
   state: "pending",
-  progress: "pending",
-  goalCount: 0,
-  totalGoalCount: 0,
-  outputNodeIds: [],
   target: null,
   receivedBy: null,
   status: "stable",
@@ -99,4 +95,24 @@ test("deleting a Node counts outside links into every Node under it, not only in
   assert.equal(impact.cards, 1);
   // Deleting only the leaf still sees its own outside link.
   assert.equal(deleteImpact(graph, graph.nodes.get("grandchild")!).links, 1);
+});
+
+test("a Role cannot be deleted while a Card waits for it, is being done by it, or returns to it", () => {
+  const role = { id: "role-a" } as SnapshotRole;
+  const c = (id: string, fields: Partial<SnapshotCard>) => ({ ...card(id, "x"), ...fields });
+  const pending = c("pending", { target: "role-a" });
+  const work = { laneCards: (lane: string) => (lane === "role-a" ? [pending] : []) };
+  const cards = [
+    pending,
+    c("doing", { state: "consumed", target: "role-a", receivedBy: "role-a", returnTo: "role-b" }),
+    c("back", { state: "returned", receivedBy: "role-b", returnTo: "role-a", result: "PASS" }),
+    c("to-it", { target: "role-b", returnTo: "role-a" }),
+    c("collected", { state: "closed", receivedBy: "role-b", returnTo: "role-a", result: "PASS" }),
+    c("finished", { state: "consumed", receivedBy: "role-a" }),
+    c("withdrawn", { state: "returned", returnTo: "role-a", status: "deprecated" }),
+  ];
+  assert.deepEqual(
+    waitingFor(work, cards, role).map((x) => x.id),
+    ["pending", "doing", "back", "to-it"],
+  );
 });

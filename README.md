@@ -23,7 +23,7 @@ Everything lives in `.tent/` at the project root. The folder that holds `.tent/`
 - **Role**: a continuing direction, with its purpose, boundaries and entry points. It is not a running agent or a permission.
 - **Card**: one fixed input. It holds a prompt, its sources and an optional target Role. Node and Role sources are pinned to their Git versions. A session takes a Card to record that it received it. A Card never changes after it is sent; to change the input, send a new Card.
 
-Two findings come from comparing the graph with your files. A Node is **behind** when its material, a file or Node it points to, has changed since Tent recorded its version. A goal is **ahead** when no active output, one that is not deprecated, exists anywhere under it; tags do not change this. A goal is also ahead after it changes: when its text or material changes, every output under it goes behind, and the goal stays ahead until they are reviewed. When only an output's own material changes, that output goes behind but its goal is not ahead: the work exists and needs review. A Card counts a goal as done while at least one output responding to it is not behind; when every responding output is behind, the Card shows `needs-review`.
+Two findings come from comparing the graph with your files. A Node is **behind** when its material, a file or Node it points to, has changed since Tent recorded its version. A goal is **ahead** when no active output, one that is not deprecated, exists anywhere under it; tags do not change this. A goal is also ahead after it changes: when its text or material changes, every output under it goes behind, and the goal stays ahead until they are reviewed. When only an output's own material changes, that output goes behind but its goal is not ahead: the work exists and needs review. These findings are about Nodes; a Card only tracks delivery. It is done once received, or, when it names a Role to return to, once its receiver hands back a one-line result.
 
 File paths you give the CLI as material, such as `--resource` or a Card `--source`, resolve from the workspace root. A write that replaces content must present the ETag it read, so two sessions cannot silently overwrite each other. The exact rules are in [docs/SPEC.md](docs/SPEC.md).
 
@@ -110,7 +110,7 @@ The plugin folder is `plugins/tent` in the extracted download, or `release/plugi
    tent node link-output <goal-id> --resource login.js --card <card-id>
    ```
 
-6. **Change the material.** The brief now lists the output as behind and the Card as `needs-review`.
+6. **Change the material.** The brief now lists the output as behind.
 
    ```sh
    echo "export const CODE_TTL_MINUTES = 10;" >> login.js
@@ -134,7 +134,7 @@ In daily work your agent runs these commands through the Skills when you ask: "u
 tent ui --workspace <project folder>
 ```
 
-The server runs in this terminal; Ctrl+C stops it. The page shows the map: Nodes and how they link, with what is ahead or behind marked on them. The Roles sit at its top left as robots, each with the Cards it has in hand; drop Nodes on a robot to write it a Card. You can edit and confirm Nodes, write Cards, and switch between workspaces you have opened. `--port` picks the port. `--no-open` prints the address without opening a browser.
+The server runs in this terminal; Ctrl+C stops it. The page shows the map: Nodes and how they link, with what is ahead or behind marked on them. The Roles sit at its top left as robots, each with the Cards it has in hand; drop Nodes on a robot to write it a Card. You can edit Nodes, write Cards, and switch between workspaces you have opened. `--port` picks the port. `--no-open` prints the address without opening a browser.
 
 ## Status
 

@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { deriveCardProgress } from "../src/core/graph/card-progress.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file: string) => fs.readFile(path.join(repoRoot, file), "utf8");
@@ -144,15 +143,26 @@ test("goal and prompt materials exclude src code, which belongs in body links or
   assert.match(plugin, /\[Codex Hooks\]\(https:\/\/learn\.chatgpt\.com\/docs\/hooks\)/);
 });
 
-test("Card progress is null when every requested goal is deprecated, even while pending", async () => {
+test("Card contract gives delivery state one completion source independent of goal progress", async () => {
   const spec = flat(await read("docs/SPEC.md"));
+  assert.match(spec, /returnTo/);
+  assert.match(spec, /`pending`.*`consumed`.*`returned`.*`closed`/);
   assert.match(
     spec,
-    /When every goal pinned by a Card's sources is deprecated, `progress` is also null, for a pending Card as well as a received one/,
+    /Without `returnTo`, consumed means complete; with it, returned means complete/,
   );
-  for (const state of ["pending", "consumed"] as const)
-    assert.equal(deriveCardProgress(state, 0).progress, null, state);
-  assert.equal(deriveCardProgress("pending", 1).progress, "pending");
+  assert.match(spec, /No Card read surface derives `progress`, goal counts or output lists/);
+  assert.doesNotMatch(
+    spec,
+    /progress is `needs-review`|progress is `received-no-output`|`progress: null`/,
+  );
+  const plugin = flat(await read("docs/PLUGIN.md"));
+  assert.match(plugin, /`pending`.*`consumed`.*`returned`.*`closed`/);
+  assert.match(plugin, /`card return <id> --role <role-id> --result TEXT`/);
+  assert.doesNotMatch(
+    plugin,
+    /received-no-output|needs-review|has-output|goalCount|totalGoalCount/,
+  );
 });
 
 test("SPEC records the Node name, rename rollback, check and Card warning contracts", async () => {

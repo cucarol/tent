@@ -104,70 +104,14 @@ export function watchSyncFlags(publish: (flags: SyncFlags) => void) {
 }
 
 /**
- * The snapshot's Card progress follows whether each pinned goal is ahead, and completion times follow
- * whether outputs are behind; both were derived from materials as they stood when it was built, and a
- * later material change or `stale_after` expiry does not move the revision. Core counts a pinned goal
- * when an output under it answers the Card and the goal is not ahead, and puts it under review when such
- * an output exists and the goal is ahead. The Card's two output lists hold every answering output, so the
- * page replays that rule goal by goal with the live flags and compares the counts and lists it gets.
- * Totals alone would let one goal's change hide behind another goal still owed. Returns a key for the
+ * Completion times in the snapshot follow whether outputs are behind, as materials stood when it was built;
+ * a later material change or `stale_after` expiry does not move the revision. An output the snapshot still
+ * dates that the live flags find behind means the snapshot is out of date. Returns a key for the
  * disagreement, so each one asks for one rebuild, or null when the snapshot agrees with the flags.
  */
 export function snapshotDisagrees(snapshot: Snapshot, flags: SyncFlags): string | null {
   if (flags === UNREAD) return null;
-  const goals = new Set(
-    snapshot.nodes
-      .filter(
-        (n) => n.type === "goal" && !n.archived && (n.status === "draft" || n.status === "stable"),
-      )
-      .map((n) => n.id),
-  );
-  const byId = new Map(snapshot.nodes.map((n) => [n.id, n]));
-  // The pinned goals an output stands under: Core counts an output for every goal above it.
-  const goalsAbove = (id: string, pinned: ReadonlySet<string>) => {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (let up = byId.get(id)?.parentId; up && !seen.has(up); up = byId.get(up)?.parentId) {
-      seen.add(up);
-      if (pinned.has(up)) out.push(up);
-    }
-    return out;
-  };
-  const same = (got: ReadonlySet<string>, listed: readonly string[]) =>
-    got.size === new Set(listed).size && listed.every((id) => got.has(id));
-  const stale =
-    snapshot.cards.some((c) => {
-      const pinned = new Set(
-        c.sources.flatMap((s) => (s.kind === "node" && s.id && goals.has(s.id) ? [s.id] : [])),
-      );
-      const answering = [...new Set([...c.outputNodeIds, ...(c.reviewOutputNodeIds ?? [])])];
-      // An output the snapshot does not hold cannot be placed under its goals; the totals still hold.
-      if (answering.some((o) => !byId.has(o))) {
-        const ahead = [...pinned].filter((id) => flags[id]?.ahead).length;
-        const reviewing = c.reviewGoalCount ?? (c.reviewOutputNodeIds?.length ? 1 : 0);
-        return ahead > c.totalGoalCount - c.goalCount || reviewing > ahead;
-      }
-      const above = new Map(answering.map((o) => [o, goalsAbove(o, pinned)]));
-      const done = new Set<string>(),
-        review = new Set<string>();
-      let counted = 0,
-        reviewing = 0;
-      for (const g of pinned) {
-        const under = answering.filter((o) => above.get(o)!.includes(g));
-        if (!under.length) continue;
-        const ahead = !!flags[g]?.ahead;
-        if (ahead) reviewing++;
-        else counted++;
-        for (const o of under) (ahead ? review : done).add(o);
-      }
-      return (
-        counted !== c.goalCount ||
-        // Core leaves the review count out when it is 0; then the review list, also left out, decides.
-        (c.reviewGoalCount !== undefined && reviewing !== c.reviewGoalCount) ||
-        !same(done, c.outputNodeIds) ||
-        !same(review, c.reviewOutputNodeIds ?? [])
-      );
-    }) || snapshot.nodes.some((n) => n.outputAt && flags[n.id]?.behind);
+  const stale = snapshot.nodes.some((n) => n.outputAt && flags[n.id]?.behind);
   if (!stale) return null;
   const marked = Object.keys(flags)
     .filter((id) => flags[id]?.ahead || flags[id]?.behind)

@@ -2,7 +2,7 @@
 // The token arrives once in the URL fragment and is kept for this tab only.
 import { t } from "../i18n.js";
 import type { ModuleDependencyResponse } from "../../core/read/module-dependency-query.js";
-import type { DocumentVersion, Snapshot, SyncFlags } from "./types.js";
+import type { CardState, DocumentVersion, Snapshot, SyncFlags } from "./types.js";
 
 const TOKEN_KEY = "tent-token";
 
@@ -135,6 +135,8 @@ export type CardInput = {
   prompt: string;
   title?: string;
   target: string | null;
+  /** The Role the result comes back to; left out, receiving finishes the Card. */
+  returnTo?: string;
   sources: CardSourceInput[];
 };
 /** A Card file as read back: the body text, its ETag and header fields. */
@@ -145,8 +147,10 @@ export type CardDocument = {
   text: string;
   title?: string;
   target?: string;
-  state: "pending" | "consumed";
+  state: CardState;
+  returnTo?: string;
   receivedBy?: string;
+  result?: string;
   sources: CardSourceInput[];
 };
 export type SavedCard = { cardId: string; path: string; etag: string };
@@ -192,7 +196,10 @@ export const api = {
     wrote(
       call(`/api/roles/${encodeURIComponent(id)}/status`, send("POST", { baseEtag, archived })),
     ),
-  /** Removes the Role document for good; pending Cards targeted to it refuse with PENDING_CARDS. */
+  /**
+   * Removes the Role document for good. Unfinished Cards refuse with PENDING_CARDS, listing every one: pending
+   * ones targeted to it, ones returning to it until collected, and ones it took and still owes a return.
+   */
   deleteRole: (id: string, baseEtag: string) =>
     wrote(call(`/api/roles/${encodeURIComponent(id)}`, send("DELETE", { baseEtag }))),
   /** Withdraws a published Card through its lifecycle status; input and reception stay. */

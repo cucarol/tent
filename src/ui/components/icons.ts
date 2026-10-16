@@ -65,7 +65,8 @@ export const ICON_SVG = {
   mail: '<rect x="3" y="5" width="18" height="14" rx="4.5"/><path d="m4 8.2 6.9 4.3a2 2 0 0 0 2.2 0L20 8.2"/><circle cx="12" cy="13.6" r="1.6" fill="var(--accent)" stroke="none"/>',
   working:
     '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
-  review: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  returned:
+    '<path d="M3 11.5V14.5A4.5 4.5 0 0 0 7.5 19h9a4.5 4.5 0 0 0 4.5-4.5v-5A4.5 4.5 0 0 0 16.5 5H12"/><path d="m11 12.4 2 1.3a2 2 0 0 0 2.2 0L20 10.6"/><path d="M6.5 2.5 3 6l3.5 3.5"/><path d="M3 6h5.5a3 3 0 0 1 3 3"/><circle cx="14.1" cy="15.4" r="1.4" fill="var(--accent)" stroke="none"/>',
   addToCard:
     '<path d="M21 12.5v-3A4.5 4.5 0 0 0 16.5 5h-9A4.5 4.5 0 0 0 3 9.5v5A4.5 4.5 0 0 0 7.5 19H13"/><path d="m4 8.2 6.9 4.3a2 2 0 0 0 2.2 0L20 8.2"/><path d="M19 15v6"/><path d="M16 18h6"/>',
   settings:

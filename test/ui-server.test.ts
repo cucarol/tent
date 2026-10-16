@@ -13,7 +13,7 @@ import { renameNode } from "../src/core/graph/ops.js";
 import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
 import { linkNodeOutput } from "../src/core/graph/node-sync.js";
-import { takeCardDocument } from "../src/core/graph/card-document.js";
+import { takeCardDocument, returnCardDocument } from "../src/core/graph/card-document.js";
 import { startUiServer, workspacePort } from "../src/ui-server/server.js";
 import {
   defaultWorkspacesFile,
@@ -752,28 +752,32 @@ test("filesystem failures other than a missing path are not reported as 404", as
 test("direct Card publication supports immutable reads, pending moves and reception conflicts", async (t) => {
   const { call, tent } = await fixture(t);
   await createRoleContext(tent, { roleId: "role-review", title: "Review", body: "Review" });
+  await createRoleContext(tent, { roleId: "role-owner", title: "Owner", body: "Owner" });
   const created = await call("POST", "/api/cards", {
     json: {
       prompt: "Review this",
       sources: [{ resource: "/Other/Other.md" }],
       target: "role-review",
+      returnTo: "role-owner",
     },
   });
   assert.equal(created.status, 200, created.body);
   const { cardId, etag } = json<{ cardId: string; etag: string }>(created);
   const endpoint = `/api/cards/${cardId}`;
-  const opened = json<{ text: string; progress: string; outputNodeIds: string[] }>(
+  const opened = json<{ text: string; state: string; returnTo: string }>(
     await call("GET", endpoint),
   );
   assert.equal(opened.text, "Review this");
-  assert.equal(opened.progress, "pending");
-  assert.deepEqual(opened.outputNodeIds, []);
+  assert.equal(opened.state, "pending");
+  assert.equal(opened.returnTo, "role-owner");
+  assert.equal(Object.prototype.hasOwnProperty.call(opened, "progress"), false);
   const live = json<Snapshot>(await call("GET", "/api/snapshot")).cards.find(
     (c) => c.id === cardId,
   )!;
   assert.ok(live.publishedAt);
   assert.ok(live.sources[0]!.version);
-  assert.equal(live.progress, "pending");
+  assert.equal(live.state, "pending");
+  assert.equal(live.returnTo, "role-owner");
   for (const [method, target] of [
     ["PUT", endpoint],
     ["DELETE", endpoint],
@@ -797,8 +801,8 @@ test("direct Card publication supports immutable reads, pending moves and recept
   assert.equal(moved.status, 200, moved.body);
   await takeCardDocument(tent, cardId, "role-review");
   assert.equal(
-    json<Snapshot>(await call("GET", "/api/snapshot")).cards.find((c) => c.id === cardId)!.progress,
-    "received-no-output",
+    json<Snapshot>(await call("GET", "/api/snapshot")).cards.find((c) => c.id === cardId)!.state,
+    "consumed",
   );
   const conflict = await call("POST", `${endpoint}/move`, {
     json: { baseEtag: json<{ etag: string }>(moved).etag, target: "role-review" },
@@ -816,10 +820,9 @@ test("direct Card publication supports immutable reads, pending moves and recept
   });
   const completed = json<Snapshot>(await call("GET", "/api/snapshot"));
   const after = completed.cards.find((c) => c.id === cardId)!;
-  assert.equal(after.progress, "has-output");
-  assert.deepEqual(after.outputNodeIds, [output.nodeId]);
-  assert.equal(after.goalCount, 1);
-  assert.equal(after.totalGoalCount, 1);
+  assert.equal(after.state, "consumed");
+  for (const key of ["progress", "goalCount", "totalGoalCount", "outputNodeIds"])
+    assert.equal(Object.prototype.hasOwnProperty.call(after, key), false);
   const activity = completed.nodes.find((n) => n.id === output.nodeId)!.outputAt;
   assert.ok(activity && Number.isFinite(Date.parse(activity)));
   const document = json<{ etag: string }>(await call("GET", `/api/nodes/${output.nodeId}`));
@@ -836,6 +839,21 @@ test("direct Card publication supports immutable reads, pending moves and recept
     Date.parse(edited.nodes.find((n) => n.id === output.nodeId)!.outputAt!) > Date.parse(activity),
   );
   assert.equal(await tent.readFile(`cards/${cardId}.md`), cardBytes);
+  const result = `done ${output.nodeId}`;
+  await returnCardDocument(tent, cardId, { roleId: "role-review", result });
+  const returned = json<Snapshot>(await call("GET", "/api/snapshot")).cards.find(
+    (c) => c.id === cardId,
+  )!;
+  assert.equal(returned.state, "returned");
+  assert.equal(returned.receivedBy, "role-review");
+  assert.equal(returned.returnTo, "role-owner");
+  assert.equal(returned.result, result);
+  await takeCardDocument(tent, cardId, "role-owner");
+  const closed = json<Snapshot>(await call("GET", "/api/snapshot")).cards.find(
+    (c) => c.id === cardId,
+  )!;
+  assert.equal(closed.state, "closed");
+  assert.equal(closed.result, result);
 });
 
 for (const goalMaterialChanges of [false, true]) {
@@ -849,11 +867,13 @@ for (const goalMaterialChanges of [false, true]) {
         "---\nid: node-other\ntype: goal\nsources:\n  - resource: ../../docs/notes.txt\n---\nThe goal.\n",
       );
     await createRoleContext(tent, { roleId: "role-review", title: "Review", body: "Review" });
+    await createRoleContext(tent, { roleId: "role-owner", title: "Owner", body: "Owner" });
     const created = await call("POST", "/api/cards", {
       json: {
         prompt: "Review this",
         sources: [{ resource: "/Other/Other.md" }],
         target: "role-review",
+        returnTo: "role-owner",
       },
     });
     const { cardId } = json<{ cardId: string }>(created);
@@ -864,7 +884,7 @@ for (const goalMaterialChanges of [false, true]) {
     });
     const done = await call("GET", "/api/snapshot");
     const card = (r: typeof done) => json<Snapshot>(r).cards.find((c) => c.id === cardId)!;
-    assert.equal(card(done).progress, "has-output");
+    assert.equal(card(done).state, "consumed");
     const outputAt = json<Snapshot>(done).nodes.find((n) => n.id === output.nodeId)!.outputAt;
     assert.ok(outputAt);
 
@@ -875,24 +895,20 @@ for (const goalMaterialChanges of [false, true]) {
       json<Snapshot>(cached).workspace.revision,
       json<Snapshot>(done).workspace.revision,
     );
-    assert.equal(card(cached).progress, "has-output");
+    assert.equal(card(cached).state, "consumed");
 
     const fresh = await call("GET", "/api/snapshot?fresh=1", {
       headers: { "If-None-Match": done.headers.etag! },
     });
     assert.equal(fresh.status, 200);
-    const expectedProgress = goalMaterialChanges ? "needs-review" : "has-output";
-    assert.equal(card(fresh).progress, expectedProgress);
-    assert.deepEqual(
-      goalMaterialChanges ? card(fresh).reviewOutputNodeIds : card(fresh).outputNodeIds,
-      [output.nodeId],
-    );
+    assert.equal(card(fresh).state, "consumed");
+    assert.equal(Object.prototype.hasOwnProperty.call(card(fresh), "progress"), false);
     assert.equal(
       json<Snapshot>(fresh).nodes.find((n) => n.id === output.nodeId)!.outputAt,
       outputAt,
     );
     // Later reads share the rebuilt snapshot.
-    assert.equal(card(await call("GET", "/api/snapshot")).progress, expectedProgress);
+    assert.equal(card(await call("GET", "/api/snapshot")).state, "consumed");
   });
 }
 
@@ -902,6 +918,8 @@ test("removed Card endpoints and invalid create requests never write Card files"
     { prompt: 4 },
     { prompt: "" },
     { prompt: "request", target: "role-missing" },
+    { prompt: "request", returnTo: "role-missing" },
+    { prompt: "request", returnTo: 4 },
     { prompt: "request", sources: ["invalid"] },
   ])
     assert.equal((await call("POST", "/api/cards", { json: input })).status, 422);
@@ -1255,6 +1273,51 @@ test("the page renames, archives, restores and deletes Nodes, archives Roles and
   });
   assert.equal(withdrawn.status, 200, withdrawn.body);
   assert.equal((await snapshot()).cards.find((c) => c.id === card.cardId)?.status, "deprecated");
+});
+
+test("Role delete HTTP reports unfinished returns and permits deprecated receipts", async (t) => {
+  const { tent, call } = await fixture(t);
+  const worker = await createRoleContext(tent, { roleId: "role-worker", title: "Worker" });
+  const owner = await createRoleContext(tent, { roleId: "role-owner", title: "Owner" });
+  const card = json<{ cardId: string }>(
+    await call("POST", "/api/cards", {
+      json: { prompt: "Return this", target: worker.roleId, returnTo: owner.roleId },
+    }),
+  );
+  await takeCardDocument(tent, card.cardId, worker.roleId);
+  for (const role of [worker, owner]) {
+    const blocked = await call("DELETE", `/api/roles/${role.roleId}`, {
+      json: { baseEtag: role.etag },
+    });
+    assert.equal(blocked.status, 409, blocked.body);
+    assert.deepEqual(
+      json<{ error: { code: string; details: { cardIds: string[] } } }>(blocked).error,
+      {
+        code: "PENDING_CARDS",
+        message: `Role has unfinished Cards: ${card.cardId}. Deprecate them, or move pending ones, before deleting it.`,
+        details: { cardIds: [card.cardId] },
+      },
+    );
+  }
+  await returnCardDocument(tent, card.cardId, { roleId: worker.roleId, result: "done" });
+  assert.equal(
+    (await call("DELETE", `/api/roles/${worker.roleId}`, { json: { baseEtag: worker.etag } }))
+      .status,
+    200,
+  );
+  assert.equal(
+    (await call("DELETE", `/api/roles/${owner.roleId}`, { json: { baseEtag: owner.etag } })).status,
+    409,
+  );
+  const current = json<{ etag: string }>(await call("GET", `/api/cards/${card.cardId}`));
+  const cancelled = await call("POST", `/api/cards/${card.cardId}/deprecate`, {
+    json: { baseEtag: current.etag },
+  });
+  assert.equal(cancelled.status, 200, cancelled.body);
+  assert.equal(
+    (await call("DELETE", `/api/roles/${owner.roleId}`, { json: { baseEtag: owner.etag } })).status,
+    200,
+  );
 });
 
 test("the page deletes a Role only once no pending Card waits for it", async (t) => {

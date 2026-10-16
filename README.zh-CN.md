@@ -23,7 +23,7 @@ Tent 面向一份交接笔记已经装不下的项目：同时有几个方向，
 - **Role**：一个持续的工作方向，写明目的、边界和入口。它不是正在运行的 Agent，也不是权限。
 - **Card**：一次固定的输入，包含一段提示、它的来源和可选的目标 Role。来源里的 Node 和 Role 钉在当时的 Git 版本。会话接收（take）一张 Card，Tent 记下这次接收。Card 发出后不再改变；输入要改，就发一张新 Card。
 
-把图谱和你的文件对照，会得到两种判断。Node 的材料，也就是它指向的文件或 Node，在 Tent 记录版本之后变了，它就处于**落后**。goal 下面任何位置都没有未作废的 output 时，它处于**领先**；tags 不影响这一点。goal 自己变了也会领先：它的正文或材料一变，下面的每个 output 都落后，goal 处于领先，直到这些 output 复核完。如果只是某个 output 自己的材料变了，这个 output 落后，但 goal 不会因此领先：实现已经有了，只是需要复核。Card 里的 goal，只要还有一个回应它的 output 没有落后，就算完成；回应它的 output 全部落后时，Card 显示 `needs-review`。
+把图谱和你的文件对照，会得到两种判断。Node 的材料，也就是它指向的文件或 Node，在 Tent 记录版本之后变了，它就处于**落后**。goal 下面任何位置都没有未作废的 output 时，它处于**领先**；tags 不影响这一点。goal 自己变了也会领先：它的正文或材料一变，下面的每个 output 都落后，goal 处于领先，直到这些 output 复核完。如果只是某个 output 自己的材料变了，这个 output 落后，但 goal 不会因此领先：实现已经有了，只是需要复核。这两种判断只关于 Node；Card 只记投递。它被接收就算完成；如果写了交回给哪个 Role，要等接收方交回一句结果才算完成。
 
 作为材料传给 CLI 的文件路径，比如 `--resource` 或 Card 的 `--source`，从工作区根目录解析。替换内容的写入必须带上读到的 ETag，两个会话不会悄悄覆盖对方。精确规则见 [docs/SPEC.md](docs/SPEC.md)。
 
@@ -110,7 +110,7 @@ node "<插件目录>/cli.mjs" --help
    tent node link-output <goal-id> --resource login.js --card <card-id>
    ```
 
-6. **改动材料。** 简报现在把这个 output 列为落后，把 Card 列为 `needs-review`。
+6. **改动材料。** 简报现在把这个 output 列为落后。
 
    ```sh
    echo "export const CODE_TTL_MINUTES = 10;" >> login.js
@@ -134,7 +134,7 @@ node "<插件目录>/cli.mjs" --help
 tent ui --workspace <项目文件夹>
 ```
 
-服务在当前终端里运行，Ctrl+C 停止。页面打开就是图谱：画出 Node 和它们之间的链接，领先和落后标在卡片上。各 Role 是左上角的机器人，旁边写着手上的 Card；把 Node 拖到机器人身上，就给它写一张 Card。你可以编辑和确认 Node、写 Card，也能在打开过的工作区之间切换。`--port` 指定端口。`--no-open` 只打印地址，不打开浏览器。
+服务在当前终端里运行，Ctrl+C 停止。页面打开就是图谱：画出 Node 和它们之间的链接，领先和落后标在卡片上。各 Role 是左上角的机器人，旁边写着手上的 Card；把 Node 拖到机器人身上，就给它写一张 Card。你可以编辑 Node、写 Card，也能在打开过的工作区之间切换。`--port` 指定端口。`--no-open` 只打印地址，不打开浏览器。
 
 ## 现状
 

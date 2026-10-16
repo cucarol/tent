@@ -2,6 +2,7 @@
 // Nothing here judges what a relation means; that is for the Agent. Rules: Tent Node
 // "UI-图谱画模块依赖与状态", "画布是投影；拖在一起形成区域" (cuca and judge 2026-10-16).
 import type { Graph } from "../data/store.js";
+import { resultNodeIds } from "../data/card-state.js";
 
 export type RegionLineKind = "parent" | "link" | "material" | "code" | "card";
 export type RegionLine = {
@@ -22,7 +23,7 @@ const fileName = (path: string) => path.split("/").filter(Boolean).at(-1) ?? pat
 
 /**
  * Relations among `members`: up and down the tree, references in the body or as materials, material
- * files they share, code imports, and outputs a Card brought back to the card it was sent with.
+ * files they share, code imports, and outputs a Card brought back, or Nodes its returned result names, to the cards it was sent with.
  */
 export function regionLines(
   graph: Graph,
@@ -76,9 +77,14 @@ export function regionLines(
       }
   for (const s of shared.values()) add({ ...s, kind: "material", files: s.files.sort() });
   for (const e of code) add({ from: e.from, to: e.to, kind: "code", imports: e.imports });
+  // What came back through a Card: outputs that name it as their source, and Nodes its result names.
+  const answers = new Map<string, string[]>();
+  for (const id of members)
+    for (const m of graph.nodes.get(id)?.materials ?? [])
+      if (m.kind === "card" && m.id) answers.set(m.id, [...(answers.get(m.id) ?? []), id]);
   for (const c of graph.snapshot.cards) {
     const sent = c.sources.flatMap((s) => (s.kind === "node" && s.id ? [s.id] : []));
-    for (const o of [...c.outputNodeIds, ...(c.reviewOutputNodeIds ?? [])])
+    for (const o of new Set([...(answers.get(c.id) ?? []), ...resultNodeIds(c.result)]))
       for (const s of sent) add({ from: o, to: s, kind: "card", cards: [c.title] });
   }
   return [...out.values()];

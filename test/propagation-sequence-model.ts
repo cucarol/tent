@@ -20,7 +20,7 @@ import {
 } from "../src/core/graph/card-document.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
 
-// Every output counts for its goals and Cards; tags only vary the documents.
+// Every output counts for its goals; Card delivery is independent of that evidence.
 const outputTags = ["asset", "evidence", "analysis", "issue"] as const;
 const roles = ["role-a", "role-b"] as const;
 export type Graph = {
@@ -179,7 +179,14 @@ type Output = {
   baseline: string[];
   ownBasis?: string;
 };
-type Card = { id: string; goal: number; received: boolean; receiver?: string; active: boolean };
+type Card = {
+  id: string;
+  goal: number;
+  received: boolean;
+  receiver?: string;
+  returnTo?: string;
+  active: boolean;
+};
 
 /** Oracle stores readable semantic values. It never reads Core fingerprints or retained records. */
 export class SequenceRunner {
@@ -253,7 +260,7 @@ export class SequenceRunner {
 
   async setup(graph: Graph) {
     await scaffoldTent(this.fs, { name: "Propagation" });
-    for (const roleId of roles)
+    for (const roleId of [...roles, "role-dispatch"])
       await createRoleContext(this.fs, { roleId, title: roleId, body: "work direction" });
     for (const [index, spec] of graph.goals.entries()) {
       const parentPath = this.goals.at(-1)?.path ?? "",
@@ -291,14 +298,23 @@ export class SequenceRunner {
     for (const [goal, spec] of graph.goals.entries()) {
       for (const [slot, c] of spec.cards.entries()) {
         const id = `card-g${goal}s${slot}`;
+        const returnTo = c.receiver ? "role-dispatch" : undefined;
         await createCardDocument(this.fs, {
           cardId: id,
           prompt: "implement",
           target: c.target,
+          returnTo,
           sources: [{ resource: `/${this.goals[goal]!.path}/G${goal}.md` }],
         });
         if (c.received) await takeCardDocument(this.fs, id, c.receiver);
-        this.cards.push({ id, goal, received: c.received, receiver: c.receiver, active: true });
+        this.cards.push({
+          id,
+          goal,
+          received: c.received,
+          receiver: c.receiver,
+          returnTo,
+          active: true,
+        });
       }
       for (const [slot, o] of spec.outputs.entries()) {
         const parentPath = this.goals[goal]!.path,
@@ -416,44 +432,24 @@ export class SequenceRunner {
         "I2/I4",
         `Card unavailable ${card.id}: ${JSON.stringify(actualCard)}`,
       );
-      const responding = this.outputs.filter(
-        (o) =>
-          o.active && o.card === card.id && o.goal >= card.goal && this.goals[card.goal]!.active,
-      );
-      const complete = this.ahead(card.goal) ? [] : responding;
-      const review = this.ahead(card.goal) ? responding : [];
-      const goalActive = this.goals[card.goal]!.active;
-      const expected = !goalActive
-        ? null
-        : !card.received
-          ? "pending"
-          : complete.length
-            ? "has-output"
-            : review.length
-              ? "needs-review"
-              : "received-no-output";
+      const expected = card.received ? "consumed" : "pending";
       this.expect(
-        actualCard!.totalGoalCount === Number(goalActive),
-        "I2/I4",
-        `${card.id} goal denominator must exclude deprecated goals`,
+        actualCard!.state === expected && actualCard!.returnTo === card.returnTo,
+        "I2-delivery",
+        `${card.id} delivery must stay ${expected} across output, material and goal changes`,
       );
-      this.expect(
-        actualCard!.progress === expected,
-        "I2/I4",
-        `${card.id} progress expected=${expected} actual=${actualCard!.progress}`,
-      );
-      const ids = actualCard!.outputNodeIds as string[];
-      this.expect(
-        JSON.stringify([...ids].sort()) === JSON.stringify(complete.map((o) => o.id).sort()),
-        "I2",
-        `${card.id} completed outputs require a responding goal that is not ahead`,
-      );
-      // Role's "last completed" selector consumes these has-output Cards; every eligible Card must have a current result.
-      if (card.receiver && actualCard!.progress === "has-output")
+      for (const field of [
+        "progress",
+        "goalCount",
+        "totalGoalCount",
+        "outputNodeIds",
+        "reviewGoalCount",
+        "reviewOutputNodeIds",
+      ])
         this.expect(
-          complete.length,
-          "I2",
-          `${card.receiver} must not select ${card.id} as completed while its goal is ahead`,
+          !(field in actualCard!),
+          "I2-delivery",
+          `${card.id} must not expose goal-derived ${field}`,
         );
     }
   }
@@ -559,11 +555,7 @@ export class SequenceRunner {
       : undefined;
     if (op.explicit && !explicit?.active) return;
     const relevant = this.cards.filter(
-      (c) =>
-        c.active &&
-        c.received &&
-        c.goal === op.goal &&
-        (this.ahead(c.goal) || !this.outputs.some((o) => o.active && o.card === c.id)),
+      (c) => c.active && c.received && c.goal === op.goal && !!c.returnTo,
     );
     const eligible = relevant.filter((c) => op.role && c.receiver === op.role);
     const reject = explicit ? !explicit.received : relevant.length > 0 && eligible.length !== 1;

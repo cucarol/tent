@@ -366,8 +366,9 @@ test("Card response source roots match stored documents while ordinary CLI paths
     { resource: "../../../docs/req.md" },
   ]);
   const read = parse(await runCardCommand("show", [card.cardId], globals));
-  assert.equal(read.progress, "has-output");
-  assert.deepEqual(read.outputNodeIds, [created.nodeId]);
+  assert.equal(read.state, "consumed");
+  assert.equal("progress" in read, false);
+  assert.equal("outputNodeIds" in read, false);
   await fs.mkdir(path.join(root, "cards"));
   await fs.writeFile(path.join(root, `cards/${card.cardId}.md`), "Workspace file");
   const ordinary = (

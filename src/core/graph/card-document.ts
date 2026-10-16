@@ -33,10 +33,10 @@ import {
   type NodeCatalog,
 } from "./node-catalog.js";
 import { listWorkspaceRelations, type DocumentRef } from "./workspace-relations.js";
-import { cardSourceIdentityError, readCardProgress } from "./card-progress.js";
+import { cardSourceIdentityError } from "./card-context.js";
 import { retainedDocumentFs, uncapturedChecker } from "./retained-read.js";
 
-export type CardDocumentState = "pending" | "consumed";
+export type CardDocumentState = "pending" | "consumed" | "returned" | "closed";
 type CardFields = Record<string, unknown> & {
   type: "card";
   id: string;
@@ -44,6 +44,8 @@ type CardFields = Record<string, unknown> & {
   sources: MaterialSource[];
   title?: string;
   target?: string;
+  returnTo?: string;
+  result?: string;
   state: CardDocumentState;
   receivedBy?: string;
 };
@@ -100,20 +102,7 @@ function cardFromParsed(
     invalid(`Invalid Card metadata: ${String(error)}`);
   }
   const data = parsed.data;
-  if (data.type !== "card" || data.id !== id || data.schemaVersion !== 3)
-    invalid("Expected a Card v3 document with matching id");
-  if (data.title !== undefined && (typeof data.title !== "string" || !data.title.trim()))
-    invalid("Card title must be nonempty text");
-  if (data.target !== undefined && (typeof data.target !== "string" || !isRoleId(data.target)))
-    invalid("Card target must be an explicit Role id");
-  if (!["pending", "consumed"].includes(String(data.state))) invalid("Invalid Card state");
-  if (
-    data.receivedBy !== undefined &&
-    (data.state === "pending" || typeof data.receivedBy !== "string" || !isRoleId(data.receivedBy))
-  )
-    invalid("Card state and receivedBy disagree");
-  if (data.state !== "pending" && data.target !== undefined && data.receivedBy !== data.target)
-    invalid("Targeted Card must be received with its Role");
+  validateCardHeader(id, data);
   return {
     path,
     raw,
@@ -123,17 +112,61 @@ function cardFromParsed(
     keyOrder: parsed.keyOrder,
   };
 }
+function validateCardHeader(id: string, data: Record<string, unknown>) {
+  if (data.type !== "card" || data.id !== id || data.schemaVersion !== 3)
+    invalid("Expected a Card v3 document with matching id");
+  if (data.title !== undefined && (typeof data.title !== "string" || !data.title.trim()))
+    invalid("Card title must be nonempty text");
+  if (data.target !== undefined && (typeof data.target !== "string" || !isRoleId(data.target)))
+    invalid("Card target must be an explicit Role id");
+  if (
+    data.returnTo !== undefined &&
+    (typeof data.returnTo !== "string" || !isRoleId(data.returnTo))
+  )
+    invalid("Card returnTo must be an explicit Role id");
+  if (data.returnTo !== undefined && data.returnTo === data.target)
+    invalid("Card returnTo must differ from target");
+  if (!["pending", "consumed", "returned", "closed"].includes(String(data.state)))
+    invalid("Invalid Card state");
+  if (
+    data.receivedBy !== undefined &&
+    (data.state === "pending" || typeof data.receivedBy !== "string" || !isRoleId(data.receivedBy))
+  )
+    invalid("Card state and receivedBy disagree");
+  if (data.state !== "pending" && data.target !== undefined && data.receivedBy !== data.target)
+    invalid("Targeted Card must be received with its Role");
+  if (
+    data.returnTo !== undefined &&
+    data.state !== "pending" &&
+    (data.receivedBy === undefined || data.receivedBy === data.returnTo)
+  )
+    invalid("A Card with returnTo must be received by a different Role");
+  if (data.state === "returned" || data.state === "closed") {
+    if (!data.returnTo || !data.receivedBy)
+      invalid("Returned Card requires returnTo and receivedBy");
+    validateResult(data.result);
+  } else if (data.result !== undefined) invalid("Only returned or closed Cards have a result");
+}
 function inputOf(document: CardDocument) {
-  const { state, receivedBy, status, target, ...fields } = document.data;
+  const { state, receivedBy, result, status, target, ...fields } = document.data;
   return { fields, body: document.body };
 }
 function stateOf(document: CardDocument) {
   return {
     state: document.data.state,
     receivedBy: document.data.receivedBy,
+    result: document.data.result,
     target: document.data.target,
     status: document.data.status,
   };
+}
+function validateResult(result: unknown): asserts result is string {
+  if (typeof result !== "string" || !result.trim() || /[\r\n\v\f\u0085\u2028\u2029]/u.test(result))
+    invalid("Card result must be nonempty single-line text");
+  if ([...result].length > 200)
+    invalid(
+      "Card result exceeds 200 characters; put details in a Node and include its Node id in the result",
+    );
 }
 function requireInput(card: CardDocument) {
   if (!card.body.trim() && !card.data.sources.length) invalid("Card needs prompt text or sources");
@@ -308,7 +341,9 @@ function validateSource(file: string, raw: string, data = parseFrontmatter(raw).
   if (error) invalid(error);
 }
 
-async function checkedCard(fs: FsAdapter, id: string, reception?: { roleId?: string }) {
+type CardAction =
+  { kind: "take"; roleId?: string } | { kind: "return"; roleId?: string; result: string };
+async function checkedCard(fs: FsAdapter, id: string, action?: CardAction) {
   const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
     await fs.readBinary(cardPath(id)),
   );
@@ -325,16 +360,23 @@ async function checkedCard(fs: FsAdapter, id: string, reception?: { roleId?: str
   if (retained[1] instanceof Error) throw retained[1];
   const published = parseCardDocument(id, retained[0]!.raw);
   const latest = parseCardDocument(id, retained[1]!.raw);
-  const recovery =
-    reception !== undefined &&
-    latest.data.state === "pending" &&
-    current.data.state === "consumed" &&
-    current.data.receivedBy === reception.roleId &&
-    isDeepStrictEqual(stateOf(current), {
-      ...stateOf(latest),
-      state: "consumed",
-      receivedBy: reception.roleId,
-    });
+  let next: ReturnType<typeof stateOf> | undefined;
+  if (action?.kind === "take" && latest.data.state === "pending")
+    next = { ...stateOf(latest), state: "consumed", receivedBy: action.roleId };
+  else if (
+    action?.kind === "take" &&
+    latest.data.state === "returned" &&
+    latest.data.returnTo === action.roleId
+  )
+    next = { ...stateOf(latest), state: "closed" };
+  else if (
+    action?.kind === "return" &&
+    latest.data.state === "consumed" &&
+    latest.data.returnTo &&
+    latest.data.receivedBy === action.roleId
+  )
+    next = { ...stateOf(latest), state: "returned", result: action.result };
+  const recovery = next !== undefined && isDeepStrictEqual(stateOf(current), next);
   validateRetainedCard(current, published, latest, recovery);
   return { current, publishedVersion: versions.first, version: versions.latest, history, recovery };
 }
@@ -369,6 +411,7 @@ export function createCardDocument(
     sources?: MaterialSource[];
     title?: string;
     target?: string;
+    returnTo?: string;
   },
 ) {
   return withTentMutation(
@@ -388,12 +431,14 @@ export function createCardDocument(
         sources,
         ...(input.title !== undefined ? { title: input.title } : {}),
         ...(input.target !== undefined ? { target: input.target } : {}),
+        ...(input.returnTo !== undefined ? { returnTo: input.returnTo } : {}),
         state: "pending",
       };
       const prompt = await canonicalDocumentReferences(fs, path, fields, input.prompt);
       const card = parseCardDocument(id, serializeFrontmatter(fields, prompt));
       requireInput(card);
       if (card.data.target) await roleAvailable(fs, card.data.target);
+      if (card.data.returnTo) await roleAvailable(fs, card.data.returnTo);
       card.data.sources = await captureSources(fs, path, card.data.sources);
       const raw = serializeFrontmatter(card.data, card.body, card.keyOrder);
       await fs.writeFile(path, raw);
@@ -408,9 +453,8 @@ export function createCardDocument(
         cardId: id,
         path,
         state: "pending" as const,
-        ...(
-          await readCardProgress(fs, [{ cardId: id, state: "pending", sources: card.data.sources }])
-        ).get(id)!,
+        target: card.data.target,
+        returnTo: card.data.returnTo,
         etag: contentEtag(raw),
         version: captured.versions[0]!,
       };
@@ -433,6 +477,7 @@ export function moveCardDocument(
         cardConflict(current, "RECEPTION_CONFLICT", "Card has already been received");
       checkEtag(current, input.expectedEtag);
       if (input.target !== null) await roleAvailable(fs, input.target);
+      if (input.target === current.data.returnTo) invalid("Card target must differ from returnTo");
       const fields = { ...current.data };
       if (input.target === null) delete fields.target;
       else fields.target = input.target;
@@ -547,16 +592,14 @@ type PageOptions = {
   range?: ReaderRange;
   expectedEtag?: string;
   capture?: boolean;
-  /** Internal callers already holding batch progress can skip a second derivation. */
-  includeProgress?: boolean;
   /** Pure CLI reads use retained documents for derived state, with live material observations. */
   retainedState?: boolean;
 };
-function cardPage(
+function cardPage<T extends Record<string, unknown>>(
   id: string,
   raw: string,
   options: PageOptions,
-  metadata: Record<string, unknown>,
+  metadata: T,
 ) {
   const path = cardPath(id),
     etag = contentEtag(raw),
@@ -625,13 +668,8 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
       target: current.data.target,
       state: current.data.state,
       receivedBy: current.data.receivedBy,
-      ...(options.includeProgress === false
-        ? {}
-        : (
-            await readCardProgress(stateFs, [
-              { cardId: id, state: current.data.state, sources: current.data.sources },
-            ])
-          ).get(id)!),
+      returnTo: current.data.returnTo,
+      result: current.data.result,
       ...documentLifecycle(current.data),
       ...(await deprecatedCardNotice(stateFs, current)),
       ...(options.retainedState && (await uncapturedChecker(fs))(current.path, raw)
@@ -657,30 +695,47 @@ export function takeCardDocument(
     fs,
     async () => {
       const { current, history, publishedVersion, recovery } = await checkedCard(fs, id, {
+        kind: "take",
         roleId,
       });
       if (roleId !== undefined) await roleAvailable(fs, roleId);
       const status = documentLifecycle(current.data).status;
       if (status !== "stable" && status !== "draft" && status !== "deprecated")
         throw new CardDocumentError("RECEPTION_CONFLICT", "Card is not current");
-      if (current.data.target && roleId === undefined)
+      const receivingReturn = current.data.state === "returned" || current.data.state === "closed";
+      const target = receivingReturn ? current.data.returnTo : current.data.target;
+      if ((target || current.data.returnTo) && roleId === undefined)
         throw new CardDocumentError(
           "RECEPTION_CONFLICT",
-          `Card ${id} is addressed to ${current.data.target}; you took it as no Role.`,
+          current.data.returnTo && !receivingReturn
+            ? `Card ${id} returns to ${current.data.returnTo}; take it with --role <your role-id>.`
+            : target
+              ? `Card ${id} is addressed to ${target}; you took it as no Role.`
+              : `Card ${id} requires an explicit receiving Role.`,
         );
-      if (current.data.target && current.data.target !== roleId)
+      if (!receivingReturn && current.data.returnTo === roleId && roleId !== undefined)
+        cardConflict(
+          current,
+          "RECEPTION_CONFLICT",
+          `${roleId} receives this Card's return, not its input; take it with another Role.`,
+        );
+      if (target && target !== roleId)
         throw new CardDocumentError(
           "RECEPTION_CONFLICT",
-          `Card ${id} is addressed to ${current.data.target}; you took it as ${roleId}.`,
+          `Card ${id} is addressed to ${target}; you took it as ${roleId}.`,
         );
-      if (current.data.state !== "pending" && current.data.receivedBy !== roleId)
+      if (
+        !receivingReturn &&
+        current.data.state !== "pending" &&
+        current.data.receivedBy !== roleId
+      )
         throw new CardDocumentError(
           "RECEPTION_CONFLICT",
           "Card reception uses a different Role context",
         );
       const state = current.data.state;
-      const nextState = "consumed";
-      const replayed = state === "consumed" && !recovery;
+      const nextState = receivingReturn ? "closed" : "consumed";
+      const replayed = state === nextState && !recovery;
       const raw =
         state === nextState
           ? current.raw
@@ -688,7 +743,7 @@ export function takeCardDocument(
               {
                 ...current.data,
                 state: nextState,
-                ...(roleId !== undefined ? { receivedBy: roleId } : {}),
+                ...(!receivingReturn && roleId !== undefined ? { receivedBy: roleId } : {}),
               },
               current.body,
               current.keyOrder,
@@ -699,13 +754,10 @@ export function takeCardDocument(
         title: current.data.title,
         target: current.data.target,
         state: nextState,
-        receivedBy: roleId,
+        receivedBy: receivingReturn ? current.data.receivedBy : roleId,
+        returnTo: current.data.returnTo,
+        result: current.data.result,
         replayed,
-        ...(
-          await readCardProgress(fs, [
-            { cardId: id, state: "consumed", sources: current.data.sources },
-          ])
-        ).get(id)!,
         ...documentLifecycle(current.data),
         ...(await deprecatedCardNotice(fs, current)),
       };
@@ -728,12 +780,96 @@ export function takeCardDocument(
   );
 }
 
-/** Wait for published pending input; idle polls read only the independent Git HEAD. */
+/** Return exactly one result; the receiving Role remains the result's author. */
+export function returnCardDocument(
+  fs: FsAdapter,
+  id: string,
+  input: { result: string; roleId: string },
+) {
+  return withTentMutation(
+    fs,
+    async () => {
+      validateResult(input.result);
+      if (!input.roleId)
+        throw new CardDocumentError(
+          "RECEPTION_CONFLICT",
+          "Return requires --role role-ID, the Role that took the Card.",
+        );
+      const { current, history, recovery } = await checkedCard(fs, id, {
+        kind: "return",
+        ...input,
+      });
+      if (input.roleId !== undefined) await roleAvailable(fs, input.roleId);
+      if (documentLifecycle(current.data).status === null)
+        cardConflict(current, "RECEPTION_CONFLICT", "Card is not current");
+      if (!current.data.returnTo)
+        cardConflict(
+          current,
+          "RECEPTION_CONFLICT",
+          `Card ${id} has no returnTo; taking it completed it.`,
+        );
+      if (current.data.state === "pending")
+        cardConflict(
+          current,
+          "RECEPTION_CONFLICT",
+          `Card ${id} is still pending; take it with --role <role-id> first.`,
+        );
+      if (current.data.receivedBy !== input.roleId)
+        cardConflict(
+          current,
+          "RECEPTION_CONFLICT",
+          `${current.data.receivedBy} took Card ${id}; return it with --role ${current.data.receivedBy}.`,
+        );
+      if (current.data.result !== undefined && current.data.result !== input.result)
+        cardConflict(
+          current,
+          "RECEPTION_CONFLICT",
+          `Card ${id} was already returned: ${current.data.result}. Put corrections in a Node, or send a new Card.`,
+        );
+      const replayed = current.data.state !== "consumed" && !recovery;
+      const fields =
+        current.data.state === "consumed"
+          ? { ...current.data, state: "returned" as const, result: input.result }
+          : current.data;
+      const raw =
+        fields === current.data
+          ? current.raw
+          : serializeFrontmatter(fields, current.body, current.keyOrder);
+      await checkUnchanged(fs, current);
+      if (raw !== current.raw) await fs.writeFile(current.path, raw);
+      const captured = await history.captureUnlocked([{ path: current.path, raw }], {
+        operation: "card.return",
+      });
+      return {
+        cardId: id,
+        path: current.path,
+        etag: contentEtag(raw),
+        state: fields.state,
+        target: fields.target,
+        returnTo: fields.returnTo,
+        receivedBy: fields.receivedBy,
+        result: fields.result,
+        replayed,
+        version: captured.versions[0],
+      };
+    },
+    { operation: "card.return" },
+  );
+}
+
+type WatchedCard = {
+  cardId: string;
+  title?: string;
+  state?: "returned";
+  receivedBy?: string;
+  result?: string;
+};
+/** Wait for published pending input or returned results; idle polls read only Git HEAD. */
 export async function watchCardDocuments(
   fs: FsAdapter,
   roleId: string,
   timeoutSeconds?: number,
-): Promise<Array<{ cardId: string; title?: string }>> {
+): Promise<WatchedCard[]> {
   if (timeoutSeconds !== undefined && (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0))
     throw new Error("--timeout must be a nonnegative number of seconds");
   await roleAvailable(fs, roleId);
@@ -746,18 +882,28 @@ export async function watchCardDocuments(
     if (head !== observed) {
       observed = head;
       await roleAvailable(fs, roleId);
-      const items: Array<{ cardId: string; title?: string }> = [];
+      const items: WatchedCard[] = [];
       for (const [path, raw] of head ? await history.readDirectory(head, CARDS_DIR) : []) {
         const name = path.slice(CARDS_DIR.length + 1);
         const id = name.slice(0, -3);
         if (!name.endsWith(".md") || !isCardId(id)) continue;
         const card = parseCardDocument(id, raw);
         if (
-          card.data.state === "pending" &&
-          card.data.target === roleId &&
+          ((card.data.state === "pending" && card.data.target === roleId) ||
+            (card.data.state === "returned" && card.data.returnTo === roleId)) &&
           documentLifecycle(card.data).status !== "deprecated"
         )
-          items.push({ cardId: id, ...(card.data.title ? { title: card.data.title } : {}) });
+          items.push({
+            cardId: id,
+            ...(card.data.title ? { title: card.data.title } : {}),
+            ...(card.data.state === "returned"
+              ? {
+                  state: "returned" as const,
+                  receivedBy: card.data.receivedBy,
+                  result: card.data.result,
+                }
+              : {}),
+          });
       }
       if (items.length) return items;
     }
@@ -805,10 +951,8 @@ export async function listCardDocumentHeaders(
               : await fs.readFile(path);
           uncaptured = isUncaptured?.(path, raw) ?? false;
           const data = parseFrontmatter(raw).data;
-          if (data.id !== id || data.type !== "card" || data.schemaVersion !== 3)
-            invalid("Card header identity mismatch");
+          validateCardHeader(id, data);
           const state = data.state;
-          if (state !== "pending" && state !== "consumed") invalid("Invalid Card state");
           if (!options.includeDeprecated && documentLifecycle(data).status === "deprecated")
             continue;
           if (options.state && state !== options.state) continue;
@@ -817,7 +961,7 @@ export async function listCardDocumentHeaders(
             (state === "pending"
               ? data.target !== options.roleId &&
                 !(options.includeOpen && data.target === undefined)
-              : data.receivedBy !== options.roleId)
+              : data.receivedBy !== options.roleId && data.returnTo !== options.roleId)
           )
             continue;
           const item = {
@@ -827,6 +971,8 @@ export async function listCardDocumentHeaders(
             state,
             target: data.target,
             receivedBy: data.receivedBy,
+            returnTo: data.returnTo,
+            result: data.result,
             ...documentLifecycle(data),
             ...(uncaptured ? { uncaptured: true } : {}),
           };
@@ -883,39 +1029,14 @@ export async function listCardDocumentHeaders(
 export async function listCardDocuments(
   fs: FsAdapter,
   options: Parameters<typeof listCardDocumentHeaders>[1] & { retainedState?: boolean } = {},
-  currentInspections?: Promise<readonly import("./node-sync.js").NodeSyncInspection[]>,
-  currentCatalog?: NodeCatalog | Promise<NodeCatalog | undefined>,
   currentHeaders?: Awaited<ReturnType<typeof listCardDocumentHeaders>>,
 ) {
-  const { items: visible, sourceSets } =
+  const { items: visible } =
     currentHeaders ??
     (await listCardDocumentHeaders(fs, {
       ...options,
       uncaptured: options.retainedState || options.uncaptured,
     }));
-  if (visible.some((item) => !item.diagnostic)) {
-    const stateFs = options.retainedState ? await retainedDocumentFs(fs) : fs;
-    const progressHeaders = options.retainedState
-      ? await listCardDocumentHeaders(stateFs, {
-          cardIds: visible.filter((item) => !item.diagnostic).map((item) => String(item.cardId)),
-          includeDeprecated: true,
-        })
-      : { items: visible, sourceSets };
-    const progress = await readCardProgress(
-      stateFs,
-      progressHeaders.items
-        .filter((item) => !item.diagnostic)
-        .map((item) => ({
-          cardId: String(item.cardId),
-          state: item.state as CardDocumentState,
-          sources: progressHeaders.sourceSets.get(String(item.cardId)) ?? [],
-        })),
-      currentInspections,
-      currentCatalog,
-    );
-    for (const item of visible)
-      if (!item.diagnostic) Object.assign(item, progress.get(String(item.cardId)));
-  }
   return { revision: canonicalSha256(visible), items: visible };
 }
 

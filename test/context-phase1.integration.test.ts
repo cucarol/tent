@@ -7,6 +7,7 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
+import { runRoleCommand } from "../src/cli/role-commands.js";
 import { git } from "./helpers.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import {
@@ -340,7 +341,7 @@ test("CLI rejects retired flags and confirmation still requires a full live read
   assert.match(rejected.stderr, /complete|incomplete|full/i);
 });
 
-test("brief shows multi-goal Card completion and only warns for changed source goals still ahead", async (t) => {
+test("brief keeps Card delivery independent of goal outputs and only warns for changed source goals still ahead", async (t) => {
   const f = await fixture(t);
   const source = await f.node("create", [
     "Spec",
@@ -361,7 +362,15 @@ test("brief shows multi-goal Card completion and only warns for changed source g
     assert.equal(result.exitCode, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
+  for (const roleId of ["role-worker", "role-requester"]) {
+    const created = await runRoleCommand("create", ["--id", roleId, "--title", roleId], f.options);
+    assert.equal(created.exitCode, 0, created.stderr);
+  }
   const published = await card("create", [
+    "--target",
+    "role-worker",
+    "--return-to",
+    "role-requester",
     "--prompt",
     "Implement the source.",
     "--source",
@@ -369,10 +378,12 @@ test("brief shows multi-goal Card completion and only warns for changed source g
     "--source",
     second.node.nodeId,
   ]);
-  await card("take", [published.cardId]);
+  await card("take", [published.cardId, "--role", "role-worker"]);
   const received = (await f.workspace("brief")).value;
   assert.deepEqual(received.changedCardSources, []);
-  assert.equal(received.cardInputs[0].progress, "received-no-output");
+  assert.equal(received.cardInputs[0].state, "consumed");
+  assert.equal(received.cardInputs[0].receivedBy, "role-worker");
+  assert.equal(received.cardInputs[0].returnTo, "role-requester");
   await fs.writeFile(path.join(f.root, "result.html"), "<h1>result</h1>");
   const output = await f.node("link-output", [
     source.node.nodeId,
@@ -387,13 +398,25 @@ test("brief shows multi-goal Card completion and only warns for changed source g
     true,
   );
   const withOutput = (await f.workspace("brief")).value;
-  assert.equal(withOutput.cardInputs[0].progress, "received-no-output");
-  assert.equal(withOutput.cardInputs[0].outputCount, 1);
-  assert.equal(withOutput.cardInputs[0].goalCount, 1);
-  assert.equal(withOutput.cardInputs[0].totalGoalCount, 2);
+  assert.deepEqual(withOutput.cardInputs, received.cardInputs);
+  for (const key of [
+    "progress",
+    "outputCount",
+    "goalCount",
+    "totalGoalCount",
+    "outputNodeIds",
+    "reviewOutputNodeIds",
+  ])
+    assert.equal(key in withOutput.cardInputs[0], false);
+  assert.equal(
+    withOutput.counts.ahead,
+    1,
+    "goal progress remains visible independently of Card delivery",
+  );
   const textBrief = await runWorkspaceCommand("brief", [], { workspace: f.root });
   assert.equal(textBrief.exitCode, 0, textBrief.stderr);
-  assert.match(textBrief.stdout, /\[received-no-output 1\/2\]/);
+  assert.match(textBrief.stdout, /\[consumed\] received by role-worker return to role-requester/);
+  assert.doesNotMatch(textBrief.stdout, /received-no-output|has-output|needs-review|1\/2/);
   const file = path.join(f.root, ".tent", "Spec", "Spec.md");
   const original = await fs.readFile(file, "utf8");
   await fs.writeFile(file, original.replace("Original requirement", "Changed requirement"));
@@ -421,10 +444,40 @@ test("brief shows multi-goal Card completion and only warns for changed source g
     "--card",
     published.cardId,
   ]);
+  const allOutputs = (await f.workspace("brief")).value;
+  assert.deepEqual(
+    allOutputs.cardInputs,
+    received.cardInputs,
+    "goal outputs do not complete the Card",
+  );
+  assert.equal(allOutputs.counts.ahead, 0);
+  await card("return", [
+    published.cardId,
+    "--role",
+    "role-worker",
+    "--result",
+    `Done ${output.nodeId}`,
+  ]);
+  const returned = (await f.workspace("brief", ["--role", "role-requester"])).value;
+  assert.equal(returned.cardInputs[0].state, "returned");
+  assert.equal(returned.cardInputs[0].result, `Done ${output.nodeId}`);
+  assert.deepEqual((await f.workspace("brief", ["--role", "role-worker"])).value.cardInputs, []);
+  assert.deepEqual(
+    (await f.workspace("brief", ["--role", "role-requester"])).value.cardInputs,
+    returned.cardInputs,
+  );
+  await card("take", [published.cardId, "--role", "role-requester"]);
   assert.deepEqual(
     (await f.workspace("brief")).value.cardInputs,
     [],
-    "fully completed Cards leave pending work",
+    "taking the receipt closes its delivery",
+  );
+  const notice = await card("create", ["--prompt", "Read this", "--source", second.node.nodeId]);
+  await card("take", [notice.cardId]);
+  assert.deepEqual(
+    (await f.workspace("brief")).value.cardInputs,
+    [],
+    "a Card without returnTo completes on take",
   );
   const shown = await card("show", [published.cardId]);
   await card("deprecate", [published.cardId, "--base-etag", shown.etag]);

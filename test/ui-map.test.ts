@@ -24,7 +24,7 @@ import { placeCards } from "../src/ui/map/canvas.js";
 import { routeLinks, type Pt } from "../src/ui/map/route.js";
 import { ago, relativeHref, resolveHref, workspaceImagePath } from "../src/ui/util.js";
 import { setLang } from "../src/ui/i18n.js";
-import { cardProgressLabel } from "../src/ui/data/card-progress.js";
+import { cardStateLabel, resultParts } from "../src/ui/data/card-state.js";
 import { petTraits } from "../src/ui/components/Pet.js";
 
 setLang("zh", false);
@@ -145,10 +145,6 @@ function card(
     id,
     title: id,
     state,
-    progress: null,
-    goalCount: 0,
-    totalGoalCount: 0,
-    outputNodeIds: [],
     target: lane.target ?? null,
     receivedBy: lane.receivedBy ?? null,
     status: "stable",
@@ -188,30 +184,21 @@ test("a Node's faces are the lanes its published Cards went to, Roles first, wit
       lane: "role-x",
       cards: 0,
       waiting: 1,
-      outputs: 0,
-      reviews: 0,
-      goalCount: 0,
-      totalGoalCount: 0,
+      doing: 0,
       old: true,
     },
     {
       lane: "role-y",
       cards: 2,
       waiting: 0,
-      outputs: 0,
-      reviews: 0,
-      goalCount: 0,
-      totalGoalCount: 0,
+      doing: 0,
       old: false,
     },
     {
       lane: "",
       cards: 0,
       waiting: 1,
-      outputs: 0,
-      reviews: 0,
-      goalCount: 0,
-      totalGoalCount: 0,
+      doing: 0,
       old: false,
     },
   ]);
@@ -220,103 +207,49 @@ test("a Node's faces are the lanes its published Cards went to, Roles first, wit
       lane: "role-y",
       cards: 1,
       waiting: 0,
-      outputs: 0,
-      reviews: 0,
-      goalCount: 0,
-      totalGoalCount: 0,
+      doing: 0,
       old: false,
     },
   ]);
 });
 
-test("Card output progress is reflected on each carried Node without counting repeated sources twice", () => {
-  const sent = card("sent", { receivedBy: "role-x" }, "consumed", [
+test("a Card being done shows on each carried Node, counted once however often it names the Node", () => {
+  const doing = card("doing", { receivedBy: "role-x" }, "consumed", [
     ["a", false],
     ["a", false],
   ]);
-  sent.progress = "has-output";
-  sent.goalCount = 1;
-  sent.totalGoalCount = 1;
-  sent.outputNodeIds = ["result"];
-  const graph = graphOf([node("a", null), node("result", null)], [role("role-x")], [sent]);
+  doing.returnTo = "role-y";
+  const finished = card("finished", { receivedBy: "role-x" }, "consumed", [["a", false]]);
+  const back = card("back", { receivedBy: "role-x" }, "returned", [["a", false]]);
+  back.returnTo = "role-y";
+  back.result = "PASS";
+  const graph = graphOf(
+    [node("a", null)],
+    [role("role-x"), role("role-y")],
+    [doing, finished, back],
+  );
   assert.deepEqual(graph.handedTo("a"), [
-    {
-      lane: "role-x",
-      cards: 1,
-      waiting: 0,
-      outputs: 1,
-      reviews: 0,
-      goalCount: 1,
-      totalGoalCount: 1,
-      old: false,
-    },
+    { lane: "role-x", cards: 3, waiting: 0, doing: 1, old: false },
   ]);
 });
 
-test("goal-free Cards show only reception while partial multi-goal Cards show a completion ratio", () => {
+test("a Card reads only its delivery state, and its result links the Node ids it names", () => {
   setLang("en", false);
   const sent = card("sent", {}, "consumed", []);
-  assert.equal(cardProgressLabel(sent), "Received");
-  assert.equal(cardProgressLabel({ ...sent, state: "pending" }), "Pending");
-  const partial = {
-    ...sent,
-    progress: "received-no-output" as const,
-    goalCount: 1,
-    totalGoalCount: 2,
-  };
-  assert.equal(cardProgressLabel(partial), "Some outputs still missing · 1/2");
-  assert.equal(cardProgressLabel({ ...partial, goalCount: 0 }), "Received, no output yet · 0/2");
-  assert.equal(
-    cardProgressLabel({ ...partial, goalCount: 2, progress: "has-output" }),
-    "Has output · 2/2",
-  );
+  assert.equal(cardStateLabel(sent), "Received");
+  assert.equal(cardStateLabel({ ...sent, state: "pending" }), "Pending");
+  assert.equal(cardStateLabel({ ...sent, returnTo: "role-y" }), "In progress");
+  assert.equal(cardStateLabel({ ...sent, returnTo: "role-y", state: "returned" }), "Returned");
+  assert.equal(cardStateLabel({ ...sent, returnTo: "role-y", state: "closed" }), "Collected");
   setLang("zh", false);
-});
-
-test("map badges keep partial goal counts without treating a Card as completed", () => {
-  const partial = card("partial", { receivedBy: "role-x" }, "consumed", [
-    ["a", false],
-    ["a", false],
+  assert.deepEqual(resultParts("PASS, see node-ab12 and node-cd34."), [
+    { text: "PASS, see " },
+    { nodeId: "node-ab12" },
+    { text: " and " },
+    { nodeId: "node-cd34" },
+    { text: "." },
   ]);
-  partial.progress = "received-no-output";
-  partial.goalCount = 1;
-  partial.totalGoalCount = 2;
-  partial.outputNodeIds = ["result"];
-  const referenceOnly = card("reference", { receivedBy: "role-x" }, "consumed", [["a", false]]);
-  const graph = graphOf([node("a", null)], [role("role-x")], [partial, referenceOnly]);
-  assert.deepEqual(graph.handedTo("a"), [
-    {
-      lane: "role-x",
-      cards: 2,
-      waiting: 0,
-      outputs: 0,
-      reviews: 0,
-      goalCount: 1,
-      totalGoalCount: 2,
-      old: false,
-    },
-  ]);
-});
-
-test("map badges count Cards whose outputs wait for review", () => {
-  const review = card("review", { receivedBy: "role-x" }, "consumed", [["a", false]]);
-  review.progress = "needs-review";
-  review.totalGoalCount = 1;
-  review.reviewGoalCount = 1;
-  review.reviewOutputNodeIds = ["result"];
-  const graph = graphOf([node("a", null)], [role("role-x")], [review]);
-  assert.deepEqual(graph.handedTo("a"), [
-    {
-      lane: "role-x",
-      cards: 1,
-      waiting: 0,
-      outputs: 0,
-      reviews: 1,
-      goalCount: 0,
-      totalGoalCount: 1,
-      old: false,
-    },
-  ]);
+  assert.deepEqual(resultParts("node-ab12"), [{ nodeId: "node-ab12" }]);
 });
 
 test("a repeated Node source counts its Card once and keeps drift from any of its versions", () => {
@@ -339,10 +272,7 @@ test("a repeated Node source counts its Card once and keeps drift from any of it
       lane: "role-x",
       cards: 1,
       waiting: 1,
-      outputs: 0,
-      reviews: 0,
-      goalCount: 0,
-      totalGoalCount: 0,
+      doing: 0,
       old: true,
     },
   ]);

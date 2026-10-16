@@ -16,7 +16,7 @@ import {
   verifyCardSourceVersion,
   verifyCardSourceVersions,
 } from "../src/core/graph/card-document.js";
-import { readCardGoalIds } from "../src/core/graph/card-progress.js";
+import { readCardGoalIds } from "../src/core/graph/card-context.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { readNode } from "../src/core/read/node-query.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
@@ -204,10 +204,10 @@ test("a historical version with a former suffixed type is rejected like any inva
     const [batch] = await verifyCardSourceVersions(adapter, [
       { owner: "cards/card-history.md", source },
     ]);
-    // Card progress over the pinned goal.
-    const progress = (
+    // Goal attribution still validates the pinned source identity.
+    const sourceGoals = (
       await readCardGoalIds(adapter, [
-        { cardId: "card-history", state: "consumed", sources: [{ resource: `/${file}`, version }] },
+        { cardId: "card-history", sources: [{ resource: `/${file}`, version }] },
       ])
     ).get("card-history")!;
     // card list/show over a received Card that pinned the retained version.
@@ -237,22 +237,22 @@ test("a historical version with a former suffixed type is rejected like any inva
       read,
       single,
       batch: batch instanceof Error ? batch.message : "accepted",
-      goalIds: [...progress.goalIds],
-      diagnostics: progress.diagnostics.map(anonymous),
-      list: [listed.progress, listed.totalGoalCount, anonymous(listed.diagnostic)],
-      show: [shown.progress, shown.totalGoalCount, anonymous(shown.diagnostic)],
+      goalIds: [...sourceGoals.goalIds],
+      diagnostics: sourceGoals.diagnostics.map(anonymous),
+      list: [listed.state, "progress" in listed, "totalGoalCount" in listed],
+      show: [shown.state, "progress" in shown, "totalGoalCount" in shown],
     });
   }
   // An invalid pin is diagnosed, never read as a Card without goals.
-  const diagnostic = `Cannot derive Card progress from <source>: Error: ${message}`;
+  const diagnostic = `Cannot read Card source <source>: Error: ${message}`;
   assert.deepEqual(outcomes[0], {
     read: message,
     single: message,
     batch: message,
     goalIds: [],
     diagnostics: [diagnostic],
-    list: [null, 0, diagnostic],
-    show: [null, 0, diagnostic],
+    list: ["consumed", false, false],
+    show: ["consumed", false, false],
   });
   assert.deepEqual(outcomes[1], outcomes[0], "a padded former type is invalid too");
   assert.deepEqual(outcomes[2], outcomes[0], "the same result as an unknown type");

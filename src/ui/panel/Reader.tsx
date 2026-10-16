@@ -19,8 +19,8 @@ import type {
   SnapshotRef,
   SnapshotRole,
 } from "../data/types.js";
-import { editDraft, isDraft, useDraft } from "../data/drafts.js";
-import { cardProgressLabel } from "../data/card-progress.js";
+import { editDraft, isDraft, useDraft, type Draft } from "../data/drafts.js";
+import { cardStage, cardStateLabel, resultParts } from "../data/card-state.js";
 import { nodeDrafts as drafts } from "../data/node-drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { FileView } from "./FileView.js";
@@ -368,14 +368,28 @@ function CardLine({
 }) {
   const draft = isDraft(card);
   const lane = work.laneOf(card);
-  const waiting = card.state === "pending" && !draft;
+  const stage = cardStage(card);
+  const waiting = stage === "pending" && !draft;
   return (
     <button
       type="button"
       className={`card-line${waiting ? " is-waiting" : draft ? " is-draft" : ""}`}
       onClick={() => onOpen({ kind: "card", id: card.id })}
     >
-      <Icon name={draft ? "draft" : waiting ? "mail" : "check"} size={14} />
+      <Icon
+        name={
+          draft
+            ? "draft"
+            : waiting
+              ? "mail"
+              : stage === "doing"
+                ? "working"
+                : stage === "returned"
+                  ? "returned"
+                  : "check"
+        }
+        size={14}
+      />
       <span className="cl-text">
         <span className="t">{work.title(card)}</span>
         <span className="w">
@@ -386,7 +400,7 @@ function CardLine({
               <span className="dot-sep">·</span>
             </>
           )}
-          {draft ? t.work.draft : `${cardProgressLabel(card)} · ${ago(card.publishedAt)}`}
+          {draft ? t.work.draft : `${cardStateLabel(card)} · ${ago(card.publishedAt)}`}
         </span>
       </span>
     </button>
@@ -400,7 +414,7 @@ function Step({
   title,
   sub,
 }: {
-  state: "done" | "ok" | "now" | "review" | "todo";
+  state: "done" | "ok" | "now" | "todo";
   dot: ReactNode;
   title: string;
   sub?: string;
@@ -423,9 +437,10 @@ const Line = ({ todo }: { todo?: boolean }) => (
 const laneIcon = (lane: string, size: number) =>
   lane !== PUBLIC ? <Pet id={lane} size={size} /> : <Tray size={size} />;
 
-/** Which lane a Card sits in; each chip moves it there. */
+/** Which lane a Card sits in; each chip moves it there, except to the Role a published Card returns to. */
 function LanePick({ work, card }: { work: Work; card: SnapshotCard }) {
   const at = work.laneOf(card);
+  const barred = (lane: string) => !isDraft(card) && card.returnTo === lane;
   return (
     <div className="lanes-pick" role="radiogroup" aria-label={t.page.whereLabel}>
       {work.lanes.map((lane) => (
@@ -434,11 +449,53 @@ function LanePick({ work, card }: { work: Work; card: SnapshotCard }) {
           type="button"
           role="radio"
           aria-checked={lane === at}
-          disabled={work.publishing === card.id}
+          disabled={work.publishing === card.id || barred(lane)}
+          title={barred(lane) ? t.work.notToReturner(work.laneName(lane)) : undefined}
           onClick={() => void work.move(card.id, lane)}
         >
           {laneIcon(lane, 14)}
           {work.laneName(lane)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Who a draft's result comes back to, or nobody; each chip sets it. The lane it goes to is left out. */
+function ReturnPick({
+  work,
+  card,
+  draft,
+}: {
+  work: Work;
+  card: SnapshotCard;
+  draft: Draft | null;
+}) {
+  const at = draft?.input.returnTo ?? null;
+  const off = !draft || work.publishing === card.id;
+  return (
+    <div className="lanes-pick" role="radiogroup" aria-label={t.page.returnWho}>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={at === null}
+        disabled={off}
+        onClick={() => work.setReturn(card.id, null)}
+      >
+        <Icon name="minus" size={14} />
+        {t.work.noReturn}
+      </button>
+      {work.returnChoices(card).map((r) => (
+        <button
+          key={r.id}
+          type="button"
+          role="radio"
+          aria-checked={at === r.id}
+          disabled={off}
+          onClick={() => work.setReturn(card.id, r.id)}
+        >
+          <Pet id={r.id} size={14} />
+          {r.title}
         </button>
       ))}
     </div>
@@ -859,7 +916,7 @@ function goneName(resource: string): string {
 function RolePage(props: PageProps & { role: SnapshotRole }) {
   const { graph, role, work, narrow, onOpen, onToast } = props;
   const drag = useDragState();
-  const here = work.laneCards(role.id);
+  const here = [...work.laneCards(role.id), ...work.laneReturned(role.id)];
   const received = graph.snapshot.cards
     .filter((c) => c.receivedBy === role.id)
     .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
@@ -1037,8 +1094,10 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
       .reverse();
   };
   const open = since === null ? undefined : card.sources[since];
-  const status = cardProgressLabel(card);
-  const progress = card.progress;
+  const stage = cardStage(card);
+  const status = cardStateLabel(card);
+  const back = card.returnTo;
+  const backName = back ? work.laneName(back) : "";
   return (
     <>
       <PageTop
@@ -1082,7 +1141,7 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
                   <b>Card</b>
                   <span className="dot-sep">·</span>
                   <span
-                    className={`pill ${pending ? "pill-pending" : progress === "needs-review" ? "pill-review" : "pill-consumed"}`}
+                    className={`pill ${pending || stage === "returned" ? "pill-pending" : stage === "doing" ? "pill-doing" : "pill-consumed"}`}
                   >
                     {status}
                   </span>
@@ -1109,32 +1168,26 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
               />
               <Line todo={pending} />
               <Step
-                state={pending ? "todo" : progress ? "done" : "ok"}
+                state={pending ? "todo" : back ? "done" : "ok"}
                 dot={<Icon name="check" size={15} />}
                 title={pending ? t.page.receive : t.page.receivedBy(laneName)}
                 sub={pending ? t.page.thenFixed : when(card.updatedAt)}
               />
-              {progress && (
+              {back && (
                 <>
-                  <Line todo={progress !== "has-output"} />
+                  <Line todo={stage === "pending" || stage === "doing"} />
                   <Step
-                    state={
-                      progress === "has-output"
-                        ? "ok"
-                        : progress === "needs-review"
-                          ? "review"
-                          : progress === "pending"
-                            ? "todo"
-                            : "now"
-                    }
-                    dot={<Icon name={progress === "needs-review" ? "review" : "out"} size={15} />}
-                    title={progress === "pending" ? t.page.outputs : status}
+                    state={stage === "pending" ? "todo" : stage === "doing" ? "now" : "ok"}
+                    dot={laneIcon(back, 28)}
+                    title={t.page.returnStep(backName)}
                     sub={
-                      progress === "needs-review"
-                        ? t.page.toReview(card.reviewOutputNodeIds?.length ?? 0)
-                        : progress === "has-output"
-                          ? undefined
-                          : t.page.noOutputYet
+                      stage === "doing"
+                        ? t.page.doingSub
+                        : stage === "returned"
+                          ? t.page.toCollect(backName)
+                          : stage === "closed"
+                            ? t.page.collected(backName)
+                            : undefined
                     }
                   />
                 </>
@@ -1149,6 +1202,24 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
         }
         main={
           <>
+            {card.result && (
+              <Section title={t.page.result}>
+                <p className="card-result">
+                  {resultParts(card.result).map((p, i) =>
+                    "nodeId" in p ? (
+                      <RefLink
+                        key={i}
+                        graph={graph}
+                        target={{ kind: "node", id: p.nodeId }}
+                        onOpen={onOpen}
+                      />
+                    ) : (
+                      <span key={i}>{p.text}</span>
+                    ),
+                  )}
+                </p>
+              </Section>
+            )}
             <Section title={t.page.what}>
               <div className="pg-doc">
                 {body.trim() ? (
@@ -1158,20 +1229,6 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
                 )}
               </div>
             </Section>
-            {card.outputNodeIds.length > 0 && (
-              <Section title={t.page.outputs}>
-                {card.outputNodeIds.map((id) => (
-                  <RefLink key={id} graph={graph} target={{ kind: "node", id }} onOpen={onOpen} />
-                ))}
-              </Section>
-            )}
-            {!!card.reviewOutputNodeIds?.length && (
-              <Section title={t.page.reviewOutputs} note={t.page.reviewOutputsNote}>
-                {card.reviewOutputNodeIds.map((id) => (
-                  <RefLink key={id} graph={graph} target={{ kind: "node", id }} onOpen={onOpen} />
-                ))}
-              </Section>
-            )}
             {open?.version && (
               <Section
                 title={t.page.sourceChanges(
@@ -1386,9 +1443,22 @@ function DraftPage(props: PageProps & { card: SnapshotCard }) {
                 title={t.page.receive}
                 sub={t.page.thenFixed}
               />
+              {draft?.input.returnTo && (
+                <>
+                  <Line todo />
+                  <Step
+                    state="todo"
+                    dot={laneIcon(draft.input.returnTo, 28)}
+                    title={t.page.returnStep(work.laneName(draft.input.returnTo))}
+                  />
+                </>
+              )}
             </div>
             <Section title={t.page.where} note={t.page.whereNote}>
               <LanePick work={work} card={card} />
+            </Section>
+            <Section title={t.page.returnWho} note={t.page.returnNote}>
+              <ReturnPick work={work} card={card} draft={draft} />
             </Section>
             <Section title={t.card.sources} count={sources.length} note={t.page.sourcesNote}>
               <ol className={`srcs2${over ? " is-over" : ""}`} data-drop={`card:${card.id}`}>

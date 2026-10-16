@@ -10,7 +10,7 @@ import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { CARDS_DIR, ROLES_DIR, nodeNotePath } from "../core/base/paths.js";
 import { loadTent } from "../core/store/tree.js";
 import type { Node } from "../core/base/types.js";
-import { readCardProgress, readOutputActivity } from "../core/graph/card-progress.js";
+import { readOutputActivity } from "../core/graph/card-context.js";
 import type {
   Snapshot,
   SnapshotCard,
@@ -33,25 +33,14 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
   const fs = readOnlyFs(source.fs);
   // Current document scans are independent of the retained Git history read.
   const cardDocuments = readDocs(CARDS_DIR);
-  const [tent, roleDocs, cardDocs, retainedEvents, relations, outputActivity, progress] =
-    await Promise.all([
-      loadTent(fs),
-      readDocs(ROLES_DIR),
-      cardDocuments,
-      listHistoryChanges(fs),
-      listWorkspaceRelations(fs),
-      readOutputActivity(fs),
-      cardDocuments.then((docs) =>
-        readCardProgress(
-          fs,
-          docs.map((d) => ({
-            cardId: String(d.data.id),
-            state: d.data.state as SnapshotCard["state"],
-            sources: Array.isArray(d.data.sources) ? d.data.sources : [],
-          })),
-        ),
-      ),
-    ]);
+  const [tent, roleDocs, cardDocs, retainedEvents, relations, outputActivity] = await Promise.all([
+    loadTent(fs),
+    readDocs(ROLES_DIR),
+    cardDocuments,
+    listHistoryChanges(fs),
+    listWorkspaceRelations(fs),
+    readOutputActivity(fs),
+  ]);
   const byPath = new Map<string, SnapshotRef>();
 
   const nodes: SnapshotNode[] = [];
@@ -203,7 +192,8 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
         id,
         title,
         state: String(d.data.state) as SnapshotCard["state"],
-        ...progress.get(id)!,
+        ...(typeof d.data.returnTo === "string" ? { returnTo: d.data.returnTo } : {}),
+        ...(typeof d.data.result === "string" ? { result: d.data.result } : {}),
         target: typeof d.data.target === "string" ? d.data.target : null,
         receivedBy: typeof d.data.receivedBy === "string" ? d.data.receivedBy : null,
         status: typeof d.data.status === "string" ? d.data.status : "stable",

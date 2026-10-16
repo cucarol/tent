@@ -361,13 +361,13 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
 /**
  * The lanes a Node went to in published Cards, up to three faces: a Role, or the public area. One still
  * waiting to be received has a blue ring and an envelope, amber when that Card pinned an older version;
- * one received but without outputs for all its goals has a grey ellipsis. Finished lanes stay quiet, and
- * the tooltip counts the goals. A Role's face selects the Role.
+ * one received and still being done, to be returned, has a grey ellipsis. Finished lanes stay quiet. A
+ * Role's face selects the Role.
  */
 function Faces({ graph, hands }: { graph: Graph; hands: Hand[] }) {
   const { activeRole, onRole } = useContext(MapActions);
   // Two faces at most, those still waiting on a Card first; the rest are counted.
-  const need = (h: Hand) => (h.old ? 3 : h.waiting ? 2 : h.reviews ? 1 : 0);
+  const need = (h: Hand) => (h.old ? 3 : h.waiting ? 2 : h.doing ? 1 : 0);
   const shown = [...hands].sort((x, y) => need(y) - need(x)).slice(0, 2);
   return (
     <span className="mcard-faces">
@@ -377,21 +377,12 @@ function Faces({ graph, hands }: { graph: Graph; hands: Hand[] }) {
           role?.title ?? (h.lane === PUBLIC ? null : t.work.goneRole(h.lane)),
           h.cards,
           h.waiting,
+          h.doing,
           h.old,
-          h.outputs,
-          h.reviews,
-          h.goalCount,
-          h.totalGoalCount,
         );
         const cls = `mcard-face${h.old ? " is-old" : h.waiting ? " is-waiting" : ""}${activeRole !== null && activeRole === h.lane ? " is-active" : ""}`;
         const face = h.lane === PUBLIC ? <Tray size={18} /> : <Pet id={h.lane} size={18} />;
-        const badge = h.waiting
-          ? "mail"
-          : h.reviews
-            ? "review"
-            : h.goalCount < h.totalGoalCount
-              ? "working"
-              : null;
+        const badge = h.waiting ? "mail" : h.doing ? "working" : null;
         const envelope = badge && (
           <i className={`face-env${badge === "mail" ? "" : ` is-${badge}`}`}>
             <Icon name={badge} size={8} />

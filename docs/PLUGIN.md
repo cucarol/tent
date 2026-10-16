@@ -101,25 +101,27 @@ Node 名称在所有平台按 Windows 文件名校验：不得含 `< > : " / \ |
 
 `node append` 不需要先读或 ETag；`--heading` 与现有同名节匹配时追加到该节末尾。正文编辑交给 Agent 自带的文件工具或 `node write`。替换整个正文前须完整读取（`--full`）；分页或部分读取得到的 `read:` ETag 只允许元数据修改，不能替换或确认正文。保存后保留回执中的 ETag 与 version，无需回读。ETag 冲突时重新读取、合并后用新 ETag 保存。Card 钉住的来源版本不能作为编辑基础。`node write-many` 的每个 create 条目需要本批唯一的 `ref`，`@ref` 可用于 parent、链接与材料地址。批次先校验并准备全部最终文档，在一个 Workspace 锁下写入，并把改动的文档记入一个 Tent 提交；失败的批次回滚它自己的文档、目录和顺序改动，回滚失败时报告受影响的路径与冲突并保留外部编辑。锁只串行化 Tent 写入者，不让文件写入与 Git 对外部编辑器或进程终止具有原子性。
 
-落后（behind）：goal 或 prompt 已记录的材料变化或缺失，或任意 Node 的 `stale_after` 到期。output 记录某一时刻的结果，自己的材料或任意祖先 goal 后续变化都不会让它落后，`asset` 标签也没有例外。完整读取 output 时，`changedSince` 分别列出变化的自身材料、直属 goal 和更上层 goal；这些信息不进 brief 的落后清单。领先（ahead）：goal 子树下没有现行 output，或者没有一份 output 的 goal 基线与当前正文、材料全部匹配。基线未知或材料不可核对不构成匹配；不同 output 的局部匹配不能拼成一份证据。确认一份仍成立的 output，或新建一份匹配的 output，即可清除该 goal 的领先，其他旧 output 的变化说明保留。现行 output 的范围不变，不增加时间字段或重放历史。Card 回应的 goal 正在领先时，进度为 `needs-review`。一个 goal 可同时落后和领先。读完整 Node 和变化的材料后，仍成立用 `node confirm`，需要修正用 `node write --confirm`；output 的普通重写、append、节编辑和元数据修改都保留原基线。确认 output 刷新其比较基线并清除已核实的变化说明，确认 goal 不代替确认 output。Tent 把材料版本记入 Git，不需要手填哈希。
+落后（behind）：goal 或 prompt 已记录的材料变化或缺失，或任意 Node 的 `stale_after` 到期。output 记录某一时刻的结果，自己的材料或任意祖先 goal 后续变化都不会让它落后，`asset` 标签也没有例外。完整读取 output 时，`changedSince` 分别列出变化的自身材料、直属 goal 和更上层 goal；这些信息不进 brief 的落后清单。领先（ahead）：goal 子树下没有现行 output，或者没有一份 output 的 goal 基线与当前正文、材料全部匹配。基线未知或材料不可核对不构成匹配；不同 output 的局部匹配不能拼成一份证据。确认一份仍成立的 output，或新建一份匹配的 output，即可清除该 goal 的领先，其他旧 output 的变化说明保留。现行 output 的范围不变，不增加时间字段或重放历史。Card 投递状态独立于 goal 的领先与产出状态。一个 goal 可同时落后和领先。读完整 Node 和变化的材料后，仍成立用 `node confirm`，需要修正用 `node write --confirm`；output 的普通重写、append、节编辑和元数据修改都保留原基线。确认 output 刷新其比较基线并清除已核实的变化说明，确认 goal 不代替确认 output。Tent 把材料版本记入 Git，不需要手填哈希。
 
 `node link-output` 在 goal 下新建 output，名称默认取文件名，只带 `--tags` 给出的标签；文件须已在 Workspace checkout 中，候选分支或 worktree 应先集成。从 linked worktree 调用仍写入主检出的 `.tent/`；材料、漂移和 brief 读取主检出文件，未合入的分支变化不使 Node 落后。本地材料按声明的地址读取，缺失时不从其他检出回退。`status` 为 `draft`、`stable`（默认）或 `deprecated`，只作用于本文档；`node archive` 弃用子树，`node restore --archive-commit` 撤销；`node delete` 永久删除子树，只在用户要求时使用。`node rename` 与 `node move` 保持 id 并更新指向它的链接。
 
-显式 `--context` 的首页与 `--full` 实时读取附带独立于 `text` 的 `context`（不超过 1 KiB）：祖先、按类型分组的子 Node、入链与出链（正文中 Markdown 链接以外的已知 Node id 记为 `mention`）、钉住该 Node 的 Card 及其状态、接收者和进度；output 另列 goal 链与同步状态，goal 保留范围内的 prompt 与子树 output。省略的计数可用 `node relations` 展开；历史读取保留钉住的内容，但没有 `context`。`node history` 跨移动列出已捕获的版本；用其中的 `version: {commit, path}` 和 `node get --version-json` 读取历史字节，再由 Agent 自己比较。Tent 只保存材料地址，材料由宿主已有工具读取。
+显式 `--context` 的首页与 `--full` 实时读取附带独立于 `text` 的 `context`（不超过 1 KiB）：祖先、按类型分组的子 Node、入链与出链（正文中 Markdown 链接以外的已知 Node id 记为 `mention`）、钉住该 Node 的 Card 及其投递状态、接收者、返回地址和结果；output 另列 goal 链与同步状态，goal 保留范围内的 prompt 与子树 output。省略的计数可用 `node relations` 展开；历史读取保留钉住的内容，但没有 `context`。`node history` 跨移动列出已捕获的版本；用其中的 `version: {commit, path}` 和 `node get --version-json` 读取历史字节，再由 Agent 自己比较。Tent 只保存材料地址，材料由宿主已有工具读取。
 
 ## Role 与 Card 的维护者说明
 
 Role 在 `.tent/roles/<role-id>.md` 中保存持续方向的目的、边界、方法和 Node 入口。它提供上下文，不占用锁，也不登记或绑定宿主 Session；多个会话可以按同一 Role 工作。共享事实由 Node 保存，Role 只链接事实入口。
 
-Card 保存一次固定输入：短指令、可选接收 Role，以及按顺序排列的来源。Node 和 Role 来源钉住所选版本，其他来源保留地址。CLI 将从 Workspace 根目录传入的路径转换为相对 Card 文档的地址。发布后的 prompt、title 和 sources 不可修改，手工修改会报告为 `INPUT_CHANGED`；接收者开始时没有发送方的对话，prompt 写明目标，来源承载其余内容；需求变化写回来源 Node，接收者在 brief 中获知变化后读取当前 Node。尚未决定的要求留在 draft Node。
+Card 保存一次固定输入：短指令、可选接收 Role、可选返回地址 returnTo，以及按顺序排列的来源。Node 和 Role 来源钉住所选版本，其他来源保留地址。CLI 将从 Workspace 根目录传入的路径转换为相对 Card 文档的地址。发布后的 prompt、title、sources 和 returnTo 不可修改，手工修改会报告为 `INPUT_CHANGED`。接收者开始时没有发送方的对话；prompt 写明目标，来源承载其余内容。需求变化写回来源 Node，接收者在 brief 中获知变化后读取当前 Node；尚未决定的要求留在 draft Node。
 
-`show` 只预览，`take` 记录接收。重复接收返回 `replayed: true`，应继续已有工作。`pending` 表示尚未接收，`consumed` 表示已经接收，完成后仍保持该状态。有 target 的 Card 必须带对应 Role 接收；公开 Card 可不带 Role。仅 pending Card 可以改派；取消使用 `deprecate`，保留原输入与接收记录，默认列表隐藏它。
+Card 只记录四种投递状态：`pending`、`consumed`、`returned`、`closed`。`show` 只预览，`take` 记录接收；相同 Role 重试返回 `replayed: true`，应继续已有工作。没有 returnTo 的 Card 收下即完成；有 returnTo 的 Card 已接未交回时才算在做。target 与 returnTo 都是投递地址，不记录发送者，不能指向同一 Role。有 target 的 Card 必须带对应 Role 接收；带 returnTo 的公开 Card 也必须由一个不同的 Role 接收，只有不带 returnTo 的公开 Card 可以匿名接收。仅 pending Card 可以改派，不能改派给 returnTo；取消使用 `deprecate`，保留原输入与接收记录，默认列表隐藏它。旧 Card 没有 returnTo，按相同规则解释，无需转换。
 
-进度由 Card 来源中的 goal 和实际产出决定：`received-no-output` 表示已接收但尚无对应结果，`needs-review` 表示有待复核的响应，`has-output` 表示每个请求目标下已有当前有效的实现产出。`goalCount` 与 `totalGoalCount` 分别是已满足与请求的目标数。没有 goal 来源的 Card 只显示接收情况。当前实现产出的生成或确认时间提供完成时间；确认无关产出不会完成 Card。
+`card return <id> --role <role-id> --result TEXT` 由接收 Role 交回，必须先 take；结果非空、单行、不超过 200 个 Unicode 字符（code points），细节写进 Node，结果可带 Node id，界面显示为链接。交回记录 returned 和 result，returnTo Role 再次 take 收下结果后变成 closed，原 receivedBy 不变。相同结果交回是重放，收回后也一样；换结果会拒绝，修正写进 Node，有新的工作再发 Card。不另存发送者、交回人或结果 Node 列表。Card 完成不由 goal 或 output 推导；goal 的领先、产出与确认语义独立保留，后续变化不会撤回 Card 的交回结果。
 
-产出通过 `node link-output --card <id>` 标明回答哪张 Card，无需另发回复 Card。显式 Card 可以跨 Role，但必须已接收、未作废，并在产出的 goal 祖先链上有来源目标。省略 Card 时，`--role` 必须匹配该目标唯一未完成 Card 的接收 Role。文件在 Workspace checkout 落地后才关联，候选分支应先集成。落后的响应需要复核，不能据此宣称完成。
+产出通过 `node link-output --card <id>` 标明回答哪张 Card。显式 Card 可以跨 Role，但必须是未作废的 consumed Card，并在产出的 goal 祖先链上有来源目标；returned 和 closed 不接受新的产出关联。省略 Card 时，`--role` 必须匹配该目标唯一 consumed 且带 returnTo 的 Card 的接收 Role。没有相关 Card 时仍可直接建立 output。文件在 Workspace checkout 落地后才关联，候选分支应先集成。结果通知使用原 Card 的交回；需要对方继续做事或拍板才发新 Card。
 
-`card watch` 只观察提交到 Tent Git 的、指向指定 Role 的未作废 pending Card，不写文件或历史；空闲时每三秒检查 HEAD；`--timeout 0` 只检查一次，适合宿主的定时检查。宿主能在后台命令结束时唤醒 Agent 时，空闲 Role 可在后台运行它。公开 Card 通过 list 的 `--include-open` 查询。Hook 行为和宿主验收边界见下文。
+未完成的 Card 投递会阻断 Role 删除：它是 pending Card 的 target、pending/consumed/returned Card 的 returnTo，或带 returnTo 的 consumed Card 的 receivedBy。报错列出全部阻断 Card；可以撤销 Card，pending 的目标也可转交。作废 Card 一律不挡；交回后释放接收 Role，收回后释放返回 Role。删除不改写历史投递事实。
+
+`card watch` 只观察提交到 Tent Git 的、指向指定 Role 的未作废 pending Card，以及 returnTo 为该 Role 的 returned Card，不写文件或历史。返回结果的一行是 `card-ID returned by role-X: <结果>`，直到该 Role take 收回前都会再次出现。空闲时每三秒检查 HEAD；`--timeout 0` 只检查一次，适合宿主的定时检查。宿主能在后台命令结束时唤醒 Agent 时，空闲 Role 可在后台运行它。公开输入通过 list 的 `--include-open` 查询。Hook 行为和宿主验收边界见下文。
 
 ## 作者与确认
 
@@ -137,9 +139,9 @@ SessionStart 先收录待处理的原生 Node 编辑，仅在有待收录改动�
 
 Codex 以原生 `turn_id` 定位轮次；Claude Code CLI 用 `--host claude-code`，以原生 `prompt_id` 对应转录的 `promptId`，没有身份的版本静默。Claude Read、Write、Edit 需匹配成功的结构化工具结果，侧链不计入。未观察到的 shell 或外部编辑器改动、取消轮次和未投递的提问都无法兜底内容保鲜；必须跟随内容变化的规则另挂具体文件或 SPEC 小节。两个实际宿主都须验证消息抵达且只续作一次；Hook 自身热耗时与完整续作成本分别记录。官方契约：[Codex Hooks](https://learn.chatgpt.com/docs/hooks)。
 
-`workspace brief` 展示落后与领先两种同步状态计数、无效 Node、待接收 Card、仍需处理的 Card、领先原因、已接收 Card 的来源变化和落后详情，并给出可打开的根 Node 文件。可选详情按 4 KiB 预算裁剪，无效 Node 和待接收 Card 不省略；不再读取会话观察日志或列出未关联产出。`workspace drift` 分页保留完整待检查关系。即使没有 Hook，这两个命令也会重新观察 Node 已声明的本地材料版本。保存 Node 时自动记录新材料版本，已变化或读不到的旧材料保留原基线，普通保存不能清除落后。用 `node check` 查看，复核判断后用 `node confirm`；修正正文可用 `node write --confirm` 同时确认，write-many 更新条目也支持 `confirm: true`。用 `node link-output` 在目标下新建 output Node；全部 goal 祖先都保留比较基线，最近的 goal 作为显示归属。目标变化由 goal 领先表达，旧产物保持冻结；完整读取时用 changedSince 说明此后的变化。基线按 Node ID 与文档保存在同一 Git 提交，Markdown 不增加同步或哈希字段。已接收 Card 的 Node 来源变化会在 brief 中提示重读；取消任务用 `card deprecate`，默认列表和简报会隐藏它，显式查看或接收仍会给出警告与现行引用。细节见上文 Node 与 Card 的维护者说明；同步状态不改变 OKF `status`。
+`workspace brief` 展示落后与领先两种同步状态计数、无效 Node、待接收 Card、待收回结果、仍需处理的 Card、领先原因、已接收 Card 的来源变化和落后详情，并给出可打开的根 Node 文件。可选详情按 4 KiB 预算裁剪，无效 Node、待接收 Card 和待收回结果不省略；不再读取会话观察日志或列出未关联产出。`workspace drift` 分页保留完整待检查关系。即使没有 Hook，这两个命令也会重新观察 Node 已声明的本地材料版本。保存 Node 时自动记录新材料版本，已变化或读不到的旧材料保留原基线，普通保存不能清除落后。用 `node check` 查看，复核判断后用 `node confirm`；修正正文可用 `node write --confirm` 同时确认，write-many 更新条目也支持 `confirm: true`。用 `node link-output` 在目标下新建 output Node；全部 goal 祖先都保留比较基线，最近的 goal 作为显示归属。目标变化由 goal 领先表达，旧产物保持冻结；完整读取时用 changedSince 说明此后的变化。基线按 Node ID 与文档保存在同一 Git 提交，Markdown 不增加同步或哈希字段。已接收 Card 的 Node 来源变化会在 brief 中提示重读；取消任务用 `card deprecate`，默认列表和简报会隐藏它，显式查看或接收仍会给出警告与现行引用。细节见上文 Node 与 Card 的维护者说明；同步状态不改变 OKF `status`。
 
-提示可能显示在界面或后续轮次，不能证明本次交付已维护上下文。Card 接收后保持已接收；产出通过 Node 的 sources 关联 Card。Role 通过命令参数明确选择，没有隐式 Session 绑定。
+提示可能显示在界面或后续轮次，不能证明本次交付已维护上下文。Card 的接收、交回与收回由投递状态表达；产出通过 Node 的 sources 关联 Card。Role 通过命令参数明确选择，没有隐式 Session 绑定。
 
 更新插件时保留项目 `.tent/`、真实材料及无关宿主设置。验收分别记录包结构、安装发现、实际 CLI 操作与宿主 Hook 投递；手工输入 Hook JSON 不算真实事件验证。
 

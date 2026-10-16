@@ -5,8 +5,8 @@
 import { useState, type ReactNode } from "react";
 import type { Graph } from "../data/store.js";
 import type { SnapshotCard, SnapshotRef } from "../data/types.js";
-import { isDraft, editDraft, useDraft } from "../data/drafts.js";
-import { cardProgressLabel } from "../data/card-progress.js";
+import { isDraft, editDraft, useDraft, type Draft } from "../data/drafts.js";
+import { cardStateLabel } from "../data/card-state.js";
 import { Icon, TypeGlyph } from "../components/Glyph.js";
 import { Tray, Pet } from "../components/Pet.js";
 import { t } from "../i18n.js";
@@ -29,17 +29,36 @@ type Props = {
   onPage: (ref: SnapshotRef) => void;
 };
 
-/** What a robot has in hand, as the three counts on its row. */
+/**
+ * What a robot has in hand, as counts on its row: only those it has, so they fit beside the face; with
+ * nothing in hand, a quiet "0 waiting". The folded chip's tooltip keeps every count.
+ */
 function Tally({ desk, role }: { desk: Desk; role: boolean }) {
-  const part = (n: number, cls: string, label: (n: number) => string) => (
-    <span className={n ? cls : "is-zero"}>{label(n)}</span>
-  );
+  const parts = [
+    role && desk.doing > 0 && (
+      <span key="doing" className="is-doing">
+        {t.work.doingN(desk.doing)}
+      </span>
+    ),
+    desk.waiting > 0 && (
+      <span key="waiting" className="is-waiting">
+        {t.work.waitingN(desk.waiting)}
+      </span>
+    ),
+    role && desk.returned > 0 && (
+      <span key="returned" className="is-returned">
+        {t.work.returnedN(desk.returned)}
+      </span>
+    ),
+    desk.drafts > 0 && (
+      <span key="drafts" className="is-draft">
+        {t.work.draftsN(desk.drafts)}
+      </span>
+    ),
+  ].filter(Boolean);
   return (
     <span className="tally">
-      {role && part(desk.doing, "is-doing", t.work.doingN)}
-      {part(desk.waiting, "is-waiting", t.work.waitingN)}
-      {role && part(desk.review, "is-review", t.work.reviewN)}
-      {desk.drafts > 0 && <span className="is-draft">{t.work.draftsN(desk.drafts)}</span>}
+      {parts.length ? parts : <span className="is-zero">{t.work.waitingN(0)}</span>}
     </span>
   );
 }
@@ -177,6 +196,7 @@ function Lane({
 }) {
   const drag = useDragState();
   const cards = work.laneCards(lane);
+  const returned = work.laneReturned(lane);
   const over = drag?.over === `lane:${lane}`;
   const name = work.laneName(lane);
   const viewing = selected?.kind === "card" ? graph.cards.get(selected.id) : undefined;
@@ -266,7 +286,16 @@ function Lane({
               />
             ),
           )}
-          {!cards.length && (
+          {returned.map((c) => (
+            <Letter
+              key={c.id}
+              card={c}
+              work={work}
+              active={selected?.kind === "card" && selected.id === c.id}
+              onClick={() => onPage({ kind: "card", id: c.id })}
+            />
+          ))}
+          {!cards.length && !returned.length && (
             <div className="lane-empty">
               {lane === PUBLIC ? (
                 <Tray size={26} empty />
@@ -343,8 +372,8 @@ function DraftChip({
 }
 
 /**
- * A robot while the dock is folded: its face, Cards in progress on a blue badge and Cards waiting on an
- * orange one. The name and all counts show on hover. Still takes Nodes or a Card.
+ * A robot while the dock is folded: its face, Cards in progress on a blue badge, and Cards waiting or
+ * results to collect on an orange one. The name and all counts show on hover. Still takes Nodes or a Card.
  */
 function LaneChip({
   work,
@@ -383,12 +412,17 @@ function LaneChip({
         <Pet id={lane} size={28} mood={moodOf(desk, work.gone(lane))} />
       )}
       {role && desk.doing > 0 && <span className="badge is-doing">{desk.doing}</span>}
-      {desk.waiting > 0 && <span className="badge is-waiting">{desk.waiting}</span>}
+      {desk.waiting + desk.returned > 0 && (
+        <span className="badge is-waiting">{desk.waiting + desk.returned}</span>
+      )}
     </button>
   );
 }
 
-/** A Card in a lane: a dashed draft, or a published Card waiting for its Role. Both drag to other lanes. */
+/**
+ * A Card in a lane: a dashed draft or a published Card waiting for its Role, which both drag to other lanes,
+ * or a result returned to this Role, with its line under the title.
+ */
 export function Letter({
   card,
   work,
@@ -402,6 +436,7 @@ export function Letter({
 }) {
   const drag = useDragState();
   const draft = isDraft(card);
+  const back = card.state === "returned";
   const over = draft && drag?.over === `card:${card.id}`;
   const lifted = drag?.item.kind === "card" && drag.item.id === card.id;
   // The draft being written counts what is on screen; others count what is saved.
@@ -411,23 +446,26 @@ export function Letter({
       : card.sources.length;
   const meta = draft
     ? `${t.work.draft}${sources ? ` · ${sources}` : ""}`
-    : `${cardProgressLabel(card)} · ${ago(card.publishedAt)}`;
+    : back
+      ? `${t.work.toCollect} · ${ago(card.updatedAt)}`
+      : `${cardStateLabel(card)} · ${ago(card.publishedAt)}`;
   return (
     <div
-      className={`letter ${draft ? "is-draft" : "is-pub"}${over ? " is-over" : ""}${lifted ? " is-lifted" : ""}${active ? " is-active" : ""}`}
+      className={`letter ${draft ? "is-draft" : back ? "is-back" : "is-pub"}${over ? " is-over" : ""}${lifted ? " is-lifted" : ""}${active ? " is-active" : ""}`}
       data-drop={draft ? `card:${card.id}` : undefined}
       role="button"
       tabIndex={0}
-      title={draft ? t.work.letterDraft : t.work.letterPub}
+      title={draft ? t.work.letterDraft : back ? t.work.letterBack : t.work.letterPub}
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.key === "Enter") onClick();
       }}
-      onPointerDown={(e) => beginDrag(e, { kind: "card", id: card.id })}
+      onPointerDown={back ? undefined : (e) => beginDrag(e, { kind: "card", id: card.id })}
     >
-      <Icon name={over ? "drop" : draft ? "draft" : "mail"} size={14} />
+      <Icon name={over ? "drop" : draft ? "draft" : back ? "returned" : "mail"} size={14} />
       <span className="t">{over ? t.work.dropIntoDraft : work.title(card)}</span>
       <span className="m">{over ? t.work.nth(sources + 1) : meta}</span>
+      {back && card.result && <span className="r">{work.resultText(card.result)}</span>}
     </div>
   );
 }
@@ -559,6 +597,7 @@ function DraftBox({
           editDraft(card.id, (input) => ({ ...input, prompt }));
         }}
       />
+      <ReturnSelect work={work} card={card} draft={draft} />
       <div className="draft-foot">
         <span className="saved">{saveState(draft)}</span>
         <button
@@ -573,6 +612,36 @@ function DraftBox({
         </button>
       </div>
     </div>
+  );
+}
+
+/** Who the draft's result comes back to, or nobody; the lane it is going to is not offered. */
+function ReturnSelect({
+  work,
+  card,
+  draft,
+}: {
+  work: Work;
+  card: SnapshotCard;
+  draft: Draft | null;
+}) {
+  return (
+    <label className="return-pick" title={t.work.returnTip}>
+      <Icon name="returned" size={13} />
+      <span>{t.work.returnTo}</span>
+      <select
+        value={draft?.input.returnTo ?? ""}
+        disabled={!draft || work.publishing === card.id}
+        onChange={(e) => work.setReturn(card.id, e.target.value || null)}
+      >
+        <option value="">{t.work.noReturn}</option>
+        {work.returnChoices(card).map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.title}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

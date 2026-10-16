@@ -179,7 +179,7 @@ export function App() {
       changes.removeEventListener("change", check);
     };
   }, [revision]);
-  // Card progress and completions depend on materials, which change without a new revision.
+  // Output completion times depend on materials, which change without a new revision.
   const rebuild = useMemo(() => snapshotRebuilder(setSnapshot), []);
   const files = useFileInfo(snapshot, flags);
   useEffect(() => rebuild(snapshot, flags), [rebuild, snapshot, flags]);

@@ -232,7 +232,7 @@ test("pure readers return live bytes and mark them while relations wait for capt
   assert.equal(parse(await runNodeCommand("get", [goal], options)).uncaptured, undefined);
 });
 
-test("Card progress uses retained output declarations and current material bytes without advancing bases", async (t) => {
+test("Card delivery stays consumed across output and goal changes without advancing bases", async (t) => {
   const { workspace, adapter, goal, options, parse } = await fixture(t);
   const card = parse(
     await runCardCommand(
@@ -251,7 +251,7 @@ test("Card progress uses retained output declarations and current material bytes
     ),
   );
   const read = () => runCardCommand("show", [card.cardId], options).then(parse);
-  assert.equal((await read()).progress, "has-output");
+  assert.equal((await read()).state, "consumed");
   const head = await adapter.history.currentCommit();
   const records = await adapter.history.nodeRecords();
   const file = "需求/Delivered/Delivered.md";
@@ -267,26 +267,27 @@ test("Card progress uses retained output declarations and current material bytes
     parse(await runNodeCommand("get", [output.nodeId, "--view", "raw"], options)).uncaptured,
     true,
   );
-  assert.equal((await read()).progress, "has-output");
+  assert.equal((await read()).state, "consumed");
   await fs.writeFile(path.join(workspace, "response.txt"), "changed since delivery");
-  assert.equal((await read()).progress, "has-output", "output material changes stay informational");
+  assert.equal((await read()).state, "consumed", "output material changes stay informational");
   await fs.writeFile(path.join(workspace, "input.txt"), "changed goal material");
   const drifted = await read();
-  assert.equal(drifted.progress, "needs-review");
-  assert.deepEqual(drifted.reviewOutputNodeIds, [output.nodeId]);
+  assert.equal(drifted.state, "consumed");
+  for (const field of ["progress", "totalGoalCount", "outputNodeIds", "reviewOutputNodeIds"])
+    assert.equal(field in drifted, false, field);
   const listed = parse(await runCardCommand("list", [], options));
   assert.equal(
-    listed.items.find((item: { cardId: string }) => item.cardId === card.cardId).progress,
-    "needs-review",
+    listed.items.find((item: { cardId: string }) => item.cardId === card.cardId).state,
+    "consumed",
   );
   await fs.writeFile(path.join(workspace, "response.txt"), "delivered material");
   await fs.writeFile(path.join(workspace, "input.txt"), "original material");
-  assert.equal((await read()).progress, "has-output");
+  assert.equal((await read()).state, "consumed");
   assert.equal(await adapter.history.currentCommit(), head);
   assert.deepEqual(await adapter.history.nodeRecords(), records);
   assert.equal(await adapter.readFile(file), edited);
   parse(await runWorkspaceCommand("brief", [], options));
-  assert.equal((await read()).progress, "received-no-output");
+  assert.equal((await read()).state, "consumed");
 });
 
 test("uncaptured new and moved Nodes remain live in discovery and export", async (t) => {

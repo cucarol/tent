@@ -174,7 +174,7 @@ export function roleHelpText() {
 All commands accept --workspace PATH and --json. list reads headers; show reads the selected document without capturing history.
 Use the returned page.next range and ETag to continue a long read. Writes reject stale ETags.
 Reading never imports a Node or creates a Role. Legacy documents require explicit conversion.
-Delete removes the Role document; Tent Git keeps its history and its id is never reused. Move or deprecate pending Cards that target it first.
+Delete removes the Role document; Tent Git keeps its history and its id is never reused. Unfinished Cards block deletion: deprecate them, or move pending ones, first.
 `;
 }
 

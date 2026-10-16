@@ -61,7 +61,9 @@ test("the file is the Node's resource, whatever its type or tags", () => {
     { kind: "file", resource: "../../src/cli/", workspacePath: "src/cli", field: "resource" },
   ]);
   assert.equal(fileOf(folder), null);
-  const snapshot = { nodes: [output, goal, remote, noSuffix, folder, output] } as unknown as Snapshot;
+  const snapshot = {
+    nodes: [output, goal, remote, noSuffix, folder, output],
+  } as unknown as Snapshot;
   assert.deepEqual(filePaths(snapshot), ["out/r.html", "Makefile"]);
 });
 

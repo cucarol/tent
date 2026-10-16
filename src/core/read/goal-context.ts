@@ -12,14 +12,14 @@ export type GoalContextItem = {
     "ancestor" | "child" | "incoming" | "outgoing" | "goal" | "prompt" | "output" | "card" | "self";
   id: string;
   name: string;
-  goalCount?: number;
-  totalGoalCount?: number;
   type?: string;
   relationKinds?: WorkspaceRelation["via"][];
   state?: string;
   sync?: true;
-  progress?: string | null;
-  receiver?: string;
+  target?: string;
+  returnTo?: string;
+  receivedBy?: string;
+  result?: string;
 };
 
 /** Complete live associations for every Node type; CLI alone bounds the navigation hint. */
@@ -159,10 +159,10 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
       ...(card
         ? {
             state: String(card.state),
-            progress: card.progress == null ? null : String(card.progress),
-            goalCount: Number(card.goalCount),
-            totalGoalCount: Number(card.totalGoalCount),
-            receiver: String(card.receivedBy ?? card.target ?? "open"),
+            ...(typeof card.target === "string" ? { target: card.target } : {}),
+            ...(typeof card.returnTo === "string" ? { returnTo: card.returnTo } : {}),
+            ...(typeof card.receivedBy === "string" ? { receivedBy: card.receivedBy } : {}),
+            ...(typeof card.result === "string" ? { result: card.result } : {}),
           }
         : {}),
     });

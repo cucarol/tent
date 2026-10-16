@@ -799,6 +799,7 @@ function cardInput(input: Record<string, unknown>) {
     prompt: requiredString(input.prompt, "prompt"),
     title: optionalString(input.title, "title"),
     target: input.target === null ? undefined : optionalString(input.target, "target"),
+    returnTo: input.returnTo === null ? undefined : optionalString(input.returnTo, "returnTo"),
     sources: input.sources === undefined ? undefined : (input.sources as never),
   };
 }

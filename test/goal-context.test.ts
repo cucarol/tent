@@ -49,14 +49,27 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
   };
   const node = async (...args: string[]) =>
     parse(await runNodeCommand("get", [...args, "--context"], globals));
+  for (const roleId of ["role-worker", "role-requester"])
+    parse(await runRoleCommand("create", ["--id", roleId, "--title", roleId], globals));
   const created = parse(
     await runCardCommand(
       "create",
-      ["--prompt", "Implement goal", "--title", "Request", "--source", "node-goal"],
+      [
+        "--prompt",
+        "Implement goal",
+        "--title",
+        "Request",
+        "--source",
+        "node-goal",
+        "--target",
+        "role-worker",
+        "--return-to",
+        "role-requester",
+      ],
       globals,
     ),
   );
-  await runCardCommand("take", [created.cardId], globals);
+  parse(await runCardCommand("take", [created.cardId, "--role", "role-worker"], globals));
   const before = await git(system, "rev-parse", "HEAD");
   await write("Scope/Rule", "node-rule", "prompt", "uncaptured neighbour");
   const context = await readGoalContext(adapter, "node-goal");
@@ -85,7 +98,17 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
     new Set(["node-result", "node-nestedresult"]),
   );
   assert.equal(context.find((item) => item.kind === "card")?.state, "consumed");
-  assert.equal(context.find((item) => item.kind === "card")?.progress, "received-no-output");
+  const receivedCard = context.find((item) => item.kind === "card")!;
+  assert.equal(receivedCard.receivedBy, "role-worker");
+  assert.equal(receivedCard.returnTo, "role-requester");
+  for (const key of [
+    "progress",
+    "goalCount",
+    "totalGoalCount",
+    "outputNodeIds",
+    "reviewOutputNodeIds",
+  ])
+    assert.equal(key in receivedCard, false);
   const first = await node("node-goal");
   assert.ok(Buffer.byteLength(JSON.stringify({ context: first.context })) <= 1024);
   assert.ok(Buffer.byteLength(JSON.stringify(first)) <= 16 * 1024);
@@ -95,12 +118,10 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
   assert.doesNotMatch(first.context, /[\p{Script=Han}\u3000-\u303f\uff00-\uffef]/u);
   assert.match(first.context, /^Context\nAncestor Scope node-scope\n/);
   assert.doesNotMatch(first.context, /useful description/);
-  assert.equal(context.find((item) => item.kind === "card")?.totalGoalCount, 1);
-  assert.equal(context.find((item) => item.kind === "card")?.goalCount, 0);
-  assert.match(first.context, /0\/1/);
+  assert.match(first.context, /\[consumed\] received by role-worker return to role-requester/);
   // Imported outputs have no retained goal basis, but unknown comparisons do not make them behind.
   assert.match(first.context, /stable\/unanchored/);
-  assert.match(first.context, /received-no-output/);
+  assert.doesNotMatch(first.context, /received-no-output|has-output|needs-review|0\/1/);
   const continuation = await node(
     "node-goal",
     "--cursor",
@@ -161,6 +182,27 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
   assert.ok(crowded.context.includes("node-decision"));
   await write("Lonely", "node-lonely", "goal", "alone");
   assert.equal(await goalContextText(adapter, "node-lonely"), "Context: no related items");
+  parse(
+    await runCardCommand(
+      "return",
+      [created.cardId, "--role", "role-worker", "--result", "Done node-result"],
+      globals,
+    ),
+  );
+  const returned = (await readGoalContext(adapter, "node-goal")).find(
+    (item) => item.kind === "card",
+  )!;
+  assert.equal(returned.state, "returned");
+  assert.equal(returned.result, "Done node-result");
+  assert.match(
+    await goalContextText(adapter, "node-goal"),
+    /\[returned\].*return to role-requester: Done node-result/,
+  );
+  parse(await runCardCommand("take", [created.cardId, "--role", "role-requester"], globals));
+  assert.equal(
+    (await readGoalContext(adapter, "node-goal")).find((item) => item.kind === "card")?.state,
+    "closed",
+  );
 });
 
 test("all Node types disclose complete live association categories and incoming Cards keep their pinned identity after moves", async (t) => {
@@ -246,7 +288,8 @@ test("all Node types disclose complete live association categories and incoming 
   ]);
   const pinned = associations.find((item) => item.kind === "card")!;
   assert.equal(pinned.state, "pending");
-  assert.equal(pinned.progress, null); // A prompt source contributes no pinned goals.
+  assert.equal("progress" in pinned, false);
+  assert.equal("goalCount" in pinned, false);
   const incoming = (
     await relatedNodes(adapter, "ws-test", { nodeId: "node-subj00", direction: "incoming" })
   ).items;
@@ -314,7 +357,7 @@ test("all Node types disclose complete live association categories and incoming 
   assert.equal(first.context, repeated.context);
   assert.match(first.context, /^Context\nAncestor Goal node-goal00\n/);
   assert.doesNotMatch(first.context, /node-[a-z0-9]+ —/);
-  assert.ok(first.context.includes(`${card.cardId} 0/0 [pending/—]`), first.context);
+  assert.ok(first.context.includes(`${card.cardId} [pending]`), first.context);
   assert.ok(Buffer.byteLength(JSON.stringify({ context: first.context })) <= 1024);
   const continuation = parse(
     await runNodeCommand(

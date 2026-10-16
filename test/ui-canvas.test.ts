@@ -176,7 +176,10 @@ test("a region draws only relations Tent records between its own cards", () => {
   const graph = graphOf(
     [
       node("goal", null, { materials: [file("docs/SPEC.md")] }),
-      node("out", "goal", { type: "output" }),
+      node("out", "goal", {
+        type: "output",
+        materials: [{ kind: "card", id: "card-1", resource: "/cards/card-1.md", field: "sources" }],
+      }),
       node("rule", null, {
         materials: [file("docs/SPEC.md"), file("src/a.ts")],
         incoming: [{ from: { kind: "node", id: "out" }, via: "link" }],
@@ -189,7 +192,6 @@ test("a region draws only relations Tent records between its own cards", () => {
         id: "card-1",
         title: "验收",
         sources: [{ kind: "node", id: "rule", resource: "rule" }],
-        outputNodeIds: ["out"],
       } as unknown as SnapshotCard,
     ],
   );

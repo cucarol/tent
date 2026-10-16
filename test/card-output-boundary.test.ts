@@ -7,6 +7,7 @@ import {
   createCardDocument,
   deprecateCardDocument,
   readCardDocument,
+  returnCardDocument,
   takeCardDocument,
 } from "../src/core/graph/card-document.js";
 import { linkNodeOutput } from "../src/core/graph/node-sync.js";
@@ -48,11 +49,12 @@ async function fixture() {
   });
   await createRoleContext(fs, { roleId: "role-a", title: "A", body: "Direction A" });
   await createRoleContext(fs, { roleId: "role-b", title: "B", body: "Direction B" });
-  const card = (id: string, source: string) =>
+  const card = (id: string, source: string, returnTo?: string) =>
     createCardDocument(fs, {
       cardId: id,
       prompt: "Implement the selected goal",
       target: "role-a",
+      returnTo,
       sources: [{ resource: `/${source}` }],
     });
   return { fs, card, outerId, innerId };
@@ -106,7 +108,7 @@ async function assertRejectedWithoutWrites(
   }
 }
 
-test("explicit output responses reject pending and deprecated Cards without writes", async (t) => {
+test("explicit output responses reject pending, deprecated, returned and closed Cards without writes", async (t) => {
   const { fs, card, innerId } = await fixture();
   const pending = await card("card-pendingoutput", "Outer/Inner/Inner.md");
   await assertRejectedWithoutWrites(t, fs, innerId, pending.cardId, /current received Card/);
@@ -114,6 +116,13 @@ test("explicit output responses reject pending and deprecated Cards without writ
   const taken = await takeCardDocument(fs, cancelled.cardId, "role-a");
   await deprecateCardDocument(fs, cancelled.cardId, taken.etag);
   await assertRejectedWithoutWrites(t, fs, innerId, cancelled.cardId, /current received Card/);
+  for (const state of ["returned", "closed"] as const) {
+    const selected = await card(`card-${state}output`, "Outer/Inner/Inner.md", "role-b");
+    await takeCardDocument(fs, selected.cardId, "role-a");
+    await returnCardDocument(fs, selected.cardId, { roleId: "role-a", result: "Delivered" });
+    if (state === "closed") await takeCardDocument(fs, selected.cardId, "role-b");
+    await assertRejectedWithoutWrites(t, fs, innerId, selected.cardId, /current received Card/);
+  }
 });
 
 test("explicit output responses require a pinned goal in the current output goal chain", async (t) => {
@@ -149,9 +158,43 @@ test("explicit responses accept selected and ancestor goals across Role boundari
     ]);
     const read = (await readCardDocument(fs, selected.cardId)) as Record<string, unknown>;
     assert.equal(read.receivedBy, "role-a");
-    assert.equal(read.progress, "has-output");
-    assert.deepEqual(read.outputNodeIds, [receipt.nodeId]);
+    assert.equal(read.state, "consumed");
+    assert.equal(read.returnTo, undefined);
+    assert.equal("progress" in read, false);
+    assert.equal("outputNodeIds" in read, false);
   }
+});
+
+test("automatic attribution uses only received Cards awaiting return, independently of existing outputs", async () => {
+  const { fs, card, innerId } = await fixture();
+  const complete = await card("card-receptiononly", "Outer/Inner/Inner.md");
+  await takeCardDocument(fs, complete.cardId, "role-a");
+  const unassigned = await linkNodeOutput(fs, innerId, {
+    roleId: "role-a",
+    resource: "https://example.org/result",
+    name: "Reception only",
+  });
+  assert.equal(unassigned.cardId, undefined);
+  const awaiting = await card("card-awaitingreturn", "Outer/Inner/Inner.md", "role-b");
+  await takeCardDocument(fs, awaiting.cardId, "role-a");
+  for (const name of ["First result", "Second result"]) {
+    const receipt = await linkNodeOutput(fs, innerId, {
+      roleId: "role-a",
+      resource: "https://example.org/result",
+      name,
+    });
+    assert.equal(receipt.cardId, awaiting.cardId);
+    assert.deepEqual(parseFrontmatter(await fs.readFile(nodeNotePath(receipt.path))).data.sources, [
+      { resource: `/cards/${awaiting.cardId}.md` },
+    ]);
+  }
+  await returnCardDocument(fs, awaiting.cardId, { roleId: "role-a", result: "Delivered" });
+  const afterReturn = await linkNodeOutput(fs, innerId, {
+    roleId: "role-a",
+    resource: "https://example.org/result",
+    name: "After return",
+  });
+  assert.equal(afterReturn.cardId, undefined);
 });
 
 test("a missing explicit Card is rejected before any write without exposing a filesystem path", async (t) => {

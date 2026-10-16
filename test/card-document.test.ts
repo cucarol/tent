@@ -9,6 +9,7 @@ import {
   createCardDocument,
   readCardDocument,
   takeCardDocument,
+  returnCardDocument,
   watchCardDocuments,
   listCardDocuments,
   moveCardDocument,
@@ -25,7 +26,7 @@ import { runCardCommand } from "../src/cli/card-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { linkNodeOutput, confirmNodeSync } from "../src/core/graph/node-sync.js";
-import { readOutputActivity } from "../src/core/graph/card-progress.js";
+import { readOutputActivity } from "../src/core/graph/card-context.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
@@ -118,168 +119,59 @@ test("interrupted reception recovery rejects simultaneous status, target and inp
   assert.equal((await adapter.history.pathVersions(card.path)).latest!.commit, card.version.commit);
 });
 
-test("Card progress counts only outputs explicitly responding to this Card", async (t) => {
-  const scratch = path.resolve(".scratch");
-  await fs.mkdir(scratch, { recursive: true });
-  const root = await fs.mkdtemp(path.join(scratch, "card-progress-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const workspace = path.join(root, "workspace");
-  await initializeFixtureWorkspace(workspace);
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
+test("Card delivery stays independent of output attribution, confirmation and goal edits", async (t) => {
+  const { adapter } = await fixture(t);
   await adapter.writeFile(
     "Main/Main.md",
-    serializeFrontmatter({ id: "node-main", type: "goal" }, "First goal"),
+    serializeFrontmatter({ id: "node-main", type: "goal" }, "Goal"),
   );
-  await adapter.writeFile(
-    "Other/Other.md",
-    serializeFrontmatter({ id: "node-other", type: "goal" }, "Second goal"),
-  );
-  await fs.writeFile(path.join(workspace, "result.txt"), "result");
-  const oldOutput = await linkNodeOutput(adapter, "node-other", { resource: "result.txt" });
   const card = await createCardDocument(adapter, {
-    cardId: "card-progress",
-    prompt: "Read both goals.",
-    sources: [
-      { resource: "/Main/Main.md" },
-      { resource: "/Other/Other.md" },
-      { resource: "/Main/Main.md" },
-    ],
+    prompt: "Implement",
+    target: "role-a",
+    returnTo: "role-b",
+    sources: [{ resource: "/Main/Main.md" }],
   });
-  assert.equal(card.progress, "pending");
-  assert.equal(card.totalGoalCount, 2);
-  assert.equal(card.goalCount, 0);
-  const taken = (await takeCardDocument(adapter, card.cardId)) as Record<string, unknown>;
-  assert.equal(taken.progress, "received-no-output");
+  await takeCardDocument(adapter, card.cardId, "role-a");
   const raw = await adapter.readFile(card.path);
-  // A later ordinary save of a preexisting output cannot stand in for confirmation.
-  const oldPath = `Other/${oldOutput.path.split("/").at(-1)}/${oldOutput.path.split("/").at(-1)}.md`;
-  const oldRaw = await adapter.readFile(oldPath);
-  await adapter.writeFile(oldPath, oldRaw + "\nordinary edit");
-  await adapter.history.captureUnlocked([{ path: oldPath, raw: oldRaw + "\nordinary edit" }], {
-    operation: "node.document-write",
-  });
-  assert.equal(
-    ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
-    0,
-  );
   const output = await linkNodeOutput(adapter, "node-main", {
-    resource: "result.txt",
+    resource: "https://example.org/result",
     cardId: card.cardId,
   });
-  assert.equal(output.cardId, card.cardId);
-  const outputRaw = await adapter.readFile(`${output.path}/${output.path.split("/").at(-1)}.md`);
-  assert.deepEqual(parseFrontmatter(outputRaw).data.sources, [
-    { resource: "/cards/card-progress.md" },
+  const outputPath = output.path + "/" + output.path.split("/").at(-1) + ".md";
+  assert.deepEqual(parseFrontmatter(await adapter.readFile(outputPath)).data.sources, [
+    { resource: "/cards/" + card.cardId + ".md" },
   ]);
-  const partial = (await readCardDocument(adapter, card.cardId)) as Record<string, unknown>;
-  assert.equal(partial.progress, "received-no-output");
-  assert.equal(partial.goalCount, 1);
-  assert.equal(partial.totalGoalCount, 2);
-  assert.deepEqual(partial.outputNodeIds, [output.nodeId]);
-  const cli = await runCardCommand("show", [card.cardId], { workspace, json: true });
-  assert.equal(cli.exitCode, 0, cli.stderr);
-  assert.equal(JSON.parse(cli.stdout).goalCount, 1);
-  assert.equal(JSON.parse(cli.stdout).totalGoalCount, 2);
-  const cliList = await runCardCommand("list", [], { workspace });
-  assert.equal(cliList.exitCode, 0, cliList.stderr);
-  assert.match(cliList.stdout, /1\/2/);
-  await renameNode(
-    { fs: adapter, clock: { now: () => "test" }, tentName: "test" },
-    "node-main",
-    "Moved",
-  );
-  assert.equal(
-    ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
-    1,
-  );
-  await confirmNodeSync(adapter, oldOutput.nodeId, {
-    baseEtag: contentEtag(await adapter.readFile(oldPath)),
+  await confirmNodeSync(adapter, output.nodeId, {
+    baseEtag: contentEtag(await adapter.readFile(outputPath)),
   });
-  assert.equal(
-    ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
-    1,
-    "confirming an old unrelated output does not complete this Card",
-  );
-  await writeNodeDocument(adapter, oldOutput.nodeId, {
-    baseEtag: contentEtag(await adapter.readFile(oldPath)),
-    frontmatter: { sources: [{ resource: "/cards/card-progress.md" }] },
+  await writeNodeDocument(adapter, "node-main", {
+    baseEtag: contentEtag(await adapter.readFile("Main/Main.md")),
+    body: "Changed goal",
   });
-  const completed = (await readCardDocument(adapter, card.cardId)) as Record<string, unknown>;
-  assert.equal(completed.progress, "has-output");
-  assert.equal(completed.goalCount, 2);
-  const listed = (await listCardDocuments(adapter)).items.find(
-    (item) => item.cardId === card.cardId,
-  )!;
-  assert.equal(listed.progress, completed.progress);
-  assert.deepEqual(listed.outputNodeIds, completed.outputNodeIds);
+  const read = await readCardDocument(adapter, card.cardId);
+  const list = (await listCardDocuments(adapter)).items[0];
+  for (const view of [read, list]) {
+    assert.equal(view.state, "consumed");
+    for (const key of [
+      "progress",
+      "goalCount",
+      "totalGoalCount",
+      "outputNodeIds",
+      "reviewGoalCount",
+      "reviewOutputNodeIds",
+    ])
+      assert.equal(Object.prototype.hasOwnProperty.call(view, key), false);
+  }
   assert.equal(await adapter.readFile(card.path), raw);
-  assert.equal(parseFrontmatter(raw).data.progress, undefined);
-  await adapter.remove("Moved");
-  assert.equal(
-    ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
-    1,
-  );
-  const confirmedCard = await createCardDocument(adapter, {
-    cardId: "card-confirmwrite",
-    prompt: "Verify the second goal.",
-    sources: [{ resource: "/Other/Other.md" }],
+  await returnCardDocument(adapter, card.cardId, {
+    roleId: "role-a",
+    result: "done " + output.nodeId,
   });
-  assert.equal(
-    ((await takeCardDocument(adapter, confirmedCard.cardId)) as Record<string, unknown>).goalCount,
-    0,
-  );
-  await writeNodeDocument(adapter, oldOutput.nodeId, {
-    baseEtag: contentEtag(await adapter.readFile(oldPath)),
-    confirm: true,
-    by: "human:cuca",
+  await writeNodeDocument(adapter, "node-main", {
+    baseEtag: contentEtag(await adapter.readFile("Main/Main.md")),
+    body: "Another goal",
   });
-  assert.equal(
-    ((await readCardDocument(adapter, confirmedCard.cardId)) as Record<string, unknown>).progress,
-    "received-no-output",
-  );
-  await assert.rejects(
-    linkNodeOutput(adapter, "node-other", { resource: "result.txt" }),
-    /Incomplete received Cards.*--card/,
-  );
-  const linked = await runNodeCommand(
-    "link-output",
-    ["node-other", "--resource", "result.txt", "--card", confirmedCard.cardId],
-    { workspace, json: true },
-  );
-  assert.equal(linked.exitCode, 0, linked.stderr);
-  const second = JSON.parse(linked.stdout);
-  assert.deepEqual(
-    ((await readCardDocument(adapter, confirmedCard.cardId)) as Record<string, unknown>)
-      .outputNodeIds,
-    [second.nodeId],
-  );
-  assert.equal(
-    ((await readCardDocument(adapter, card.cardId)) as Record<string, unknown>).goalCount,
-    1,
-  );
-  await adapter.writeFile(card.path, raw + "\nmanual input edit");
-  const independent = await linkNodeOutput(adapter, "node-other", { resource: "result.txt" });
-  assert.deepEqual(
-    parseFrontmatter(
-      await adapter.readFile(`${independent.path}/${independent.path.split("/").at(-1)}.md`),
-    ).data.sources ?? [],
-    [],
-    "an invalid received Card is not an inference candidate",
-  );
-  await adapter.writeFile(
-    "Notes/Notes.md",
-    serializeFrontmatter({ id: "node-notes", type: "prompt" }, "Notes"),
-  );
-  const plain = await createCardDocument(adapter, {
-    cardId: "card-nogoal",
-    prompt: "Read the notes.",
-    sources: [{ resource: "/Notes/Notes.md" }],
-  });
-  assert.equal(plain.progress, null);
-  assert.equal(
-    ((await takeCardDocument(adapter, plain.cardId)) as Record<string, unknown>).progress,
-    null,
-  );
+  assert.equal((await readCardDocument(adapter, card.cardId)).state, "returned");
 });
 
 test("automatic output attribution requires the receiving Role and returns the selected Card", async (t) => {
@@ -293,6 +185,7 @@ test("automatic output attribution requires the receiving Role and returns the s
     prompt: "Implement the goal",
     sources: [{ resource: "/Main/Main.md" }],
     target: "role-a",
+    returnTo: "role-b",
   });
   await takeCardDocument(adapter, card.cardId, "role-a");
   const input = { resource: "https://example.org/result" };
@@ -301,12 +194,14 @@ test("automatic output attribution requires the receiving Role and returns the s
   assert.equal((await adapter.listDir("Main")).filter((entry) => entry.isDir).length, 0);
   const linked = await linkNodeOutput(adapter, "node-main", { ...input, roleId: "role-a" });
   assert.equal(linked.cardId, card.cardId);
-  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).progress, "has-output");
+  assert.equal((await readCardDocument(adapter, card.cardId)).state, "consumed");
+  await returnCardDocument(adapter, card.cardId, { roleId: "role-a", result: "done" });
   const next = await createCardDocument(adapter, {
     cardId: "card-roleoutputnext",
     prompt: "Implement the next response",
     sources: [{ resource: "/Main/Main.md" }],
     target: "role-a",
+    returnTo: "role-b",
   });
   await takeCardDocument(adapter, next.cardId, "role-a");
   const last = await createCardDocument(adapter, {
@@ -314,6 +209,7 @@ test("automatic output attribution requires the receiving Role and returns the s
     prompt: "Implement another response",
     sources: [{ resource: "/Main/Main.md" }],
     target: "role-a",
+    returnTo: "role-b",
   });
   await takeCardDocument(adapter, last.cardId, "role-a");
   await assert.rejects(
@@ -331,7 +227,7 @@ test("automatic output attribution requires the receiving Role and returns the s
   assert.equal((await git(root, "diff", "--cached", "--name-only")).trim(), "");
 });
 
-test("goal changes retract Card completion while output material changes preserve it", async (t) => {
+test("goal and output material changes preserve explicit Card delivery and output activity", async (t) => {
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "card-review-"));
@@ -344,11 +240,13 @@ test("goal changes retract Card completion while output material changes preserv
     serializeFrontmatter({ id: "node-goal", type: "goal" }, "Goal"),
   );
   await createRoleContext(adapter, { roleId: "role-a", title: "A", body: "direction" });
+  await createRoleContext(adapter, { roleId: "role-b", title: "B", body: "owner" });
   const card = await createCardDocument(adapter, {
     cardId: "card-review",
     prompt: "Implement and review the goal",
     sources: [{ resource: "/Goal/Goal.md" }],
     target: "role-a",
+    returnTo: "role-b",
   });
   await takeCardDocument(adapter, card.cardId, "role-a");
   await fs.writeFile(path.join(workspace, "result.txt"), "first");
@@ -366,10 +264,10 @@ test("goal changes retract Card completion while output material changes preserv
     by: "human:cuca",
   });
   const cardRaw = await adapter.readFile(card.path);
-  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).progress, "has-output");
+  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).state, "consumed");
   assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
   await fs.writeFile(path.join(workspace, "result.txt"), "changed");
-  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).progress, "has-output");
+  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).state, "consumed");
   assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
   await writeNodeDocument(adapter, "node-goal", {
     baseEtag: contentEtag(await adapter.readFile("Goal/Goal.md")),
@@ -377,11 +275,8 @@ test("goal changes retract Card completion while output material changes preserv
   });
   const head = await adapter.history.currentCommit();
   const behind = (await readCardDocument(adapter, card.cardId)) as any;
-  assert.equal(behind.progress, "needs-review");
-  assert.equal(behind.goalCount, 0);
-  assert.deepEqual(behind.outputNodeIds, []);
-  assert.equal(behind.reviewGoalCount, 1);
-  assert.deepEqual(behind.reviewOutputNodeIds, [output.nodeId]);
+  assert.equal(behind.state, "consumed");
+  assert.equal(Object.prototype.hasOwnProperty.call(behind, "progress"), false);
   assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
   assert.equal(await adapter.history.currentCommit(), head);
   assert.equal(await adapter.readFile(card.path), cardRaw);
@@ -393,7 +288,7 @@ test("goal changes retract Card completion while output material changes preserv
     baseEtag: contentEtag(await fs.readFile(outputPath, "utf8")),
     by: "human:cuca",
   });
-  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).progress, "has-output");
+  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).state, "consumed");
   assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
 });
 
