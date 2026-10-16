@@ -30,6 +30,8 @@ import { isNodeId } from "../base/id.js";
 import { NODE_TYPES } from "../base/node-type.js";
 import { NODE_TAG_PRESETS, countNodeTags, normalizeTagName } from "../base/tags.js";
 import { uncapturedChecker } from "../graph/retained-read.js";
+import { readOutputChanges } from "../graph/node-sync.js";
+import { isOutputNode } from "../graph/node-sync-record.js";
 
 /** Short-lived callers share these queries; no mount, registry, watcher or read-time repair. */
 export async function readNode(
@@ -91,10 +93,15 @@ export async function readNode(
   const delivered = version ? reader.read(request, version) : node;
   const document =
     options.uncaptured && !request.capture ? reader.documentBytes(request.nodeId) : undefined;
+  const changedSince =
+    "partial" in delivered && !delivered.partial && isOutputNode(delivered)
+      ? await readOutputChanges(fs, request.nodeId)
+      : undefined;
   return {
     workspaceId,
     node: {
       ...delivered,
+      ...(changedSince ? { changedSince } : {}),
       ...(document && (await uncapturedChecker(fs))(document.path, document.raw)
         ? { uncaptured: true as const }
         : {}),
@@ -105,7 +112,7 @@ export async function readNode(
 export async function readNodeForEdit(
   fs: FsAdapter,
   nodeId: string,
-  options: { capture?: boolean; uncaptured?: boolean } = {},
+  options: { capture?: boolean; uncaptured?: boolean; changes?: boolean } = {},
 ) {
   if (!isNodeId(nodeId)) throw new ReaderError("INVALID_INPUT", "Expected a canonical Node id");
   const node = (await loadNodeCatalog(fs)).byId.get(nodeId);
@@ -115,6 +122,8 @@ export async function readNodeForEdit(
   const version = options.capture
     ? await captureReadDocument(fs, nodeNotePath(node.path), document.raw)
     : undefined;
+  const changedSince =
+    options.changes && isOutputNode(data) ? await readOutputChanges(fs, nodeId) : undefined;
   return {
     nodeId,
     path: node.path,
@@ -126,6 +135,7 @@ export async function readNodeForEdit(
     raw: document.raw,
     etag: document.etag,
     frontmatter: data,
+    ...(changedSince ? { changedSince } : {}),
     ...(options.uncaptured &&
     !options.capture &&
     (await uncapturedChecker(fs))(nodeNotePath(node.path), document.raw)

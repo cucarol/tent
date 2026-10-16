@@ -98,8 +98,8 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
   assert.equal(context.find((item) => item.kind === "card")?.totalGoalCount, 1);
   assert.equal(context.find((item) => item.kind === "card")?.goalCount, 0);
   assert.match(first.context, /0\/1/);
-  // Imported outputs have no retained goal basis, so context must expose review debt.
-  assert.match(first.context, /stable\/behind/);
+  // Imported outputs have no retained goal basis, but unknown comparisons do not make them behind.
+  assert.match(first.context, /stable\/unanchored/);
   assert.match(first.context, /received-no-output/);
   const continuation = await node(
     "node-goal",
@@ -328,7 +328,8 @@ test("all Node types disclose complete live association categories and incoming 
     await runNodeCommand("get", ["node-outp00", "--full", "--context"], globals),
   );
   assert.match(output.context, /Goal.*node-goal00/);
-  assert.match(output.context, /Self.*stable\/behind/);
+  assert.match(output.context, /Self.*stable\/unanchored/);
+  assert.equal(output.changedSince, undefined, "unknown comparisons are not known changes");
   const historical = parse(
     await runNodeCommand(
       "get",

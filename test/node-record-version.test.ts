@@ -158,7 +158,7 @@ test("bad declarations isolate each Node, mask old bases and use the final dupli
 });
 
 for (const hasResource of [false, true]) {
-  test(`old independent output ${hasResource ? "with readable resource" : "without materials"} stays behind until confirm`, async (t) => {
+  test(`old independent output ${hasResource ? "with readable resource" : "without materials"} keeps unknown comparison bases until confirm`, async (t) => {
     const { workspace, system, adapter, env, commitTrailers } = await fixture(t);
     const material = path.join(workspace, "material.txt");
     if (hasResource) await fs.writeFile(material, "readable bytes");
@@ -173,19 +173,22 @@ for (const hasResource of [false, true]) {
     const other = await createNode(env, { parentPath: "", name: "Other", type: "prompt" });
     const otherRecord = (await adapter.history.nodeRecords())[other];
     await commitTrailers([trailer(output, { materials: [] })]);
-    const assertBehind = async () => {
+    const assertUnknown = async () => {
       const fresh = new NodeFs(system);
       assert.equal((await fresh.history.nodeRecords())[output], null);
-      assert.equal((await inspectNodeSync(fresh, output)).state, "behind");
+      const inspection = await inspectNodeSync(fresh, output);
+      assert.equal(inspection.state, "unanchored");
+      assert.equal(inspection.behind, undefined);
+      assert.ok(inspection.materials.some((material) => material.state === "unavailable"));
       assert.deepEqual((await fresh.history.nodeRecords())[other], otherRecord);
     };
-    await assertBehind();
+    await assertUnknown();
     let current = await readNodeForEdit(adapter, output);
     await writeNodeDocument(adapter, output, {
       baseEtag: current.etag,
       frontmatter: { title: "metadata edit" },
     });
-    await assertBehind();
+    await assertUnknown();
     current = await readNodeForEdit(adapter, output);
     await writeNodesBatch(env, {
       items: [
@@ -197,9 +200,9 @@ for (const hasResource of [false, true]) {
         },
       ],
     });
-    await assertBehind();
+    await assertUnknown();
     await renameNode(env, output, "Renamed Output");
-    await assertBehind();
+    await assertUnknown();
     await confirmNodeSync(adapter, output, {
       baseEtag: (await readNodeForEdit(adapter, output)).etag,
     });
@@ -213,7 +216,7 @@ for (const hasResource of [false, true]) {
   });
 }
 
-test("confirm without baseline preserves behind until missing local material becomes readable", async (t) => {
+test("confirm without baseline preserves unknown comparison until missing local material becomes readable", async (t) => {
   const { workspace, system, adapter, env, commitTrailers } = await fixture(t);
   const material = path.join(workspace, "missing-material.txt");
   const output = await createNode(env, {
@@ -224,13 +227,15 @@ test("confirm without baseline preserves behind until missing local material bec
     resource: pathToFileURL(material).href,
   });
   await commitTrailers([trailer(output, { v: 1, materials: "damaged" })]);
-  assert.equal((await inspectNodeSync(new NodeFs(system), output)).state, "behind");
+  assert.equal((await inspectNodeSync(new NodeFs(system), output)).state, "unanchored");
   await confirmNodeSync(adapter, output, {
     baseEtag: (await readNodeForEdit(adapter, output)).etag,
   });
   let fresh = new NodeFs(system);
   assert.equal((await fresh.history.nodeRecords())[output], null);
-  assert.equal((await inspectNodeSync(fresh, output)).state, "behind");
+  const unknown = await inspectNodeSync(fresh, output);
+  assert.equal(unknown.behind, undefined);
+  assert.ok(unknown.materials.some((material) => material.state === "unavailable"));
   assert.ok((await readNodeForEdit(fresh, output)).frontmatter.verified);
   await fs.writeFile(material, "material is now readable");
   await confirmNodeSync(adapter, output, {
@@ -253,7 +258,7 @@ test("confirm without baseline keeps remote material neutral while establishing 
     resource: "https://example.invalid/material.md",
   });
   await commitTrailers([trailer(output, { materials: [] })]);
-  assert.equal((await inspectNodeSync(new NodeFs(system), output)).state, "behind");
+  assert.equal((await inspectNodeSync(new NodeFs(system), output)).state, "unanchored");
   await confirmNodeSync(adapter, output, {
     baseEtag: (await readNodeForEdit(adapter, output)).etag,
   });

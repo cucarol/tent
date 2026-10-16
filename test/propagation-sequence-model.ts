@@ -218,11 +218,15 @@ export class SequenceRunner {
       JSON.stringify(this.basis(output.goal).slice(offset, offset + size))
     );
   }
-  private behind(output: Output) {
+  private changed(output: Output) {
     return (
       this.goalDrift(output) ||
       !!(output.resource && output.ownBasis !== normalized(output.resource.body))
     );
+  }
+  private ahead(index: number) {
+    const subtree = this.outputs.filter((output) => output.active && output.goal >= index);
+    return !subtree.some((output) => !this.driftForGoal(output, index));
   }
   private reset(output: Output) {
     output.baseline = this.basis(output.goal);
@@ -339,7 +343,7 @@ export class SequenceRunner {
           (_m, slot) => output.baseline[offset + slot + 1] !== currentBasis[offset + slot + 1],
         );
       });
-      const invariant = !this.behind(output)
+      const invariant = !this.changed(output)
         ? "I5"
         : materialChanged
           ? "I1-material"
@@ -347,9 +351,15 @@ export class SequenceRunner {
             ? "I1-goal"
             : "I1-own-material";
       this.expect(
-        !!inspected!.behind === this.behind(output),
+        !inspected!.behind,
         invariant,
-        `${output.path} behind expected=${this.behind(output)} actual=${!!inspected!.behind}`,
+        `${output.path} must remain frozen after material or goal changes`,
+      );
+      this.expect(
+        inspected!.materials.some((material) => material.state === "changed") ===
+          this.changed(output),
+        invariant,
+        `${output.path} informational comparisons must retain actual drift`,
       );
       for (const material of inspected!.materials.filter((m) => m.state === "changed")) {
         this.expect(
@@ -363,11 +373,6 @@ export class SequenceRunner {
           material.resource,
           "I6",
           `${output.path}: changed record lacks material address`,
-        );
-        this.expect(
-          inspected!.behind?.reasons.some((reason) => reason.includes(material.resource)),
-          "I6",
-          `${output.path}: behind reason must identify concrete material ${material.resource}`,
         );
         // All inherited rows must name their actual goal and concrete material, either in the address or in a reason.
         const extended = material as typeof material & { goalId?: string };
@@ -390,20 +395,12 @@ export class SequenceRunner {
             "I6",
             `${output.path}: inherited changed material must expose its exact goalId`,
           );
-          this.expect(
-            inspected!.behind?.reasons.some(
-              (reason) => reason.includes(material.resource) && reason.includes(extended.goalId!),
-            ),
-            "I6",
-            `${output.path}: behind reason must identify inherited goal ${extended.goalId}`,
-          );
         }
       }
     }
     for (const [index, goal] of this.goals.entries())
       if (goal.active) {
-        const subtree = this.outputs.filter((o) => o.active && o.goal >= index);
-        const expectedAhead = !subtree.length || subtree.some((o) => this.driftForGoal(o, index));
+        const expectedAhead = this.ahead(index);
         this.expect(
           !!byId.get(goal.id)?.ahead === expectedAhead,
           "I3",
@@ -423,8 +420,8 @@ export class SequenceRunner {
         (o) =>
           o.active && o.card === card.id && o.goal >= card.goal && this.goals[card.goal]!.active,
       );
-      const complete = responding.filter((o) => !this.behind(o));
-      const review = responding.filter((o) => this.behind(o));
+      const complete = this.ahead(card.goal) ? [] : responding;
+      const review = this.ahead(card.goal) ? responding : [];
       const goalActive = this.goals[card.goal]!.active;
       const expected = !goalActive
         ? null
@@ -449,14 +446,14 @@ export class SequenceRunner {
       this.expect(
         JSON.stringify([...ids].sort()) === JSON.stringify(complete.map((o) => o.id).sort()),
         "I2",
-        `${card.id} completed outputs must be only current asset/evidence`,
+        `${card.id} completed outputs require a responding goal that is not ahead`,
       );
       // Role's "last completed" selector consumes these has-output Cards; every eligible Card must have a current result.
       if (card.receiver && actualCard!.progress === "has-output")
         this.expect(
           complete.length,
           "I2",
-          `${card.receiver} must not select ${card.id} as completed with only behind results`,
+          `${card.receiver} must not select ${card.id} as completed while its goal is ahead`,
         );
     }
   }
@@ -566,7 +563,7 @@ export class SequenceRunner {
         c.active &&
         c.received &&
         c.goal === op.goal &&
-        !this.outputs.some((o) => o.active && o.card === c.id && !this.behind(o)),
+        (this.ahead(c.goal) || !this.outputs.some((o) => o.active && o.card === c.id)),
     );
     const eligible = relevant.filter((c) => op.role && c.receiver === op.role);
     const reject = explicit ? !explicit.received : relevant.length > 0 && eligible.length !== 1;

@@ -88,7 +88,7 @@ test("behind and ahead reasons read by kind, not as file names", () => {
     "落后：gone.pdf 已删除",
   );
   assert.equal(t.map.aheadWhy("3 小时前", "empty"), "领先（3 小时前起）：还没有产出");
-  assert.equal(t.map.aheadWhy(null, "behind"), "领先：产出还没跟上");
+  assert.equal(t.map.aheadWhy(null, "unmatched"), "领先：已有产出，但都没按现在的内容确认过");
 
   setLang("en", false);
   assert.equal(
@@ -100,8 +100,8 @@ test("behind and ahead reasons read by kind, not as file names", () => {
     "Behind: content expired on 2026-10-01",
   );
   assert.equal(
-    t.map.aheadWhy("3 hours ago", "behind"),
-    "Ahead since 3 hours ago: outputs have not caught up",
+    t.map.aheadWhy("3 hours ago", "unmatched"),
+    "Ahead since 3 hours ago: it has outputs, but none was confirmed against it as it is now",
   );
   setLang("zh", false);
 });

@@ -167,10 +167,12 @@ const zh = {
     },
     behindNext: "复核这些材料后确认，标记就会消失",
     /** Why a goal is ahead; `since` is when it last became ahead. */
-    aheadWhy: (since: string | null, kind: "empty" | "behind") =>
-      `领先${since ? `（${since}起）` : ""}：${kind === "behind" ? "产出还没跟上" : "还没有产出"}`,
-    aheadNext: (kind: "empty" | "behind"): string =>
-      kind === "behind" ? "按新要求复核下面的产出，跟上后确认" : "做出东西后，在它下面挂一个产出",
+    aheadWhy: (since: string | null, kind: "empty" | "unmatched") =>
+      `领先${since ? `（${since}起）` : ""}：${kind === "unmatched" ? "已有产出，但都没按现在的内容确认过" : "还没有产出"}`,
+    aheadNext: (kind: "empty" | "unmatched"): string =>
+      kind === "unmatched"
+        ? "确认一个仍然成立的产出，或者挂一个新的产出"
+        : "做出东西后，在它下面挂一个产出",
     commitOnlyOther: "这次只改了 Role、Card 或其他文件",
     /** What a commit did to Nodes, e.g. "新建 1 · 修改 2：A、B 等 3 个". */
     commitSummary: (added: number, changed: number, names: string[]) =>
@@ -507,8 +509,6 @@ const zh = {
     openRole: (role: string) => `打开 ${role}`,
     zoomIn: (name: string) => `进入「${name}」`,
     gapsNote: (n: number) => `另有 ${n} 个只缺基线`,
-    goalChanged: (since: string | null, n: number) =>
-      `领先${since ? `（${since}起）` : ""}：${n} 个产出要按新要求复核`,
   },
   doc: {
     workspaceFile: (path: string) => `工作区文件：${path}`,
@@ -725,10 +725,10 @@ const en: Messages = {
     },
     behindNext: "Review those materials, then confirm to clear the mark",
     aheadWhy: (since, kind) =>
-      `Ahead${since ? ` since ${since}` : ""}: ${kind === "behind" ? "outputs have not caught up" : "no output yet"}`,
+      `Ahead${since ? ` since ${since}` : ""}: ${kind === "unmatched" ? "it has outputs, but none was confirmed against it as it is now" : "no output yet"}`,
     aheadNext: (kind) =>
-      kind === "behind"
-        ? "Review the outputs below against it, then confirm"
+      kind === "unmatched"
+        ? "Confirm an output that still holds, or add a new one"
         : "Once something is made, add an output under it",
     commitOnlyOther: "This commit only changed Roles, Cards or other files",
     commitSummary: (added, changed, names) =>
@@ -1081,8 +1081,6 @@ const en: Messages = {
     openRole: (role) => `Open ${role}`,
     zoomIn: (name) => `Go into "${name}"`,
     gapsNote: (n) => `${n} more only lack a baseline`,
-    goalChanged: (since, n) =>
-      `Ahead${since ? ` (since ${since})` : ""}: ${count(n, "output")} to review against the new goal`,
   },
   doc: {
     workspaceFile: (path) => `Workspace file: ${path}`,

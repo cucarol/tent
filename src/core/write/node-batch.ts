@@ -3,6 +3,8 @@ import { ContextReader, ReaderError } from "../graph/context-reader.js";
 import { loadNodeCatalog, readCatalogDocument } from "../graph/node-catalog.js";
 import { nodeNotePath } from "../base/paths.js";
 import { uncapturedChecker } from "../graph/retained-read.js";
+import { isOutputNode } from "../graph/node-sync-record.js";
+import { readOutputChanges } from "../graph/node-sync.js";
 
 /** One header scan; each requested body is read exactly once. */
 export async function prepareNodeBatch(
@@ -19,11 +21,13 @@ export async function prepareNodeBatch(
     const document = await readCatalogDocument(fs, node);
     const item = new ContextReader(source, [document], [nodeId]).read({ nodeId, view });
     if (!("text" in item)) throw new Error("Body/raw selection was not delivered");
+    const changedSince = isOutputNode(item) ? await readOutputChanges(fs, nodeId) : undefined;
     return {
       document,
       view,
       item: {
         ...item,
+        ...(changedSince ? { changedSince } : {}),
         ...(uncaptured?.(nodeNotePath(document.path), document.raw)
           ? { uncaptured: true as const }
           : {}),

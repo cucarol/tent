@@ -232,7 +232,7 @@ test("prefix coverage and structure coexist, and goal confirmation never confirm
   assert.equal((await run("check", [goal])).state, "behind");
   await confirm(goal);
   check = await run("check", [output]);
-  assert.equal(check.state, "behind");
+  assert.equal(check.state, "synced");
   assert.deepEqual(
     check.materials.find((m: any) => m.goalId === goal && m.track === "structure")
       .changedDependencies,
@@ -251,8 +251,8 @@ test("prefix coverage and structure coexist, and goal confirmation never confirm
     frontmatter: { sources: [{ resource: "../../src/core/card-*" }] },
   });
   assert.equal(
-    (await run("check", [output])).state,
-    "behind",
+    !!(await run("check", [goal])).ahead,
+    true,
     "removing track changes the goal even if bytes are unchanged",
   );
 });
@@ -336,5 +336,8 @@ test("one Node excludes its structure-source union while retaining each material
   check = await run("check", [goal]);
   assert.equal(check.state, "ahead");
   assert.ok(check.materials.every((material: any) => material.state === "current"));
-  assert.equal((await run("check", [output])).state, "behind");
+  assert.equal((await run("check", [output])).state, "synced");
+  assert.ok(
+    (await run("check", [output])).materials.some((material: any) => material.state === "changed"),
+  );
 });

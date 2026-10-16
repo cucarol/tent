@@ -331,7 +331,7 @@ test("automatic output attribution requires the receiving Role and returns the s
   assert.equal((await git(root, "diff", "--cached", "--name-only")).trim(), "");
 });
 
-test("behind responses retract Card completion and output activity without changing Card bytes", async (t) => {
+test("goal changes retract Card completion while output material changes preserve it", async (t) => {
   const scratch = path.resolve(".scratch");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "card-review-"));
@@ -369,6 +369,12 @@ test("behind responses retract Card completion and output activity without chang
   assert.equal(((await readCardDocument(adapter, card.cardId)) as any).progress, "has-output");
   assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
   await fs.writeFile(path.join(workspace, "result.txt"), "changed");
+  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).progress, "has-output");
+  assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
+  await writeNodeDocument(adapter, "node-goal", {
+    baseEtag: contentEtag(await adapter.readFile("Goal/Goal.md")),
+    body: "Changed requirement",
+  });
   const head = await adapter.history.currentCommit();
   const behind = (await readCardDocument(adapter, card.cardId)) as any;
   assert.equal(behind.progress, "needs-review");
@@ -376,7 +382,7 @@ test("behind responses retract Card completion and output activity without chang
   assert.deepEqual(behind.outputNodeIds, []);
   assert.equal(behind.reviewGoalCount, 1);
   assert.deepEqual(behind.reviewOutputNodeIds, [output.nodeId]);
-  assert.ok(!(await readOutputActivity(adapter)).has(output.nodeId));
+  assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
   assert.equal(await adapter.history.currentCommit(), head);
   assert.equal(await adapter.readFile(card.path), cardRaw);
   await assert.rejects(

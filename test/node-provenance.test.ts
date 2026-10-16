@@ -357,7 +357,12 @@ test("material-only observation does not regenerate or clear behind, and native 
     body: "new scope",
     by: "writer/2",
   });
-  assert.equal((await inspectNodeSync(adapter, linked.nodeId)).state, "behind");
+  assert.equal((await inspectNodeSync(adapter, linked.nodeId)).state, "synced");
+  assert.ok(
+    (await inspectNodeSync(adapter, linked.nodeId)).materials.some(
+      (material) => material.state === "changed",
+    ),
+  );
   assert.deepEqual(
     parseFrontmatter(edited.raw).data.verified,
     parseFrontmatter(observed.raw).data.verified,

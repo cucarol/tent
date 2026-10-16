@@ -399,13 +399,14 @@ export async function runNodeCommand(
             (view !== undefined && view !== "body" && view !== "raw")
           )
             return usage("--full cannot be combined with reader filters or paging.");
-          const edit = await readNodeForEdit(fs, ref, { uncaptured: true });
+          const edit = await readNodeForEdit(fs, ref, { uncaptured: true, changes: true });
           return print(
             await withContext({
               nodeId: edit.nodeId,
               text: view === "raw" ? edit.raw : edit.body,
               etag: edit.etag,
               ...(edit.uncaptured ? { uncaptured: true } : {}),
+              ...(edit.changedSince ? { changedSince: edit.changedSince } : {}),
             }),
             json,
             formatNodeRead,
@@ -442,6 +443,9 @@ export async function runNodeCommand(
                         partial: true,
                         page: paged.page,
                       }
+                    : {}),
+                  ...(!paged.partial && "changedSince" in paged
+                    ? { changedSince: paged.changedSince }
                     : {}),
                 };
               })();
@@ -859,9 +863,9 @@ export function nodeHelpText(sub?: string): string {
       "Create an output child of the selected goal; --tags adds tags, none are added automatically. Local file or slash-marked directory paths, including / addresses, resolve from the Workspace root and are saved relative to the output document. Node IDs and absolute URIs are supported. Local materials must exist and be readable. The default name is the file or directory name, or Output for the root. Remote addresses are never fetched. The returned nodeId identifies the new output. --card explicitly selects its response Card. Automatic selection requires --role matching the receiver of exactly one incomplete Card for this goal; otherwise choose --card. The receipt names the selected Card.",
     search:
       "Look up active Nodes by a Workspace file path or absolute URI. Results include exact material matches and directory/prefix coverage, most specific first, with the matching field and address. Only headers are read; no document ETag is returned. Text search uses the Agent's own file tools.",
-    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output depends on every goal ancestor. The type is goal, prompt or output; tags name form and topic, preferably from tent node tags or the presets ${NODE_TAG_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; local paths resolve from the Workspace root, including / addresses, and are saved relative to the new Node document. Card response sources /cards/<card-id>.md keep their .tent root. Bare sources are descriptive unless they match an existing Workspace file or a directory marked with a trailing /; use ./ for a path that does not exist yet. Node IDs and absolute URIs are supported. --id <node-id> sets the new Node's id, so a retry after an unclear result cannot create a duplicate. An existing id or sibling name fails and names the existing Node. Names follow Windows file-name rules on every platform.`,
+    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output keeps what was seen when it is saved: later changes to its material or goals never make it behind; a goal that changes after its outputs is ahead instead. The type is goal, prompt or output; tags name form and topic, preferably from tent node tags or the presets ${NODE_TAG_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; local paths resolve from the Workspace root, including / addresses, and are saved relative to the new Node document. Card response sources /cards/<card-id>.md keep their .tent root. Bare sources are descriptive unless they match an existing Workspace file or a directory marked with a trailing /; use ./ for a path that does not exist yet. Node IDs and absolute URIs are supported. --id <node-id> sets the new Node's id, so a retry after an unclear result cannot create a duplicate. An existing id or sibling name fails and names the existing Node. Names follow Windows file-name rules on every platform.`,
     write:
-      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"src/file.ts","sources":[{"resource":".tent/Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields and unchanged material declarations are preserved. New local material declarations in frontmatter use Workspace-root paths, as in create. Ordinary saves retain existing material and goal baselines, including full-body output rewrites, metadata edits, no-ops and append. Only --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials retain their baseline and remain behind. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
+      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"src/file.ts","sources":[{"resource":".tent/Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields and unchanged material declarations are preserved. New local material declarations in frontmatter use Workspace-root paths, as in create. Ordinary saves retain existing material and goal baselines, including full-body output rewrites, metadata edits, no-ops and append. Only --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials keep their baseline and leave a goal or prompt behind; an output does not go behind for them. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
     append:
       "Append under the Workspace lock without a prior read or ETag. --heading adds a level-two Markdown heading. Existing and new content are separated by one blank line; the saved body ends with one newline. Ordinary saves retain material baselines.",
     tags: "Without arguments, list the tags of current Nodes with their counts, marking presets; --include-archived also counts deprecated Nodes. Prefer an existing tag or a preset to a new synonym. Tags add no behavior.",

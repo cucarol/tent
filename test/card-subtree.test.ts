@@ -245,6 +245,7 @@ test("Card responses follow the current hierarchy while unrelated moves remain u
   assert.equal((await f.query(card)).goalCount, 2);
   // Current hierarchy determines goal membership even before its next capture.
   await f.disk.move("Renamed/Child/Out", "A/Out");
+  assert.equal((await f.query(card)).goalCount, 0);
   assert.equal((await f.query(card)).reviewGoalCount, 1);
 });
 

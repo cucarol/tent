@@ -268,94 +268,49 @@ const goalTree = (
     ),
   ];
 };
-const goalChanged = (goal: string) => `Goal ${goal}: Material changed: /Plan/Goal/Goal.md`;
 
-test("a goal edit shows once on the changed goal, with the outputs it leaves to review", () => {
+test("an ahead goal says whether it has no output or none matches it, without claiming a change", () => {
   setLang("en", false);
-  const rendered = renderNow(
-    snapshot(
-      goalTree([
-        ["sub", "goal"],
-        ["o1", "goal"],
-        ["o2", "sub"],
-        ["o3", "goal"],
-        ["o4", "sub"],
-      ]),
+  const ahead = (reason: string) =>
+    attention(
+      renderNow(snapshot(goalTree([["o", "goal"]])), { goal: { ahead: { reasons: [reason] } } }),
+    );
+  assert.match(
+    ahead(
+      "No output under this goal was saved or confirmed against its current content and materials",
     ),
-    {
-      goal: { ahead: { reasons: [] } },
-      o1: { behind: { reasons: [goalChanged("goal")] } },
-      // An ancestor goal changed: the output folds into that goal, not its nearest one.
-      o2: { behind: { reasons: [goalChanged("goal")] } },
-      // Also behind for its own material, so it keeps its own row.
-      o3: { behind: { reasons: [goalChanged("goal"), "Material changed: /src/a.ts"] } },
-      // The goal named by the reason is not ahead, so nothing explains it away.
-      o4: { behind: { reasons: [goalChanged("sub")] } },
-    },
+    /ns-text">goal<\/span><span class="ns-meta is-long">Ahead: it has outputs, but none was confirmed against it as it is now</,
   );
   assert.match(
-    attention(rendered),
-    /ns-text">goal<\/span><span class="ns-meta is-long">[^<]*2 outputs to review/,
+    ahead("Goal subtree has no current output Node"),
+    /ns-text">goal<\/span><span class="ns-meta is-long">Ahead: no output yet</,
   );
-  assert.equal(rowsNamed(rendered, "o1"), 0);
-  assert.equal(rowsNamed(rendered, "o2"), 0);
-  assert.equal(rowsNamed(rendered, "o3"), 1);
-  assert.equal(rowsNamed(rendered, "o4"), 1);
-  // The top line still counts every output that is behind.
-  assert.match(rendered, /now-key is-behind"><i><\/i>4 behind/);
+  // The retired reason is not read any more.
+  assert.match(ahead("Implementation output is behind"), /Ahead: no output yet/);
 });
 
-test("a goal's own material warning and the outputs folded into it both show on its row", () => {
+test("a goal behind and ahead at once gives both reasons on its row and in its title", () => {
   setLang("en", false);
-  const rendered = renderNow(snapshot(goalTree([["result", "goal"]])), {
-    goal: { ahead: { reasons: [] }, behind: { reasons: ["Material changed: ../requirements.md"] } },
-    result: { behind: { reasons: [goalChanged("goal")] } },
-  });
-  assert.match(
-    attention(rendered),
-    /ns-text">goal<\/span><span class="ns-meta is-long">[^<]*requirements\.md[^<]*1 output to review/,
-  );
-  assert.equal(rowsNamed(rendered, "result"), 0);
-  assert.match(rendered, /2 behind/);
-  assert.match(rendered, /1 ahead/);
-});
-
-test("a baseline gap under a changed goal is not folded into its review count", () => {
-  setLang("en", false);
-  const rendered = renderNow(snapshot(goalTree([["o", "goal"]])), {
-    goal: { ahead: { reasons: [] } },
-    o: {
-      behind: {
-        reasons: [
-          "Goal goal: Output has no retained baseline for this ancestor goal: /Plan/Goal/Goal.md",
-        ],
+  const rendered = attention(
+    renderNow(snapshot(goalTree([["o", "goal"]])), {
+      goal: {
+        behind: { reasons: ["Material changed: ../source.md"] },
+        ahead: {
+          reasons: [
+            "No output under this goal was saved or confirmed against its current content and materials",
+          ],
+        },
       },
-    },
-  });
-  // It waits with the other gaps instead.
-  assert.match(rendered, /1 more only lack a baseline/);
-  assert.equal(rowsNamed(rendered, "o"), 0);
-  assert.doesNotMatch(rendered, /outputs? to review/);
-});
-
-test("same-named outside materials and unknown causes keep their own rows under a changed goal", () => {
-  setLang("en", false);
-  const rendered = renderNow(
-    snapshot(
-      goalTree([
-        ["same-name", "goal"],
-        ["unknown", "goal"],
-      ]),
-    ),
-    {
-      goal: { ahead: { reasons: [] } },
-      "same-name": { behind: { reasons: ["Material changed: /Other/Goal.md"] } },
-      unknown: { behind: { reasons: [] } },
-    },
+    }),
   );
-  assert.equal(rowsNamed(rendered, "same-name"), 1);
-  assert.equal(rowsNamed(rendered, "unknown"), 1);
-  assert.doesNotMatch(rendered, /outputs? to review/);
+  const unmatched = "Ahead: it has outputs, but none was confirmed against it as it is now";
+  assert.match(rendered, /ns-pill is-behind is-ahead/);
+  assert.match(
+    rendered,
+    new RegExp(`ns-text">goal</span><span class="ns-meta is-long">[^<]+ · ${unmatched}<`),
+  );
+  assert.match(rendered, new RegExp(`title="goal · [^"]+ · ${unmatched}"`));
+  assert.equal(rowsNamed(rendered, "goal"), 1);
 });
 
 test("Nodes that only lack a baseline are counted apart; stale content and real changes stay rows", () => {

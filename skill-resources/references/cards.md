@@ -9,6 +9,6 @@
 | Cancel | `tent card deprecate <card-id> --base-etag <etag>` | `status` |
 
 - `--source` takes a Node id or a Workspace-root path such as `docs/req.md`; Nodes are pinned to their current version.
-- `progress`: `received-no-output` needs a result, `needs-review` needs a look at changed outputs, `has-output` means each goal source has a current output; `goalCount` of `totalGoalCount` are done.
+- `progress`: `received-no-output` needs a result, `needs-review` means no output was confirmed against a pinned goal's current version: confirm one that still holds or record a new one, `has-output` means each goal source has a current output; `goalCount` of `totalGoalCount` are done.
 - Continue a paged `show` or `list` with the `page.next` values as `--start`, `--end`, `--expected-etag` or `--expected-revision`.
 - `notice` on `show` or `take` marks a cancelled Card.

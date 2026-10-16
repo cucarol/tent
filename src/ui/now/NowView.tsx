@@ -15,8 +15,6 @@ import { Pet } from "../components/Pet.js";
 import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
 
-/** A behind reason caused by a goal's own material changing, e.g. "Goal node-ab12cd: Material changed: /A/A.md". */
-const GOAL_CHANGE = /^Goal ([^:\s]+): Material changed: /;
 // A side is one list of groups, each a heading over one-line rows, with a hairline between groups.
 // Fixed heights, so how many rows fit is known before drawing; the heading counts the rest.
 const ROW = 32,
@@ -86,16 +84,19 @@ export function allot(needs: number[], height: number, reserve = 0): number[] {
   return rows;
 }
 
-type Mark = "waiting" | "doing" | "review" | "behind" | "ahead";
+type Mark = "waiting" | "doing" | "review";
+
+/** A Node's flags: a goal whose own material changed can be behind and ahead at once, and shows both. */
+function FlagMark({ flag }: { flag: SyncFlag }) {
+  return (
+    <span className="ns-ico">
+      <i className={`ns-pill${flag.behind ? " is-behind" : ""}${flag.ahead ? " is-ahead" : ""}`} />
+    </span>
+  );
+}
 
 /** The state at the start of a row, so the words after it can stay quiet. */
 function StateMark({ kind, part = 0 }: { kind: Mark; part?: number }) {
-  if (kind === "behind" || kind === "ahead")
-    return (
-      <span className="ns-ico">
-        <i className={`ns-pill is-${kind}`} />
-      </span>
-    );
   const r = 5.5;
   return (
     <span className="ns-ico">
@@ -349,24 +350,8 @@ export function NowView({
   });
   const behindN = flagged.filter((f) => f.flag.behind && !onlyGaps(f.flag.behind.reasons)).length;
   const aheadN = flagged.filter((f) => f.flag.ahead).length;
-  // One goal edit makes the goal ahead and every output under it behind, down the whole goal chain.
-  // Show it once, on each changed goal, unless an output is also behind for another reason.
-  const reviewing = new Map<string, number>();
-  const folded = (n: SnapshotNode, reasons: string[]) => {
-    if (primaryOf(n.type) !== "output" || !reasons.length) return false;
-    const goals = new Set<string>();
-    for (const r of reasons) {
-      const goal = GOAL_CHANGE.exec(r)?.[1];
-      if (!goal || !flags[goal]?.ahead) return false;
-      goals.add(goal);
-    }
-    for (const goal of goals) reviewing.set(goal, (reviewing.get(goal) ?? 0) + 1);
-    return true;
-  };
   const shown: Flagged[] = [
-    ...flagged.filter(
-      (f) => f.flag.behind && (f.flag.ahead || !folded(f.n, f.flag.behind.reasons)),
-    ),
+    ...flagged.filter((f) => f.flag.behind),
     ...flagged.filter((f) => f.flag.ahead && !f.flag.behind),
   ];
   // Missing baselines say nothing changed; they wait for one confirmation, so they only get counted.
@@ -378,18 +363,18 @@ export function NowView({
       const f = watch.get(n.id);
       return f ? [f] : [];
     });
-  const why = ({ n, flag }: Flagged) =>
-    flag.behind
-      ? t.map.behindWhy(flag.behind.reasons) +
-        (reviewing.has(n.id)
-          ? ` · ${t.now.goalChanged(flag.ahead?.since ? ago(flag.ahead.since) : null, reviewing.get(n.id)!)}`
-          : "")
-      : reviewing.has(n.id)
-        ? t.now.goalChanged(flag.ahead?.since ? ago(flag.ahead.since) : null, reviewing.get(n.id)!)
-        : t.map.aheadWhy(
-            flag.ahead?.since ? ago(flag.ahead.since) : null,
-            aheadKind(flag.ahead?.reasons),
-          );
+  const why = ({ flag }: Flagged) =>
+    [
+      flag.behind ? t.map.behindWhy(flag.behind.reasons) : "",
+      flag.ahead
+        ? t.map.aheadWhy(
+            flag.ahead.since ? ago(flag.ahead.since) : null,
+            aheadKind(flag.ahead.reasons),
+          )
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
   const nodeRow = (f: Flagged) => (
     <button
       key={f.n.id}
@@ -398,7 +383,7 @@ export function NowView({
       onClick={() => onOpen({ kind: "node", id: f.n.id })}
       title={`${f.n.name} · ${why(f)}`}
     >
-      <StateMark kind={f.flag.behind ? "behind" : "ahead"} />
+      <FlagMark flag={f.flag} />
       <span className="ns-text">{f.n.name}</span>
       <span className="ns-meta is-long">{why(f)}</span>
     </button>
@@ -432,7 +417,7 @@ export function NowView({
         head: (
           <>
             {self ? (
-              <StateMark kind={self.flag.behind ? "behind" : "ahead"} />
+              <FlagMark flag={self.flag} />
             ) : (
               <span className="ns-ico">
                 <NodeGlyph node={c} size={14} />
@@ -452,7 +437,7 @@ export function NowView({
       open: () => onOpen({ kind: "node", id: direct.n.id }),
       head: (
         <>
-          <StateMark kind={direct.flag.behind ? "behind" : "ahead"} />
+          <FlagMark flag={direct.flag} />
           <span className="ns-name">{direct.n.name}</span>
           <span className="ns-count is-long">{why(direct)}</span>
         </>

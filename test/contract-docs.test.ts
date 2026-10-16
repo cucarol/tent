@@ -80,12 +80,19 @@ test("material paths are defined once, in node-maintenance", async () => {
   assert.doesNotMatch(cards, /`\.\/docs\/req\.md`|`\/docs\/req\.md`/);
 });
 
-test("PLUGIN.md matches SPEC goal ancestry and brief counts", async () => {
+test("PLUGIN.md matches SPEC frozen outputs, goal ancestry and brief counts", async () => {
   const spec = flat(await read("docs/SPEC.md"));
   const plugin = await read("docs/PLUGIN.md");
-  assert.match(spec, /An output depends on every goal ancestor/);
+  assert.match(spec, /An output retains comparison bases for every goal ancestor/);
+  assert.match(spec, /Only an explicit `stale_after` expiry makes an output behind/);
+  assert.match(spec, /informational `changedSince` entries/);
+  assert.doesNotMatch(
+    spec,
+    /An output depends on every goal ancestor|Behind outputs do not enter completed goal counts/,
+  );
   assert.match(spec, /`workspace brief \[--role <id>\]` reports behind and ahead counts/);
-  assert.match(plugin, /全部 goal 祖先都提供隐式来源/);
+  assert.match(plugin, /全部 goal 祖先/);
+  assert.match(plugin, /`changedSince`/);
   assert.doesNotMatch(plugin, /最近的 goal 祖先提供隐式来源/);
   assert.match(plugin, /落后与领先两种同步状态计数/);
   assert.doesNotMatch(plugin, /四种同步状态计数/);
@@ -98,7 +105,7 @@ test("type guidance names exactly three types and the preset tags", async () => 
   assert.match(spec, /a Node has one `type`, exactly `goal`, `prompt` or `output`/);
   assert.match(
     spec,
-    /A goal without any active `output` anywhere in its subtree is ahead; tags do not change this/,
+    /Every `goal` is a requirement regardless of tags\. A goal without any active `output` anywhere in its subtree is ahead/,
   );
   assert.doesNotMatch(spec, formerTypes);
   const types = await read("skill-resources/references/node-types.md");

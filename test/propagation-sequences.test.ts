@@ -13,7 +13,7 @@ import {
 } from "../src/core/graph/card-document.js";
 import { generate, replay, shrink, type Sequence } from "./propagation-sequence-model.js";
 
-test("propagation baseline: ancestor material change survives goal confirmation", async () => {
+test("frozen output: ancestor material change keeps the goal ahead and Card awaiting review after goal confirmation", async () => {
   const fs = new PropagationMemoryFs();
   await scaffoldTent(fs, { name: "Propagation" });
   const env = { fs, clock: { now: () => "2026-10-06T00:00:00.000Z" }, tentName: "Propagation" };
@@ -26,18 +26,42 @@ test("propagation baseline: ancestor material change survives goal confirmation"
     resource: "../../material.txt",
   });
   await createNode(env, { name: "Inner", type: "goal", parentPath: "Outer", body: "requirement" });
+  await createCardDocument(fs, {
+    cardId: "card-ancestor",
+    prompt: "implement direction",
+    sources: [{ resource: "/Outer/Outer.md" }],
+  });
+  await takeCardDocument(fs, "card-ancestor");
   const output = await createNode(env, {
     name: "Result",
     type: "output",
     parentPath: "Outer/Inner",
     body: "observed",
+    sources: [{ resource: "/cards/card-ancestor.md" }],
+  });
+  const other = await createNode(env, {
+    name: "Other",
+    type: "output",
+    parentPath: "Outer/Inner",
+    body: "Other observed evidence",
   });
   await fs.writeFile("../material.txt", "second\n");
   const current = await readNodeForEdit(fs, outer);
   await confirmNodeSync(fs, outer, { baseEtag: current.etag });
+  assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
+  assert.ok((await inspectNodeSync(fs, outer)).ahead);
+  assert.equal(
+    (await listCardDocuments(fs)).items.find((card) => card.cardId === "card-ancestor")!.progress,
+    "needs-review",
+  );
+  await confirmNodeSync(fs, other, { baseEtag: (await readNodeForEdit(fs, other)).etag });
+  assert.equal((await inspectNodeSync(fs, outer)).ahead, undefined);
+  assert.equal(
+    (await listCardDocuments(fs)).items.find((card) => card.cardId === "card-ancestor")!.progress,
+    "has-output",
+  );
   assert.ok(
-    (await inspectNodeSync(fs, output)).behind,
-    "seed=ancestor-confirm; trace=[material-change outer, confirm outer]; I1 nested output must remain behind",
+    (await inspectNodeSync(fs, output)).materials.some((material) => material.state === "changed"),
   );
 });
 
@@ -74,12 +98,17 @@ test("deprecated ancestor stays in output dependencies while Card excludes its d
   });
   const inspected = await inspectNodeSync(fs, output);
   assert.deepEqual(inspected.goalIds, [inner, outer]);
-  assert.ok(inspected.behind);
+  assert.equal(inspected.behind, undefined);
+  assert.ok(
+    inspected.materials.some(
+      (material) => material.goalId === outer && material.state === "changed",
+    ),
+  );
   const card = (await listCardDocuments(fs)).items.find((c) => c.cardId === "card-request")!;
   assert.equal(card.totalGoalCount, 1);
-  assert.equal(card.progress, "needs-review");
-  assert.deepEqual(card.outputNodeIds, []);
-  assert.deepEqual(card.reviewOutputNodeIds, [output]);
+  assert.equal(card.progress, "has-output");
+  assert.deepEqual(card.outputNodeIds, [output]);
+  assert.equal(card.reviewOutputNodeIds, undefined);
 });
 
 test("propagation oracle rejects explicit unreceived Cards", async () => {

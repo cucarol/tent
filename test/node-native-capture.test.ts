@@ -85,7 +85,7 @@ test("native capture skips an unchanged lock and rereads bytes and HEAD after ac
 });
 
 test("sync rechecks native boundary snapshots before returning a judgment", async (t) => {
-  const { adapter, output } = await fixture(t);
+  const { adapter, output, goal } = await fixture(t);
   const observed = await captureNativeNodeEdits(adapter);
   const goalFile = "需求/需求.md";
   await adapter.writeFile(goalFile, (await adapter.readFile(goalFile)) + "\nChanged after capture");
@@ -95,7 +95,13 @@ test("sync rechecks native boundary snapshots before returning a judgment", asyn
     observed.invalidNodes,
     observed.catalog,
   );
-  assert.ok(sync.nodes.find((node) => node.nodeId === output)?.behind);
+  assert.equal(sync.nodes.find((node) => node.nodeId === output)?.behind, undefined);
+  assert.ok(sync.nodes.find((node) => node.nodeId === goal)?.ahead);
+  assert.ok(
+    sync.nodes
+      .find((node) => node.nodeId === output)
+      ?.materials.some((material) => material.goalId === goal && material.state === "changed"),
+  );
 });
 
 test("pure CLI reads leave native Node, Role and Card edits unretained", async (t) => {
@@ -263,6 +269,8 @@ test("Card progress uses retained output declarations and current material bytes
   );
   assert.equal((await read()).progress, "has-output");
   await fs.writeFile(path.join(workspace, "response.txt"), "changed since delivery");
+  assert.equal((await read()).progress, "has-output", "output material changes stay informational");
+  await fs.writeFile(path.join(workspace, "input.txt"), "changed goal material");
   const drifted = await read();
   assert.equal(drifted.progress, "needs-review");
   assert.deepEqual(drifted.reviewOutputNodeIds, [output.nodeId]);
@@ -272,6 +280,7 @@ test("Card progress uses retained output declarations and current material bytes
     "needs-review",
   );
   await fs.writeFile(path.join(workspace, "response.txt"), "delivered material");
+  await fs.writeFile(path.join(workspace, "input.txt"), "original material");
   assert.equal((await read()).progress, "has-output");
   assert.equal(await adapter.history.currentCommit(), head);
   assert.deepEqual(await adapter.history.nodeRecords(), records);
@@ -352,13 +361,25 @@ test("native body saves retain exact bytes and old bases; node get is pure and t
   await adapter.writeFile(file, first);
   for (const args of [[], ["--full"], ["--view", "raw"]]) {
     const read = parse(await runNodeCommand("get", [output, ...args], options));
-    assert.deepEqual(Object.keys(read).sort(), ["etag", "nodeId", "text", "uncaptured"]);
+    assert.deepEqual(Object.keys(read).sort(), [
+      "changedSince",
+      "etag",
+      "nodeId",
+      "text",
+      "uncaptured",
+    ]);
+    assert.ok(
+      read.changedSince.some(
+        (change: { kind: string; nodeId?: string }) =>
+          change.kind === "goal" && change.nodeId === goal,
+      ),
+    );
     assert.equal(read.uncaptured, true);
     assert.equal(await adapter.history.currentCommit(), beforeHead);
     assert.equal(await adapter.readFile(file), first);
   }
   const brief = parse(await runWorkspaceCommand("brief", [], options));
-  assert.equal(brief.counts.behind, 2);
+  assert.equal(brief.counts.behind, 1);
   const firstHead = await adapter.history.currentCommit();
   assert.notEqual(firstHead, beforeHead);
   assert.equal(await adapter.history.read({ commit: firstHead!, path: file }), first);

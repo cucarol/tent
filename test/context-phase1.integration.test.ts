@@ -244,11 +244,8 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   await fs.writeFile(path.join(f.root, "requirement.md"), "Requirement version two");
   const headBefore = await git(path.join(f.root, ".tent"), "rev-parse", "HEAD");
   let brief = await f.workspace("brief");
-  assert.equal(brief.value.counts.behind, 2);
-  assert.deepEqual(
-    brief.value.behind.map((item: { nodeId: string }) => item.nodeId).sort(),
-    [id, linked.nodeId].sort(),
-  );
+  assert.equal(brief.value.counts.behind, 1);
+  assert.deepEqual(brief.value.behind.map((item: { nodeId: string }) => item.nodeId).sort(), [id]);
   assert.ok(Buffer.byteLength(brief.stdout) <= 4096);
   let drift = (await f.workspace("drift")).value;
   assert.equal(
@@ -263,19 +260,19 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   let read = await f.node("get", [id, "--full"]);
   await f.node("confirm", [id, "--base-etag", read.etag]);
   assert.equal((await f.node("check", [id])).state, "ahead");
-  assert.equal((await f.node("check", [linked.nodeId])).state, "behind");
+  assert.equal((await f.node("check", [linked.nodeId])).state, "synced");
   const outputRead = await f.node("get", [linked.nodeId, "--full"]);
+  assert.deepEqual(outputRead.changedSince, [{ kind: "goal", nodeId: id, name: "Requirement" }]);
   await f.node("confirm", [linked.nodeId, "--base-etag", outputRead.etag]);
   assert.equal((await f.node("check", [id])).state, "synced");
   read = await f.node("get", [id, "--full"]);
   await f.node("write", [id, "--body", "Changed confirmed requirement", "--base-etag", read.etag]);
   assert.equal((await f.node("check", [id])).state, "ahead");
-  assert.equal((await f.node("check", [linked.nodeId])).state, "behind");
+  assert.equal((await f.node("check", [linked.nodeId])).state, "synced");
   drift = (await f.workspace("drift")).value;
   assert.ok(
     drift.items.some(
-      (item: { kind: string; nodeId?: string }) =>
-        item.kind === "node-behind" && item.nodeId === linked.nodeId,
+      (item: { kind: string; nodeId?: string }) => item.kind === "node-ahead" && item.nodeId === id,
     ),
   );
   read = await f.node("get", [linked.nodeId, "--full"]);

@@ -233,10 +233,9 @@ export async function readCardProgress(
     (
       (await currentInspections) ??
       (relatedOutputs.length
-        ? await inspectNodesSync(
-            readOnlyFs(fs),
-            relatedOutputs.map((node) => node.nodeId),
-          )
+        ? await inspectNodesSync(readOnlyFs(fs), [
+            ...new Set([...pinned.values()].flatMap((entry) => [...entry.goalIds])),
+          ])
         : [])
     ).map((node) => [node.nodeId, node]),
   );
@@ -259,8 +258,8 @@ export async function readCardProgress(
           output.path.startsWith(goal.path + "/") &&
           responses.get(output.nodeId)!.has(cardRecordPath(card.cardId))
         ) {
-          const inspection = inspections.get(output.nodeId);
-          if (!inspection || inspection.behind || inspection.uncertain)
+          const inspection = inspections.get(goalId);
+          if (!inspection || inspection.ahead || inspection.uncertain)
             awaitingReview.add(output.nodeId);
           else {
             completed.add(goalId);

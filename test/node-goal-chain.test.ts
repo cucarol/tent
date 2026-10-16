@@ -6,7 +6,11 @@ import { createNode } from "../src/core/graph/ops.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { appendNodeBody } from "../src/core/write/node-lightwrite.js";
-import { confirmNodeSync, inspectNodeSync } from "../src/core/graph/node-sync.js";
+import {
+  confirmNodeSync,
+  inspectNodeSync,
+  readOutputChanges,
+} from "../src/core/graph/node-sync.js";
 import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
 import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 
@@ -18,13 +22,18 @@ test("an imported output without any retained record cannot gain a baseline from
   const raw = serializeFrontmatter({ id: "node-imported", type: "output" }, "Imported evidence");
   await fs.writeFile("Goal/Imported/Imported.md", raw);
   await fs.history.captureUnlocked([{ path: "Goal/Imported/Imported.md", raw }]);
-  assert.ok((await inspectNodeSync(fs, "node-imported")).behind);
+  assert.equal((await inspectNodeSync(fs, "node-imported")).behind, undefined);
+  assert.ok(
+    (await inspectNodeSync(fs, "node-imported")).materials.some(
+      (material) => material.state === "unavailable",
+    ),
+  );
   const read = await readNodeForEdit(fs, "node-imported");
   await writeNodeDocument(fs, "node-imported", {
     baseEtag: read.etag,
     frontmatter: { tags: ["metadata"] },
   });
-  assert.ok((await inspectNodeSync(fs, "node-imported")).behind);
+  assert.equal((await inspectNodeSync(fs, "node-imported")).behind, undefined);
   assert.equal((await fs.history.nodeRecords())["node-imported"]?.goals, undefined);
   const current = await readNodeForEdit(fs, "node-imported");
   await confirmNodeSync(fs, "node-imported", { baseEtag: current.etag });
@@ -54,16 +63,18 @@ test("output metadata, equivalent newlines and partial edits retain a changed de
     return writeNodeDocument(fs, output, { baseEtag: read.etag, ...patch });
   }
   const original = await inspectNodeSync(fs, output);
-  assert.ok(original.behind);
+  assert.equal(original.behind, undefined);
+  const changes = await readOutputChanges(fs, output);
+  assert.ok(changes?.length);
   await edit({ frontmatter: { tags: ["review", "asset"], type: "output" } });
-  assert.ok((await inspectNodeSync(fs, output)).behind);
+  assert.deepEqual(await readOutputChanges(fs, output), changes);
   const read = await readNodeForEdit(fs, output);
   await edit({ body: read.body.replace(/\n/g, "\r\n") });
-  assert.ok((await inspectNodeSync(fs, output)).behind);
+  assert.deepEqual(await readOutputChanges(fs, output), changes);
   await appendNodeBody(fs, output, { body: "An added detail." });
-  assert.ok((await inspectNodeSync(fs, output)).behind);
+  assert.deepEqual(await readOutputChanges(fs, output), changes);
   await appendNodeBody(fs, output, { heading: "Result", body: "Changed section." });
-  assert.ok((await inspectNodeSync(fs, output)).behind);
+  assert.deepEqual(await readOutputChanges(fs, output), changes);
   assert.deepEqual(
     (await fs.history.nodeRecords())[output]?.goals?.[0]?.materials.map((m) => m.version),
     original.materials
@@ -71,11 +82,12 @@ test("output metadata, equivalent newlines and partial edits retain a changed de
       .map((m) => m.recordedVersion),
   );
   await edit({ body: "## Result\nRewritten after full review.\n" });
-  assert.ok((await inspectNodeSync(fs, output)).behind);
+  assert.deepEqual(await readOutputChanges(fs, output), changes);
   assert.equal((await inspectNodeSync(fs, output)).trustTier, "unverified");
   const reviewed = await readNodeForEdit(fs, output);
   await confirmNodeSync(fs, output, { baseEtag: reviewed.etag });
   assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
+  assert.equal(await readOutputChanges(fs, output), undefined);
 });
 
 test("explicit output confirmation acknowledges final bytes also used by ancestor goal materials", async () => {

@@ -2,6 +2,7 @@ import * as z from "zod/v4";
 import { canonicalSha256 } from "../core/base/canonical-digest.js";
 import { boundary, ReaderError } from "../core/graph/context-reader.js";
 import { incompleteNodeReadEtag } from "../core/base/node-read-basis.js";
+import type { OutputChange } from "../core/graph/node-sync.js";
 
 const nodeReadContainers = new Set([
   "node",
@@ -117,10 +118,22 @@ export function formatTextPage(value: unknown): string {
     page?: { hasMore: boolean; next?: unknown; nextCursor?: string };
     version?: unknown;
     uncaptured?: boolean;
+    changedSince?: OutputChange[];
   };
   return (
     (result.uncaptured ? `${uncapturedNotice}\n` : "") +
     result.text +
+    (result.changedSince?.length
+      ? `\n\nChanged since this output was saved or confirmed:\n${result.changedSince
+          .map((change) =>
+            change.kind === "material"
+              ? `- material ${change.resource}`
+              : `- ${change.kind === "goal" ? "goal" : "ancestor goal"} ${change.name} (${change.nodeId})`,
+          )
+          .join(
+            "\n",
+          )}\nIt still records what it saw then. If a change makes it wrong for current work, record a new output; if it still holds, confirm it.`
+      : "") +
     (result.page?.hasMore
       ? `\n\n[Partial text]\nNext: ${JSON.stringify(result.page.next)}${result.page.nextCursor ? `\nCursor: ${result.page.nextCursor}` : ""}${result.version ? `\nVersion: ${JSON.stringify(result.version)}` : ""}`
       : "")
@@ -246,9 +259,13 @@ export function pageText<
   ) {
     throw new ReaderError("INVALID_RANGE", "Invalid text page range");
   }
-  const base = compactItem({ ...result, text: "" });
+  const { changedSince, ...metadata } = result as T & { changedSince?: OutputChange[] };
+  const base = compactItem({ ...metadata, text: "" });
   const makePage = (end: number) => ({
     ...base,
+    ...(start === 0 && end === (result.total ?? result.viewLength) && changedSince
+      ? { changedSince }
+      : {}),
     text: result.text.slice(start - lower, end - lower),
     range: { unit: "utf16" as const, start, end },
     partial: start !== 0 || end !== (result.total ?? result.viewLength),

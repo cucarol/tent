@@ -136,7 +136,6 @@ async function inspectCatalogNodesInScope(
 ) {
   const records = await retainedNodeRecords(fs);
   const hasRetainedHistory = !!fs.history && (await fs.exists(".git"));
-  const goalMismatch = new Map<string, Set<string>>();
   // One inspection observes each declaration once. Shared ancestor materials use
   // that same observation; later inspections always start with an empty map.
   const materialReads = new Map<string, ReturnType<typeof observeNodeMaterials>>();
@@ -318,7 +317,7 @@ async function inspectCatalogNodesInScope(
         if ((await fs.readFile(path)) !== raw)
           throw new NodeWriteError("ETAG_CONFLICT", "Node changed during sync inspection");
         const stale = nodeIsStale(data, now);
-        const reasons = materials
+        const reasons = (isOutputNode(data) ? [] : materials)
           .filter(
             (m) =>
               m.state === "changed" ||
@@ -346,12 +345,6 @@ async function inspectCatalogNodesInScope(
           materials,
           reasons,
         };
-        for (const material of materials)
-          if (material.goalId && material.state === "changed") {
-            const mismatches = goalMismatch.get(material.goalId) ?? new Set<string>();
-            mismatches.add(current.nodeId);
-            goalMismatch.set(material.goalId, mismatches);
-          }
         break;
       } catch (error) {
         if (
@@ -416,33 +409,26 @@ async function inspectCatalogNodesInScope(
     const subtreeOutputs = nodes.filter(
       (n) => isOutputNode(n) && n.path.startsWith(goal.path + "/"),
     );
-    const owned = subtreeOutputs;
+    const hasMatchingOutput = subtreeOutputs.some((node) => {
+      const dependencies = node.materials.filter((material) => material.goalId === goal.nodeId);
+      return (
+        !node.uncertain &&
+        dependencies.length > 0 &&
+        dependencies.every((material) => material.state === "current")
+      );
+    });
     const uncertainSubtree = nodes.some((n) => n.uncertain && n.path.startsWith(goal.path + "/"));
     if (!subtreeOutputs.length && !uncertainSubtree) requirementsWithoutOutputs.push(goal.nodeId);
-    if (
-      (!subtreeOutputs.length && !uncertainSubtree) ||
-      owned.some((n) => goalMismatch.get(goal.nodeId)?.has(n.nodeId))
-    ) {
+    if (!hasMatchingOutput && (subtreeOutputs.length > 0 || !uncertainSubtree)) {
       if (!goal.behind) goal.state = "ahead";
       const reasons = [
         subtreeOutputs.length
-          ? "An output is behind this goal's content or materials"
+          ? "No output under this goal was saved or confirmed against its current content and materials"
           : "Goal subtree has no current output Node",
       ];
       goal.reasons.push(...reasons);
       goal.ahead = { reasons };
-    } else if (
-      !goal.behind &&
-      owned.some((node) => {
-        const dependencies = node.materials.filter((material) => material.goalId === goal.nodeId);
-        return (
-          !node.uncertain &&
-          dependencies.length > 0 &&
-          dependencies.every((material) => material.state === "current")
-        );
-      })
-    )
-      goal.state = "synced";
+    } else if (!goal.behind && hasMatchingOutput) goal.state = "synced";
   }
   const counts: Record<NodeSyncState, number> = { synced: 0, ahead: 0, behind: 0, unanchored: 0 };
   for (const node of nodes) {
@@ -477,7 +463,7 @@ export async function inspectNodeSync(
   return node;
 }
 
-/** Inspect selected outputs together without replaying unrelated goal progress. */
+/** Include a selected goal's outputs so its progress has the same basis as a single check. */
 export async function inspectNodesSync(
   fs: FsAdapter,
   nodeIds: readonly string[],
@@ -485,14 +471,49 @@ export async function inspectNodesSync(
 ) {
   const catalog = await loadNodeCatalog(fs);
   const ids = new Set(nodeIds);
+  const goals = [...catalog.byId.values()].filter(
+    (node) => ids.has(node.nodeId) && isRequirementNode(node),
+  );
   return (
     await inspectCatalogNodes(
       fs,
       catalog,
-      currentNodes(catalog).filter((node) => ids.has(node.nodeId)),
+      currentNodes(catalog).filter(
+        (node) =>
+          ids.has(node.nodeId) ||
+          (isOutputNode(node) && goals.some((goal) => node.path.startsWith(goal.path + "/"))),
+      ),
       now,
     )
-  ).nodes;
+  ).nodes.filter((node) => ids.has(node.nodeId));
+}
+
+export type OutputChange =
+  | { kind: "material"; resource: string }
+  | { kind: "goal" | "ancestor-goal"; nodeId: string; name: string };
+
+/** Informational comparisons never contribute output behind findings. */
+export async function readOutputChanges(fs: FsAdapter, nodeId: string) {
+  const catalog = await loadNodeCatalog(fs);
+  const target = catalog.byId.get(nodeId);
+  if (!target) throw new NodeWriteError("NOT_FOUND", `Node not found: ${nodeId}`);
+  if (!isOutputNode(target)) return undefined;
+  const inspection = (
+    await inspectCatalogNodes(fs, catalog, [target], new Date().toISOString(), nodeId)
+  ).nodes[0]!;
+  const changed = inspection.materials.filter((material) => material.state === "changed");
+  if (!changed.length) return undefined;
+  const own: OutputChange[] = changed
+    .filter((material) => !material.goalId)
+    .map((material) => ({ kind: "material", resource: material.resource }));
+  const goals: OutputChange[] = [
+    ...new Set(changed.flatMap((material) => material.goalId ?? [])),
+  ].map((id) => ({
+    kind: id === inspection.goalId ? "goal" : "ancestor-goal",
+    nodeId: id,
+    name: catalog.byId.get(id)!.name,
+  }));
+  return [...own, ...goals];
 }
 
 export function confirmNodeSync(

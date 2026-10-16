@@ -62,10 +62,14 @@ export function summarizeBehind(reasons: readonly string[]): BehindSummary {
   return summary;
 }
 
-/** Why a goal is ahead: nothing answers it yet, or its outputs have not caught up with it. */
+/**
+ * Why a goal is ahead: nothing answers it yet, or it has outputs but none was saved or confirmed
+ * against its current content and materials. The second says nothing about what changed: a missing
+ * baseline reads the same as a known change.
+ */
 export const aheadKind = (reasons: readonly string[] = []) =>
-  reasons.some((r) => r.startsWith("Implementation output is behind"))
-    ? ("behind" as const)
+  reasons.some((r) => r.startsWith("No output under this goal was saved or confirmed"))
+    ? ("unmatched" as const)
     : ("empty" as const);
 
 /**

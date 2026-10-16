@@ -70,7 +70,7 @@ test("missing declared worktree remains unavailable even after merging its mater
   await git(main, "worktree", "remove", "--force", worktree);
   assert.equal(await fs.readFile(path.join(main, "assets/result.txt"), "utf8"), "completed\n");
   const unavailable = await inspectNodeSync(adapter, output.nodeId);
-  assert.equal(unavailable.state, "behind");
+  assert.equal(unavailable.state, "synced");
   assert.equal(unavailable.materials[0]!.state, "unavailable");
   assert.match(unavailable.materials[0]!.reason!, /ENOENT|no such file/);
   const checked = await runWorkspaceCommand("check", [], { workspace: main, json: true });
@@ -169,7 +169,7 @@ test("committed main deletion stays unavailable with a retained or reused worktr
   await git(main, "commit", "--quiet", "-m", "test: delete material in main");
   const unavailable = async () => {
     const state = await inspectNodeSync(adapter, output.nodeId);
-    assert.equal(state.state, "behind");
+    assert.equal(state.state, "synced");
     assert.equal(state.materials[0]!.state, "unavailable");
     assert.match(state.materials[0]!.reason!, /ENOENT|no such file/);
     const node = await runNodeCommand("check", [output.nodeId], { workspace: main, json: true });

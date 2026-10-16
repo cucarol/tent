@@ -20,7 +20,7 @@ Reuse a tag from `tent node tags` or a preset:
 | `spec` | explains an area and links its SPEC or code |
 | `reference` | holds background to consult |
 | `procedure` | lists steps to carry out |
-| `asset` | tracks a delivered file |
+| `asset` | points to a delivered file |
 | `evidence` | records what was checked and the result |
 | `analysis` | draws conclusions from measurements |
 | `issue` | describes a known problem |
