@@ -826,14 +826,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
           <>
             <RailSection title={t.page.props}>
               <NodeProps graph={graph} node={node} onOpen={onOpen}>
-                <ReviewRow
-                  node={node}
-                  doc={doc}
-                  disabled={editing || draft !== null || saving || savedBody !== null}
-                  flag={flags[node.id]}
-                  onRead={acceptRead}
-                  onToast={onToast}
-                />
+                <ReviewRow doc={doc} flag={flags[node.id]} />
                 <PropRow label="id">
                   <CopyId id={node.id} onToast={onToast} />
                 </PropRow>

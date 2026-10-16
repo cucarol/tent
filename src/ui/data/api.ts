@@ -2,7 +2,6 @@
 // The token arrives once in the URL fragment and is kept for this tab only.
 import { t } from "../i18n.js";
 import type { DocumentVersion, Snapshot, SyncFlags } from "./types.js";
-import { actorBy } from "./actor.js";
 
 const TOKEN_KEY = "tent-token";
 
@@ -171,20 +170,7 @@ export const api = {
   node: (id: string, capture = false) =>
     call<NodeDocument>(`/api/nodes/${encodeURIComponent(id)}${capture ? "?capture=true" : ""}`),
   saveNode: (id: string, edit: NodeEdit) =>
-    wrote(
-      call<SavedNode>(
-        `/api/nodes/${encodeURIComponent(id)}`,
-        send("PUT", { ...edit, by: actorBy() }),
-      ),
-    ),
-  /** Records that the Node still holds against its materials; needs the ETag of a complete live read. */
-  confirmNode: (id: string, baseEtag: string) =>
-    wrote(
-      call<SavedNode>(
-        `/api/nodes/${encodeURIComponent(id)}/confirm`,
-        send("POST", { baseEtag, by: actorBy() }),
-      ),
-    ),
+    wrote(call<SavedNode>(`/api/nodes/${encodeURIComponent(id)}`, send("PUT", edit))),
   /** Removes the Node and everything under it; referenced files and links pointing at it stay. */
   deleteNode: (id: string) =>
     wrote(call<{ nodeId: string }>(`/api/nodes/${encodeURIComponent(id)}`, send("DELETE", {}))),

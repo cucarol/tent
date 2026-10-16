@@ -70,9 +70,6 @@ const zh = {
   },
   cardReception: { pending: "待接收", consumed: "已接收" },
   side: {
-    sign: "确认署名",
-    signTip: "在网页上保存和确认时记下的名字；留空就用本机系统用户名",
-    signPlaceholder: "本机用户名",
     nav: "导航",
     expand: "展开侧栏",
     collapse: "收起侧栏",
@@ -158,21 +155,21 @@ const zh = {
       const parts = [
         s.changed.length && `${list(s.changed, "、", more)} 改过`,
         s.deleted.length && `${list(s.deleted, "、", more)} 已删除`,
-        s.baseline && `${s.baseline} 份材料还没有基线，复核后确认一次`,
+        s.baseline && `${s.baseline} 份材料还没有基线`,
         s.uncertain && `${s.uncertain} 份材料无法核对`,
         s.stale && `内容已在 ${s.stale} 到期`,
         s.other[0],
       ].filter(Boolean);
       return `落后：${parts.join("；") || "原因未知"}`;
     },
-    behindNext: "复核这些材料后确认，标记就会消失",
+    behindNext: "Agent 复核这些材料并确认后，标记会消失",
     /** Why a goal is ahead; `since` is when it last became ahead. */
     aheadWhy: (since: string | null, kind: "empty" | "unmatched") =>
       `领先${since ? `（${since}起）` : ""}：${kind === "unmatched" ? "已有产出，但都没按现在的内容确认过" : "还没有产出"}`,
     aheadNext: (kind: "empty" | "unmatched"): string =>
       kind === "unmatched"
-        ? "确认一个仍然成立的产出，或者挂一个新的产出"
-        : "做出东西后，在它下面挂一个产出",
+        ? "Agent 确认一个仍然成立的产出，或挂上新的产出后，标记会消失"
+        : "它下面挂上产出后，标记会消失",
     commitOnlyOther: "这次只改了 Role、Card 或其他文件",
     /** What a commit did to Nodes, e.g. "新建 1 · 修改 2：A、B 等 3 个". */
     commitSummary: (added: number, changed: number, names: string[]) =>
@@ -293,11 +290,6 @@ const zh = {
     label: "复核",
     tier: { unverified: "还没复核", "machine-confirmed": "机器确认", "human-reviewed": "人工复核" },
     by: (by: string, ago: string) => `${by} · ${ago}`,
-    confirm: "确认仍然成立",
-    confirming: "正在确认…",
-    confirmTip: "对照它依据的材料，确认它说的仍然成立。会记下确认人和时间，落后标记也会消失",
-    confirmed: "已确认",
-    conflict: "它刚被改过，请再看一眼再确认",
   },
   props: {
     versions: "版本",
@@ -630,10 +622,6 @@ const en: Messages = {
   },
   cardReception: { pending: "Pending", consumed: "Received" },
   side: {
-    sign: "Sign as",
-    signTip:
-      "The name recorded when you save or confirm here; empty uses this computer's user name",
-    signPlaceholder: "OS user name",
     nav: "Navigation",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
@@ -715,21 +703,20 @@ const en: Messages = {
       const parts = [
         s.changed.length && `${list(s.changed, ", ", more)} changed`,
         s.deleted.length && `${list(s.deleted, ", ", more)} deleted`,
-        s.baseline &&
-          `${count(s.baseline, "material")} without a baseline yet; confirm once after review`,
+        s.baseline && `${count(s.baseline, "material")} without a baseline yet`,
         s.uncertain && `${count(s.uncertain, "material")} Tent cannot check`,
         s.stale && `content expired on ${s.stale}`,
         s.other[0],
       ].filter(Boolean);
       return `Behind: ${parts.join("; ") || "unknown reason"}`;
     },
-    behindNext: "Review those materials, then confirm to clear the mark",
+    behindNext: "The mark clears once an Agent reviews those materials and confirms",
     aheadWhy: (since, kind) =>
       `Ahead${since ? ` since ${since}` : ""}: ${kind === "unmatched" ? "it has outputs, but none was confirmed against it as it is now" : "no output yet"}`,
     aheadNext: (kind) =>
       kind === "unmatched"
-        ? "Confirm an output that still holds, or add a new one"
-        : "Once something is made, add an output under it",
+        ? "The mark clears once an Agent confirms an output that still holds, or adds a new one"
+        : "The mark clears once an output is added under it",
     commitOnlyOther: "This commit only changed Roles, Cards or other files",
     commitSummary: (added, changed, names) =>
       `${[added > 0 && `${added} added`, changed > 0 && `${changed} changed`].filter(Boolean).join(" · ")}: ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` and ${names.length - 2} more` : ""}`,
@@ -852,12 +839,6 @@ const en: Messages = {
       "human-reviewed": "Human-reviewed",
     },
     by: (by, ago) => `${by} · ${ago}`,
-    confirm: "Confirm it still holds",
-    confirming: "Confirming…",
-    confirmTip:
-      "Check it against its materials and confirm it still holds. Records who and when, and clears the behind mark",
-    confirmed: "Confirmed",
-    conflict: "It just changed; take another look before confirming",
   },
   props: {
     versions: "Versions",

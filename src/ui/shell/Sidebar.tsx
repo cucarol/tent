@@ -11,7 +11,6 @@ import { Pet } from "../components/Pet.js";
 import { t, type Lang } from "../i18n.js";
 import { ago, pathTail, readStored, when, writeStored } from "../util.js";
 import { beginDrag, useDragState } from "./drag.js";
-import { actorName, setActorName } from "../data/actor.js";
 import { carried, PUBLIC, sourceIds, type Work } from "./work.js";
 
 export type ThemePref = "light" | "dark" | "system";
@@ -1110,24 +1109,6 @@ function Workspaces({ name }: { name: string }) {
 }
 
 /** The gear at the foot: appearance and language. */
-/** The name saves and confirmations are signed with in this browser; empty means the service's OS user. */
-function SignName() {
-  const [name, setName] = useState(actorName);
-  return (
-    <input
-      id="sign-name"
-      className="settings-input"
-      value={name}
-      placeholder={t.side.signPlaceholder}
-      spellCheck={false}
-      onChange={(e) => {
-        setName(e.target.value);
-        setActorName(e.target.value);
-      }}
-    />
-  );
-}
-
 function Settings({
   themePref,
   lang,
@@ -1186,10 +1167,6 @@ function Settings({
               {choice("dark", themePref, t.side.dark, onTheme)}
             </div>
           </div>
-          <label className="settings-row">
-            <span data-tip={t.side.signTip}>{t.side.sign}</span>
-            <SignName />
-          </label>
           <div className="settings-row">
             <span>{t.side.language}</span>
             <div className="seg" role="radiogroup" aria-label={t.side.language}>

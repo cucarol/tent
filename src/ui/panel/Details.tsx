@@ -328,44 +328,12 @@ function latestVerification(value: unknown): Verification | null {
 }
 
 /**
- * Whether someone checked this Node against its materials, and the way to say so. A behind Node names
- * what changed; confirming signs with the name set in settings, or the service's OS user.
+ * Whether someone checked this Node against its materials, and why it is behind. Agents confirm Nodes; the
+ * page only says what Tent sees.
  */
-export function ReviewRow({
-  node,
-  doc,
-  disabled = false,
-  flag,
-  onRead,
-  onToast,
-}: {
-  node: SnapshotNode;
-  doc: NodeDocument | null;
-  disabled?: boolean;
-  flag?: SyncFlag;
-  onRead: (doc: NodeDocument) => void;
-  onToast: (text: string) => void;
-}) {
-  const [busy, setBusy] = useState(false);
+export function ReviewRow({ doc, flag }: { doc: NodeDocument | null; flag?: SyncFlag }) {
   const last = latestVerification(doc?.frontmatter.verified);
   const tier = doc?.trustTier ?? "unverified";
-  const confirm = async () => {
-    if (!doc || disabled || busy) return;
-    setBusy(true);
-    try {
-      await confirmDisplayedNode(doc);
-      onRead(await api.node(node.id));
-      onToast(t.review.confirmed);
-    } catch (error) {
-      onToast(
-        error instanceof ApiError && error.code === "ETAG_CONFLICT"
-          ? t.review.conflict
-          : describe(error),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
   return (
     <PropRow label={t.review.label}>
       <div className="review">
@@ -374,23 +342,10 @@ export function ReviewRow({
           {t.review.tier[tier]}
           {last && <span className="review-by">{t.review.by(last.by, ago(last.at))}</span>}
         </span>
-        <button
-          type="button"
-          className={`review-confirm${flag?.behind ? " is-behind" : ""}`}
-          onClick={confirm}
-          disabled={busy || disabled || !doc}
-          data-tip={t.review.confirmTip}
-        >
-          <Icon name="check" size={13} />
-          {busy ? t.review.confirming : t.review.confirm}
-        </button>
       </div>
     </PropRow>
   );
 }
-
-/** Confirmation applies to the complete document the reader displayed, even if the file changed. */
-export const confirmDisplayedNode = (doc: NodeDocument) => api.confirmNode(doc.nodeId, doc.etag);
 
 export function PropRow({ label, children }: { label: string; children: ReactNode }) {
   return (

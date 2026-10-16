@@ -73,7 +73,7 @@ test("behind and ahead reasons read by kind, not as file names", () => {
       "Goal node-ab12cd: Output has no retained baseline for this goal material: ../README.md",
       "Goal node-ab12cd: Remote material version is unknown; no network request was made: https://example.com/x",
     ]),
-    "落后：2 份材料还没有基线，复核后确认一次；1 份材料无法核对",
+    "落后：2 份材料还没有基线；1 份材料无法核对",
   );
   assert.equal(
     t.map.behindWhy([
@@ -91,6 +91,14 @@ test("behind and ahead reasons read by kind, not as file names", () => {
   assert.equal(t.map.aheadWhy(null, "unmatched"), "领先：已有产出，但都没按现在的内容确认过");
 
   setLang("en", false);
+  assert.equal(
+    t.map.behindWhy([
+      "Goal node-ab12cd: Output has no retained baseline for this ancestor goal: /A/A.md",
+      "Goal node-ab12cd: Output has no retained baseline for this goal material: ../README.md",
+      "Goal node-ab12cd: Remote material version is unknown; no network request was made: https://example.com/x",
+    ]),
+    "Behind: 2 materials without a baseline yet; 1 material Tent cannot check",
+  );
   assert.equal(
     t.map.behindWhy(["Material changed: a.md", "Material changed: b.md", "Material changed: c.md"]),
     "Behind: a.md, b.md and 1 more changed",

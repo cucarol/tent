@@ -389,9 +389,6 @@ body.is-dragging .row .acts { display: none !important; }
 .settings-pop { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 30; display: flex; flex-direction: column; gap: 10px; width: max-content; padding: 12px; border-radius: 11px; background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow-lg); }
 .sidebar.is-rail .settings-pop { left: calc(100% + 8px); bottom: 0; }
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; font-size: 12.5px; color: var(--text-2); }
-.settings-input { width: 150px; height: 28px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 12.5px; }
-.settings-input::placeholder { color: var(--text-3); }
-.settings-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 
 /* Dragging a Node or a Card: what is carried follows the pointer. */
 body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select: none; }
@@ -710,11 +707,6 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .review-tier { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px; color: var(--text); }
 .review-tier.is-unverified { color: var(--text-3); }
 .review-by { color: var(--text-3); font-size: 12px; }
-.review-confirm { display: inline-flex; align-items: center; gap: 6px; height: 26px; margin: 2px 0 0 -8px; padding: 0 8px; border-radius: 7px; color: var(--text-2); font-size: 12.5px; }
-.review-confirm:hover:not(:disabled) { background: var(--hover); color: var(--text); }
-.review-confirm.is-behind { margin-left: 0; color: var(--warn); background: var(--warn-soft); }
-.review-confirm.is-behind:hover:not(:disabled) { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, var(--warn-soft)); }
-.review-confirm:disabled { opacity: .5; cursor: default; }
 .ref-link { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; height: 28px; padding: 0 8px; border-radius: 7px; font-size: 12.5px; text-align: left; color: var(--text); transition: background .12s; }
 .ref-link > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button.ref-link:hover, span.ref-link:hover { background: var(--hover); }
