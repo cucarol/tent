@@ -47,7 +47,7 @@ const OPERATIONAL_TOP = new Set([".git", "roles", "cards", "temp", "attachments"
 const LOCK_GUARD = /^mutation\.lock\.guard(?:\.(?:pending|released|stale)-[^/]+)?$/;
 const PENDING_FILES = ["node-move.pending.json", "delete.pending.json"];
 const TEXT_EXTENSIONS = new Set([".md", ".json", ".jsonl", ".txt", ".yaml", ".yml"]);
-// Same parser settings as src/core/frontmatter.ts.
+// Same parser settings as src/core/base/frontmatter.ts.
 const YAML_OPTIONS = {
   version: "1.2",
   schema: "core",

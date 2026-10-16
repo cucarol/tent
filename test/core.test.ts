@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readdir } from "node:fs/promises";
-import { createNode } from "../src/core/ops.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
-import { loadTent, nodeNotePath } from "../src/core/tree.js";
+import { createNode } from "../src/core/graph/ops.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { loadTent, nodeNotePath } from "../src/core/store/tree.js";
 import { NodeFs, SystemClock } from "../src/fs/node-fs.js";
 import { makeTent } from "./helpers.js";
-import { workspaceDocumentPaths } from "../src/core/workspace-revision.js";
+import { workspaceDocumentPaths } from "../src/core/workspace/workspace-revision.js";
 
 test("Node creation rejects unindexable names before writing and allows nested system basenames", async (t) => {
   const root = await makeTent(t);

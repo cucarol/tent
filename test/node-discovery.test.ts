@@ -6,9 +6,9 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
-import { contentEtag } from "../src/core/etag.js";
-import { readNode, listNodes, relatedNodes } from "../src/core/node-query.js";
-import { readWorkspaceSettings } from "../src/core/workspace-settings.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import { readNode, listNodes, relatedNodes } from "../src/core/read/node-query.js";
+import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 
 const raw = (id: string, body: string, extra = "") =>

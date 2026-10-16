@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 test("Node CLI forwards explicit actors through content writes, confirmation and batch inputs", async (t) => {

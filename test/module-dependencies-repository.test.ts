@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import test from "node:test";
 import { createModuleDependencyRepositoryReader } from "../src/fs/module-dependencies.js";
-import { extractRepositoryImports } from "../src/core/repository-imports.js";
+import { extractRepositoryImports } from "../src/core/base/repository-imports.js";
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
   const scratch = path.resolve(".scratch");

@@ -3,27 +3,27 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { loadNodeCatalog } from "../src/core/node-catalog.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import {
   structureMaterialCoverage,
   materialCoverageContains,
-} from "../src/core/material-coverage.js";
+} from "../src/core/base/material-coverage.js";
 import {
   formatStopTurnReview,
   TURN_REVIEW_ACTION,
   TURN_REVIEW_RULE,
-} from "../src/core/stop-turn-review.js";
-import type { SessionObservationEvent } from "../src/core/session-observations.js";
-import type { StopQuestion } from "../src/core/stop-advice.js";
+} from "../src/core/return/stop-turn-review.js";
+import type { SessionObservationEvent } from "../src/core/return/session-observations.js";
+import type { StopQuestion } from "../src/core/return/stop-advice.js";
 import { runHookCommand } from "../src/cli/hook.js";
 import { readClaudeTurnActivity } from "../src/cli/claude-turn-activity.js";
 import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
-import { modulesForIndexedTurn } from "../src/core/stop-turn-review.js";
-import { buildStopMaterialIndex } from "../src/core/stop-material-index.js";
+import { modulesForIndexedTurn } from "../src/core/return/stop-turn-review.js";
+import { buildStopMaterialIndex } from "../src/core/return/stop-material-index.js";
 import { createHash } from "node:crypto";
-import { isUsableNode } from "../src/core/tree.js";
-import { questionsForIndexedTurn, stopAdvice } from "../src/core/stop-advice.js";
+import { isUsableNode } from "../src/core/store/tree.js";
+import { questionsForIndexedTurn, stopAdvice } from "../src/core/return/stop-advice.js";
 import { codexHookAdapter } from "../src/cli/codex-turn-activity.js";
 import { claudeHookAdapter } from "../src/cli/claude-turn-activity.js";
 import { stopReviewOutput } from "../src/cli/hook-adapter.js";

@@ -8,16 +8,16 @@ import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { git } from "./helpers.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import {
   inspectCurrentContext,
   makeContextBrief,
   formatContextBrief,
   contextDriftItems,
   type CurrentContext,
-} from "../src/core/context-brief.js";
-import type { FsAdapter } from "../src/core/adapter.js";
-import { loadNodeCatalog } from "../src/core/node-catalog.js";
+} from "../src/core/read/context-brief.js";
+import type { FsAdapter } from "../src/core/store/adapter.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 
 test("brief reports native capture failure without unhandled unused Card query promises", async () => {
   const adapter = {

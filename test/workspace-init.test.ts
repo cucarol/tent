@@ -7,7 +7,7 @@ import * as path from "node:path";
 import test from "node:test";
 import { initializeTentWorkspace, ensureWorkspaceGitExclude } from "../src/fs/workspace-init.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
-import { loadTent } from "../src/core/tree.js";
+import { loadTent } from "../src/core/store/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 test("initialization creates independent Git without Nodes, commits or changes to outer history", async (t) => {

@@ -1,5 +1,5 @@
 // Read model the Web UI renders; `tent ui` serves it (src/ui-server/snapshot.ts builds it from Core).
-import type { CardProgress } from "../../core/card-progress.js";
+import type { CardProgress } from "../../core/graph/card-progress.js";
 
 export type RefKind = "node" | "role" | "card";
 export type SnapshotRef = { kind: RefKind; id: string };

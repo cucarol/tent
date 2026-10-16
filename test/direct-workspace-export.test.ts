@@ -8,7 +8,7 @@ import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { git } from "./helpers.js";
 
 test("direct export preserves published Git sources after live rename/deletion and rejects invalid history", async (t) => {

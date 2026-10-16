@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { deriveCardProgress } from "../src/core/card-progress.js";
+import { deriveCardProgress } from "../src/core/graph/card-progress.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file: string) => fs.readFile(path.join(repoRoot, file), "utf8");

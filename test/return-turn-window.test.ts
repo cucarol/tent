@@ -5,10 +5,10 @@ import test, { type TestContext } from "node:test";
 import { readCodexTurnActivity, codexHookAdapter } from "../src/cli/codex-turn-activity.js";
 import { readClaudeTurnActivity, claudeHookAdapter } from "../src/cli/claude-turn-activity.js";
 import { stopReviewOutput } from "../src/cli/hook-adapter.js";
-import { modulesForIndexedTurn } from "../src/core/stop-turn-review.js";
-import { stopAdvice } from "../src/core/stop-advice.js";
-import type { StopMaterialIndex } from "../src/core/stop-material-index.js";
-import type { SessionObservationEvent } from "../src/core/session-observations.js";
+import { modulesForIndexedTurn } from "../src/core/return/stop-turn-review.js";
+import { stopAdvice } from "../src/core/return/stop-advice.js";
+import type { StopMaterialIndex } from "../src/core/return/stop-material-index.js";
+import type { SessionObservationEvent } from "../src/core/return/session-observations.js";
 
 async function fixture(t: TestContext) {
   await fs.mkdir(".scratch", { recursive: true });

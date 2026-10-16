@@ -1,4 +1,4 @@
-import type { SessionObservationActivity } from "../core/session-observations.js";
+import type { SessionObservationActivity } from "../core/return/session-observations.js";
 
 export type HookAdapter = {
   turnId(event: Record<string, unknown>): string | undefined;

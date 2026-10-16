@@ -4,7 +4,7 @@ import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import { test } from "node:test";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 test("NodeFs reads the exact frontmatter prefix across UTF-8 and fence boundaries", async () => {

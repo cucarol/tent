@@ -5,10 +5,10 @@ import test, { type TestContext } from "node:test";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
-import { prepareNodeDocumentWrite, NodeWriteError } from "../src/core/node-document-write.js";
-import { contentEtag } from "../src/core/etag.js";
-import { incompleteNodeReadEtag } from "../src/core/node-read-basis.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { prepareNodeDocumentWrite, NodeWriteError } from "../src/core/graph/node-document-write.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import { incompleteNodeReadEtag } from "../src/core/base/node-read-basis.js";
 
 async function fixture(t: TestContext, metadata = "") {
   const scratch = path.resolve(".scratch");

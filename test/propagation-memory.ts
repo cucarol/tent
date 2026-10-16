@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import type { FsAdapter } from "../src/core/adapter.js";
+import type { FsAdapter } from "../src/core/store/adapter.js";
 import {
   GitDocumentHistory,
   type CaptureMetadata,
   type DocumentChange,
   type HistoryCommit,
-} from "../src/core/git-history.js";
-import type { NodeBasisRecord } from "../src/core/node-basis-record.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
-import { materialLocator } from "../src/core/material.js";
+} from "../src/core/store/git-history.js";
+import type { NodeBasisRecord } from "../src/core/base/node-basis-record.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { materialLocator } from "../src/core/base/material.js";
 
 /** Storage-only fixture: baselines are produced exclusively by the real Core. */
 export class PropagationMemoryFs implements FsAdapter {

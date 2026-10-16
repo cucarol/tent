@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { extractRepositoryImports, type RepositorySource } from "../src/core/repository-imports.js";
-import { repositoryFacts, repositoryDirectoryGraph } from "../src/core/repository-facts.js";
+import {
+  extractRepositoryImports,
+  type RepositorySource,
+} from "../src/core/base/repository-imports.js";
+import { repositoryFacts, repositoryDirectoryGraph } from "../src/core/base/repository-facts.js";
 
 const source = (path: string, content = ""): RepositorySource => ({ path, content });
 

@@ -4,8 +4,8 @@ import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { TestContext } from "node:test";
-import type { FsAdapter } from "../src/core/adapter.js";
-import { NODE_MOVE_PENDING_PATH } from "../src/core/node-move-recovery.js";
+import type { FsAdapter } from "../src/core/store/adapter.js";
+import { NODE_MOVE_PENDING_PATH } from "../src/core/store/node-move-recovery.js";
 import type { NodeFs } from "../src/fs/node-fs.js";
 import { withFileMutationLock } from "../src/fs/mutation-lock.js";
 

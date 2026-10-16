@@ -2,14 +2,14 @@ import { readTranscriptTurnTail } from "./transcript-turn-tail.js";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as z from "zod/v4";
-import { createTurnPathResolver } from "../core/git-checkout.js";
-import { isHistoryDocument } from "../core/document-history.js";
+import { createTurnPathResolver } from "../core/workspace/git-checkout.js";
+import { isHistoryDocument } from "../core/store/document-history.js";
 import type { HookAdapter } from "./hook-adapter.js";
 import type {
   SessionObservationActivity,
   SessionFileObservation,
   SessionSignal,
-} from "../core/session-observations.js";
+} from "../core/return/session-observations.js";
 
 const entrySchema = z.object({
   type: z.string(),

@@ -3,10 +3,10 @@ import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { selectedContextReader } from "../src/core/context-reader-factory.js";
-import { loadNodeCatalog } from "../src/core/node-catalog.js";
-import { contentEtag } from "../src/core/etag.js";
-import { ReaderError } from "../src/core/context-reader.js";
+import { selectedContextReader } from "../src/core/read/context-reader-factory.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import { ReaderError } from "../src/core/graph/context-reader.js";
 
 const source = { kind: "live" as const, workspaceId: "ws-selected" };
 const raw = (id: string, body = "正文", metadata = "") =>

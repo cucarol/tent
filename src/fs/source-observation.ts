@@ -8,13 +8,13 @@ import {
   localMaterialPath,
   isDirectoryMaterial,
   isPrefixMaterial,
-} from "../core/material.js";
+} from "../core/base/material.js";
 import { observeStructureMaterial } from "./structure-observation.js";
-import { markdownMaterialHeading, materialContent } from "../core/material-section.js";
-import { parseFrontmatter } from "../core/frontmatter.js";
-import { isNodeId } from "../core/id.js";
-import { nodeSemanticContent } from "../core/node-sync-record.js";
-import { systemMaterialPath } from "../core/material-target.js";
+import { markdownMaterialHeading, materialContent } from "../core/base/material-section.js";
+import { parseFrontmatter } from "../core/base/frontmatter.js";
+import { isNodeId } from "../core/base/id.js";
+import { nodeSemanticContent } from "../core/graph/node-sync-record.js";
+import { systemMaterialPath } from "../core/graph/material-target.js";
 
 /** Safely read and hash bytes; the Core caller supplies any content selection. */
 export async function observeSourceFile(

@@ -2,15 +2,21 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { structureMaterialCoverage, materialCoverageContains } from "../core/material-coverage.js";
-import { externalStructureDependencies, structureFingerprint } from "../core/structure-material.js";
+import {
+  structureMaterialCoverage,
+  materialCoverageContains,
+} from "../core/base/material-coverage.js";
+import {
+  externalStructureDependencies,
+  structureFingerprint,
+} from "../core/base/structure-material.js";
 import {
   extractRepositoryImports,
   isImportSource,
   isImportConfig,
   isTestSource,
   type RepositorySource,
-} from "../core/repository-imports.js";
+} from "../core/base/repository-imports.js";
 import { sourceDirectoryPaths } from "./directory-observation.js";
 import { observeSourceFile } from "./source-observation.js";
 import { checkedSourceFile } from "./checked-source-file.js";

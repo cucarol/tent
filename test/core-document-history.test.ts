@@ -1,15 +1,15 @@
 import { NodeFs } from "../src/fs/node-fs.js";
-import { readWorkspaceSettings } from "../src/core/workspace-settings.js";
-import { readNode, readNodeForEdit, listNodes, searchNodes } from "../src/core/node-query.js";
-import { readDocumentDiff } from "../src/core/document-diff.js";
+import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
+import { readNode, readNodeForEdit, listNodes, searchNodes } from "../src/core/read/node-query.js";
+import { readDocumentDiff } from "../src/core/read/document-diff.js";
 import {
   createRoleContext,
   editRoleContext,
   requireRoleDocument,
   readRolePage,
   listRoleContexts,
-} from "../src/core/role-context.js";
-import { inspectNodeSync, confirmNodeSync } from "../src/core/node-sync.js";
+} from "../src/core/read/role-context.js";
+import { inspectNodeSync, confirmNodeSync } from "../src/core/graph/node-sync.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
@@ -17,15 +17,15 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { initializeFixtureWorkspace } from "./scratch.js";
-import { renameNode, deleteNode } from "../src/core/ops.js";
-import { withTentMutation } from "../src/core/adapter.js";
-import { DELETE_PENDING_PATH } from "../src/core/delete-recovery.js";
-import type { DocumentVersion } from "../src/core/git-history.js";
+import { renameNode, deleteNode } from "../src/core/graph/ops.js";
+import { withTentMutation } from "../src/core/store/adapter.js";
+import { DELETE_PENDING_PATH } from "../src/core/store/delete-recovery.js";
+import type { DocumentVersion } from "../src/core/store/git-history.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
-import { NODE_MOVE_PENDING_PATH } from "../src/core/node-move-recovery.js";
-import { contentEtag } from "../src/core/etag.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
-import { NodeWriteError, writeNodeDocument } from "../src/core/node-document-write.js";
+import { NODE_MOVE_PENDING_PATH } from "../src/core/store/node-move-recovery.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { NodeWriteError, writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { extendTestLockWait } from "./helpers.js";
 
 async function fixture(t: TestContext) {

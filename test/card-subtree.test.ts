@@ -3,13 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import type { FsAdapter } from "../src/core/adapter.js";
-import { readCardProgress, type CardProgressInput } from "../src/core/card-progress.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import type { DocumentVersion, GitDocumentHistory } from "../src/core/git-history.js";
-import { nodeNotePath } from "../src/core/paths.js";
-import { prepareNodeSyncSave } from "../src/core/node-sync-record.js";
-import type { NodeBasisRecord } from "../src/core/node-basis-record.js";
+import type { FsAdapter } from "../src/core/store/adapter.js";
+import { readCardProgress, type CardProgressInput } from "../src/core/graph/card-progress.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import type { DocumentVersion, GitDocumentHistory } from "../src/core/store/git-history.js";
+import { nodeNotePath } from "../src/core/base/paths.js";
+import { prepareNodeSyncSave } from "../src/core/graph/node-sync-record.js";
+import type { NodeBasisRecord } from "../src/core/base/node-basis-record.js";
 
 // Real current files/catalog, with a deterministic retained Git lineage for transition cases.
 async function fixture(t: TestContext) {

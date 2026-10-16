@@ -3,9 +3,9 @@ import { test } from "node:test";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldTent } from "../src/core/scaffold.js";
-import { createNode } from "../src/core/ops.js";
-import { loadTent } from "../src/core/tree.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
+import { createNode } from "../src/core/graph/ops.js";
+import { loadTent } from "../src/core/store/tree.js";
 import { testScratchRoot } from "./scratch.js";
 
 test("retired names are ordinary Nodes and grouping folders stay transparent", async (t) => {

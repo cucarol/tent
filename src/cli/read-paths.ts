@@ -1,7 +1,7 @@
 import path from "node:path";
-import { nodeNotePath } from "../core/paths.js";
-import { materialLocator, localMaterialPath } from "../core/material.js";
-import { markdownMaterialHeading } from "../core/material-section.js";
+import { nodeNotePath } from "../core/base/paths.js";
+import { materialLocator, localMaterialPath } from "../core/base/material.js";
+import { markdownMaterialHeading } from "../core/base/material-section.js";
 
 /** Discovery addresses are directly usable by the host's file reader. */
 export function workspaceReadPaths<T>(value: T, workspaceRoot: string): T {

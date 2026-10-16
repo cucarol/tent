@@ -7,8 +7,8 @@ import path from "node:path";
 import test from "node:test";
 import { createModuleDependencyWatch } from "../src/fs/module-dependency-watch.js";
 import { createModuleDependencyRepositoryReader } from "../src/fs/module-dependencies.js";
-import { createModuleDependencyQuery } from "../src/core/module-dependency-query.js";
-import { readModuleDependencies } from "../src/core/module-dependencies.js";
+import { createModuleDependencyQuery } from "../src/core/read/module-dependency-query.js";
+import { readModuleDependencies } from "../src/core/graph/module-dependencies.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {

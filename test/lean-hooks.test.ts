@@ -6,10 +6,10 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { runHookCommand } from "../src/cli/hook.js";
 import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
-import { questionsForIndexedTurn } from "../src/core/stop-advice.js";
-import type { SessionObservationEvent } from "../src/core/session-observations.js";
+import { questionsForIndexedTurn } from "../src/core/return/stop-advice.js";
+import type { SessionObservationEvent } from "../src/core/return/session-observations.js";
 import { withFileMutationLock } from "../src/fs/mutation-lock.js";
-import { GitDocumentHistory } from "../src/core/git-history.js";
+import { GitDocumentHistory } from "../src/core/store/git-history.js";
 import { claimStopReview } from "../src/fs/stop-review-claim.js";
 
 async function fixture(t: TestContext) {

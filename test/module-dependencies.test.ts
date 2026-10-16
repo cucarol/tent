@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { readModuleDependencies } from "../src/core/module-dependencies.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
+import { readModuleDependencies } from "../src/core/graph/module-dependencies.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";
-import type { RepositorySource } from "../src/core/repository-imports.js";
+import type { RepositorySource } from "../src/core/base/repository-imports.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "module-dependencies-"));

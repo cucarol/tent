@@ -1,19 +1,19 @@
-import type { FsAdapter } from "../src/core/adapter.js";
+import type { FsAdapter } from "../src/core/store/adapter.js";
 import { randomUUID } from "node:crypto";
-import { NODE_FRONTMATTER_KEY_ORDER, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { normalizeOptionalNodeType } from "../src/core/node-type.js";
-import { isNodeId, makeUniqueNodeId } from "../src/core/id.js";
+import { NODE_FRONTMATTER_KEY_ORDER, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { normalizeOptionalNodeType } from "../src/core/base/node-type.js";
+import { isNodeId, makeUniqueNodeId } from "../src/core/base/id.js";
 import {
   INDEX_PATH,
   TEMP_DIR,
   TENT_SYSTEM_DIR,
   WORKSPACE_SETTINGS_PATH,
-} from "../src/core/paths.js";
+} from "../src/core/base/paths.js";
 import {
   validateNodeName,
   tentIndexMarker,
   type ScaffoldTentOptions,
-} from "../src/core/scaffold.js";
+} from "../src/core/store/scaffold.js";
 export async function scaffoldInWorkspace(
   workspaceFs: FsAdapter,
   options: ScaffoldTentOptions,

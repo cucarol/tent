@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createModuleDependencyQuery } from "../src/core/module-dependency-query.js";
-import type { ModuleDependencies } from "../src/core/module-dependencies.js";
+import { createModuleDependencyQuery } from "../src/core/read/module-dependency-query.js";
+import type { ModuleDependencies } from "../src/core/graph/module-dependencies.js";
 
 function graph(head: string): ModuleDependencies {
   return { basis: { head, dirty: true }, modules: [], edges: [], uncovered: 0, unresolved: 0 };

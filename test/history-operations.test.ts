@@ -4,10 +4,10 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { createNode, deleteNode, renameNode } from "../src/core/ops.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { listHistoryChanges } from "../src/core/history-query.js";
+import { createNode, deleteNode, renameNode } from "../src/core/graph/ops.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { listHistoryChanges } from "../src/core/read/history-query.js";
 import { testScratchRoot } from "./scratch.js";
 
 test("public saves and observed edits retain distinct history operations across locations", async (t) => {

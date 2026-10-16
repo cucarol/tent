@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractNodeMentions } from "../src/markdown/links.js";
-import { ContextReader, type ReaderDocument } from "../src/core/context-reader.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
-import { contentEtag } from "../src/core/etag.js";
-import { nodeSemanticFingerprint } from "../src/core/node-sync-record.js";
+import { extractNodeMentions } from "../src/core/base/links.js";
+import { ContextReader, type ReaderDocument } from "../src/core/graph/context-reader.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import { nodeSemanticFingerprint } from "../src/core/graph/node-sync-record.js";
 
 test("mentions retain each bare known token range, including code and HTML text, outside Markdown links", () => {
   const body =

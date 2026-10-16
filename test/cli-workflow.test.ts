@@ -1,6 +1,6 @@
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { readWorkspaceSettings } from "../src/core/workspace-settings.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
 import { git } from "./helpers.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";

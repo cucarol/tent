@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { createRoleContext } from "../src/core/role-context.js";
-import { createCardDocument, takeCardDocument } from "../src/core/card-document.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import type { DocumentVersion } from "../src/core/git-history.js";
+import { createRoleContext } from "../src/core/read/role-context.js";
+import { createCardDocument, takeCardDocument } from "../src/core/graph/card-document.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import type { DocumentVersion } from "../src/core/store/git-history.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {

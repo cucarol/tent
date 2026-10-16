@@ -206,7 +206,7 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   assert.match(spec, /Retired commands and wire fields are removed rather than kept as aliases/);
   assert.doesNotMatch(spec, /temp\/<role>\/reports\//);
   // Installation metadata and resources are contracts; prose remains editable.
-  const { parseFrontmatter } = await import("../src/core/frontmatter.js");
+  const { parseFrontmatter } = await import("../src/core/base/frontmatter.js");
   for (const name of skillEntrypoints.filter((name): name is string => name !== undefined)) {
     const skill = await fs.readFile(path.join(repoRoot, "skills", name, "SKILL.md"), "utf8");
     const metadata = parseFrontmatter(skill).data;

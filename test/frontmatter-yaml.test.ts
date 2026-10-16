@@ -1,14 +1,14 @@
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { test } from "node:test";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { createNode, moveNode, renameNode } from "../src/core/ops.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { createNode, moveNode, renameNode } from "../src/core/graph/ops.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { scaffoldTent } from "../src/core/scaffold.js";
-import { nodeNotePath } from "../src/core/tree.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
+import { nodeNotePath } from "../src/core/store/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 const metadata = [

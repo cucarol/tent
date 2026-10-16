@@ -6,8 +6,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { prepareNodeBatch } from "../src/core/node-batch.js";
-import { captureReadDocuments } from "../src/core/document-history.js";
+import { prepareNodeBatch } from "../src/core/write/node-batch.js";
+import { captureReadDocuments } from "../src/core/store/document-history.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 

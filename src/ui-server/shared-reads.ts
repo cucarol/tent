@@ -1,4 +1,4 @@
-import type { FsAdapter } from "../core/adapter.js";
+import type { FsAdapter } from "../core/store/adapter.js";
 
 /** Share overlapping identical reads; a settled read is never reused by a later query. */
 export function shareInFlightReads(fs: FsAdapter): FsAdapter {

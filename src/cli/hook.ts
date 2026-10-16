@@ -1,11 +1,11 @@
-import { captureNativeNodeEdits } from "../core/node-native-capture.js";
+import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { NodeFs } from "../fs/node-fs.js";
-import { findTentSystemRoot } from "../core/status.js";
-import { workspaceRootFromSystemRoot } from "../core/paths.js";
-import { stopAdvice } from "../core/stop-advice.js";
-import type { SessionObservationEvent } from "../core/session-observations.js";
+import { findTentSystemRoot } from "../core/workspace/status.js";
+import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
+import { stopAdvice } from "../core/return/stop-advice.js";
+import type { SessionObservationEvent } from "../core/return/session-observations.js";
 import { loadStopMaterialIndex } from "../fs/stop-material-index.js";
 import { claimStopReview, hasStopReviewClaim } from "../fs/stop-review-claim.js";
 import { codexHookAdapter } from "./codex-turn-activity.js";

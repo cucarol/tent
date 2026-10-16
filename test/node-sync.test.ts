@@ -5,25 +5,25 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { createNode, renameNode, moveNode, archiveNode } from "../src/core/ops.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { writeNodesBatch } from "../src/core/node-write-batch.js";
-import { appendNodeBody } from "../src/core/node-lightwrite.js";
+import { createNode, renameNode, moveNode, archiveNode } from "../src/core/graph/ops.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
+import { appendNodeBody } from "../src/core/write/node-lightwrite.js";
 import {
   inspectNodeSync,
   inspectWorkspaceSync,
   linkNodeOutput,
   confirmNodeSync,
-} from "../src/core/node-sync.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { materialLocator } from "../src/core/material.js";
-import { nodeNotePath } from "../src/core/paths.js";
-import { loadNodeCatalog } from "../src/core/node-catalog.js";
-import { incompleteNodeReadEtag } from "../src/core/node-read-basis.js";
+} from "../src/core/graph/node-sync.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { materialLocator } from "../src/core/base/material.js";
+import { nodeNotePath } from "../src/core/base/paths.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { incompleteNodeReadEtag } from "../src/core/base/node-read-basis.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
-import { inspectCurrentContext, makeContextBrief } from "../src/core/context-brief.js";
+import { inspectCurrentContext, makeContextBrief } from "../src/core/read/context-brief.js";
 
 async function fixture(t: TestContext, history = true) {
   await mkdir(testScratchRoot(), { recursive: true });

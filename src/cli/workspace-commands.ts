@@ -1,26 +1,29 @@
 import { workspaceReadPaths } from "./read-paths.js";
-import { captureNativeNodeEdits } from "../core/node-native-capture.js";
+import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
 import { stat } from "node:fs/promises";
 import { NodeFs } from "../fs/node-fs.js";
 import { exportGraph } from "../fs/graph-export.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
-import { readWorkspaceSettings } from "../core/workspace-settings.js";
-import { checkGraph } from "../core/graph-check.js";
-import { scanWorkspace, formatWorkspaceScan } from "../core/workspace-scan.js";
+import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
+import { checkGraph } from "../core/check/graph-check.js";
+import { scanWorkspace, formatWorkspaceScan } from "../core/check/workspace-scan.js";
 import {
   readWorkspaceScanRepository,
   readModuleMapRepository,
   scanFileKind,
 } from "../fs/workspace-scan.js";
-import { checkWorkspaceModules, formatWorkspaceModules } from "../core/workspace-module-map.js";
+import {
+  checkWorkspaceModules,
+  formatWorkspaceModules,
+} from "../core/check/workspace-module-map.js";
 import {
   inspectCurrentContext,
   makeContextBrief,
   formatContextBrief,
   inspectWorkspaceDrift,
-} from "../core/context-brief.js";
-import { canonicalSha256 } from "../core/canonical-digest.js";
+} from "../core/read/context-brief.js";
+import { canonicalSha256 } from "../core/base/canonical-digest.js";
 import { pageItems } from "./reader-page.js";
 import { cliErrorText, type ErrorContext } from "./error-text.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";

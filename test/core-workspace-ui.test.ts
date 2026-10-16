@@ -4,12 +4,12 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { createNode, renameNode } from "../src/core/ops.js";
-import { readWorkspaceRevision } from "../src/core/workspace-revision.js";
-import { listWorkspaceRelations } from "../src/core/workspace-relations.js";
-import { readDocumentVersion } from "../src/core/document-diff.js";
-import { createCardDocument } from "../src/core/card-document.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
+import { createNode, renameNode } from "../src/core/graph/ops.js";
+import { readWorkspaceRevision } from "../src/core/workspace/workspace-revision.js";
+import { listWorkspaceRelations } from "../src/core/graph/workspace-relations.js";
+import { readDocumentVersion } from "../src/core/read/document-diff.js";
+import { createCardDocument } from "../src/core/graph/card-document.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
 

@@ -1,5 +1,5 @@
 import { workspaceReadPaths } from "./read-paths.js";
-import { captureNativeNodeEdits } from "../core/node-native-capture.js";
+import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
 import { NodeFs } from "../fs/node-fs.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
@@ -8,9 +8,9 @@ import {
   editRoleContext,
   listRoleContexts,
   readRolePage,
-} from "../core/role-context.js";
+} from "../core/read/role-context.js";
 import { pageItems, pageText, formatTextPage } from "./reader-page.js";
-import { deleteRole } from "../core/role-delete.js";
+import { deleteRole } from "../core/write/role-delete.js";
 import { cliErrorText, type ErrorContext } from "./error-text.js";
 
 export type RoleCommandOptions = {

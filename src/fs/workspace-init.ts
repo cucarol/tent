@@ -2,8 +2,8 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { scaffoldTent } from "../core/scaffold.js";
-import { TENT_SYSTEM_DIR } from "../core/paths.js";
+import { scaffoldTent } from "../core/store/scaffold.js";
+import { TENT_SYSTEM_DIR } from "../core/base/paths.js";
 import { NodeFs } from "./node-fs.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 

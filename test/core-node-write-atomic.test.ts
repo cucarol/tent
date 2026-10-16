@@ -4,16 +4,16 @@ import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { createNode, renameNode, moveNode } from "../src/core/ops.js";
-import { nodeNotePath } from "../src/core/tree.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { createNode, renameNode, moveNode } from "../src/core/graph/ops.js";
+import { nodeNotePath } from "../src/core/store/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
 import {
   writeNodeDocument,
   NodeWriteError,
   type NodeDocumentEdit,
-} from "../src/core/node-document-write.js";
+} from "../src/core/graph/node-document-write.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");

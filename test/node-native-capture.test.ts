@@ -6,15 +6,15 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
-import { createNode } from "../src/core/ops.js";
+import { createNode } from "../src/core/graph/ops.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runHookCommand } from "../src/cli/hook.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { captureNativeNodeEdits } from "../src/core/node-native-capture.js";
-import { inspectWorkspaceSync } from "../src/core/node-sync.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
+import { inspectWorkspaceSync } from "../src/core/graph/node-sync.js";
 
 async function fixture(t: TestContext) {
   await fs.mkdir(path.resolve(".scratch"), { recursive: true });

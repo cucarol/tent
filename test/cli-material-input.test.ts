@@ -7,7 +7,7 @@ import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { git } from "./helpers.js";
 import { buildSnapshot } from "../src/ui-server/snapshot.js";

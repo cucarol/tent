@@ -12,20 +12,20 @@ import {
   isPrefixMaterial,
   validateMaterialAddresses,
   rewriteMaterialPaths,
-} from "../src/core/material.js";
+} from "../src/core/base/material.js";
 import { workspaceMaterialFields } from "../src/cli/material-input.js";
 import {
   nodeSemanticFingerprint,
   syncMaterialIdentity,
   prepareNodeSyncSave,
-} from "../src/core/node-sync-record.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
-import { nodeBasisRecordSchema } from "../src/core/node-basis-record.js";
-import { structureFingerprint } from "../src/core/structure-material.js";
+} from "../src/core/graph/node-sync-record.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { nodeBasisRecordSchema } from "../src/core/base/node-basis-record.js";
+import { structureFingerprint } from "../src/core/base/structure-material.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 
 test("prefix selectors and explicit tracking preserve address rules", async () => {
   const locator = materialLocator("../../src/card-*", "M/M.md", true);

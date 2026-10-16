@@ -5,8 +5,8 @@ import {
   normalizeTarget,
   resolveOutLink,
   rewriteMarkdownDestinations,
-} from "../src/markdown/links.js";
-import { buildOkfNodeIndex, resolveNode } from "../src/core/okf-index.js";
+} from "../src/core/base/links.js";
+import { buildOkfNodeIndex, resolveNode } from "../src/core/base/okf-index.js";
 
 test("Markdown parser handles links, reference definitions, escapes and exact source spans", () => {
   const body =

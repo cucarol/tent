@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { scaffoldTent } from "../src/core/scaffold.js";
-import { createNode } from "../src/core/ops.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { inspectNodeSync, confirmNodeSync } from "../src/core/node-sync.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
+import { createNode } from "../src/core/graph/ops.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { inspectNodeSync, confirmNodeSync } from "../src/core/graph/node-sync.js";
 import { PropagationMemoryFs } from "./propagation-memory.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import {
   createCardDocument,
   takeCardDocument,
   listCardDocuments,
-} from "../src/core/card-document.js";
+} from "../src/core/graph/card-document.js";
 import { generate, replay, shrink, type Sequence } from "./propagation-sequence-model.js";
 
 test("propagation baseline: ancestor material change survives goal confirmation", async () => {

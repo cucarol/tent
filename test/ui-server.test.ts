@@ -8,12 +8,12 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { renameNode } from "../src/core/ops.js";
-import { readWorkspaceSettings } from "../src/core/workspace-settings.js";
-import { createRoleContext } from "../src/core/role-context.js";
-import { linkNodeOutput } from "../src/core/node-sync.js";
-import { takeCardDocument } from "../src/core/card-document.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { renameNode } from "../src/core/graph/ops.js";
+import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
+import { createRoleContext } from "../src/core/read/role-context.js";
+import { linkNodeOutput } from "../src/core/graph/node-sync.js";
+import { takeCardDocument } from "../src/core/graph/card-document.js";
 import { startUiServer, workspacePort } from "../src/ui-server/server.js";
 import {
   defaultWorkspacesFile,
@@ -22,11 +22,11 @@ import {
 } from "../src/ui-server/workspaces.js";
 import type { Snapshot } from "../src/ui/data/types.js";
 import { testScratchRoot } from "./scratch.js";
-import { incompleteNodeReadEtag } from "../src/core/node-read-basis.js";
-import { contentEtag } from "../src/core/etag.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { readWorkspaceRevision } from "../src/core/workspace-revision.js";
-import type { ModuleDependencyResponse } from "../src/core/module-dependency-query.js";
+import { incompleteNodeReadEtag } from "../src/core/base/node-read-basis.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { readWorkspaceRevision } from "../src/core/workspace/workspace-revision.js";
+import type { ModuleDependencyResponse } from "../src/core/read/module-dependency-query.js";
 import { git } from "./helpers.js";
 
 type Reply = { status: number; headers: http.IncomingHttpHeaders; body: string };

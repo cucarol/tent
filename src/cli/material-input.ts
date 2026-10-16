@@ -8,8 +8,8 @@ import {
   isDirectoryMaterial,
   isPrefixMaterial,
   type MaterialSource,
-} from "../core/material.js";
-import { isNodeId } from "../core/id.js";
+} from "../core/base/material.js";
+import { isNodeId } from "../core/base/id.js";
 
 /** CLI file declarations use the Workspace root; serialized documents use Core addresses. */
 export async function workspaceMaterialFields(

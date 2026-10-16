@@ -4,17 +4,17 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { test, type TestContext } from "node:test";
-import { contentEtag } from "../src/core/etag.js";
-import { readOnlyFs } from "../src/core/adapter.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { incompleteNodeReadEtag } from "../src/core/node-read-basis.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import { readOnlyFs } from "../src/core/store/adapter.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { incompleteNodeReadEtag } from "../src/core/base/node-read-basis.js";
 import {
   NodeBatchWriteError,
   writeNodesBatch,
   type NodeWriteBatchInput,
-} from "../src/core/node-write-batch.js";
-import { createNode } from "../src/core/ops.js";
+} from "../src/core/write/node-write-batch.js";
+import { createNode } from "../src/core/graph/ops.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";

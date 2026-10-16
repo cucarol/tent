@@ -1,13 +1,16 @@
 // Build the Web UI read model (src/ui/data/types.ts) from Core.
-import { readOnlyFs, type FsAdapter } from "../core/adapter.js";
-import { listHistoryChanges } from "../core/history-query.js";
-import { listWorkspaceRelations, type WorkspaceRelation } from "../core/workspace-relations.js";
-import { isNodeId, isRoleId, isCardId } from "../core/id.js";
-import { parseFrontmatter } from "../core/frontmatter.js";
-import { CARDS_DIR, ROLES_DIR, nodeNotePath } from "../core/paths.js";
-import { loadTent } from "../core/tree.js";
-import type { Node } from "../core/types.js";
-import { readCardProgress, readOutputActivity } from "../core/card-progress.js";
+import { readOnlyFs, type FsAdapter } from "../core/store/adapter.js";
+import { listHistoryChanges } from "../core/read/history-query.js";
+import {
+  listWorkspaceRelations,
+  type WorkspaceRelation,
+} from "../core/graph/workspace-relations.js";
+import { isNodeId, isRoleId, isCardId } from "../core/base/id.js";
+import { parseFrontmatter } from "../core/base/frontmatter.js";
+import { CARDS_DIR, ROLES_DIR, nodeNotePath } from "../core/base/paths.js";
+import { loadTent } from "../core/store/tree.js";
+import type { Node } from "../core/base/types.js";
+import { readCardProgress, readOutputActivity } from "../core/graph/card-progress.js";
 import type {
   Snapshot,
   SnapshotCard,

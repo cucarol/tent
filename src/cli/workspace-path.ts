@@ -1,6 +1,6 @@
 import * as path from "node:path";
-import { findTentSystemRoot, NOT_INSIDE_TENT_MESSAGE } from "../core/status.js";
-import { workspaceRootFromSystemRoot } from "../core/paths.js";
+import { findTentSystemRoot, NOT_INSIDE_TENT_MESSAGE } from "../core/workspace/status.js";
+import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 export async function resolveWorkspacePaths(options: {
   cwd?: string;
   workspace?: string;

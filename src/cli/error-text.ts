@@ -1,4 +1,4 @@
-import { validationIssueText } from "../core/validation-message.js";
+import { validationIssueText } from "../core/base/validation-message.js";
 
 export type ErrorContext = {
   target?: { kind: "node" | "card" | "role"; id: string };

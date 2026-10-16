@@ -4,28 +4,31 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
 import { runNodeCommand } from "../src/cli/node-commands.js";
-import { createNode } from "../src/core/ops.js";
+import { createNode } from "../src/core/graph/ops.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import {
   materialLocator,
   validateMaterialAddresses,
   type MaterialSource,
-} from "../src/core/material.js";
-import { NodeWriteError, writeNodeDocument } from "../src/core/node-document-write.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
+} from "../src/core/base/material.js";
+import { NodeWriteError, writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";
-import type { FsAdapter } from "../src/core/adapter.js";
-import { observeNodeMaterials, nodeSemanticFingerprint } from "../src/core/node-sync-record.js";
-import { writeNodesBatch } from "../src/core/node-write-batch.js";
+import type { FsAdapter } from "../src/core/store/adapter.js";
+import {
+  observeNodeMaterials,
+  nodeSemanticFingerprint,
+} from "../src/core/graph/node-sync-record.js";
+import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
 import {
   createRoleContext,
   editRoleContext,
   requireRoleDocument,
-} from "../src/core/role-context.js";
-import { createCardDocument, verifyCardSourceVersion } from "../src/core/card-document.js";
-import { renameNode } from "../src/core/rename-ops.js";
+} from "../src/core/read/role-context.js";
+import { createCardDocument, verifyCardSourceVersion } from "../src/core/graph/card-document.js";
+import { renameNode } from "../src/core/graph/rename-ops.js";
 import { git } from "./helpers.js";
 
 test("query observations distinguish descriptive sources from file resources", async () => {

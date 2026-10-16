@@ -1,6 +1,6 @@
-import type { FsAdapter } from "../core/adapter.js";
-import { readGoalContext, type GoalContextItem } from "../core/goal-context.js";
-import { inspectNodesSync } from "../core/node-sync.js";
+import type { FsAdapter } from "../core/store/adapter.js";
+import { readGoalContext, type GoalContextItem } from "../core/read/goal-context.js";
+import { inspectNodesSync } from "../core/graph/node-sync.js";
 
 const budget = 1024;
 const labels = {

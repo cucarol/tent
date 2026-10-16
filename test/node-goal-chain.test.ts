@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PropagationMemoryFs } from "./propagation-memory.js";
-import { scaffoldTent } from "../src/core/scaffold.js";
-import { createNode } from "../src/core/ops.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { appendNodeBody } from "../src/core/node-lightwrite.js";
-import { confirmNodeSync, inspectNodeSync } from "../src/core/node-sync.js";
-import { writeNodesBatch } from "../src/core/node-write-batch.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
+import { createNode } from "../src/core/graph/ops.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { appendNodeBody } from "../src/core/write/node-lightwrite.js";
+import { confirmNodeSync, inspectNodeSync } from "../src/core/graph/node-sync.js";
+import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 
 test("an imported output without any retained record cannot gain a baseline from metadata", async () => {
   const fs = new PropagationMemoryFs();

@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ContextReader, ReaderError, type ReaderDocument } from "../src/core/context-reader.js";
-import { contentEtag } from "../src/core/etag.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
+import {
+  ContextReader,
+  ReaderError,
+  type ReaderDocument,
+} from "../src/core/graph/context-reader.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 
 const source = { kind: "live" as const, workspaceId: "ws-reader" };
 function doc(id: string, body: string, fields: Record<string, unknown> = {}): ReaderDocument {

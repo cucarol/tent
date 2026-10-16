@@ -4,11 +4,11 @@ import path from "node:path";
 import test from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
-import { createNode } from "../src/core/ops.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { confirmNodeSync } from "../src/core/node-sync.js";
-import { inspectCurrentContext, makeContextBrief } from "../src/core/context-brief.js";
-import { readWorkspaceRevision } from "../src/core/workspace-revision.js";
+import { createNode } from "../src/core/graph/ops.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { confirmNodeSync } from "../src/core/graph/node-sync.js";
+import { inspectCurrentContext, makeContextBrief } from "../src/core/read/context-brief.js";
+import { readWorkspaceRevision } from "../src/core/workspace/workspace-revision.js";
 import { startUiServer } from "../src/ui-server/server.js";
 import { testScratchRoot } from "./scratch.js";
 

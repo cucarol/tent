@@ -1,4 +1,4 @@
-import { parseFrontmatter } from "../src/core/frontmatter.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";

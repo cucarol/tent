@@ -12,9 +12,9 @@ import {
   requireRoleDocument,
   readRolePage,
   listRoleContexts,
-} from "../src/core/role-context.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
-import { contentEtag } from "../src/core/etag.js";
+} from "../src/core/read/role-context.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { contentEtag } from "../src/core/base/etag.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { git } from "./helpers.js";
 

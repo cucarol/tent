@@ -1,7 +1,7 @@
 import * as z from "zod/v4";
-import { canonicalSha256 } from "../core/canonical-digest.js";
-import { boundary, ReaderError } from "../core/context-reader.js";
-import { incompleteNodeReadEtag } from "../core/node-read-basis.js";
+import { canonicalSha256 } from "../core/base/canonical-digest.js";
+import { boundary, ReaderError } from "../core/graph/context-reader.js";
+import { incompleteNodeReadEtag } from "../core/base/node-read-basis.js";
 
 const nodeReadContainers = new Set([
   "node",

@@ -5,16 +5,16 @@ import test, { type TestContext } from "node:test";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
-import { withTentMutation } from "../src/core/adapter.js";
+import { withTentMutation } from "../src/core/store/adapter.js";
 import {
   CANVAS_LIMIT,
   CanvasError,
   readCanvasDocument,
   writeCanvasDocument,
-} from "../src/core/canvas.js";
-import { readDocumentDiff, readDocumentVersion } from "../src/core/document-diff.js";
-import { readWorkspaceRevision } from "../src/core/workspace-revision.js";
-import { MUTATION_LOCK_PATH } from "../src/core/paths.js";
+} from "../src/core/workspace/canvas.js";
+import { readDocumentDiff, readDocumentVersion } from "../src/core/read/document-diff.js";
+import { readWorkspaceRevision } from "../src/core/workspace/workspace-revision.js";
+import { MUTATION_LOCK_PATH } from "../src/core/base/paths.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { exportGraph } from "../src/fs/graph-export.js";

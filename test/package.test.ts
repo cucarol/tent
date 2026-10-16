@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isValidTentIndexMarker } from "../src/core/scaffold.js";
+import { isValidTentIndexMarker } from "../src/core/store/scaffold.js";
 import { listBundledSkillNames } from "./fixtures/bundled-skills.js";
 import { initializeFixtureRepository } from "./scratch.js";
 

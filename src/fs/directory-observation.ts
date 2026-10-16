@@ -3,7 +3,7 @@ import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { checkedSourceFile } from "./checked-source-file.js";
 import { directoryRepository } from "./repository-material.js";
-import { isTentWorkspacePath } from "../core/material-coverage.js";
+import { isTentWorkspacePath } from "../core/base/material-coverage.js";
 
 /** No caller Git environment or external filters affect the observed bytes. */
 async function git(

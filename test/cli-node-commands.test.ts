@@ -9,9 +9,9 @@ import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { NodeFs, SystemClock } from "../src/fs/node-fs.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
-import { moveNode } from "../src/core/move-ops.js";
-import { readNode, listNodes } from "../src/core/node-query.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { moveNode } from "../src/core/graph/move-ops.js";
+import { readNode, listNodes } from "../src/core/read/node-query.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: { after(fn: () => Promise<void>): void }, name: string) {

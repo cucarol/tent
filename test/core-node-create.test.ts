@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createNode } from "../src/core/ops.js";
+import { createNode } from "../src/core/graph/ops.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { loadTent } from "../src/core/tree.js";
+import { loadTent } from "../src/core/store/tree.js";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const scratch = path.resolve(".scratch");

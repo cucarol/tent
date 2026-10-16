@@ -5,15 +5,15 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { observeMaterialResource } from "../src/fs/source-observation.js";
-import { loadNodeCatalog } from "../src/core/node-catalog.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 import {
   nodeMaterialFingerprint,
   prepareNodeSyncSave,
   syncMaterialIdentity,
-} from "../src/core/node-sync-record.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
+} from "../src/core/graph/node-sync-record.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import type { NodeBasisRecord } from "../src/core/node-basis-record.js";
+import type { NodeBasisRecord } from "../src/core/base/node-basis-record.js";
 import { testScratchRoot } from "./scratch.js";
 
 const hash = (raw: string) => createHash("sha256").update(raw).digest("hex");
@@ -119,7 +119,7 @@ test("review fix: a batch URI confirmation uses final upstream sections and reco
 });
 
 test("current root Nodes have no parent and independent outputs have no goal", async (t) => {
-  const { goalAncestors } = await import("../src/core/node-sync-record.js");
+  const { goalAncestors } = await import("../src/core/graph/node-sync-record.js");
   const adapter = new NodeFs(await scratch(t));
   for (const [nodePath, raw] of [
     ["Root", "---\nid: node-root\ntype: prompt\n---\ngroup"],

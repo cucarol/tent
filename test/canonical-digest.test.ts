@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalJson, canonicalSha256 } from "../src/core/canonical-digest.js";
+import { canonicalJson, canonicalSha256 } from "../src/core/base/canonical-digest.js";
 
 test("canonical digest sorts object keys by locale-independent UTF-16 code units", () => {
   const first = { z: 1, Z: 2, ä: 3, a: 4, 中: 5 };

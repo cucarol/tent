@@ -14,18 +14,18 @@ import {
   moveCardDocument,
   deprecateCardDocument,
   inspectReceivedCardSourceChanges,
-} from "../src/core/card-document.js";
-import { createRoleContext } from "../src/core/role-context.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { renameNode } from "../src/core/rename-ops.js";
-import { contentEtag } from "../src/core/etag.js";
-import type { DocumentVersion } from "../src/core/git-history.js";
+} from "../src/core/graph/card-document.js";
+import { createRoleContext } from "../src/core/read/role-context.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { renameNode } from "../src/core/graph/rename-ops.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import type { DocumentVersion } from "../src/core/store/git-history.js";
 import { git } from "./helpers.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { linkNodeOutput, confirmNodeSync } from "../src/core/node-sync.js";
-import { readOutputActivity } from "../src/core/card-progress.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { linkNodeOutput, confirmNodeSync } from "../src/core/graph/node-sync.js";
+import { readOutputActivity } from "../src/core/graph/card-progress.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");

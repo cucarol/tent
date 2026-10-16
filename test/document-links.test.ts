@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { canonicalDocumentLinks } from "../src/core/document-links.js";
+import { canonicalDocumentLinks } from "../src/core/graph/document-links.js";
 
 test("known Node IDs become relative Markdown destinations without changing surrounding prose", () => {
   const paths = new Map([["node-alpha", "Alpha/Alpha.md"]]);

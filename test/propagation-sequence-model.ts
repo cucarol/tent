@@ -1,20 +1,24 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { PropagationMemoryFs } from "./propagation-memory.js";
-import { scaffoldTent } from "../src/core/scaffold.js";
-import { createNode, archiveNode, restoreNode } from "../src/core/ops.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { appendNodeBody } from "../src/core/node-lightwrite.js";
-import { confirmNodeSync, inspectWorkspaceSync, linkNodeOutput } from "../src/core/node-sync.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
+import { createNode, archiveNode, restoreNode } from "../src/core/graph/ops.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { appendNodeBody } from "../src/core/write/node-lightwrite.js";
+import {
+  confirmNodeSync,
+  inspectWorkspaceSync,
+  linkNodeOutput,
+} from "../src/core/graph/node-sync.js";
 import {
   createCardDocument,
   takeCardDocument,
   readCardDocument,
   listCardDocuments,
   deprecateCardDocument,
-} from "../src/core/card-document.js";
-import { createRoleContext } from "../src/core/role-context.js";
+} from "../src/core/graph/card-document.js";
+import { createRoleContext } from "../src/core/read/role-context.js";
 
 // Every output counts for its goals and Cards; tags only vary the documents.
 const outputTags = ["asset", "evidence", "analysis", "issue"] as const;

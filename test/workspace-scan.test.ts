@@ -4,15 +4,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
-import { scanWorkspace, formatWorkspaceScan } from "../src/core/workspace-scan.js";
+import { scanWorkspace, formatWorkspaceScan } from "../src/core/check/workspace-scan.js";
 import { readWorkspaceScanRepository, scanFileKind } from "../src/fs/workspace-scan.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { git } from "./helpers.js";
 import { testScratchRoot } from "./scratch.js";
-import { repositoryFacts } from "../src/core/repository-facts.js";
+import { repositoryFacts } from "../src/core/base/repository-facts.js";
 
 async function fixture(t: TestContext, initializeGit = true) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "workspace-scan-"));

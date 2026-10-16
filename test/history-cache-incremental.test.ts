@@ -5,7 +5,7 @@ import * as fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
-import { GitDocumentHistory } from "../src/core/git-history.js";
+import { GitDocumentHistory } from "../src/core/store/git-history.js";
 
 const file = "Goal/Goal.md";
 const raw = (body: string) => `---\nid: node-cache\ntype: goal\n---\n${body}\n`;

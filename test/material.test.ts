@@ -9,15 +9,15 @@ import {
   materialOccurrences,
   localMaterialPath,
   rewriteMaterialPaths,
-} from "../src/core/material.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
+} from "../src/core/base/material.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { scaffoldTent } from "../src/core/scaffold.js";
-import { createNode, moveNode, renameNode } from "../src/core/ops.js";
-import { loadTent } from "../src/core/tree.js";
-import { liveContextReader } from "../src/core/context-reader-factory.js";
-import { ContextReader } from "../src/core/context-reader.js";
-import { contentEtag } from "../src/core/etag.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
+import { createNode, moveNode, renameNode } from "../src/core/graph/ops.js";
+import { loadTent } from "../src/core/store/tree.js";
+import { liveContextReader } from "../src/core/read/context-reader-factory.js";
+import { ContextReader } from "../src/core/graph/context-reader.js";
+import { contentEtag } from "../src/core/base/etag.js";
 
 test("standard sources preserve duplicates, spelling, order and unknown values", () => {
   const sources = [

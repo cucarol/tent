@@ -11,12 +11,12 @@ import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { pageItems } from "../src/cli/reader-page.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { createCardDocument, listCardDocuments } from "../src/core/card-document.js";
-import { createRoleContext } from "../src/core/role-context.js";
-import { MUTATION_LOCK_PATH } from "../src/core/paths.js";
+import { createCardDocument, listCardDocuments } from "../src/core/graph/card-document.js";
+import { createRoleContext } from "../src/core/read/role-context.js";
+import { MUTATION_LOCK_PATH } from "../src/core/base/paths.js";
 import { git } from "./helpers.js";
 import { cliErrorText } from "../src/cli/error-text.js";
-import { NodeWriteError } from "../src/core/node-document-write.js";
+import { NodeWriteError } from "../src/core/graph/node-document-write.js";
 
 type Result = { exitCode: number; stdout: string; stderr: string };
 const ok = (result: Result) => {

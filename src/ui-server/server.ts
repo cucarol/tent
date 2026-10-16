@@ -1,4 +1,4 @@
-import { inspectWorkspaceSync } from "../core/node-sync.js";
+import { inspectWorkspaceSync } from "../core/graph/node-sync.js";
 // The local service behind `tent ui`: serves the bundled Web UI and a small JSON API over Core.
 // Its contract is the Tent Node "Web界面服务接口"; it is not a public protocol.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -12,33 +12,33 @@ import {
   moveCardDocument,
   readCardDocument,
   CardDocumentError,
-} from "../core/card-document.js";
-import { ReaderError } from "../core/context-reader.js";
+} from "../core/graph/card-document.js";
+import { ReaderError } from "../core/graph/context-reader.js";
 import {
   CANVAS_LIMIT,
   CanvasError,
   readCanvasDocument,
   writeCanvasDocument,
-} from "../core/canvas.js";
-import { readDocumentDiff, readDocumentVersion } from "../core/document-diff.js";
-import { parseFrontmatter, serializeFrontmatter } from "../core/frontmatter.js";
-import { documentVersionSchema } from "../core/git-history.js";
-import { NodeWriteError, writeNodeDocument } from "../core/node-document-write.js";
-import { nodeTrustTier } from "../core/node-provenance.js";
-import { confirmNodeSync } from "../core/node-sync.js";
-import { archiveNode, restoreNode } from "../core/node-lifecycle.js";
-import { deleteNode, renameNode } from "../core/ops.js";
-import { editRoleContext } from "../core/role-context.js";
-import { deleteRole, RoleDeleteError } from "../core/role-delete.js";
-import { readRoleDocument } from "../core/role-document.js";
-import { readNodeForEdit } from "../core/node-query.js";
-import { TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/paths.js";
-import { findTentSystemRoot } from "../core/status.js";
-import { readWorkspaceRevision } from "../core/workspace-revision.js";
-import { readWorkspaceSettings } from "../core/workspace-settings.js";
-import { readModuleDependencies } from "../core/module-dependencies.js";
-import { createModuleDependencyQuery } from "../core/module-dependency-query.js";
-import { validationIssueText } from "../core/validation-message.js";
+} from "../core/workspace/canvas.js";
+import { readDocumentDiff, readDocumentVersion } from "../core/read/document-diff.js";
+import { parseFrontmatter, serializeFrontmatter } from "../core/base/frontmatter.js";
+import { documentVersionSchema } from "../core/store/git-history.js";
+import { NodeWriteError, writeNodeDocument } from "../core/graph/node-document-write.js";
+import { nodeTrustTier } from "../core/base/node-provenance.js";
+import { confirmNodeSync } from "../core/graph/node-sync.js";
+import { archiveNode, restoreNode } from "../core/graph/node-lifecycle.js";
+import { deleteNode, renameNode } from "../core/graph/ops.js";
+import { editRoleContext } from "../core/read/role-context.js";
+import { deleteRole, RoleDeleteError } from "../core/write/role-delete.js";
+import { readRoleDocument } from "../core/store/role-document.js";
+import { readNodeForEdit } from "../core/read/node-query.js";
+import { TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/base/paths.js";
+import { findTentSystemRoot } from "../core/workspace/status.js";
+import { readWorkspaceRevision } from "../core/workspace/workspace-revision.js";
+import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
+import { readModuleDependencies } from "../core/graph/module-dependencies.js";
+import { createModuleDependencyQuery } from "../core/read/module-dependency-query.js";
+import { validationIssueText } from "../core/base/validation-message.js";
 import { NodeFs, SystemClock } from "../fs/node-fs.js";
 import { createModuleDependencyRepositoryReader } from "../fs/module-dependencies.js";
 import { createModuleDependencyWatch } from "../fs/module-dependency-watch.js";

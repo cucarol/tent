@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { nodeSemanticFingerprint } from "../src/core/node-sync-record.js";
-import { isCardResponseSource } from "../src/core/material.js";
+import { nodeSemanticFingerprint } from "../src/core/graph/node-sync-record.js";
+import { isCardResponseSource } from "../src/core/base/material.js";
 
 test("semantic fingerprints preserve ordered source addresses and body while excluding administrative metadata", () => {
   const data = {

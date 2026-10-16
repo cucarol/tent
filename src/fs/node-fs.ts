@@ -2,27 +2,27 @@
 
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
-import type { FsAdapter, Clock } from "../core/adapter.js";
+import type { FsAdapter, Clock } from "../core/store/adapter.js";
 import { withFileMutationLock } from "./mutation-lock.js";
 import { constants } from "node:fs";
 import { checkedSourceFile } from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
-import { GitDocumentHistory, type CaptureMetadata } from "../core/git-history.js";
-import { isHistoryDocument, isHistoryFile } from "../core/document-history.js";
+import { GitDocumentHistory, type CaptureMetadata } from "../core/store/git-history.js";
+import { isHistoryDocument, isHistoryFile } from "../core/store/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 import { observeMaterialResource } from "./source-observation.js";
 import { withStructureSnapshot } from "./structure-observation.js";
-import { workspaceRootFromSystemRoot } from "../core/paths.js";
+import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import {
   prepareNodeSyncSave,
   relocateNodeRecord,
   retainedNodeRecords,
-} from "../core/node-sync-record.js";
-import { parseFrontmatter } from "../core/frontmatter.js";
-import { loadNodeCatalog } from "../core/node-catalog.js";
-import { materialLocator } from "../core/material.js";
-import { assertSystemMaterial } from "../core/material-target.js";
+} from "../core/graph/node-sync-record.js";
+import { parseFrontmatter } from "../core/base/frontmatter.js";
+import { loadNodeCatalog } from "../core/graph/node-catalog.js";
+import { materialLocator } from "../core/base/material.js";
+import { assertSystemMaterial } from "../core/graph/material-target.js";
 
 export class NodeFs implements FsAdapter {
   private root: string;

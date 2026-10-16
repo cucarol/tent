@@ -4,17 +4,17 @@ import { testScratchRoot } from "./scratch.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { loadTent } from "../src/core/tree.js";
+import { loadTent } from "../src/core/store/tree.js";
 import {
   NODE_FRONTMATTER_KEY_ORDER,
   parseFrontmatter,
   serializeFrontmatter,
-} from "../src/core/frontmatter.js";
+} from "../src/core/base/frontmatter.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { scaffoldTent } from "../src/core/scaffold.js";
-import { countNodeTags } from "../src/core/tags.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
+import { countNodeTags } from "../src/core/base/tags.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { makeTent } from "./helpers.js";
 
 async function saveTags(fs: NodeFs, nodeId: string, tags: string[]) {
@@ -288,7 +288,7 @@ test("corrupt order registry is backed up and reset to default order", async (t)
   await fs.writeFile(path.join(dir, "order.json"), "{not-json", "utf8");
 
   const warnings = await captureConsoleError(async () => {
-    const { createNode } = await import("../src/core/ops.js");
+    const { createNode } = await import("../src/core/graph/ops.js");
     await createNode(
       {
         fs: fsa,

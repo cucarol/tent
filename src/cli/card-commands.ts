@@ -1,12 +1,12 @@
 import { workspaceReadPaths } from "./read-paths.js";
-import { captureNativeNodeEdits } from "../core/node-native-capture.js";
+import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { NodeFs } from "../fs/node-fs.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
 import { isFile, missingExplicitSources, workspaceMaterialFields } from "./material-input.js";
-import { localMaterialPath, materialLocator, type MaterialSource } from "../core/material.js";
-import { parseFrontmatter } from "../core/frontmatter.js";
+import { localMaterialPath, materialLocator, type MaterialSource } from "../core/base/material.js";
+import { parseFrontmatter } from "../core/base/frontmatter.js";
 import {
   verifyCardSourceVersions,
   createCardDocument,
@@ -17,7 +17,7 @@ import {
   moveCardDocument,
   deprecateCardDocument,
   type CardDocumentState,
-} from "../core/card-document.js";
+} from "../core/graph/card-document.js";
 import { pageItems, pageText, formatTextPage, uncapturedNotice } from "./reader-page.js";
 import { cliErrorText, type ErrorContext } from "./error-text.js";
 

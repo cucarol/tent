@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { readOutputActivity } from "../src/core/card-progress.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
+import { readOutputActivity } from "../src/core/graph/card-progress.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 async function fixture(t: TestContext) {

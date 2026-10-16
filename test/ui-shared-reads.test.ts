@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { FsAdapter } from "../src/core/adapter.js";
+import type { FsAdapter } from "../src/core/store/adapter.js";
 import { shareInFlightReads } from "../src/ui-server/shared-reads.js";
 
 test("overlapping equal reads share work, while a later query reads changed content", async () => {

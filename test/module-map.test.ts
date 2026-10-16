@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { checkModuleMap, type ModuleMapInput, type ModuleMapNode } from "../src/core/module-map.js";
-import type { RepositoryImport } from "../src/core/repository-imports.js";
-import type { ModuleMapCommit } from "../src/core/module-map.js";
-import { materialCoverageContains } from "../src/core/material-coverage.js";
+import {
+  checkModuleMap,
+  type ModuleMapInput,
+  type ModuleMapNode,
+} from "../src/core/check/module-map.js";
+import type { RepositoryImport } from "../src/core/base/repository-imports.js";
+import type { ModuleMapCommit } from "../src/core/check/module-map.js";
+import { materialCoverageContains } from "../src/core/base/material-coverage.js";
 
 const node = (id: string, overrides: Partial<ModuleMapNode> = {}): ModuleMapNode => ({
   id,

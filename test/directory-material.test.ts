@@ -15,22 +15,22 @@ import {
   rewriteMaterialPaths,
   isCardResponseSource,
   materialFields,
-} from "../src/core/material.js";
-import { syncMaterialIdentity } from "../src/core/node-sync-record.js";
-import { loadNodeCatalog } from "../src/core/node-catalog.js";
-import { ContextReader } from "../src/core/context-reader.js";
-import { contentEtag } from "../src/core/etag.js";
-import { serializeFrontmatter, parseFrontmatter } from "../src/core/frontmatter.js";
-import { createCardDocument, verifyCardSourceVersion } from "../src/core/card-document.js";
+} from "../src/core/base/material.js";
+import { syncMaterialIdentity } from "../src/core/graph/node-sync-record.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { ContextReader } from "../src/core/graph/context-reader.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import { serializeFrontmatter, parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { createCardDocument, verifyCardSourceVersion } from "../src/core/graph/card-document.js";
 import { workspaceMaterialFields, linkOutputResource } from "../src/cli/material-input.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { sourceDirectoryPaths } from "../src/fs/directory-observation.js";
-import { nodeBasisRecordSchema } from "../src/core/node-basis-record.js";
-import { prepareNodeSyncSave } from "../src/core/node-sync-record.js";
-import { inspectNodeSync } from "../src/core/node-sync.js";
+import { nodeBasisRecordSchema } from "../src/core/base/node-basis-record.js";
+import { prepareNodeSyncSave } from "../src/core/graph/node-sync-record.js";
+import { inspectNodeSync } from "../src/core/graph/node-sync.js";
 
 test("old directory manifests and repository locators are opaque extensions", () => {
   for (const directoryFiles of [null, "malformed", [{ path: "../unsafe", version: "bad" }]]) {

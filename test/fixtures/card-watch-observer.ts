@@ -1,7 +1,7 @@
 import { syncBuiltinESMExports } from "node:module";
 import timers from "node:timers/promises";
 import type { TimerOptions } from "node:timers";
-import { GitDocumentHistory } from "../../src/core/git-history.js";
+import { GitDocumentHistory } from "../../src/core/store/git-history.js";
 
 // Observe the real CLI's completed Card scan and next idle delay without
 // changing either the committed data or the polling promise/duration.

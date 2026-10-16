@@ -3,15 +3,18 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import * as z from "zod/v4";
 import { NodeFs } from "./node-fs.js";
-import { loadNodeCatalog } from "../core/node-catalog.js";
-import { buildStopMaterialIndex, type StopMaterialIndex } from "../core/stop-material-index.js";
+import { loadNodeCatalog } from "../core/graph/node-catalog.js";
+import {
+  buildStopMaterialIndex,
+  type StopMaterialIndex,
+} from "../core/return/stop-material-index.js";
 import {
   isOperationalPath,
   isSystemNoteName,
   nodeNotePath,
   OPERATIONAL_TOP_LEVEL,
-} from "../core/paths.js";
-import type { FsAdapter } from "../core/adapter.js";
+} from "../core/base/paths.js";
+import type { FsAdapter } from "../core/store/adapter.js";
 
 const coverageSchema = z.strictObject({
   kind: z.enum(["directory", "prefix"]),

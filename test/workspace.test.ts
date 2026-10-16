@@ -3,10 +3,10 @@ import * as fs from "node:fs/promises";
 import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { test } from "node:test";
-import { findTentSystemRoot } from "../src/core/status.js";
-import { workspaceRootFromSystemRoot } from "../src/core/paths.js";
+import { findTentSystemRoot } from "../src/core/workspace/status.js";
+import { workspaceRootFromSystemRoot } from "../src/core/base/paths.js";
 import { resolveWorkspacePaths } from "../src/cli/workspace-path.js";
-import { tentIndexMarker } from "../src/core/scaffold.js";
+import { tentIndexMarker } from "../src/core/store/scaffold.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { git } from "./helpers.js";
 

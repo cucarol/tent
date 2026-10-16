@@ -4,11 +4,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, type TestContext } from "node:test";
-import { withTentMutation } from "../src/core/adapter.js";
-import { createNode, moveNode, renameNode } from "../src/core/ops.js";
-import { scaffoldTent } from "../src/core/scaffold.js";
-import { loadTent } from "../src/core/tree.js";
-import { NODE_MOVE_PENDING_PATH } from "../src/core/node-move-recovery.js";
+import { withTentMutation } from "../src/core/store/adapter.js";
+import { createNode, moveNode, renameNode } from "../src/core/graph/ops.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
+import { loadTent } from "../src/core/store/tree.js";
+import { NODE_MOVE_PENDING_PATH } from "../src/core/store/node-move-recovery.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { MUTATION_LOCK_STALE_MS } from "../src/fs/mutation-lock.js";
 

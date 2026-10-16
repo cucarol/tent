@@ -5,9 +5,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
-import { checkWorkspaceModules } from "../src/core/workspace-module-map.js";
+import { checkWorkspaceModules } from "../src/core/check/workspace-module-map.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import {
   parseModuleMapGitLog,

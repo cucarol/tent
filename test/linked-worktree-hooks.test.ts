@@ -5,14 +5,14 @@ import test, { type TestContext } from "node:test";
 import { git } from "./helpers.js";
 import { testScratchRoot } from "./scratch.js";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
-import { findTentSystemRoot } from "../src/core/status.js";
+import { findTentSystemRoot } from "../src/core/workspace/status.js";
 import { resolveWorkspacePaths } from "../src/cli/workspace-path.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runHookCommand } from "../src/cli/hook.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { inspectNodeSync } from "../src/core/node-sync.js";
-import { createTurnPathResolver } from "../src/core/git-checkout.js";
+import { inspectNodeSync } from "../src/core/graph/node-sync.js";
+import { createTurnPathResolver } from "../src/core/workspace/git-checkout.js";
 
 async function fixture(t: TestContext) {
   const base = await fs.mkdtemp(path.join(testScratchRoot(), "linked-hooks-"));

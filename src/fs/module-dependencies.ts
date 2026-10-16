@@ -6,7 +6,7 @@ import {
   isImportSource,
   isTestSource,
   type RepositorySource,
-} from "../core/repository-imports.js";
+} from "../core/base/repository-imports.js";
 import { sourceDirectoryPaths } from "./directory-observation.js";
 import { directoryRepository } from "./repository-material.js";
 

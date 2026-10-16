@@ -10,12 +10,12 @@ import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { createNode } from "../src/core/ops.js";
-import { inspectNodeSync, linkNodeOutput } from "../src/core/node-sync.js";
+import { createNode } from "../src/core/graph/ops.js";
+import { inspectNodeSync, linkNodeOutput } from "../src/core/graph/node-sync.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 
 async function fixture(t: TestContext, nestedWorktree = false) {
   const base = await fs.mkdtemp(path.join(testScratchRoot(), "repository-material-"));

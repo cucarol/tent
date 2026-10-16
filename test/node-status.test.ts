@@ -3,13 +3,17 @@ import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { loadTent, isContentMutable, isUsableNode } from "../src/core/tree.js";
-import { archiveNode, restoreNode, NodeLifecycleError } from "../src/core/node-lifecycle.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { loadNodeCatalog, catalogRelations, catalogSummary } from "../src/core/node-catalog.js";
-import { liveContextReader } from "../src/core/context-reader-factory.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
-import { contentEtag } from "../src/core/etag.js";
+import { loadTent, isContentMutable, isUsableNode } from "../src/core/store/tree.js";
+import { archiveNode, restoreNode, NodeLifecycleError } from "../src/core/graph/node-lifecycle.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import {
+  loadNodeCatalog,
+  catalogRelations,
+  catalogSummary,
+} from "../src/core/graph/node-catalog.js";
+import { liveContextReader } from "../src/core/read/context-reader-factory.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { contentEtag } from "../src/core/base/etag.js";
 import { git } from "./helpers.js";
 
 const source = { kind: "live" as const, workspaceId: "ws-status" };

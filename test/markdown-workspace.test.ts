@@ -3,11 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { test } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { contentEtag } from "../src/core/etag.js";
+import { contentEtag } from "../src/core/base/etag.js";
 import {
   extractOutLinksDetailed as extractOutLinks,
   extractOutLinksDetailed,
-} from "../src/markdown/links.js";
+} from "../src/core/base/links.js";
 
 test("contentEtag: stable hash slice", () => {
   assert.equal(contentEtag("abc"), contentEtag("abc"));

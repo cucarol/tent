@@ -3,8 +3,8 @@ import * as fs from "node:fs/promises";
 import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { test } from "node:test";
-import { contentEtag } from "../src/core/etag.js";
-import { loadTent, nodeNotePath } from "../src/core/tree.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import { loadTent, nodeNotePath } from "../src/core/store/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 test("Node load and reload retain the exact raw document etag", async (t) => {

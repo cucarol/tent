@@ -12,7 +12,7 @@ import {
   structureDependenciesSchema,
   structureFingerprint,
   externalStructureDependencies,
-} from "../src/core/structure-material.js";
+} from "../src/core/base/structure-material.js";
 
 const owner = "index.md";
 async function fixture(t: TestContext, repository = true) {

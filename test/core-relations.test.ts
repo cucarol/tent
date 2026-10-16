@@ -7,11 +7,11 @@ import * as fs from "node:fs/promises";
 import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { test, type TestContext } from "node:test";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { loadTent, nodeNotePath } from "../src/core/tree.js";
+import { loadTent, nodeNotePath } from "../src/core/store/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 async function makeSystemRoot(t: TestContext): Promise<{ systemFs: NodeFs }> {

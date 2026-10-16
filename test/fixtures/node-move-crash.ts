@@ -1,7 +1,7 @@
 import { NodeFs } from "../../src/fs/node-fs.js";
-import { moveNode, renameNode } from "../../src/core/ops.js";
-import { withTentMutation } from "../../src/core/adapter.js";
-import { NODE_MOVE_PENDING_PATH } from "../../src/core/node-move-recovery.js";
+import { moveNode, renameNode } from "../../src/core/graph/ops.js";
+import { withTentMutation } from "../../src/core/store/adapter.js";
+import { NODE_MOVE_PENDING_PATH } from "../../src/core/store/node-move-recovery.js";
 
 const [root, operation, nodeId, parentId, crashPoint] = process.argv.slice(2);
 if (!root || !operation || !nodeId || !parentId || !crashPoint)

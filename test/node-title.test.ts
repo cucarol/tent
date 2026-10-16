@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test from "node:test";
-import { createNode, renameNode } from "../src/core/ops.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
-import { loadTent } from "../src/core/tree.js";
-import { scaffoldTent } from "../src/core/scaffold.js";
+import { createNode, renameNode } from "../src/core/graph/ops.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { loadTent } from "../src/core/store/tree.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 test("Node names follow filenames; writes synchronize existing titles and retain metadata", async (t) => {

@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import { scaffoldTent } from "../src/core/scaffold.js";
-import { createNode } from "../src/core/ops.js";
-import { createRoleContext } from "../src/core/role-context.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
+import { createNode } from "../src/core/graph/ops.js";
+import { createRoleContext } from "../src/core/read/role-context.js";
 import {
   createCardDocument,
   deprecateCardDocument,
   readCardDocument,
   takeCardDocument,
-} from "../src/core/card-document.js";
-import { linkNodeOutput } from "../src/core/node-sync.js";
-import { parseFrontmatter } from "../src/core/frontmatter.js";
-import { nodeNotePath } from "../src/core/paths.js";
+} from "../src/core/graph/card-document.js";
+import { linkNodeOutput } from "../src/core/graph/node-sync.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { nodeNotePath } from "../src/core/base/paths.js";
 import { PropagationMemoryFs } from "./propagation-memory.js";
 
 async function fixture() {

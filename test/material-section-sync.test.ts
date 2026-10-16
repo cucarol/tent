@@ -5,16 +5,16 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { createNode } from "../src/core/ops.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { selectSection } from "../src/core/markdown-section.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { writeNodesBatch } from "../src/core/node-write-batch.js";
-import { confirmNodeSync, inspectNodeSync } from "../src/core/node-sync.js";
+import { createNode } from "../src/core/graph/ops.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { selectSection } from "../src/core/base/markdown-section.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
+import { confirmNodeSync, inspectNodeSync } from "../src/core/graph/node-sync.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
-import { nodeSemanticFingerprint } from "../src/core/node-sync-record.js";
-import { loadNodeCatalog } from "../src/core/node-catalog.js";
+import { nodeSemanticFingerprint } from "../src/core/graph/node-sync-record.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 

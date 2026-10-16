@@ -6,7 +6,7 @@ import * as path from "node:path";
 import test from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { exportGraph } from "../src/fs/graph-export.js";
 
 test("export validates standard bundle materials and reports external and unresolved occurrences without copying them", async (t) => {

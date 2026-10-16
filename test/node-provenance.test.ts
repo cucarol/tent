@@ -6,19 +6,19 @@ import { test, type TestContext } from "node:test";
 import { pathToFileURL } from "node:url";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { createNode } from "../src/core/ops.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { readNodeForEdit, listNodes } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { nodeWriteInputSchema } from "../src/core/node-write.js";
-import { writeNodesBatch } from "../src/core/node-write-batch.js";
-import { appendNodeBody } from "../src/core/node-lightwrite.js";
+import { createNode } from "../src/core/graph/ops.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { readNodeForEdit, listNodes } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { nodeWriteInputSchema } from "../src/core/write/node-write.js";
+import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
+import { appendNodeBody } from "../src/core/write/node-lightwrite.js";
 import {
   confirmNodeSync,
   inspectNodeSync,
   inspectWorkspaceSync,
   linkNodeOutput,
-} from "../src/core/node-sync.js";
+} from "../src/core/graph/node-sync.js";
 import {
   defaultNodeActor,
   nodeActorSchema,
@@ -27,8 +27,8 @@ import {
   nodeIsStale,
   prepareNodeProvenanceSave,
   recordNodeVerification,
-} from "../src/core/node-provenance.js";
-import { nodeSemanticFingerprint } from "../src/core/node-sync-record.js";
+} from "../src/core/base/node-provenance.js";
+import { nodeSemanticFingerprint } from "../src/core/graph/node-sync-record.js";
 import { git } from "./helpers.js";
 
 const createdAt = "2026-10-04T00:00:00.000Z";

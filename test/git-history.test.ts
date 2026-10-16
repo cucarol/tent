@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test from "node:test";
-import { GitDocumentHistory } from "../src/core/git-history.js";
+import { GitDocumentHistory } from "../src/core/store/git-history.js";
 
 async function fixture(t: { after(fn: () => Promise<void>): void }, init = true) {
   const scratch = path.resolve(".scratch");

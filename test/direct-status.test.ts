@@ -4,9 +4,9 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { loadNodeCatalog } from "../src/core/node-catalog.js";
-import { listRoleContexts } from "../src/core/role-context.js";
-import { listCardDocuments } from "../src/core/card-document.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { listRoleContexts } from "../src/core/read/role-context.js";
+import { listCardDocuments } from "../src/core/graph/card-document.js";
 
 test("Node, Role and Card discovery reads headers without bodies or Git capture", async (t) => {
   const scratch = path.resolve(".scratch");

@@ -5,17 +5,17 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { injectWriteFailure } from "./helpers.js";
-import type { FsAdapter } from "../src/core/adapter.js";
-import { createNode, renameNode } from "../src/core/ops.js";
-import { loadTent } from "../src/core/tree.js";
-import { loadOrder, saveOrder, ROOT_KEY } from "../src/core/order.js";
-import { scaffoldTent } from "../src/core/scaffold.js";
-import { buildNodeIndex } from "../src/core/okf.js";
-import { rewriteNodeLinks } from "../src/core/rename-ops.js";
+import type { FsAdapter } from "../src/core/store/adapter.js";
+import { createNode, renameNode } from "../src/core/graph/ops.js";
+import { loadTent } from "../src/core/store/tree.js";
+import { loadOrder, saveOrder, ROOT_KEY } from "../src/core/store/order.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
+import { buildNodeIndex } from "../src/core/base/okf.js";
+import { rewriteNodeLinks } from "../src/core/graph/rename-ops.js";
 import {
   extractOutLinksDetailed as extractOutLinks,
   resolveOutLink,
-} from "../src/markdown/links.js";
+} from "../src/core/base/links.js";
 
 for (const reference of ["stable-id", "definition"] as const) {
   test(`renameNode: preserves resolved ${reference} references with a colliding new name`, async (t) => {

@@ -6,9 +6,9 @@ import { createHash } from "node:crypto";
 import { observeMaterialResource, observeSourceFile } from "../src/fs/source-observation.js";
 import { pathToFileURL } from "node:url";
 import { runNodeCommand } from "../src/cli/node-commands.js";
-import { markdownMaterialHeading } from "../src/core/material-section.js";
-import { materialLocator } from "../src/core/material.js";
-import { NodeSectionError } from "../src/core/markdown-section.js";
+import { markdownMaterialHeading } from "../src/core/base/material-section.js";
+import { materialLocator } from "../src/core/base/material.js";
+import { NodeSectionError } from "../src/core/base/markdown-section.js";
 
 test("material checks observe generic bytes while software/format adapters have no public entry", async (t) => {
   const scratch = path.resolve(".scratch");

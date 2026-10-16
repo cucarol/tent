@@ -4,8 +4,8 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { createRoleContext, requireRoleDocument } from "../src/core/role-context.js";
-import { deleteRole, RoleDeleteError } from "../src/core/role-delete.js";
+import { createRoleContext, requireRoleDocument } from "../src/core/read/role-context.js";
+import { deleteRole, RoleDeleteError } from "../src/core/write/role-delete.js";
 import {
   createCardDocument,
   deprecateCardDocument,
@@ -13,10 +13,10 @@ import {
   takeCardDocument,
   parseCardDocument,
   verifyCardSourceVersion,
-} from "../src/core/card-document.js";
-import { checkGraph } from "../src/core/graph-check.js";
-import { contentEtag } from "../src/core/etag.js";
-import { DELETE_PENDING_PATH, executeDeleteUnlocked } from "../src/core/delete-recovery.js";
+} from "../src/core/graph/card-document.js";
+import { checkGraph } from "../src/core/check/graph-check.js";
+import { contentEtag } from "../src/core/base/etag.js";
+import { DELETE_PENDING_PATH, executeDeleteUnlocked } from "../src/core/store/delete-recovery.js";
 import { runRoleCommand, roleHelpText } from "../src/cli/role-commands.js";
 import { git } from "./helpers.js";
 

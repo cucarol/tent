@@ -1,24 +1,24 @@
 import { workspaceReadPaths } from "./read-paths.js";
-import { captureNativeNodeEdits } from "../core/node-native-capture.js";
+import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
 import { linkOutputResource, workspaceMaterialFields } from "./material-input.js";
-import { validateNodeName } from "../core/scaffold.js";
-import { nodeActorSchema } from "../core/node-provenance.js";
-import { isNodeId } from "../core/id.js";
+import { validateNodeName } from "../core/store/scaffold.js";
+import { nodeActorSchema } from "../core/base/node-provenance.js";
+import { isNodeId } from "../core/base/id.js";
 // Agent-facing parsing and rendering; document semantics and locking belong to Core.
 
-import { materialFields } from "../core/material.js";
-import { isNodeType } from "../core/node-type.js";
-import { normalizeTagName, NODE_TAG_PRESETS, type NodeTagCount } from "../core/tags.js";
-import { nodeWriteInputSchema } from "../core/node-write.js";
+import { materialFields } from "../core/base/material.js";
+import { isNodeType } from "../core/base/node-type.js";
+import { normalizeTagName, NODE_TAG_PRESETS, type NodeTagCount } from "../core/base/tags.js";
+import { nodeWriteInputSchema } from "../core/write/node-write.js";
 import {
   writeNodesBatch,
   nodeWriteBatchInputSchema,
   NodeBatchWriteError,
-} from "../core/node-write-batch.js";
+} from "../core/write/node-write-batch.js";
 import { NodeFs, SystemClock } from "../fs/node-fs.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
-import { readWorkspaceSettings } from "../core/workspace-settings.js";
+import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
 import {
   readNode,
   readNodeForEdit,
@@ -28,9 +28,9 @@ import {
   searchNodes,
   nodeResourceSearchSchema,
   relatedNodes,
-} from "../core/node-query.js";
-import { prepareNodeBatch } from "../core/node-batch.js";
-import { nodeNotePath } from "../core/paths.js";
+} from "../core/read/node-query.js";
+import { prepareNodeBatch } from "../core/write/node-batch.js";
+import { nodeNotePath } from "../core/base/paths.js";
 import {
   createNode,
   renameNode,
@@ -38,18 +38,18 @@ import {
   archiveNode,
   restoreNode,
   deleteNode,
-} from "../core/ops.js";
-import { writeNodeDocument, NodeWriteError } from "../core/node-document-write.js";
-import { appendNodeBody } from "../core/node-lightwrite.js";
-import { NodeSectionError } from "../core/markdown-section.js";
-import { NodeLifecycleError } from "../core/node-lifecycle.js";
-import { ContextReader } from "../core/context-reader.js";
-import { documentLifecycle } from "../core/document-status.js";
-import { parseFrontmatter } from "../core/frontmatter.js";
-import { loadNodeCatalog } from "../core/node-catalog.js";
-import { readerReadSchema, readerRelationsSchema } from "../core/context-reader.js";
+} from "../core/graph/ops.js";
+import { writeNodeDocument, NodeWriteError } from "../core/graph/node-document-write.js";
+import { appendNodeBody } from "../core/write/node-lightwrite.js";
+import { NodeSectionError } from "../core/base/markdown-section.js";
+import { NodeLifecycleError } from "../core/graph/node-lifecycle.js";
+import { ContextReader } from "../core/graph/context-reader.js";
+import { documentLifecycle } from "../core/base/document-status.js";
+import { parseFrontmatter } from "../core/base/frontmatter.js";
+import { loadNodeCatalog } from "../core/graph/node-catalog.js";
+import { readerReadSchema, readerRelationsSchema } from "../core/graph/context-reader.js";
 import { readerFlags } from "./reader-flags.js";
-import { readerBatchSchema } from "../core/reader-batch.js";
+import { readerBatchSchema } from "../core/read/reader-batch.js";
 import {
   pageItems,
   pageText,
@@ -58,10 +58,10 @@ import {
   compactItem,
   incompleteNodeRead,
 } from "./reader-page.js";
-import { canonicalSha256 } from "../core/canonical-digest.js";
-import { inspectNodeSync, confirmNodeSync, linkNodeOutput } from "../core/node-sync.js";
+import { canonicalSha256 } from "../core/base/canonical-digest.js";
+import { inspectNodeSync, confirmNodeSync, linkNodeOutput } from "../core/graph/node-sync.js";
 import { goalContextText } from "./goal-context.js";
-import { retainedDocumentFs } from "../core/retained-read.js";
+import { retainedDocumentFs } from "../core/graph/retained-read.js";
 import { cliErrorText, type ErrorContext } from "./error-text.js";
 
 export type NodeCommandOptions = {

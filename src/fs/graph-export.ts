@@ -1,4 +1,4 @@
-import { resolvedMaterialOccurrences, sourcesSchema } from "../core/material.js";
+import { resolvedMaterialOccurrences, sourcesSchema } from "../core/base/material.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -11,12 +11,12 @@ import {
   NODE_MOVE_PENDING_PATH,
   DELETE_PENDING_PATH,
   TEMP_DIR,
-} from "../core/paths.js";
-import { parseFrontmatter } from "../core/frontmatter.js";
-import { liveContextReader } from "../core/context-reader-factory.js";
-import type { FsAdapter } from "../core/adapter.js";
-import { verifyCardSourceVersion } from "../core/card-document.js";
-import { isHistoryDocument } from "../core/document-history.js";
+} from "../core/base/paths.js";
+import { parseFrontmatter } from "../core/base/frontmatter.js";
+import { liveContextReader } from "../core/read/context-reader-factory.js";
+import type { FsAdapter } from "../core/store/adapter.js";
+import { verifyCardSourceVersion } from "../core/graph/card-document.js";
+import { isHistoryDocument } from "../core/store/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 
 export type GraphExportSource = {

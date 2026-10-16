@@ -4,10 +4,10 @@ import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { deleteNode } from "../src/core/ops.js";
-import { loadTent } from "../src/core/tree.js";
-import { nodeNotePath } from "../src/core/paths.js";
-import { DELETE_PENDING_PATH, executeDeleteUnlocked } from "../src/core/delete-recovery.js";
+import { deleteNode } from "../src/core/graph/ops.js";
+import { loadTent } from "../src/core/store/tree.js";
+import { nodeNotePath } from "../src/core/base/paths.js";
+import { DELETE_PENDING_PATH, executeDeleteUnlocked } from "../src/core/store/delete-recovery.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");

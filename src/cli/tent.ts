@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { NodeFs } from "../fs/node-fs.js";
 
-import { workspaceRootFromSystemRoot } from "../core/paths.js";
+import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import { cardHelpText, runCardCommand } from "./card-commands.js";
 import { runNodeCommand, nodeHelpText } from "./node-commands.js";
 import { runRoleCommand, roleHelpText } from "./role-commands.js";

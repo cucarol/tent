@@ -8,17 +8,17 @@ import { createHash } from "node:crypto";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { exportGraph } from "../src/fs/graph-export.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { createNode, moveNode, renameNode } from "../src/core/ops.js";
-import { readNodeForEdit } from "../src/core/node-query.js";
-import { writeNodeDocument } from "../src/core/node-document-write.js";
-import { writeNodesBatch } from "../src/core/node-write-batch.js";
-import { confirmNodeSync, inspectNodeSync, linkNodeOutput } from "../src/core/node-sync.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { nodeNotePath } from "../src/core/paths.js";
+import { createNode, moveNode, renameNode } from "../src/core/graph/ops.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
+import { confirmNodeSync, inspectNodeSync, linkNodeOutput } from "../src/core/graph/node-sync.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { nodeNotePath } from "../src/core/base/paths.js";
 import { git } from "./helpers.js";
 import { testScratchRoot } from "./scratch.js";
-import { nodeSemanticFingerprint } from "../src/core/node-sync-record.js";
-import type { CatalogNode } from "../src/core/node-catalog.js";
+import { nodeSemanticFingerprint } from "../src/core/graph/node-sync-record.js";
+import type { CatalogNode } from "../src/core/graph/node-catalog.js";
 
 test("goal versions retain link query and anchor semantics while Node paths relocate", () => {
   const node = { nodeId: "node-target", path: "Target" } as CatalogNode;

@@ -5,8 +5,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { serializeFrontmatter } from "../src/core/frontmatter.js";
-import { searchNodes } from "../src/core/node-query.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { searchNodes } from "../src/core/read/node-query.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { git } from "./helpers.js";
 

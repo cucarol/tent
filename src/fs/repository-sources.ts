@@ -5,7 +5,7 @@ import {
   isImportSource,
   isTestSource,
   type RepositorySource,
-} from "../core/repository-imports.js";
+} from "../core/base/repository-imports.js";
 
 /** Read tracked source/config bytes only; no symlinks, package loading, commands or writes. */
 export async function readRepositorySources(root: string, trackedFiles: readonly string[]) {

@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
-import { isTentWorkspacePath } from "../core/material-coverage.js";
-import type { WorkspaceScanRepository } from "../core/workspace-scan.js";
-import { MODULE_MAP_THRESHOLDS, type ModuleMapCommit } from "../core/module-map.js";
-import type { WorkspaceModuleMapRepository } from "../core/workspace-module-map.js";
-import { selectSection } from "../core/markdown-section.js";
-import { parseFrontmatter } from "../core/frontmatter.js";
+import { isTentWorkspacePath } from "../core/base/material-coverage.js";
+import type { WorkspaceScanRepository } from "../core/check/workspace-scan.js";
+import { MODULE_MAP_THRESHOLDS, type ModuleMapCommit } from "../core/check/module-map.js";
+import type { WorkspaceModuleMapRepository } from "../core/check/workspace-module-map.js";
+import { selectSection } from "../core/base/markdown-section.js";
+import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { readRepositorySources } from "./repository-sources.js";
 
 async function git(root: string, args: string[]): Promise<string> {

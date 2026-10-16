@@ -8,20 +8,20 @@ import {
   isNodeType,
   nodeTypeOf,
   normalizeOptionalNodeType,
-} from "../src/core/node-type.js";
-import { NODE_TAG_PRESETS, countNodeTags, isNodeTagPreset } from "../src/core/tags.js";
+} from "../src/core/base/node-type.js";
+import { NODE_TAG_PRESETS, countNodeTags, isNodeTagPreset } from "../src/core/base/tags.js";
 import {
   listCardDocuments,
   readCardDocument,
   verifyCardSourceVersion,
   verifyCardSourceVersions,
-} from "../src/core/card-document.js";
-import { readCardGoalIds } from "../src/core/card-progress.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
-import { readNode } from "../src/core/node-query.js";
+} from "../src/core/graph/card-document.js";
+import { readCardGoalIds } from "../src/core/graph/card-progress.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { readNode } from "../src/core/read/node-query.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { scaffoldTent } from "../src/core/scaffold.js";
-import { canonicalIdentityError, loadTent } from "../src/core/tree.js";
+import { scaffoldTent } from "../src/core/store/scaffold.js";
+import { canonicalIdentityError, loadTent } from "../src/core/store/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { git } from "./helpers.js";
 
