@@ -1,4 +1,5 @@
 // 分工: which lane each Card sits in, the draft being written, and what dragging and the buttons do with them.
+import type { Mood } from "../components/Pet.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cardTitle, type Graph } from "../data/store.js";
 import type { SnapshotCard } from "../data/types.js";
@@ -22,17 +23,41 @@ export const PUBLIC = "";
 
 export type Work = ReturnType<typeof useWork>;
 
+/** What a robot has in hand: Cards it received and has not answered, waiting for it, awaiting review. */
+export type Desk = { doing: number; waiting: number; review: number; drafts: number };
+
+/**
+ * The Cards on a lane's desk: received and not answered yet, or awaiting review, as the Card reads say.
+ * Finished and withdrawn Cards are off it.
+ */
+/** A robot is doing when it holds a received Card, waiting when only Cards to take are left. */
+export function moodOf(desk: Desk, gone: boolean): Mood | undefined {
+  if (gone) return "gone";
+  if (desk.doing > 0) return "doing";
+  if (desk.waiting > 0) return "waiting";
+  return undefined;
+}
+
+export function onDesk(card: SnapshotCard) {
+  return (
+    card.status !== "deprecated" &&
+    (card.state === "pending" ||
+      card.progress === "received-no-output" ||
+      card.progress === "needs-review")
+  );
+}
+
 /** A draft's sources as the Nodes and Roles they name, in order; addresses outside Tent are null. */
 export function sourceIds(graph: Graph, card: SnapshotCard | undefined, draft: Draft | null) {
   if (draft) return draft.input.sources.map((s) => graph.refOf(s.resource)?.id ?? null);
   return card?.sources.map((s) => s.id ?? null) ?? [];
 }
 
-/** The Nodes and Roles a lane's Cards carried, drafts and received Cards included. */
+/** The Nodes and Roles the Cards on a lane's desk carry, drafts included. */
 export function carried(graph: Graph, laneOf: (card: SnapshotCard) => string, lane: string) {
   const ids = new Set<string>();
   for (const c of graph.snapshot.cards)
-    if (laneOf(c) === lane) for (const s of c.sources) if (s.id) ids.add(s.id);
+    if (laneOf(c) === lane && onDesk(c)) for (const s of c.sources) if (s.id) ids.add(s.id);
   return ids;
 }
 
@@ -100,6 +125,22 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
       ];
     },
     [graph, laneOf, openDraft],
+  );
+  const desk = useCallback(
+    (lane: string): Desk => {
+      const here = laneCards(lane);
+      const mine = (graph?.snapshot.cards ?? []).filter(
+        (c) => c.receivedBy === lane && c.status !== "deprecated",
+      );
+      const drafts = here.filter(isDraft).length;
+      return {
+        doing: mine.filter((c) => c.progress === "received-no-output").length,
+        waiting: here.length - drafts,
+        review: mine.filter((c) => c.progress === "needs-review").length,
+        drafts,
+      };
+    },
+    [graph, laneCards],
   );
   // A Role deleted since keeps its id on the Cards it received, marked as gone.
   const laneName = (lane: string) =>
@@ -246,11 +287,11 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     drop: (item: Dragged, target: string) => {
       const [kind, id = ""] = target.split(/:(.*)/s);
       if (kind === "lane" && item.kind === "node")
-        void newCard(id === PUBLIC ? null : id, [item.id]);
+        void newCard(id === PUBLIC ? null : id, item.ids ?? [item.id]);
       else if (kind === "lane") void move(item.id, id);
       else if (kind === "card") {
         if (id !== openDraft) setOpenDraft(id);
-        toggleSource(id, item.id, true);
+        for (const nodeId of item.ids ?? [item.id]) toggleSource(id, nodeId, true);
       }
     },
   });
@@ -264,7 +305,9 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     lanes,
     laneOf,
     laneCards,
+    desk,
     laneName,
+    gone: (lane: string) => lane !== PUBLIC && !!graph && !graph.roles.has(lane),
     newCard,
     attach,
     toggleSource,

@@ -13,11 +13,12 @@ import { buildGraph, loadSnapshot, primaryOf, type Visits } from "./data/store.j
 import { api, ApiError, changes, describe } from "./data/api.js";
 import type { Snapshot, SnapshotRef } from "./data/types.js";
 import { Icon, TypeGlyph } from "./components/Glyph.js";
+import { Pet } from "./components/Pet.js";
 import { Loader } from "./components/Loader.js";
 import { Boundary } from "./components/Boundary.js";
 import { Sidebar, type ThemePref } from "./shell/Sidebar.js";
-import { StageBar, type StageView } from "./shell/StageBar.js";
-import { NowView } from "./now/NowView.js";
+import { StageBar } from "./shell/StageBar.js";
+import { Dock } from "./shell/Dock.js";
 import { Reader } from "./panel/Reader.js";
 import { Palette } from "./panel/Overlays.js";
 import { isDraft, loadLocalDrafts, useDraftCards } from "./data/drafts.js";
@@ -87,9 +88,6 @@ export function App() {
     readStored("tent-theme-pref", "system"),
   );
   const [selected, setSelected] = useState<SnapshotRef | null>(null);
-  const [view, setView] = useState<StageView>(() =>
-    readStored<StageView>("tent-view", "now") === "map" ? "map" : "now",
-  );
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => new Set(readStored<string[]>("tent-collapsed-v1", [])),
   );
@@ -108,8 +106,11 @@ export function App() {
   );
   const showToast = useCallback((text: string) => setToast(text), []);
   const work = useWork(graph, showToast);
-  // The lane the pointer rests on in 分工; the tree and the map mark what its Cards carried.
-  const [hotLane, setHotLane] = useState<string | null>(null);
+  // The robot the pointer rests on in the dock, or the one clicked to keep it lit; the tree and the map
+  // mark what the Cards on its desk carry.
+  const [hoverLane, setHoverLane] = useState<string | null>(null);
+  const [pinnedLane, setPinnedLane] = useState<string | null>(null);
+  const hotLane = hoverLane ?? pinnedLane;
   const carriedBy = useCallback(
     (lane: string) => (graph ? carried(graph, work.laneOf, lane) : new Set<string>()),
     [graph, work.laneOf],
@@ -416,6 +417,7 @@ export function App() {
   if (error)
     return (
       <div className="boot">
+        <Pet id="tent" size={64} mood="off" />
         <p>{error}</p>
       </div>
     );
@@ -425,13 +427,8 @@ export function App() {
     setLang(next);
     setLangState(next);
   };
-  const showView = (next: StageView) => {
-    setView(next);
-    writeStored("tent-view", next);
-  };
   const locate = (ref: SnapshotRef) => {
     setExpanded(false);
-    showView("map");
     open(ref);
   };
   /** Roles and Cards open as pages; they are not places on the map. */
@@ -488,7 +485,6 @@ export function App() {
             onResetWidth={() => setSideWidth(SIDE.initial)}
             onMarkAllSeen={() => markSeen(graph.snapshot.nodes.map((n) => n.id))}
             hotLane={hotLane}
-            onHotLane={setHotLane}
           />
 
           <div
@@ -496,41 +492,43 @@ export function App() {
             style={{ "--detail-w": `${detailWidth}px` } as CSSProperties}
           >
             <main className="stage" aria-hidden={reading || undefined}>
-              <StageBar
-                graph={graph}
-                selected={selected}
-                view={view}
-                onView={showView}
-                onOpen={open}
-              />
+              <StageBar graph={graph} selected={selected} onOpen={open} />
               <div className="stage-body">
-                {view === "now" ? (
-                  <Boundary label={t.now.tab}>
-                    <NowView graph={graph} flags={flags} onOpen={open} onPage={openPage} />
-                  </Boundary>
-                ) : (
-                  <Boundary label={t.app.map}>
-                    <Suspense fallback={<Loader label={t.app.loading} />}>
-                      <MapView
-                        graph={graph}
-                        flags={flags}
-                        selected={selected}
-                        collapsed={collapsed}
-                        draft={draftIds}
-                        hotLane={hotLane}
-                        carriedBy={carriedBy}
-                        keys={!reading && !overlay}
-                        onNotice={setToast}
-                        onSelect={open}
-                        onFold={fold}
-                        onExpand={() => {
-                          setEditOnExpand(false);
-                          setExpanded(true);
-                        }}
-                      />
-                    </Suspense>
-                  </Boundary>
-                )}
+                <Boundary label={t.app.map}>
+                  <Suspense fallback={<Loader label={t.app.loading} />}>
+                    <MapView
+                      graph={graph}
+                      flags={flags}
+                      selected={selected}
+                      collapsed={collapsed}
+                      draft={draftIds}
+                      hotLane={hotLane}
+                      carriedBy={carriedBy}
+                      dock={
+                        <Dock
+                          graph={graph}
+                          selected={selected}
+                          work={work}
+                          draftOnPage={selected?.kind === "card" && selected.id === work.openDraft}
+                          hotLane={hotLane}
+                          pinned={pinnedLane}
+                          onHot={setHoverLane}
+                          onPin={setPinnedLane}
+                          onOpen={open}
+                          onPage={openPage}
+                        />
+                      }
+                      keys={!reading && !overlay}
+                      onNotice={setToast}
+                      onSelect={open}
+                      onFold={fold}
+                      onExpand={() => {
+                        setEditOnExpand(false);
+                        setExpanded(true);
+                      }}
+                    />
+                  </Suspense>
+                </Boundary>
               </div>
             </main>
 
@@ -594,7 +592,8 @@ export function App() {
             </div>
           )}
           {toast && (
-            <div className="toast" role="status">
+            <div className={`toast${toast === t.app.offline ? " has-face" : ""}`} role="status">
+              {toast === t.app.offline && <Pet id="tent" size={28} mood="off" />}
               {toast}
             </div>
           )}
@@ -616,10 +615,12 @@ function DragGhost({ graph, work }: { graph: Graph; work: Work }) {
       className={`drag-ghost${card && !isDraft(card) ? " is-pub" : ""}${drag.over ? " is-over" : ""}`}
       style={{ left: drag.x + 14, top: drag.y + 10 }}
     >
-      {node ? (
+      {node && drag.over?.startsWith("lane:") ? (
+        <Icon name="draft" size={14} />
+      ) : node ? (
         <TypeGlyph type={node.type} size={14} />
       ) : (
-        <Icon name={isDraft(card!) ? "edit" : "mail"} size={14} />
+        <Icon name={isDraft(card!) ? "draft" : "mail"} size={14} />
       )}
       <span>{node?.name ?? work.title(card!)}</span>
     </div>

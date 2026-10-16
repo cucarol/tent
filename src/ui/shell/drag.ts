@@ -1,9 +1,11 @@
 // Dragging Nodes and Cards with the pointer. A Node dropped on a draft becomes its next source; dropped on a
-// lane it starts a new Card there. A Card dropped on a lane moves there until a Role receives it.
+// robot (a lane) it starts a new Card there. Several Nodes travel together when a picked set or a region is
+// dragged. A Card dropped on a lane moves there until a Role receives it.
 // Drop targets carry data-drop: "lane:<roleId>" ("lane:" is the public area) or "card:<cardId>".
 import { useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
 
-export type Dragged = { kind: "node" | "card"; id: string };
+/** `ids`, for Nodes carried together, lists all of them in order, `id` first. */
+export type Dragged = { kind: "node" | "card"; id: string; ids?: string[] };
 export type DragState = { item: Dragged; x: number; y: number; over: string | null };
 export type DropHandler = {
   accepts: (item: Dragged, target: string) => boolean;

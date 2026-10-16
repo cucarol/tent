@@ -134,7 +134,7 @@ In daily work your agent runs these commands through the Skills when you ask: "u
 tent ui --workspace <project folder>
 ```
 
-The server runs in this terminal; Ctrl+C stops it. The page opens on Now: Role work from Cards, outputs since your last visit, and what is ahead or behind. The map shows Nodes, Roles and Cards and how they link, with the same marks. You can edit and confirm Nodes, write Cards, and switch between workspaces you have opened. `--port` picks the port. `--no-open` prints the address without opening a browser.
+The server runs in this terminal; Ctrl+C stops it. The page shows the map: Nodes and how they link, with what is ahead or behind marked on them. The Roles sit at its top left as robots, each with the Cards it has in hand; drop Nodes on a robot to write it a Card. You can edit and confirm Nodes, write Cards, and switch between workspaces you have opened. `--port` picks the port. `--no-open` prints the address without opening a browser.
 
 ## Status
 

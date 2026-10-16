@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
   type RefObject,
 } from "react";
 import {
@@ -35,7 +36,7 @@ import { FileGlyph, Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { fileOf, infoOf, previewOf, useFiles } from "../data/files.js";
 import type { LocalFile } from "../panel/FileView.js";
 import { CardPreview, previewHeight } from "./CardPreview.js";
-import { Pet } from "../components/Pet.js";
+import { Tray, Pet } from "../components/Pet.js";
 import {
   CARD,
   GAP,
@@ -373,7 +374,7 @@ function Faces({ graph, hands }: { graph: Graph; hands: Hand[] }) {
       {shown.map((h) => {
         const role = h.lane === PUBLIC ? undefined : graph.roles.get(h.lane);
         const tip = t.map.handed(
-          role?.title ?? (h.lane === PUBLIC ? null : h.lane),
+          role?.title ?? (h.lane === PUBLIC ? null : t.work.goneRole(h.lane)),
           h.cards,
           h.waiting,
           h.old,
@@ -383,14 +384,7 @@ function Faces({ graph, hands }: { graph: Graph; hands: Hand[] }) {
           h.totalGoalCount,
         );
         const cls = `mcard-face${h.old ? " is-old" : h.waiting ? " is-waiting" : ""}${activeRole !== null && activeRole === h.lane ? " is-active" : ""}`;
-        const face =
-          h.lane === PUBLIC ? (
-            <span className="pub-face">
-              <Icon name="public" size={10} />
-            </span>
-          ) : (
-            <Pet id={h.lane} size={18} />
-          );
+        const face = h.lane === PUBLIC ? <Tray size={18} /> : <Pet id={h.lane} size={18} />;
         const badge = h.waiting
           ? "mail"
           : h.reviews
@@ -680,6 +674,64 @@ function PeekCard({ graph, peek, flag }: { graph: Graph; peek: Peek; flag?: Sync
 }
 
 /**
+ * Lines from the robot lit in the dock to the cards on screen that the Cards on its desk carry, drawn
+ * over the map in screen space and redrawn as the map moves.
+ */
+function DeskWires({
+  lane,
+  ids,
+  box,
+}: {
+  lane: string;
+  ids: ReadonlySet<string>;
+  box: RefObject<HTMLDivElement | null>;
+}) {
+  const transform = useStore((s) => s.transform);
+  const [paths, setPaths] = useState<string[]>([]);
+  // The dock folding, a row opening or the window resizing moves where the lines start.
+  const [moved, setMoved] = useState(0);
+  useEffect(() => {
+    const dock = box.current?.querySelector(".dock");
+    if (!dock) return;
+    const watch = new ResizeObserver(() => setMoved((n) => n + 1));
+    watch.observe(dock);
+    return () => watch.disconnect();
+  }, [box]);
+  useLayoutEffect(() => {
+    const host = box.current;
+    const row = host?.querySelector(`.dock [data-lane="${CSS.escape(lane)}"]`);
+    const from = row?.querySelector(".lane-head") ?? row;
+    if (!host || !from) return setPaths([]);
+    const o = host.getBoundingClientRect(),
+      a = from.getBoundingClientRect();
+    const x1 = a.right - o.left,
+      y1 = a.top + a.height / 2 - o.top;
+    const next: string[] = [];
+    for (const id of ids) {
+      const card = host.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"] .mcard`);
+      if (!card) continue;
+      const b = card.getBoundingClientRect();
+      const x2 = b.left - o.left,
+        y2 = b.top + Math.min(b.height, 48) / 2 - o.top;
+      // Off screen, or tucked under the dock.
+      if (b.right < o.left || b.left > o.right || b.bottom < o.top || b.top > o.bottom) continue;
+      if (x2 < x1 + 12) continue;
+      const mx = x1 + (x2 - x1) / 2;
+      next.push(`M${x1} ${y1}C${mx} ${y1},${mx} ${y2},${x2} ${y2}`);
+    }
+    setPaths((was) => (was.join() === next.join() ? was : next));
+  }, [lane, ids, transform, box, moved]);
+  if (!paths.length) return null;
+  return (
+    <svg className="desk-wires" aria-hidden="true">
+      {paths.map((d) => (
+        <path key={d} d={d} />
+      ))}
+    </svg>
+  );
+}
+
+/**
  * How many Nodes are behind or ahead, in the top corner of the map; a Node that is both counts in each.
  * Each count steps through its Nodes in tree order; nothing shows while no Node needs attention.
  */
@@ -747,9 +799,11 @@ type MapProps = {
   collapsed: ReadonlySet<string>;
   /** The draft being written: its sources in order (null for an address outside Tent). */
   draft: (string | null)[];
-  /** The lane the pointer rests on in 分工, and the Nodes a lane's Cards carried. */
+  /** The robot lit in the dock, and the Nodes the Cards on a robot's desk carry. */
   hotLane: string | null;
   carriedBy: (lane: string) => ReadonlySet<string>;
+  /** The robot dock, laid over the map's top left; cards and regions dragged onto it go to a robot. */
+  dock?: ReactNode;
   /** Whether arrow keys, Enter and Space drive the map right now. */
   keys: boolean;
   onSelect: (ref: SnapshotRef | null) => void;
@@ -775,6 +829,7 @@ function MapContent({
   draft,
   hotLane,
   carriedBy,
+  dock,
   keys,
   onSelect,
   onFold,
@@ -1921,6 +1976,8 @@ function MapContent({
     arrange({ positions, regions: { [id]: { id, name: "", box } } });
     if (!inView(boxRect({ id, name: "", box }))) fitRects([boxRect({ id, name: "", box })], 1);
   };
+  const overDock = (ev: PointerEvent) =>
+    !!document.elementFromPoint(ev.clientX, ev.clientY)?.closest(".dock");
   const onPress = (e: React.PointerEvent) => {
     const el = box.current;
     const target = e.target as HTMLElement;
@@ -1937,7 +1994,14 @@ function MapContent({
       const els = [head.parentElement!, ...ids.flatMap((i) => cardEl(i) ?? [])];
       track(
         e,
-        (dx, dy) => {
+        (dx, dy, ev) => {
+          // Over the robots, the region's cards go on together as a drag into a Card.
+          if (ids.length && overDock(ev)) {
+            el.classList.remove("is-moving");
+            els.forEach((n) => (n.style.translate = ""));
+            continueDrag({ kind: "node", id: ids[0], ids }, { x: ev.clientX, y: ev.clientY });
+            return false;
+          }
           el.classList.add("is-moving");
           setPeek(null);
           els.forEach((n) => (n.style.translate = `${dx / zoom}px ${dy / zoom}px`));
@@ -1993,16 +2057,20 @@ function MapContent({
         (dx, dy, ev) => {
           el.classList.add("is-moving");
           setPeek(null);
-          // Over the sidebar, a single card goes on as a drag into a Card instead of moving.
-          if (
-            ids.length === 1 &&
-            document.elementFromPoint(ev.clientX, ev.clientY)?.closest(".sidebar")
-          ) {
+          // Over the robots, the cards go on as a drag into a Card instead of moving.
+          if (overDock(ev)) {
             gone = true;
             clear();
             el.classList.remove("is-moving");
             els.forEach((n) => (n.style.translate = ""));
-            continueDrag({ kind: "node", id }, { x: ev.clientX, y: ev.clientY });
+            continueDrag(
+              {
+                kind: "node",
+                id,
+                ...(ids.length > 1 ? { ids: [id, ...ids.filter((i) => i !== id)] } : {}),
+              },
+              { x: ev.clientX, y: ev.clientY },
+            );
             return false;
           }
           els.forEach((n) => (n.style.translate = `${dx / zoom}px ${dy / zoom}px`));
@@ -2287,6 +2355,8 @@ function MapContent({
         partial={!Object.values(filters.types).every(Boolean)}
         onSelect={onSelect}
       />
+      {dock}
+      {hotLane !== null && lit && <DeskWires lane={hotLane} ids={lit} box={box} />}
       {lensName ? (
         <div className="panel map-hint">
           <Icon name="lens" size={14} />

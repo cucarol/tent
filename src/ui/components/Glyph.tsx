@@ -1,78 +1,22 @@
 import type { CSSProperties } from "react";
-import {
-  ArrowDown,
-  ArrowUpRight,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  CircleHelp,
-  Copy,
-  SquareDashed,
-  Ungroup,
-  Ellipsis,
-  Eye,
-  EyeOff,
-  File,
-  FileCode,
-  FileImage,
-  FileMusic,
-  FileText,
-  FileType,
-  FileVideoCamera,
-  FileX,
-  FolderOpen,
-  Globe,
-  GripVertical,
-  History,
-  Link,
-  LocateFixed,
-  Lock,
-  Mail,
-  RotateCcw,
-  MailPlus,
-  MousePointer2,
-  Maximize2,
-  Minimize2,
-  Minus,
-  Moon,
-  PanelLeft,
-  Pause,
-  Pencil,
-  PencilLine,
-  Play,
-  Plus,
-  Redo2,
-  Scan,
-  Search,
-  SendHorizontal,
-  Settings,
-  SquarePen,
-  SquarePlus,
-  Sun,
-  Type,
-  Undo2,
-  UsersRound,
-  Waypoints,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { ICON_SVG, type IconName } from "./icons.js";
 import { primaryOf, type Primary } from "../data/store.js";
 import { fileOf, infoOf, useFiles, type FileKind } from "../data/files.js";
 import type { SnapshotNode } from "../data/types.js";
 
 /**
- * Type icons from Lucide, so they sit with the interface icons: goal is a flag, prompt the prompt `>_`,
- * output the return `↵` that answers it. Role is an id card (a direction of work, not a person) and Card an envelope.
- * The outer <svg> sets the line; see `glyphSvg`.
+ * Type icons, drawn like the robot avatars. Goal is a pennant on a pole. Prompt and output share the robot's
+ * rounded screen: prompt shows the `>_` handed to a session, output the return `↵` it hands back. Role is a robot
+ * head, Card an envelope sealed in accent. The outer <svg> sets the line; see `glyphSvg`.
  */
 export const TYPE_ICON_SVG: Record<Primary | "role" | "card", string> = {
-  goal: '<path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528" stroke="var(--goal)"/>',
+  goal: '<g stroke="var(--goal)"><path d="M5 21.5V3"/><path d="M5 4h13.6a1.4 1.4 0 0 1 1.1 2.3L17 10l2.7 3.7a1.4 1.4 0 0 1-1.1 2.3H5" fill="var(--goal-fill)"/></g>',
   prompt:
-    '<path d="M12 19h8" stroke="var(--prompt)"/><path d="m4 17 6-6-6-6" stroke="var(--prompt)"/>',
+    '<rect x="2.5" y="3.5" width="19" height="17" rx="5.5" stroke="var(--prompt)"/><path d="m7 8.5 3.5 3.5L7 15.5" stroke="var(--prompt)"/><path d="M12.5 15.5h4.5" stroke="var(--accent)"/>',
   output:
-    '<g stroke="var(--output)"><path d="M20 4v7a4 4 0 0 1-4 4H4"/><path d="m9 10-5 5 5 5"/></g>',
-  role: '<g stroke="currentColor"><path d="M13 19a4 4 0 0 0-8 0"/><path d="M16 10h2"/><path d="M16 14h2"/><circle cx="9" cy="12" r="3"/><rect x="2" y="5" width="20" height="14" rx="2"/></g>',
-  card: '<path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7" stroke="currentColor"/><rect x="2" y="4" width="20" height="16" rx="2" stroke="currentColor"/>',
+    '<g stroke="var(--output)"><rect x="2.5" y="3.5" width="19" height="17" rx="5.5"/><path d="M17 7.5v4a2.5 2.5 0 0 1-2.5 2.5H7"/><path d="m10.5 10.5-3.5 3.5 3.5 3.5"/></g>',
+  role: '<g stroke="currentColor"><rect x="4.5" y="7.5" width="15" height="13" rx="4.5"/><path d="M12 7.5V5"/></g><circle cx="12" cy="3.6" r="1.5" fill="var(--accent)"/><circle cx="9.6" cy="13.8" r="1.25" fill="currentColor"/><circle cx="14.4" cy="13.8" r="1.25" fill="currentColor"/>',
+  card: '<g stroke="currentColor"><rect x="3" y="5" width="18" height="14" rx="4.5"/><path d="m4 8.2 6.9 4.3a2 2 0 0 0 2.2 0L20 8.2"/></g><circle cx="12" cy="13.6" r="1.6" fill="var(--accent)"/>',
 };
 
 const GLYPH_ATTRS =
@@ -130,7 +74,7 @@ export function TypeTile({ kind, size = 30 }: { kind: string; size?: number }) {
   return (
     <span className={`tile k-${p}`} style={{ width: size, height: size }}>
       {p === "draft" ? (
-        <Icon name="edit" size={glyph} />
+        <Icon name="draft" size={glyph} />
       ) : p === "card" ? (
         <Svg kind="card" size={glyph} />
       ) : (
@@ -143,69 +87,25 @@ export function CardGlyph({ size = 15 }: { size?: number }) {
   return <Svg kind="card" size={size} />;
 }
 
-/** Interface icons: Lucide (ISC), one line weight everywhere. */
-const icons = {
-  search: Search,
-  compose: SquarePen,
-  plus: Plus,
-  minus: Minus,
-  sun: Sun,
-  moon: Moon,
-  close: X,
-  fit: Scan,
-  place: SquarePlus,
-  edit: PencilLine,
-  copy: Copy,
-  chevron: ChevronRight,
-  down: ChevronDown,
-  locate: LocateFixed,
-  sidebar: PanelLeft,
-  expand: Maximize2,
-  shrink: Minimize2,
-  link: Link,
-  lens: Waypoints,
-  clock: History,
-  help: CircleHelp,
-  play: Play,
-  pause: Pause,
-  globe: Globe,
-  file: File,
-  fileHtml: FileCode,
-  fileImage: FileImage,
-  fileVideo: FileVideoCamera,
-  fileAudio: FileMusic,
-  fileText: FileText,
-  filePdf: FileType,
-  preview: Eye,
-  unpreview: EyeOff,
-  fileMissing: FileX,
-  out: ArrowUpRight,
-  mail: Mail,
-  working: Ellipsis,
-  review: RotateCcw,
-  addToCard: MailPlus,
-  settings: Settings,
-  public: UsersRound,
-  grip: GripVertical,
-  send: SendHorizontal,
-  check: Check,
-  drop: ArrowDown,
-  lock: Lock,
-  text: FileText,
-  folder: FolderOpen,
-  pointer: MousePointer2,
-  pen: Pencil,
-  type: Type,
-  undo: Undo2,
-  redo: Redo2,
-  region: SquareDashed,
-  ungroup: Ungroup,
-} satisfies Record<string, LucideIcon>;
-export type IconName = keyof typeof icons;
+export type { IconName };
 
+/** Interface icons, one line weight everywhere; see icons.ts. */
 export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
-  const Glyph = icons[name];
-  return <Glyph className="icon" size={size} strokeWidth={1.75} aria-hidden="true" />;
+  return (
+    <svg
+      className="icon"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      dangerouslySetInnerHTML={{ __html: ICON_SVG[name] }}
+    />
+  );
 }
 
 const FILE_ICONS: Record<FileKind, IconName> = {

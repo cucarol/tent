@@ -11,10 +11,6 @@ import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontma
 import { NodeFs } from "../src/fs/node-fs.js";
 import { git } from "./helpers.js";
 import { buildSnapshot } from "../src/ui-server/snapshot.js";
-import { buildGraph } from "../src/ui/data/store.js";
-import { NowView } from "../src/ui/now/NowView.js";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(".scratch");
@@ -380,7 +376,7 @@ test("Card response source roots match stored documents while ordinary CLI paths
   assert.equal((await get(ordinary.nodeId)).resource, `../../cards/${card.cardId}.md`);
 });
 
-test("ordinary link-output confirmation preserves completion time and the home page's finished list", async (t) => {
+test("ordinary link-output confirmation preserves completion time", async (t) => {
   const { root, cli, get } = await fixture(t);
   const linked = await cli("link-output", [
     "node-goal",
@@ -398,37 +394,11 @@ test("ordinary link-output confirmation preserves completion time and the home p
   const before = await buildSnapshot(source);
   const at = before.nodes.find((node) => node.id === linked.nodeId)!.outputAt!;
   assert.ok(at);
-  for (const name of ["localStorage", "sessionStorage"] as const) {
-    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
-    Object.defineProperty(globalThis, name, {
-      configurable: true,
-      value: {
-        getItem: () => (name === "localStorage" ? JSON.stringify(at) : at),
-        setItem: () => {},
-      },
-    });
-    t.after(() =>
-      descriptor
-        ? Object.defineProperty(globalThis, name, descriptor)
-        : Reflect.deleteProperty(globalThis, name),
-    );
-  }
-  const render = (snapshot: typeof before) =>
-    renderToStaticMarkup(
-      createElement(NowView, {
-        graph: buildGraph(snapshot),
-        flags: {},
-        onOpen: () => {},
-        onPage: () => {},
-      }),
-    );
-  assert.doesNotMatch(render(before), /Linked proof/);
   for (let index = 0; index < 2; index++) {
     const observed = await get(linked.nodeId);
     await cli("confirm", [linked.nodeId, "--base-etag", observed.etag, "--by", "human:cuca"]);
     const after = await buildSnapshot(source);
     assert.equal(after.nodes.find((node) => node.id === linked.nodeId)!.outputAt, at);
-    assert.doesNotMatch(render(after), /Linked proof/);
   }
   const saved = parseFrontmatter(await fs.readFile(path.join(root, linked.path), "utf8")).data;
   assert.equal(

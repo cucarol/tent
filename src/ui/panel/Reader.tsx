@@ -25,7 +25,7 @@ import { nodeDrafts as drafts } from "../data/node-drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { FileView } from "./FileView.js";
 import { fileOf } from "../data/files.js";
-import { Pet, turnPet } from "../components/Pet.js";
+import { Tray, Pet, turnPet } from "../components/Pet.js";
 import { Markdown } from "../components/Markdown.js";
 import {
   FileDiff,
@@ -39,9 +39,9 @@ import {
 } from "./Details.js";
 import { useFlags } from "../data/flags.js";
 import { CardMenu, NodeMenu, RoleMenu } from "./Manage.js";
-import { Letter, saveState } from "../shell/Sidebar.js";
+import { Letter, saveState } from "../shell/Dock.js";
 import { beginDrag, useDragState } from "../shell/drag.js";
-import { draftTitle, PUBLIC, sourceIds, type Work } from "../shell/work.js";
+import { draftTitle, moodOf, PUBLIC, sourceIds, type Work } from "../shell/work.js";
 import { ago, lineDiff, readStored, shortHash, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
 
@@ -375,7 +375,7 @@ function CardLine({
       className={`card-line${waiting ? " is-waiting" : draft ? " is-draft" : ""}`}
       onClick={() => onOpen({ kind: "card", id: card.id })}
     >
-      <Icon name={draft ? "edit" : waiting ? "mail" : "check"} size={14} />
+      <Icon name={draft ? "draft" : waiting ? "mail" : "check"} size={14} />
       <span className="cl-text">
         <span className="t">{work.title(card)}</span>
         <span className="w">
@@ -419,17 +419,9 @@ const Line = ({ todo }: { todo?: boolean }) => (
   <span className={`step-line${todo ? " is-todo" : ""}`} />
 );
 
-/** A lane's face: the Role's pet, or the public area's dashed box (a bare icon when small). */
+/** A lane's face: the Role's pet, or the public area's tray. */
 const laneIcon = (lane: string, size: number) =>
-  lane !== PUBLIC ? (
-    <Pet id={lane} size={size} />
-  ) : size < 20 ? (
-    <Icon name="public" size={size} />
-  ) : (
-    <span className="pub-ic" style={{ width: size, height: size }}>
-      <Icon name="public" size={Math.round(size * 0.5)} />
-    </span>
-  );
+  lane !== PUBLIC ? <Pet id={lane} size={size} /> : <Tray size={size} />;
 
 /** Which lane a Card sits in; each chip moves it there. */
 function LanePick({ work, card }: { work: Work; card: SnapshotCard }) {
@@ -921,7 +913,11 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
                   aria-label={t.page.turnFace}
                   onClick={(e) => turnPet(role.id, e.shiftKey ? -1 : 1)}
                 >
-                  <Pet id={role.id} size={narrow ? 44 : 56} />
+                  <Pet
+                    id={role.id}
+                    size={narrow ? 44 : 56}
+                    mood={moodOf(work.desk(role.id), false)}
+                  />
                 </button>
               }
               eyebrow={
@@ -954,7 +950,12 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
                     onClick={() => onOpen({ kind: "card", id: c.id })}
                   />
                 ))}
-                {!here.length && <div className="lane-empty">{t.page.nothingHere}</div>}
+                {!here.length && (
+                  <div className="lane-empty">
+                    <Pet id={role.id} size={26} className="faint" />
+                    {t.page.nothingHere}
+                  </div>
+                )}
               </div>
             </Section>
             <Section title={t.page.received} count={received.length}>
@@ -1298,7 +1299,7 @@ function DraftPage(props: PageProps & { card: SnapshotCard }) {
       <PageTop
         {...props}
         title={draftTitle(card, draft)}
-        glyph={<Icon name="edit" size={14} />}
+        glyph={<Icon name="draft" size={14} />}
         crumbs={[
           <Crumb key="card">Card</Crumb>,
           <Crumb key="lane">{laneName}</Crumb>,

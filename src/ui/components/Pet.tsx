@@ -158,15 +158,76 @@ export function turnPet(id: string, step = 1) {
   notify();
 }
 
+/**
+ * The public area's face: an inbox tray with Cards lying in it, drawn on the robot's grid with one accent
+ * slot, so it sits in a column of robots. Cards here wait for a Role to take them. Below 20px one Card is drawn;
+ * an empty tray holds none.
+ */
+export function Tray({
+  size = 28,
+  className,
+  empty = false,
+}: {
+  size?: number;
+  className?: string;
+  empty?: boolean;
+}) {
+  const full = size >= 20;
+  return (
+    <svg
+      className={`pet is-tray${full ? "" : " is-compact"}${className ? ` ${className}` : ""}`}
+      width={size}
+      height={size}
+      viewBox={full ? "0 0 64 64" : "4 10 56 48"}
+      aria-hidden="true"
+    >
+      {!empty && full && (
+        <rect
+          className="p-paper"
+          x="17"
+          y="12"
+          width="30"
+          height="20"
+          rx="3"
+          transform="rotate(-8 32 22)"
+        />
+      )}
+      {!empty && (
+        <rect
+          className="p-paper"
+          x="17"
+          y="17"
+          width="30"
+          height="20"
+          rx="3"
+          transform="rotate(5 32 27)"
+        />
+      )}
+      <path className="p-tray" d="M8 34h14l4 7h12l4-7h14v12a8 8 0 0 1-8 8H16a8 8 0 0 1-8-8z" />
+      <path className="p-accent" d="M28 41h8v2.6h-8z" />
+    </svg>
+  );
+}
+
+/**
+ * What a robot is up to, drawn around its face and never on it. doing: a line of light passes down the screen
+ * and the antenna glows on and off; waiting: a sealed letter is held up beside it; gone (a deleted Role): grey,
+ * no antenna, a `—` on the screen; off (tent ui cannot be reached): a `—` and an unplugged cord; loading: `…`.
+ * Only the full drawing carries a mood; below 20px only gone shows, as grey.
+ */
+export type Mood = "doing" | "waiting" | "gone" | "off" | "loading";
+
 /** A Role's avatar. */
 export function Pet({
   id,
   size = 28,
   className,
+  mood,
 }: {
   id: string;
   size?: number;
   className?: string;
+  mood?: Mood;
 }) {
   const turn = useSyncExternalStore(
     subscribe,
@@ -178,9 +239,12 @@ export function Pet({
   if (!t) traitsOf.set(seed, (t = petTraits(seed)));
   const full = size >= 20;
   const eyeY = t.mouth ? 31 : 33;
+  const shown = full ? mood : mood === "gone" ? mood : undefined;
+  // The screen shows a sign instead of the face only when nobody is behind it.
+  const sign = shown === "gone" || shown === "off" ? "rest" : shown === "loading" ? "dots" : null;
   return (
     <svg
-      className={`pet${full ? "" : " is-compact"}${className ? ` ${className}` : ""}`}
+      className={`pet${full ? "" : " is-compact"}${shown ? ` is-${shown}` : ""}${className ? ` ${className}` : ""}`}
       width={size}
       height={size}
       viewBox={full ? "0 0 64 64" : "9 13 46 46"}
@@ -189,17 +253,45 @@ export function Pet({
     >
       {full && (
         <>
-          <Antenna kind={t.antenna} />
+          {shown !== "gone" && <Antenna kind={t.antenna} />}
           <rect className="p-dark" x="7" y="27" width="5" height="12" rx="2" />
           <rect className="p-dark" x="52" y="27" width="5" height="12" rx="2" />
         </>
       )}
       <rect className="p-head" x="10" y="14" width="44" height="40" rx="13" />
       <rect className="p-screen" x="15" y="20" width="34" height="26" rx="9" />
-      <g className="p-glow">
-        <Eyes kind={t.eyes} y={eyeY} />
-      </g>
-      {t.mouth && <path className="p-glow-line" d="M28 40q4 3 8 0" strokeWidth="2.3" />}
+      {sign === "rest" ? (
+        <path className="p-glow-line p-sign" d="M26 33h12" strokeWidth="2.8" />
+      ) : sign === "dots" ? (
+        <g className="p-glow p-dots">
+          <circle cx="24" cy="33" r="3" />
+          <circle cx="32" cy="33" r="3" />
+          <circle cx="40" cy="33" r="3" />
+        </g>
+      ) : (
+        <>
+          <g className="p-glow">
+            <Eyes kind={t.eyes} y={eyeY} />
+          </g>
+          {t.mouth && <path className="p-glow-line" d="M28 40q4 3 8 0" strokeWidth="2.3" />}
+        </>
+      )}
+      {shown === "doing" && (
+        <rect className="p-scan" x="19" y="21" width="26" height="3" rx="1.5" />
+      )}
+      {shown === "waiting" && (
+        <g className="p-letter">
+          <rect x="40" y="42" width="22" height="16" rx="4" />
+          <path d="m41.8 45 9.2 5.6 9.2-5.6" />
+          <circle className="p-accent" cx="51" cy="51.4" r="1.9" />
+        </g>
+      )}
+      {shown === "off" && (
+        <g className="p-cord">
+          <path d="M57 36c5 4 5 12-1 16" />
+          <rect x="52" y="50" width="7" height="6" rx="1.5" />
+        </g>
+      )}
     </svg>
   );
 }
