@@ -17,6 +17,7 @@ import {
   isTestSource,
   type RepositorySource,
 } from "../core/base/repository-imports.js";
+import { extractRustImports } from "../core/base/rust-imports.js";
 import { sourceDirectoryPaths } from "./directory-observation.js";
 import { observeSourceFile } from "./source-observation.js";
 import { checkedSourceFile } from "./checked-source-file.js";
@@ -107,8 +108,10 @@ export async function observeStructureMaterial(
         materialCoverageContains(coverage, file) && isImportSource(file) && !isTestSource(file),
     );
   const members = new Set(memberSources);
+  const rustMembers = memberSources.filter((member) => member.endsWith(".rs"));
   const neededConfig = (file: string) => {
     if (!isImportConfig(file)) return false;
+    if (/(^|\/)Cargo\.toml$/.test(file)) return false;
     const configDirectory = path.posix.dirname(file);
     return memberSources.some(
       (member) =>
@@ -116,24 +119,26 @@ export async function observeStructureMaterial(
         (configDirectory === "." || member.startsWith(configDirectory + "/")),
     );
   };
+  const readSource = (workspacePath: string, filename: string) =>
+    shared(snapshot?.sources, filename, async () => {
+      let content: string | undefined;
+      await observeSourceFile(workspaceRoot, filename, undefined, {
+        key: "structure-source-v1",
+        content: (bytes) => {
+          content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+          if (content.includes("\0"))
+            throw new Error(`Structure source is not valid text: ${workspacePath}`);
+          return bytes;
+        },
+      });
+      return content!;
+    });
   const files: RepositorySource[] = [];
   for (const filename of paths) {
     const workspacePath = path.relative(workspaceRoot, filename).split(path.sep).join("/");
     const file: RepositorySource = { path: workspacePath };
     if (members.has(workspacePath) || neededConfig(workspacePath)) {
-      file.content = await shared(snapshot?.sources, filename, async () => {
-        let content: string | undefined;
-        await observeSourceFile(workspaceRoot, filename, undefined, {
-          key: "structure-source-v1",
-          content: (bytes) => {
-            content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-            if (content.includes("\0"))
-              throw new Error(`Structure source is not valid text: ${workspacePath}`);
-            return bytes;
-          },
-        });
-        return content!;
-      });
+      file.content = await readSource(workspacePath, filename);
     } else if (
       await shared(snapshot?.directories, filename, async () =>
         (await lstat(filename)).isDirectory(),
@@ -142,7 +147,24 @@ export async function observeStructureMaterial(
       continue;
     files.push(file);
   }
-  const imports = extractRepositoryImports(files);
+  // Core requests only Cargo ancestry/path-dependency facts and source bytes
+  // needed to establish these members' module contexts and resolve their uses.
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  const rustSources = files.filter((file) => !isTestSource(file.path));
+  let rust = extractRustImports(rustSources, rustMembers);
+  while (true) {
+    const required = rust.requiredFiles.filter((file) => byPath.get(file)?.content === undefined);
+    if (!required.length) break;
+    for (const file of required) {
+      const source = byPath.get(file);
+      if (!source) throw new Error(`Required Rust source is absent: ${file}`);
+      source.content = await readSource(file, path.join(workspaceRoot, file));
+    }
+    rust = extractRustImports(rustSources, rustMembers);
+  }
+  const imports = extractRepositoryImports(files, { rust: false });
+  imports.edges.push(...rust.edges);
+  imports.issues.push(...rust.issues);
   const issue = imports.issues.find(
     (issue) => isImportConfig(issue.file) || materialCoverageContains(coverage, issue.file),
   );

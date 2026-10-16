@@ -49,6 +49,27 @@ async function snapshot(root: string, prefix = ""): Promise<Record<string, strin
   return files;
 }
 
+test("scan reads Rust Cargo/source bytes and reports actual local file dependencies", async (t) => {
+  const { root, adapter, write } = await fixture(t);
+  await write("Cargo.toml", '[package]\nname="sample"\nedition="2021"');
+  await write("src/lib.rs", "pub mod domain; pub mod adapter;");
+  await write("src/domain.rs", "pub struct Item;");
+  await write("src/adapter.rs", "use crate::domain::Item;");
+  await git(root, "add", ".");
+  const repository = await readWorkspaceScanRepository(root);
+  assert.deepEqual(repository.sources.errors, []);
+  assert.ok(repository.sources.files.find((file) => file.path === "Cargo.toml")?.content);
+  const result = await scanWorkspace(adapter, root, repository, scanFileKind);
+  assert.equal(result.imports.scannedFiles, 3);
+  assert.deepEqual(result.imports.issues, []);
+  assert.ok(
+    result.imports.edges.some(
+      (edge) => edge.from === "src/adapter.rs" && edge.to === "src/domain.rs",
+    ),
+  );
+  assert.deepEqual(result.inspectionErrors, []);
+});
+
 test("scan text bounds retained fact groups and escapes path control characters", () => {
   const report = {
     head: null,

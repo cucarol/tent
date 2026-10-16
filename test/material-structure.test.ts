@@ -26,6 +26,10 @@ import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import {
+  observeStructureMaterial,
+  withStructureSnapshot,
+} from "../src/fs/structure-observation.js";
 
 test("prefix selectors and explicit tracking preserve address rules", async () => {
   const locator = materialLocator("../../src/card-*", "M/M.md", true);
@@ -191,6 +195,98 @@ async function fixture(t: TestContext) {
     run("confirm", [id, "--base-etag", (await readNodeForEdit(adapter, id)).etag]);
   return { root, adapter, run, confirm, globals };
 }
+
+test("Rust structure members read supporting Cargo/module context and retain unresolved diagnostics", async (t) => {
+  const { root } = await fixture(t);
+  await fs.mkdir(path.join(root, "src/consumer"), { recursive: true });
+  await fs.writeFile(path.join(root, "Cargo.toml"), '[package]\nname="sample"\nedition="2021"');
+  await fs.writeFile(path.join(root, "src/lib.rs"), "pub mod api; pub mod consumer;");
+  await fs.writeFile(path.join(root, "src/api.rs"), "pub struct Api;");
+  await fs.writeFile(path.join(root, "src/consumer/mod.rs"), "use crate::api::Api;");
+  await git(root, "add", ".");
+  const observe = () => observeStructureMaterial(root, "Module/Module.md", "../../src/consumer/");
+  const result = await withStructureSnapshot(observe);
+  assert.deepEqual(result.structureDependencies, ["src/"]);
+  await fs.writeFile(path.join(root, "src/consumer/mod.rs"), "use crate::api::Missing;");
+  await assert.rejects(
+    withStructureSnapshot(observe),
+    /Structure unavailable: src\/consumer\/mod.rs/,
+  );
+  await fs.writeFile(path.join(root, "src/consumer/mod.rs"), "use crate::api::Api;");
+  await fs.writeFile(path.join(root, "Cargo.toml"), "[invalid");
+  await assert.rejects(withStructureSnapshot(observe), /Cargo configuration/);
+});
+
+test("non-Rust and empty structure materials ignore intentionally unread Rust context", async (t) => {
+  const { root } = await fixture(t);
+  await fs.mkdir(path.join(root, "web"), { recursive: true });
+  await fs.writeFile(
+    path.join(root, "web/a.ts"),
+    'import "../src/other/api"; import "../src/lib.rs?raw";',
+  );
+  await fs.writeFile(path.join(root, "Cargo.toml"), '[package]\nname="sample"\nedition="2021"');
+  await fs.writeFile(path.join(root, "src/lib.rs"), Buffer.from([0xff, 0xfe]));
+  await git(root, "add", ".");
+  const web = await withStructureSnapshot(() =>
+    observeStructureMaterial(root, "Module/Module.md", "../../web/"),
+  );
+  assert.deepEqual(web.structureDependencies, ["src/", "src/other/"]);
+  const empty = await withStructureSnapshot(() =>
+    observeStructureMaterial(root, "Module/Module.md", "../../web/missing-*"),
+  );
+  assert.deepEqual(empty.structureDependencies, []);
+});
+
+test("Rust narrow materials ignore independent package bytes but preserve required ancestor failures", async (t) => {
+  const { root } = await fixture(t);
+  await fs.mkdir(path.join(root, "src/consumer"), { recursive: true });
+  await fs.mkdir(path.join(root, "tools/unrelated"), { recursive: true });
+  await fs.writeFile(path.join(root, "Cargo.toml"), '[package]\nname="sample"\nedition="2021"');
+  await fs.writeFile(path.join(root, "src/lib.rs"), "pub mod api; pub mod consumer;");
+  await fs.writeFile(path.join(root, "src/api.rs"), "pub struct Api;");
+  await fs.writeFile(path.join(root, "src/consumer/mod.rs"), "use crate::api::Api;");
+  await git(root, "add", ".");
+  const observe = () =>
+    withStructureSnapshot(() =>
+      observeStructureMaterial(root, "Module/Module.md", "../../src/consumer/"),
+    );
+  assert.deepEqual((await observe()).structureDependencies, ["src/"]);
+  await fs.writeFile(path.join(root, "tools/unrelated/Cargo.toml"), "[invalid");
+  await fs.writeFile(path.join(root, "tools/unrelated/broken.rs"), Buffer.from([0xff, 0xfe, 0]));
+  await fs.writeFile(path.join(root, "src/lib.rs"), "pub mod api; pub mod consumer; mod unused;");
+  await fs.writeFile(path.join(root, "src/unused.rs"), Buffer.from([0xff, 0xfe]));
+  assert.deepEqual((await observe()).structureDependencies, ["src/"]);
+  await fs.writeFile(path.join(root, "src/lib.rs"), Buffer.from([0xff, 0xfe]));
+  await assert.rejects(observe, /encoded data|valid text/i);
+});
+
+test("Rust declared path dependency configuration and used source bytes remain required", async (t) => {
+  const { root } = await fixture(t);
+  await fs.mkdir(path.join(root, "src/consumer"), { recursive: true });
+  await fs.mkdir(path.join(root, "deps/helper/src"), { recursive: true });
+  await fs.writeFile(
+    path.join(root, "Cargo.toml"),
+    '[package]\nname="sample"\nedition="2021"\n[dependencies]\nhelper={path="deps/helper"}',
+  );
+  await fs.writeFile(path.join(root, "src/lib.rs"), "pub mod consumer;");
+  await fs.writeFile(path.join(root, "src/consumer/mod.rs"), "use helper::Api;");
+  const helperCargo = path.join(root, "deps/helper/Cargo.toml");
+  const helperSource = path.join(root, "deps/helper/src/lib.rs");
+  const manifest = '[package]\nname="helper"\nedition="2021"';
+  await fs.writeFile(helperCargo, manifest);
+  await fs.writeFile(helperSource, "pub struct Api;");
+  await git(root, "add", ".");
+  const observe = () =>
+    withStructureSnapshot(() =>
+      observeStructureMaterial(root, "Module/Module.md", "../../src/consumer/"),
+    );
+  assert.deepEqual((await observe()).structureDependencies, ["deps/helper/src/"]);
+  await fs.writeFile(helperCargo, "[invalid");
+  await assert.rejects(observe, /Cargo configuration/);
+  await fs.writeFile(helperCargo, manifest);
+  await fs.writeFile(helperSource, Buffer.from([0xff, 0xfe]));
+  await assert.rejects(observe, /encoded data|valid text/i);
+});
 
 test("prefix coverage and structure coexist, and goal confirmation never confirms its output", async (t) => {
   const { root, adapter, run, confirm, globals } = await fixture(t);
