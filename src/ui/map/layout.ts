@@ -85,20 +85,6 @@ export function flagRuns(
   });
 }
 
-/** How far each card moved by hand from where the tree puts it, in map units. */
-export type Moves = Record<string, readonly [number, number]>;
-
-/** The layout with cards moved by hand where they were left; each card moves alone, its children stay. */
-export function moveCards(layout: Layout, moves: Moves): Layout {
-  if (!Object.keys(moves).some((id) => layout.placed.has(id))) return layout;
-  const placed = new Map(layout.placed);
-  for (const [id, [dx, dy]] of Object.entries(moves)) {
-    const p = placed.get(id);
-    if (p) placed.set(id, { ...p, x: p.x + dx, y: p.y + dy });
-  }
-  return { ...layout, placed };
-}
-
 type TreeDatum = { id: string; children: TreeDatum[] };
 
 /**

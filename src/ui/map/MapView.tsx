@@ -27,6 +27,7 @@ import {
   type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { createPortal } from "react-dom";
 import { primaryOf, type Graph, type Hand, type Primary } from "../data/store.js";
 import type { SnapshotCommit, SnapshotRef, SyncFlag, SyncFlags } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
@@ -43,9 +44,7 @@ import {
   treeLayout,
   isResult,
   flagRuns,
-  moveCards,
   shownTree,
-  type Moves,
   type Layout,
   type Placed,
   type Rect,
@@ -53,7 +52,7 @@ import {
 } from "./layout.js";
 import { PUBLIC } from "../shell/work.js";
 import { continueDrag } from "../shell/drag.js";
-import { nearest, refPath } from "./geometry.js";
+import { nearest, refPath, regionPath } from "./geometry.js";
 import { fitZoom, watchSpace } from "./pointer.js";
 import { routeLinks, type Route } from "./route.js";
 import { Timeline } from "./Timeline.js";
@@ -67,7 +66,21 @@ import {
   type Writing,
 } from "./Ink.js";
 import { newId, withNote, type Pt } from "./drawings.js";
-import { useInk } from "./useInk.js";
+import { useCanvas } from "./useCanvas.js";
+import {
+  boxRect,
+  cornerOf,
+  fitBox,
+  heldBy,
+  inside,
+  membersOf,
+  newRegionId,
+  placeCards,
+  shifted,
+  type Region,
+} from "./canvas.js";
+import { regionLines, type CodeEdge, type RegionLine, type RegionLineKind } from "./regions.js";
+import { api } from "../data/api.js";
 import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
 // At 100% a card shows all it has; there is nothing more to see closer in.
@@ -130,7 +143,13 @@ type LinkData = {
   /** A reference's way round the cards; without one it curves straight across. */
   route?: Route;
 };
+type RegionLineData = { kind: RegionLineKind; from: Rect; to: Rect; tip: string };
+type GhostData = { name: string; w: number; h: number; region: string };
 type Peek = { id: string; left: number; top: number; above: boolean };
+/** A card in a region keeps a faint copy at its place in the tree: `ghost:<id>`. */
+const GHOST = "ghost:";
+/** How long a dragged card waits over another before letting go forms a region. */
+const HOLD = 450;
 
 /** Card controls that act without selecting the card. */
 type Actions = {
@@ -443,6 +462,141 @@ function LinkEdge({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps<Ed
   return <BaseEdge id={id} path={path} className={`link link-tree${state}`} />;
 }
 
+/** A line between two cards in a region; its meaning shows on hover, beside it. */
+function RegionEdge({ id, data }: EdgeProps<Edge<RegionLineData>>) {
+  if (!data) return null;
+  const { path, arrow, label } = regionPath(data.from, data.to, data.kind);
+  const arrowed = data.kind === "link" || data.kind === "code" || data.kind === "card";
+  return (
+    <g className={`rline rline-${data.kind}`} data-line={id}>
+      <path d={path} className="rline-hit" />
+      <path d={path} className="rline-path" />
+      {data.kind === "card" && <path d={path} className="rline-inner" />}
+      {arrowed && <path d={arrow} className="rline-arrow" />}
+      <text
+        x={label.x}
+        y={label.y}
+        className="rline-label"
+        textAnchor={label.anchor}
+        dominantBaseline="middle"
+      >
+        {data.tip}
+      </text>
+    </g>
+  );
+}
+
+/** Where a card in a region stands in the tree: faint, and a click goes to its region. */
+function GhostCard({ data }: NodeProps<Node<GhostData>>) {
+  return (
+    <div
+      className="mghost"
+      style={{ width: data.w, height: data.h }}
+      title={t.map.region.ghost(data.region)}
+    >
+      <Handles />
+      <span className="mghost-name">{data.name}</span>
+    </div>
+  );
+}
+
+/**
+ * Regions under the cards: a tinted block with its name, how many cards stand in it and a way to
+ * dissolve it. Its edge shows dashed while a card dragged over it would join, and while one is drawn.
+ */
+function RegionLayer({
+  regions,
+  members,
+  related,
+  draft,
+  editing,
+  onEdit,
+  onName,
+  onDissolve,
+}: {
+  regions: Region[];
+  members: Map<string, string[]>;
+  /** Regions with at least one line between their cards. */
+  related: ReadonlySet<string>;
+  draft: Region["box"] | null;
+  editing: string | null;
+  onEdit: (id: string | null) => void;
+  onName: (id: string, name: string) => void;
+  onDissolve: (id: string) => void;
+}) {
+  // Straight into the viewport, under the cards and lines: the flow's own portal layer sits above them.
+  const host = useStore(
+    (s) => s.domNode?.querySelector<HTMLElement>(".react-flow__viewport") ?? null,
+  );
+  if (!host) return null;
+  return createPortal(
+    <div className="map-regions">
+      {regions.map((r) => {
+        const ids = members.get(r.id) ?? [];
+        return (
+          <div
+            key={r.id}
+            className="map-region"
+            data-region={r.id}
+            style={{ left: r.box[0], top: r.box[1], width: r.box[2], height: r.box[3] }}
+          >
+            <div className="map-region-head">
+              {editing === r.id ? (
+                <input
+                  className="map-region-input"
+                  aria-label={t.map.region.name}
+                  placeholder={t.map.region.unnamed}
+                  defaultValue={r.name}
+                  autoFocus
+                  onFocus={(e) => e.currentTarget.select()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
+                    if (e.key === "Escape") {
+                      e.stopPropagation();
+                      onEdit(null);
+                    }
+                  }}
+                  onBlur={(e) => {
+                    if (editing === r.id) onName(r.id, e.currentTarget.value.trim());
+                  }}
+                />
+              ) : (
+                <span
+                  className={`map-region-name${r.name ? "" : " is-blank"}`}
+                  title={t.map.region.rename}
+                  onClick={() => onEdit(r.id)}
+                >
+                  {r.name || t.map.region.unnamed}
+                </span>
+              )}
+              <span className="map-region-count">{t.map.region.count(ids.length)}</span>
+              <button
+                type="button"
+                className="icon-btn map-region-dissolve"
+                aria-label={t.map.region.dissolve}
+                title={t.map.region.dissolve}
+                onClick={() => onDissolve(r.id)}
+              >
+                <Icon name="ungroup" size={14} />
+              </button>
+            </div>
+            {ids.length > 1 && !related.has(r.id) && (
+              <div className="map-region-none">{t.map.region.none}</div>
+            )}
+          </div>
+        );
+      })}
+      {draft && (
+        <div
+          className="map-region is-draft"
+          style={{ left: draft[0], top: draft[1], width: draft[2], height: draft[3] }}
+        />
+      )}
+    </div>,
+    host,
+  );
+}
+
 /**
  * The second line a card gets close up: why it is behind or ahead, then its tags (or a file's path), when
  * it last changed and what it is linked to. Only facts the map already has, nothing summarised.
@@ -574,8 +728,8 @@ function FlagCounts({
   );
 }
 
-const nodeTypes = { node: NodeCard, label: LensLabel };
-const edgeTypes = { link: LinkEdge };
+const nodeTypes = { node: NodeCard, label: LensLabel, ghost: GhostCard };
+const edgeTypes = { link: LinkEdge, region: RegionEdge };
 const KEYS: Record<string, [number, number]> = {
   ArrowLeft: [-1, 0],
   ArrowRight: [1, 0],
@@ -748,7 +902,12 @@ function MapContent({
   // ---------- drawing ----------
   // Drawings keep their own map coordinates, so they show only on the tree, not in the lens or a
   // moment of the past, where cards stand elsewhere. null: drawing is off.
-  const ink = useInk(graph.snapshot.workspace.id, graph.snapshot.workspace.revision, onNotice);
+  const canvas = useCanvas(
+    graph.snapshot.workspace.id,
+    graph.snapshot.workspace.revision,
+    onNotice,
+  );
+  const ink = canvas;
   const [inkTool, setInkTool] = useState<InkTool | null>(null);
   const [inkPicked, setInkPicked] = useState<string | null>(null);
   const [inkMoving, setInkMoving] = useState<Moving | null>(null);
@@ -795,8 +954,8 @@ function MapContent({
       else if ((e.key === "Delete" || e.key === "Backspace") && inkPicked) {
         ink.commit(ink.ink.filter((d) => d.id !== inkPicked));
         setInkPicked(null);
-      } else if (key === "v" || key === "p" || key === "t")
-        setInkTool(key === "v" ? "select" : key === "p" ? "pen" : "text");
+      } else if (key === "v" || key === "p" || key === "t" || key === "g")
+        setInkTool(key === "v" ? "select" : key === "p" ? "pen" : key === "t" ? "text" : "region");
       else return;
       // Capture on the window runs before the page's own keys, which then never see these.
       e.preventDefault();
@@ -831,16 +990,12 @@ function MapContent({
     },
     [previews, previewFile],
   );
-  // Cards moved by hand stay where they were left, in this browser only; the tree is laid out without them.
-  const movesKey = `tent-map-moves:${graph.snapshot.workspace.id}`;
-  const [moves, setMoves] = useState<Moves>(() => readStored<Moves>(movesKey, {}));
-  useEffect(() => setMoves(readStored<Moves>(movesKey, {})), [movesKey]);
+  // Cards moved by hand stay where they were left, in the canvas file; the tree is laid out without them.
   // Moving cards keeps the view still, where another change of layout pins a card instead.
   const still = useRef(false);
-  const saveMoves = (next: Moves) => {
+  const arrange: typeof canvas.arrange = (change) => {
     still.current = true;
-    setMoves(next);
-    writeStored(movesKey, next);
+    canvas.arrange(change);
   };
   // Cards picked with the box or with Shift / Ctrl, which move together.
   const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
@@ -848,7 +1003,64 @@ function MapContent({
     () => treeLayout(graph, folded, openOutputs, grown, shown.kidsOf),
     [graph, folded, openOutputs, grown, shown],
   );
-  const base = useMemo(() => moveCards(tree, moves), [tree, moves]);
+  const base = useMemo(() => placeCards(tree, canvas.positions), [tree, canvas.positions]);
+
+  // ---------- regions ----------
+  // Like drawings, regions show on the tree only. A card belongs to the region it was put in and stands in.
+  const regionsShown = inkShown;
+  const [regionDraft, setRegionDraft] = useState<Region["box"] | null>(null);
+  const [naming, setNaming] = useState<string | null>(null);
+  const members = useMemo(
+    () =>
+      regionsShown
+        ? membersOf(
+            canvas.regions,
+            base,
+            (id) => !!canvas.positions[id] && visible(id) && exists(id),
+          )
+        : new Map<string, string[]>(),
+    [regionsShown, canvas.regions, canvas.positions, base, visible, exists],
+  );
+  const regionOfCard = useMemo(
+    () => new Map([...members].flatMap(([r, ids]) => ids.map((id) => [id, r] as const))),
+    [members],
+  );
+  // Cards standing in a region away from their place in the tree leave a ghost there.
+  const ghosted = useMemo(() => {
+    const out = new Set<string>();
+    for (const id of regionOfCard.keys()) {
+      const a = tree.placed.get(id),
+        b = base.placed.get(id);
+      if (a && b && Math.hypot(a.x - b.x, a.y - b.y) > 1) out.add(id);
+    }
+    return out;
+  }, [regionOfCard, tree, base]);
+  // Code imports, read only while some region holds two cards that could have them.
+  const [code, setCode] = useState<CodeEdge[]>([]);
+  const wantsCode = [...members.values()].some((ids) => ids.length > 1);
+  useEffect(() => {
+    if (!wantsCode) return;
+    let current = true;
+    api
+      .moduleDeps()
+      .then((r) => current && setCode(r.edges))
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [wantsCode, graph.snapshot.workspace.revision]);
+  const lines = useMemo(() => {
+    const out = new Map<string, RegionLine[]>();
+    for (const [rid, ids] of members)
+      if (ids.length > 1) out.set(rid, regionLines(graph, ids, shown.upOf, code));
+    return out;
+  }, [members, graph, shown, code]);
+  const linked = useMemo(
+    () => new Set([...lines].flatMap(([rid, l]) => (l.length ? [rid] : []))),
+    [lines],
+  );
+  const regionName = (rid: string) =>
+    canvas.regions.find((r) => r.id === rid)?.name || t.map.region.unnamed;
   // The selected Node's references, marked on the cards at either end instead of drawn as lines.
   const rel = useMemo(() => {
     const n = focus ? graph.nodes.get(focus) : undefined;
@@ -963,6 +1175,23 @@ function MapContent({
         },
       });
     }
+    if (!lensView)
+      for (const id of ghosted) {
+        const at = tree.placed.get(id)!;
+        out.push({
+          id: GHOST + id,
+          type: "ghost",
+          position: { x: at.x, y: rectOf(at).y },
+          draggable: false,
+          selectable: false,
+          data: {
+            name: graph.nodes.get(id)?.name ?? id,
+            w: at.w,
+            h: at.head ?? at.h,
+            region: regionName(regionOfCard.get(id)!),
+          },
+        });
+      }
     for (const l of view.labels)
       out.push({
         id: l.id,
@@ -996,27 +1225,36 @@ function MapContent({
     previewFile,
     previews,
     shown,
+    ghosted,
+    tree,
+    regionOfCard,
+    canvas.regions,
   ]);
 
   const routed = useRef<{ view: typeof view; key: string; routes: Map<string, Route> } | null>(
     null,
   );
-  const edges = useMemo<Edge<LinkData>[]>(() => {
+  const edges = useMemo<Edge[]>(() => {
     const out: Edge<LinkData>[] = [];
     const seen = new Set<string>();
+    const real = (id: string) => (id.startsWith(GHOST) ? id.slice(GHOST.length) : id);
+    const spot = (id: string) =>
+      id.startsWith(GHOST) ? tree.placed.get(real(id)) : view.placed.get(id);
+    // Tree lines keep to the tree: a card in a region is met at its ghost.
+    const inTree = (id: string) => (!lensId && ghosted.has(id) ? GHOST + id : id);
     const add = (source: string, target: string, kind: LinkData["kind"]) => {
       const key = `${source}>${target}`;
-      const a = view.placed.get(source),
-        b = view.placed.get(target);
+      const a = spot(source),
+        b = spot(target);
       if (
         source === target ||
         seen.has(key) ||
         !a ||
         !b ||
-        !visible(source) ||
-        !visible(target) ||
-        !exists(source) ||
-        !exists(target)
+        !visible(real(source)) ||
+        !visible(real(target)) ||
+        !exists(real(source)) ||
+        !exists(real(target))
       )
         return;
       // The lens shows only the focused Node's own lines. Elsewhere references are marks on the cards, not
@@ -1038,7 +1276,7 @@ function MapContent({
     };
     for (const n of graph.snapshot.nodes) {
       const up = visible(n.id) ? shown.upOf(n.id) : null;
-      if (up) add(up, n.id, "tree");
+      if (up) add(inTree(up), inTree(n.id), "tree");
     }
     for (const n of graph.snapshot.nodes) {
       for (const l of n.links)
@@ -1069,8 +1307,34 @@ function MapContent({
       };
     for (const e of refs) e.data!.route = routed.current.routes.get(e.id);
     // Lines that matter now draw last, above the rest.
-    return out.sort((x, y) => Number(x.data!.hot) - Number(y.data!.hot));
-  }, [graph, view, lensId, visible, shown, exists, focus, lit, hover]);
+    const sorted: Edge[] = out.sort((x, y) => Number(x.data!.hot) - Number(y.data!.hot));
+    if (lensId) return sorted;
+    for (const l of [...lines.values()].flat()) {
+      const a = view.placed.get(l.from),
+        b = view.placed.get(l.to);
+      if (!a || !b) continue;
+      const tip =
+        l.kind === "material"
+          ? t.map.region.line.material(l.files ?? [])
+          : l.kind === "code"
+            ? t.map.region.line.code(l.imports ?? 0)
+            : l.kind === "card"
+              ? t.map.region.line.card(l.cards ?? [])
+              : t.map.region.line[l.kind];
+      sorted.push({
+        id: `region:${l.kind}:${l.from}>${l.to}`,
+        source: l.from,
+        target: l.to,
+        type: "region",
+        focusable: false,
+        interactionWidth: 0,
+        sourceHandle: "out",
+        targetHandle: "in",
+        data: { kind: l.kind, from: rectOf(a), to: rectOf(b), tip },
+      });
+    }
+    return sorted;
+  }, [graph, view, lensId, visible, shown, exists, focus, lit, hover, tree, ghosted, lines]);
 
   // ---------- viewport ----------
   /** Width the map can actually show: on narrow screens the details panel floats over its right side. */
@@ -1138,7 +1402,7 @@ function MapContent({
   const overview = useCallback(
     (motion: { duration: number } = { duration: 400 }) => {
       const el = box.current;
-      const rects = viewRects(view);
+      const rects = [...viewRects(view), ...(regionsShown ? canvas.regions.map(boxRect) : [])];
       if (!el || !rects.length) return;
       const x1 = Math.min(...rects.map((r) => r.x)),
         y1 = Math.min(...rects.map((r) => r.y));
@@ -1159,7 +1423,7 @@ function MapContent({
         motion,
       );
     },
-    [flow, view, viewRects, clearWidth],
+    [flow, view, viewRects, clearWidth, regionsShown, canvas.regions],
   );
   useEffect(() => {
     if (ready) overview({ duration: 0 });
@@ -1383,11 +1647,11 @@ function MapContent({
     timeOpen,
     inking,
     picked,
-    moves,
+    positions: canvas.positions,
     overview,
     openTime,
     closeTime,
-    saveMoves,
+    arrange,
   };
   const latest = useRef(live);
   latest.current = live;
@@ -1395,8 +1659,18 @@ function MapContent({
     if (!keys) return;
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
-      const { view, selected, lensId, collapsed, visible, shown, timeOpen, inking, picked, moves } =
-        latest.current;
+      const {
+        view,
+        selected,
+        lensId,
+        collapsed,
+        visible,
+        shown,
+        timeOpen,
+        inking,
+        picked,
+        positions,
+      } = latest.current;
       // While drawing, the keys are the drawing tools'.
       if (inking) return;
       if (e.key === "Escape" && picked.size) {
@@ -1445,11 +1719,11 @@ function MapContent({
         return act(() => {
           // Back to where the tree puts them: the picked cards, else the selected one; with Shift, all.
           const back = e.shiftKey ? null : picked.size ? picked : new Set(node ? [node.id] : []);
-          const next = back
-            ? Object.fromEntries(Object.entries(moves).filter(([id]) => !back.has(id)))
-            : {};
-          if (Object.keys(next).length !== Object.keys(moves).length)
-            latest.current.saveMoves(next);
+          const going = Object.keys(positions).filter((id) => !back || back.has(id));
+          if (going.length)
+            latest.current.arrange({
+              positions: Object.fromEntries(going.map((id) => [id, null])),
+            });
         });
       if (key === "b" && node && !lensId)
         return act(() => {
@@ -1573,21 +1847,147 @@ function MapContent({
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
   };
+  const cardEl = (id: string) =>
+    box.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(id)}"]`) ??
+    null;
+  const regionEl = (id: string) =>
+    box.current?.querySelector<HTMLElement>(`.map-region[data-region="${CSS.escape(id)}"]`) ?? null;
+  /** The region under a map point: the last drawn wins where regions overlap. */
+  const regionAt = (x: number, y: number) =>
+    regionsShown
+      ? ([...canvas.regions]
+          .reverse()
+          .find(
+            (r) =>
+              x >= r.box[0] &&
+              x <= r.box[0] + r.box[2] &&
+              y >= r.box[1] &&
+              y <= r.box[1] + r.box[3],
+          ) ?? null)
+      : null;
+  /**
+   * Cards let go over a card held long enough: they stack under it, and the two stand in a region,
+   * the one it is in or a new one. A new region takes the spot where the cards are if nothing else is
+   * there, else the free margin left of the tree.
+   */
+  const gather = (onto: string, ids: string[]) => {
+    const at = base.placed.get(onto)!;
+    const head = rectOf(at);
+    let top = head.y + (head.head ?? head.h) + 16;
+    const placed: Record<string, Pt> = {};
+    const rects: Rect[] = [head];
+    for (const id of ids) {
+      const p = base.placed.get(id);
+      if (!p) continue;
+      const r = rectOf(p);
+      placed[id] = [head.x, top];
+      rects.push({ ...r, x: head.x, y: top });
+      top += (r.head ?? r.h) + 16;
+    }
+    const rid = regionOfCard.get(onto);
+    const old = rid ? canvas.regions.find((r) => r.id === rid) : undefined;
+    if (old) {
+      arrange({
+        positions: placed,
+        regions: { [old.id]: { ...old, box: fitBox(old.box, rects) } },
+      });
+      return;
+    }
+    let box = fitBox(null, rects);
+    const taken = (b: Region["box"]) =>
+      [...view.placed.values()].some((p) => {
+        if (p.id === onto || ids.includes(p.id) || !visible(p.id)) return false;
+        const q = rectOf(p);
+        return q.x < b[0] + b[2] && q.x + q.w > b[0] && q.y < b[1] + b[3] && q.y + q.h > b[1];
+      }) ||
+      canvas.regions.some(
+        (r) =>
+          r.box[0] < b[0] + b[2] &&
+          r.box[0] + r.box[2] > b[0] &&
+          r.box[1] < b[1] + b[3] &&
+          r.box[1] + r.box[3] > b[1],
+      );
+    let dx = 0,
+      dy = 0;
+    if (taken(box)) {
+      const left = Math.min(...[...tree.placed.values()].map((p) => p.x));
+      dx = left - 160 - box[2] - box[0];
+      for (let i = 0; i < 40 && taken([box[0] + dx, box[1] + dy, box[2], box[3]]); i++) dy += 80;
+      box = [box[0] + dx, box[1] + dy, box[2], box[3]];
+    }
+    const positions: Record<string, Pt> = { [onto]: cornerOf(at, dx, dy) };
+    for (const [id, [x, y]] of Object.entries(placed)) positions[id] = [x + dx, y + dy];
+    const id = newRegionId();
+    arrange({ positions, regions: { [id]: { id, name: "", box } } });
+    if (!inView(boxRect({ id, name: "", box }))) fitRects([boxRect({ id, name: "", box })], 1);
+  };
   const onPress = (e: React.PointerEvent) => {
     const el = box.current;
     const target = e.target as HTMLElement;
     if (e.button !== 0 || !el || inking || lensView || moment || space.current?.held()) return;
     if (target.closest("button, a, input, textarea, .panel")) return;
     const zoom = flow.getZoom();
+    // A region's title moves the region and every card in it.
+    const head = target.closest<HTMLElement>(".map-region-head");
+    if (head) {
+      const rid = head.parentElement!.dataset.region!;
+      const r = canvas.regions.find((g) => g.id === rid);
+      if (!r) return;
+      const ids = members.get(rid) ?? [];
+      const els = [head.parentElement!, ...ids.flatMap((i) => cardEl(i) ?? [])];
+      track(
+        e,
+        (dx, dy) => {
+          el.classList.add("is-moving");
+          setPeek(null);
+          els.forEach((n) => (n.style.translate = `${dx / zoom}px ${dy / zoom}px`));
+        },
+        (moved, ev) => {
+          if (!moved) return;
+          el.classList.remove("is-moving");
+          const dx = (ev.clientX - e.clientX) / zoom,
+            dy = (ev.clientY - e.clientY) / zoom;
+          const [x, y] = cornerOf({ id: rid, x: r.box[0], y: r.box[1], w: 0, h: 0 }, dx, dy);
+          settling.current = els;
+          // Cards hidden by the type switches or a folded branch move with the region too.
+          const held = heldBy(canvas.regions, canvas.positions, base).get(rid) ?? [];
+          arrange({
+            regions: { [rid]: { ...r, box: [x, y, r.box[2], r.box[3]] } },
+            positions: Object.fromEntries(
+              held.map((i) => {
+                const p = base.placed.get(i);
+                return [i, p ? cornerOf(p, dx, dy) : shifted(canvas.positions[i]!, dx, dy)];
+              }),
+            ),
+          });
+        },
+      );
+      return;
+    }
     const card = target.closest<HTMLElement>(".react-flow__node-node");
     if (card) {
       const id = card.dataset.id!;
       const ids = picked.has(id) ? [...picked] : [id];
-      const els = ids.flatMap((i) => {
-        const n = el.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(i)}"]`);
-        return n ? [n] : [];
-      });
+      const els = ids.flatMap((i) => cardEl(i) ?? []);
       let gone = false;
+      // The card held over, once it has waited long enough; and the region the pointer is over.
+      let over: string | null = null,
+        onto: string | null = null,
+        into: string | null = null;
+      let wait: ReturnType<typeof setTimeout> | undefined;
+      const mark = (kind: "join" | "into", id: string | null) => {
+        const was = kind === "join" ? onto : into;
+        if (was === id) return;
+        if (was) (kind === "join" ? cardEl(was) : regionEl(was))?.classList.remove(`is-${kind}`);
+        if (id) (kind === "join" ? cardEl(id) : regionEl(id))?.classList.add(`is-${kind}`);
+        if (kind === "join") onto = id;
+        else into = id;
+      };
+      const clear = () => {
+        clearTimeout(wait);
+        mark("join", null);
+        mark("into", null);
+      };
       track(
         e,
         (dx, dy, ev) => {
@@ -1599,25 +1999,55 @@ function MapContent({
             document.elementFromPoint(ev.clientX, ev.clientY)?.closest(".sidebar")
           ) {
             gone = true;
+            clear();
             el.classList.remove("is-moving");
             els.forEach((n) => (n.style.translate = ""));
             continueDrag({ kind: "node", id }, { x: ev.clientX, y: ev.clientY });
             return false;
           }
           els.forEach((n) => (n.style.translate = `${dx / zoom}px ${dy / zoom}px`));
+          if (!regionsShown) return;
+          const p = flow.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
+          const under = [...view.placed.values()].find((q) => {
+            if (ids.includes(q.id) || !visible(q.id) || !exists(q.id)) return false;
+            const r = rectOf(q);
+            return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + (r.head ?? r.h);
+          });
+          if ((under?.id ?? null) !== over) {
+            clearTimeout(wait);
+            mark("join", null);
+            over = under?.id ?? null;
+            if (over) {
+              const held = over;
+              wait = setTimeout(() => mark("join", held), HOLD);
+            }
+          }
+          mark("into", onto ? null : (regionAt(p.x, p.y)?.id ?? null));
         },
         (moved, ev) => {
+          const joining = onto,
+            region = into;
+          clear();
           if (!moved || gone) return;
           el.classList.remove("is-moving");
           const dx = (ev.clientX - e.clientX) / zoom,
             dy = (ev.clientY - e.clientY) / zoom;
-          const next = { ...moves };
-          for (const i of ids) {
-            const [x, y] = next[i] ?? [0, 0];
-            next[i] = [x + dx, y + dy];
-          }
           settling.current = els;
-          saveMoves(next);
+          if (joining) return gather(joining, ids);
+          const positions: Record<string, Pt> = {};
+          const rects: Rect[] = [];
+          for (const i of ids) {
+            const p = base.placed.get(i);
+            if (!p) continue;
+            positions[i] = cornerOf(p, dx, dy);
+            rects.push({ ...rectOf(p), x: positions[i][0], y: positions[i][1] });
+          }
+          const r = region ? canvas.regions.find((g) => g.id === region) : undefined;
+          arrange({
+            positions,
+            // Dropped into a region, the cards join it, and it grows to hold them.
+            ...(r ? { regions: { [r.id]: { ...r, box: fitBox(r.box, rects) } } } : {}),
+          });
         },
       );
       return;
@@ -1740,6 +2170,12 @@ function MapContent({
             onMoveStart={() => setPeek(null)}
             onMoveEnd={countOutside}
             onNodeClick={(e, node) => {
+              if (node.type === "ghost") {
+                const rid = regionOfCard.get(node.id.slice(GHOST.length));
+                const r = rid && canvas.regions.find((g) => g.id === rid);
+                if (r) fitRects([boxRect(r)], 1);
+                return;
+              }
               if (node.type !== "node") return;
               // Shift or Ctrl adds a card to the picked ones, or takes it out.
               if (e.shiftKey || e.ctrlKey || e.metaKey)
@@ -1760,6 +2196,33 @@ function MapContent({
               onSelect(null);
             }}
           >
+            {regionsShown && (
+              <RegionLayer
+                regions={canvas.regions}
+                members={members}
+                related={linked}
+                draft={regionDraft}
+                editing={naming}
+                onEdit={setNaming}
+                onName={(rid, name) => {
+                  setNaming(null);
+                  const r = canvas.regions.find((g) => g.id === rid);
+                  if (r && r.name !== name) arrange({ regions: { [rid]: { ...r, name } } });
+                }}
+                onDissolve={(rid) =>
+                  arrange({
+                    regions: { [rid]: null },
+                    // Hidden members go back to the tree too, not only the cards on screen.
+                    positions: Object.fromEntries(
+                      (heldBy(canvas.regions, canvas.positions, base).get(rid) ?? []).map((i) => [
+                        i,
+                        null,
+                      ]),
+                    ),
+                  })
+                }
+              />
+            )}
             {inkShown && (
               <InkLayer
                 ink={ink.ink}
@@ -1783,6 +2246,27 @@ function MapContent({
           onDraft={setInkDraft}
           writing={!!inkWriting}
           onWrite={setInkWriting}
+          onRegionDraft={setRegionDraft}
+          onRegion={(box) => {
+            // Cards the pen circled join it where they stand.
+            const id = newRegionId();
+            const at = boxRect({ id, name: "", box });
+            const held: Record<string, Pt> = {};
+            const rects: Rect[] = [];
+            for (const p of base.placed.values()) {
+              const r = rectOf(p);
+              if (visible(p.id) && exists(p.id) && !regionOfCard.has(p.id) && inside(at, r)) {
+                held[p.id] = cornerOf(p);
+                rects.push(r);
+              }
+            }
+            arrange({
+              positions: held,
+              regions: { [id]: { id, name: "", box: rects.length ? fitBox(box, rects) : box } },
+            });
+            setInkTool(null);
+            setNaming(id);
+          }}
         />
       )}
       {inking && inkWriting && (

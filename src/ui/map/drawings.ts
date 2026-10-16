@@ -1,74 +1,38 @@
 // Drawing on the map: pen strokes and written notes, kept for looking at only. They hold on to nothing:
-// each one keeps its own map coordinates (`node: null`), so cards moving, folding or going away never
-// move them. They live in the workspace's canvas file next to whatever else it holds, which is kept as
-// it was. Rules: Tent Node "UI-图谱画模块依赖与状态", cuca 2026-10-13.
+// each one keeps its own map coordinates, so cards moving, folding or going away never move them. They
+// live in the canvas file (canvas.ts) beside card places and regions. Rules: Tent Node
+// "UI-图谱画模块依赖与状态", cuca 2026-10-13.
+import type { Drawing } from "./canvas.js";
 
 export type Pt = [number, number];
-export type Stroke = { id: string; kind: "pen"; node: null; points: Pt[] };
-export type Note = { id: string; kind: "text"; node: null; at: Pt; text: string };
+export type Stroke = { id: string; kind: "pen"; points: Pt[] };
+export type Note = { id: string; kind: "text"; at: Pt; text: string };
 export type Ink = Stroke | Note;
-
-/** The canvas file as the service holds it; only `drawings` is ours to change. */
-export type CanvasFile = {
-  version: 1;
-  forms: Record<string, unknown>;
-  positions: Record<string, unknown>;
-  drawings: Array<{ id: string; kind: string; node: string | null; [key: string]: unknown }>;
-};
 
 /** Handwriting size in map units, and how near a pointer has to come to pick a stroke, in screen pixels. */
 export const INK = { font: 15, line: 1.35, stroke: 2, reach: 7 };
 
-export const emptyCanvas = (): CanvasFile => ({
-  version: 1,
-  forms: {},
-  positions: {},
-  drawings: [],
-});
-
 const isPt = (p: unknown): p is Pt =>
   Array.isArray(p) && p.length === 2 && p.every((n) => typeof n === "number" && Number.isFinite(n));
 
-/** The file as read, or an empty one; anything not shaped like a canvas is treated as empty. */
-export function readCanvas(value: unknown): CanvasFile {
-  const c = value as Partial<CanvasFile> | null;
-  if (!c || c.version !== 1 || !Array.isArray(c.drawings)) return emptyCanvas();
-  return {
-    version: 1,
-    forms: c.forms ?? {},
-    positions: c.positions ?? {},
-    drawings: c.drawings,
-  };
-}
-
-/** The free pens and texts in the file. Drawings of any other shape are left alone and not shown. */
-export function inkOf(canvas: CanvasFile): Ink[] {
-  return canvas.drawings.flatMap((d): Ink[] => {
-    if (d.node !== null) return [];
+/** The pens and texts among the file's drawings. Drawings of any other shape are left alone and not shown. */
+export function inkOf(drawings: readonly Drawing[]): Ink[] {
+  return drawings.flatMap((d): Ink[] => {
     if (d.kind === "pen" && Array.isArray(d.points) && d.points.length && d.points.every(isPt))
-      return [{ id: d.id, kind: "pen", node: null, points: d.points }];
+      return [{ id: d.id, kind: "pen", points: d.points }];
     if (d.kind === "text" && isPt(d.at) && typeof d.text === "string" && d.text.trim())
-      return [{ id: d.id, kind: "text", node: null, at: d.at, text: d.text }];
+      return [{ id: d.id, kind: "text", at: d.at, text: d.text }];
     return [];
   });
 }
 
-/**
- * The file with `ink` in place of the drawings it was read from. Drawings that were not ours keep their
- * place in the list; new ones go at the end, in the order drawn.
- */
-export function withInk(canvas: CanvasFile, ink: Ink[]): CanvasFile {
-  const ours = new Set(inkOf(canvas).map((d) => d.id));
-  const next = new Map(ink.map((d) => [d.id, d]));
-  const drawings: CanvasFile["drawings"] = [];
-  for (const d of canvas.drawings) {
-    if (!ours.has(d.id)) drawings.push(d);
-    else if (next.has(d.id)) {
-      drawings.push(next.get(d.id)!);
-      next.delete(d.id);
-    }
-  }
-  return { ...canvas, drawings: [...drawings, ...next.values()] };
+/** The drawing changes that turn `before` into `after`, by id; null takes one out. */
+export function inkChanges(before: readonly Ink[], after: readonly Ink[]): Map<string, Ink | null> {
+  const out = new Map<string, Ink | null>();
+  const next = new Map(after.map((d) => [d.id, d]));
+  for (const d of before) if (!next.has(d.id)) out.set(d.id, null);
+  for (const d of after) if (!before.includes(d)) out.set(d.id, d);
+  return out;
 }
 
 /** Map coordinates to a tenth of a unit: finer than any screen shows, and the file stays small. */
@@ -166,5 +130,5 @@ export function withNote(
       ? all.map((d) => (d.id === own && d.kind === "text" ? { ...d, text: clean } : d))
       : all.filter((d) => d.id !== own);
   }
-  return clean ? [...all, { id: id(), kind: "text", node: null, at: note.at, text: clean }] : all;
+  return clean ? [...all, { id: id(), kind: "text", at: note.at, text: clean }] : all;
 }

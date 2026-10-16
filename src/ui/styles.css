@@ -15,6 +15,8 @@
   --text-2: #5E5D59;
   --text-3: #8D8B83;
   --frame: #F0EEE6; --canvas: #FAF9F5; --line: #D6D3C7;
+  /* A region: a faint tint of the goal ink over the canvas. */
+  --region: color-mix(in srgb, #3B534E 6%, #F2F0E8);
   --hover: rgba(31, 30, 29, .045); --press: rgba(31, 30, 29, .08);
   --accent: #D2582B; --accent-hover: #BA4B22; --accent-soft: color-mix(in srgb, #D2582B 10%, #FFFFFF); --accent-line: color-mix(in srgb, #D2582B 60%, transparent); --on-accent: #FFFFFF;
   --goal: #3B534E; --goal-soft: color-mix(in srgb, #3B534E 9%, #FFFFFF);
@@ -42,6 +44,7 @@
   --border: #31302E; --border-strong: #42413D;
   --text: #F2F1EC; --text-2: #B8B6AD; --text-3: #8A8880;
   --frame: #212120; --canvas: #1A1A19; --line: #3E3D39;
+  --region: color-mix(in srgb, #C9D6D1 7%, #1F1F1E);
   --hover: rgba(255, 255, 255, .05); --press: rgba(255, 255, 255, .085);
   --accent: #E46F3D; --accent-hover: #EC8457; --accent-soft: color-mix(in srgb, #E46F3D 18%, #222221); --accent-line: color-mix(in srgb, #E46F3D 65%, transparent); --on-accent: #FFFFFF;
   --goal: #C9D6D1; --goal-soft: color-mix(in srgb, #C9D6D1 12%, #222221);
@@ -62,6 +65,7 @@
     --border: #31302E; --border-strong: #42413D;
     --text: #F2F1EC; --text-2: #B8B6AD; --text-3: #8A8880;
     --frame: #212120; --canvas: #1A1A19; --line: #3E3D39;
+    --region: color-mix(in srgb, #C9D6D1 7%, #1F1F1E);
     --hover: rgba(255, 255, 255, .05); --press: rgba(255, 255, 255, .085);
     --accent: #E46F3D; --accent-hover: #EC8457; --accent-soft: color-mix(in srgb, #E46F3D 18%, #222221); --accent-line: color-mix(in srgb, #E46F3D 65%, transparent); --on-accent: #FFFFFF;
     --goal: #C9D6D1; --goal-soft: color-mix(in srgb, #C9D6D1 12%, #222221);
@@ -637,6 +641,43 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 /* Drawings: pencil marks over the cards, for looking at only. They never take the pointer; while drawing
    is on, the pad above the map does. */
 .map .react-flow__viewport-portal { z-index: 1001; pointer-events: none; }
+/* Regions sit under the cards and lines; only their title takes the pointer. */
+.map-regions { position: absolute; left: 0; top: 0; z-index: -1; user-select: none; -webkit-user-select: none; }
+.map-region { position: absolute; border-radius: 22px; background: var(--region); pointer-events: none; }
+.map-region.is-into, .map-region.is-draft { outline: 1.5px dashed var(--border-strong); outline-offset: -1.5px; }
+.map-region.is-draft { background: color-mix(in srgb, var(--region) 70%, transparent); }
+.map-region-head { position: absolute; inset: 0 0 auto 0; height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 22px; pointer-events: auto; cursor: grab; }
+.map.is-moving .map-region-head { cursor: grabbing; }
+.map-region-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650; color: var(--text); cursor: text; }
+.map-region-name.is-blank { color: var(--text-3); font-weight: 550; }
+.map-region-count { flex: none; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.map-region-input { min-width: 0; flex: 0 1 260px; padding: 3px 8px; margin-left: -9px; border: 1px solid var(--accent-line); border-radius: 7px; background: var(--bg); color: var(--text); font: 650 15px var(--font-sans); outline: none; }
+.map-region-dissolve { margin-left: auto; opacity: 0; transition: opacity .12s ease; }
+.map-region-head:hover .map-region-dissolve, .map-region-dissolve:focus-visible { opacity: 1; }
+.map-region-none { position: absolute; inset: auto 0 14px 0; text-align: center; font-size: 13px; color: var(--text-3); }
+/* Where a card in a region stands in the tree. */
+.mghost { display: flex; align-items: center; padding: 0 13px 0 42px; border: 1px dashed var(--border-strong); border-radius: 10px; color: var(--text-3); font-size: 14px; cursor: pointer; }
+.mghost:hover { border-color: var(--text-3); color: var(--text-2); }
+.mghost-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A card held over long enough: letting go forms a region with it. */
+.mcard.is-join, .react-flow__node.is-join .mcard { border-color: var(--new); box-shadow: 0 0 0 1px var(--new), 0 0 0 5px color-mix(in srgb, var(--new) 18%, transparent); }
+/* Lines in a region, one style per relation; the label shows on hover. */
+.rline-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; }
+.rline-path { fill: none; stroke-width: 1.5; pointer-events: none; }
+.rline-parent .rline-path { stroke: var(--line); stroke-width: 1.6; }
+.rline-link .rline-path { stroke: var(--goal); stroke-dasharray: 5 4; opacity: .75; }
+.rline-link .rline-arrow { fill: var(--goal); opacity: .75; }
+.rline-material .rline-path { stroke: var(--warn); stroke-dasharray: 1.5 4.5; stroke-linecap: round; stroke-width: 2; }
+.rline-code .rline-path { stroke: var(--prompt); }
+.rline-code .rline-arrow { fill: var(--prompt); }
+.rline-card .rline-path { stroke: var(--accent); stroke-width: 4.2; }
+.rline-card .rline-inner { fill: none; stroke: var(--region); stroke-width: 1.4; pointer-events: none; }
+.rline-card .rline-arrow { fill: var(--accent); }
+.rline-label { display: none; fill: var(--text-2); font: 500 12.5px var(--font-sans); paint-order: stroke; stroke: var(--region); stroke-width: 5px; stroke-linejoin: round; pointer-events: none; }
+.rline:hover .rline-label { display: inline; }
+.rline:hover .rline-path { stroke-width: 2.4; }
+.rline-card:hover .rline-path { stroke-width: 5; }
+.map.is-moving .rline { opacity: 0; }
 .ink-layer { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .ink-line { fill: none; stroke: var(--text-2); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 /* A halo in the map colour keeps a note readable where it crosses a line or a card edge. */

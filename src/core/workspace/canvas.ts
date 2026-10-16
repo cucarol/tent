@@ -7,24 +7,21 @@ import { CANVAS_PATH } from "../base/paths.js";
 export const CANVAS_LIMIT = 5 * 1024 * 1024;
 const nodeId = z.string().refine(isNodeId);
 const canvasSchema = z.strictObject({
-  version: z.literal(1),
-  forms: z.record(nodeId, z.enum(["box", "tree"])),
-  positions: z.record(
-    z.string().refine((key) => {
-      if (key === "@root") return true;
-      const [parent, form] = key.split("|");
-      return (
-        isNodeId(parent ?? "") && (form === "box" || form === "tree") && key === `${parent}|${form}`
-      );
-    }),
-    z.record(nodeId, z.tuple([z.number(), z.number()])),
-  ),
+  version: z.literal(2),
+  positions: z.record(nodeId, z.tuple([z.number(), z.number()])),
+  regions: z
+    .array(
+      z.strictObject({
+        id: z.string(),
+        name: z.string(),
+        box: z.tuple([z.number(), z.number(), z.number().positive(), z.number().positive()]),
+      }),
+    )
+    .refine((regions) => new Set(regions.map((region) => region.id)).size === regions.length),
   drawings: z.array(
-    z.looseObject({
-      id: z.string(),
-      kind: z.enum(["pen", "text", "rect", "arrow"]),
-      node: nodeId.nullable(),
-    }),
+    z
+      .looseObject({ id: z.string(), kind: z.enum(["pen", "text"]) })
+      .refine((drawing) => !Object.prototype.hasOwnProperty.call(drawing, "node")),
   ),
 });
 export type Canvas = z.infer<typeof canvasSchema>;

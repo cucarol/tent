@@ -21,7 +21,7 @@ import { exportGraph } from "../src/fs/graph-export.js";
 import { testScratchRoot } from "./scratch.js";
 import { buildSnapshot } from "../src/ui-server/snapshot.js";
 
-const empty = () => ({ version: 1, forms: {}, positions: {}, drawings: [] });
+const empty = () => ({ version: 2, positions: {}, regions: [], drawings: [] });
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "canvas-"));
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
@@ -39,19 +39,25 @@ test("canvas missing reads are inert; writes preserve UI fields and unavailable 
   assert.equal(await adapter.history.currentCommit(), before);
   const canvas = {
     ...empty(),
-    forms: { "node-missing": "box" },
     positions: {
-      "node-missing|tree": { "node-gone": [10, -20] },
-      "@root": { "node-missing": [0.25, 2] },
+      "node-gone": [10, -20],
+      "node-missing": [0.25, 2],
     },
+    regions: [
+      { id: "r1", name: "", box: [-30, 0.5, 200, 100] },
+      { id: "r2", name: "计划", box: [400, 250, 0.5, 50] },
+    ],
     drawings: [
       {
         id: "d1",
-        kind: "arrow",
-        node: "node-gone",
-        to: { node: null, at: [3, 4] },
+        kind: "pen",
+        points: [
+          [3, 4],
+          [-1, 0.25],
+        ],
         custom: { untouched: true },
       },
+      { id: "d2", kind: "text", text: "计划", at: [8, -9], color: "orange" },
     ],
   };
   const first = await writeCanvasDocument(adapter, { baseEtag: null, canvas });
@@ -77,16 +83,38 @@ test("invalid canvas input, corrupt existing files and oversized UTF-8 leave byt
   for (const canvas of [
     null,
     {},
-    { ...empty(), version: 2 },
+    { ...empty(), version: 1 },
+    { version: 1, forms: {}, positions: {}, drawings: [] },
     { ...empty(), forms: { "node-x": "circle" } },
     { ...empty(), positions: { bad: {} } },
     { ...empty(), positions: { "@root": { "node-x": [1] } } },
-    { ...empty(), positions: { "@root": { "node-x": [NaN, 1] } } },
-    { ...empty(), drawings: [{ id: "d", kind: "pen" }] },
-    { ...empty(), drawings: [{ id: "d", kind: "circle", node: null }] },
+    { ...empty(), positions: { "node-x": [1] } },
+    { ...empty(), positions: { "node-x": [NaN, 1] } },
+    { ...empty(), positions: { "node-x": [1, Infinity] } },
+    { ...empty(), positions: { "node-x": [1, 2, 3] } },
+    { ...empty(), regions: [{ id: "r", name: "", box: [0, 0, 1] }] },
+    { ...empty(), regions: [{ id: "r", name: "", box: [0, 0, 0, 1] }] },
+    { ...empty(), regions: [{ id: "r", name: "", box: [0, 0, 1, -1] }] },
+    { ...empty(), regions: [{ id: "r", name: "", box: [NaN, 0, 1, 1] }] },
+    { ...empty(), regions: [{ id: "r", name: "", box: [0, 0, Infinity, 1] }] },
+    { ...empty(), regions: [{ id: "r", name: 1, box: [0, 0, 1, 1] }] },
+    { ...empty(), regions: [{ id: "r", name: "", box: [0, 0, 1, 1], members: [] }] },
     {
       ...empty(),
-      drawings: [{ id: "d", kind: "text", node: null, text: "画".repeat(CANVAS_LIMIT / 3) }],
+      regions: [
+        { id: "r", name: "first", box: [0, 0, 1, 1] },
+        { id: "r", name: "second", box: [2, 2, 3, 4] },
+      ],
+    },
+    { ...empty(), drawings: [{ kind: "pen" }] },
+    { ...empty(), drawings: [{ id: "d", kind: "circle" }] },
+    { ...empty(), drawings: [{ id: "d", kind: "rect" }] },
+    { ...empty(), drawings: [{ id: "d", kind: "arrow" }] },
+    { ...empty(), drawings: [{ id: "d", kind: "pen", node: null }] },
+    { ...empty(), drawings: [{ id: "d", kind: "text", node: "node-x" }] },
+    {
+      ...empty(),
+      drawings: [{ id: "d", kind: "text", text: "画".repeat(CANVAS_LIMIT / 3) }],
     },
   ]) {
     await assert.rejects(
@@ -99,7 +127,12 @@ test("invalid canvas input, corrupt existing files and oversized UTF-8 leave byt
     async () => writeCanvasDocument(adapter, { baseEtag: undefined, canvas: empty() }),
     { code: "INVALID_INPUT" },
   );
-  for (const bad of ["{", '{"version":2}', " ".repeat(CANVAS_LIMIT + 1)]) {
+  for (const bad of [
+    "{",
+    '{"version":2}',
+    JSON.stringify({ version: 1, forms: {}, positions: {}, drawings: [] }),
+    " ".repeat(CANVAS_LIMIT + 1),
+  ]) {
     await adapter.writeFile("canvas.json", bad);
     await assert.rejects(readCanvasDocument(adapter), { code: "INVALID_INPUT" });
     await assert.rejects(writeCanvasDocument(adapter, { baseEtag: first.etag, canvas: empty() }), {
@@ -130,7 +163,7 @@ test("canvas uses the workspace lock and detects another writer's saved ETag", a
 test("a canvas exactly at 5 MiB saves without initializing Git; one more byte is rejected", async (t) => {
   const { root } = await fixture(t);
   const adapter = new NodeFs(path.join(root, "without-git"));
-  const drawing = { id: "d", kind: "text", node: null, text: "" };
+  const drawing = { id: "d", kind: "text", text: "" };
   const canvas = { ...empty(), drawings: [drawing] };
   drawing.text = "x".repeat(CANVAS_LIMIT - Buffer.byteLength(JSON.stringify(canvas) + "\n"));
   const saved = await writeCanvasDocument(adapter, { baseEtag: null, canvas });
@@ -145,10 +178,10 @@ test("a canvas exactly at 5 MiB saves without initializing Git; one more byte is
   assert.equal((await readCanvasDocument(adapter)).etag, saved.etag);
 });
 
-test("layer forms are lowercase while Node IDs retain their case rules", async (t) => {
+test("canvas positions reject old grouped layers while Node IDs retain their case rules", async (t) => {
   const { root } = await fixture(t);
-  const adapter = new NodeFs(path.join(root, "layer-forms"));
-  for (const layer of ["node-x|BOX", "node-x|TREE", "node-x|Box", "node-x|tree|extra"]) {
+  const adapter = new NodeFs(path.join(root, "positions"));
+  for (const layer of ["@root", "node-x|box", "node-x|tree", "node-x|BOX", "node-x|tree|extra"]) {
     await assert.rejects(
       async () =>
         writeCanvasDocument(adapter, {
@@ -161,7 +194,7 @@ test("layer forms are lowercase while Node IDs retain their case rules", async (
   }
   const canvas = {
     ...empty(),
-    positions: { "NODE-X|box": { "NODE-Y": [1, 2] }, "node-x|tree": {} },
+    positions: { "NODE-X": [1, 2], "node-x": [-3, 4] },
   };
   const saved = await writeCanvasDocument(adapter, { baseEtag: null, canvas });
   assert.deepEqual(await readCanvasDocument(adapter), { etag: saved.etag, canvas });
@@ -301,7 +334,7 @@ test("canvas participates in revision, history, diff, external preimage capture 
   const firstRaw = await adapter.readFile("canvas.json");
   const savedRevision = await readWorkspaceRevision(adapter);
   assert.notEqual(savedRevision, initialRevision);
-  const external = JSON.stringify({ ...empty(), forms: { "node-absent": "tree" } });
+  const external = JSON.stringify({ ...empty(), positions: { "node-absent": [1, 2] } });
   await adapter.writeFile("canvas.json", external);
   assert.notEqual(await readWorkspaceRevision(adapter), savedRevision);
   const second = await writeCanvasDocument(adapter, {

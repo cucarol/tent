@@ -17,13 +17,15 @@ import {
   type Note,
   type Pt,
 } from "./drawings.js";
-import type { InkStore } from "./useInk.js";
+import type { Region } from "./canvas.js";
+import type { InkStore } from "./useCanvas.js";
 
-export type InkTool = "select" | "pen" | "text";
+export type InkTool = "select" | "pen" | "text" | "region";
 export const INK_TOOLS: { tool: InkTool; icon: IconName; key: string }[] = [
   { tool: "select", icon: "pointer", key: "V" },
   { tool: "pen", icon: "pen", key: "P" },
   { tool: "text", icon: "type", key: "T" },
+  { tool: "region", icon: "region", key: "G" },
 ];
 
 /** A drawing being moved, and how far. */
@@ -157,12 +159,22 @@ export function InkEditor({
 type Gesture =
   | { kind: "pen" }
   | { kind: "move"; id: string; from: Pt }
-  | { kind: "pan"; from: [number, number] };
+  | { kind: "pan"; from: [number, number] }
+  | { kind: "region"; from: Pt };
+
+/** The box between two corners, in map units. */
+const boxBetween = (a: Pt, b: Pt): Region["box"] => {
+  const x = Math.min(a[0], b[0]),
+    y = Math.min(a[1], b[1]);
+  const [rx, ry] = round([x, y]),
+    [rw, rh] = round([Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])]);
+  return [rx, ry, rw, rh];
+};
 
 /**
  * Takes the pointer while drawing is on. The pen draws a stroke along the drag; a text starts a note
- * where you click, or opens one you click on; select picks a drawing and drags it, or pans the map
- * from empty space.
+ * where you click, or opens one you click on; the region tool draws a region along the drag; select
+ * picks a drawing and drags it, or pans the map from empty space.
  */
 export function InkPad({
   tool,
@@ -173,6 +185,8 @@ export function InkPad({
   onDraft,
   writing,
   onWrite,
+  onRegionDraft,
+  onRegion,
 }: {
   tool: InkTool;
   store: InkStore;
@@ -184,6 +198,10 @@ export function InkPad({
   /** Whether a note is open: a click with the text tool then only closes it. */
   writing: boolean;
   onWrite: (w: Writing | null) => void;
+  /** The region being drawn, while the region tool drags. */
+  onRegionDraft: (box: Region["box"] | null) => void;
+  /** A region drawn big enough to keep. */
+  onRegion: (box: Region["box"]) => void;
 }) {
   const flow = useReactFlow();
   const gesture = useRef<Gesture | null>(null);
@@ -217,6 +235,10 @@ export function InkPad({
       onDraft(points.current);
       return;
     }
+    if (tool === "region") {
+      gesture.current = { kind: "region", from: p };
+      return;
+    }
     const d = hit(p);
     onPick(d?.id ?? null);
     if (d) gesture.current = { kind: "move", id: d.id, from: p };
@@ -238,6 +260,8 @@ export function InkPad({
     } else if (g.kind === "move") {
       const p = at(e);
       onMoving({ id: g.id, dx: p[0] - g.from[0], dy: p[1] - g.from[1] });
+    } else if (g.kind === "region") {
+      onRegionDraft(boxBetween(g.from, at(e)));
     } else {
       const v = flow.getViewport();
       void flow.setViewport({
@@ -257,7 +281,12 @@ export function InkPad({
       const stroke = points.current;
       points.current = [];
       onDraft(null);
-      store.commit([...store.ink, { id: newId("pen"), kind: "pen", node: null, points: stroke }]);
+      store.commit([...store.ink, { id: newId("pen"), kind: "pen", points: stroke }]);
+    } else if (g.kind === "region") {
+      onRegionDraft(null);
+      const box = boxBetween(g.from, at(e));
+      // Smaller than a card's height on screen is a slip, not a region.
+      if (Math.min(box[2], box[3]) * flow.getZoom() >= 40) onRegion(box);
     } else if (g.kind === "move") {
       onMoving(null);
       const p = at(e);

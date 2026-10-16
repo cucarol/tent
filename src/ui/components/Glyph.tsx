@@ -7,6 +7,8 @@ import {
   ChevronRight,
   CircleHelp,
   Copy,
+  SquareDashed,
+  Ungroup,
   Ellipsis,
   Eye,
   EyeOff,
@@ -196,6 +198,8 @@ const icons = {
   type: Type,
   undo: Undo2,
   redo: Redo2,
+  region: SquareDashed,
+  ungroup: Ungroup,
 } satisfies Record<string, LucideIcon>;
 export type IconName = keyof typeof icons;
 

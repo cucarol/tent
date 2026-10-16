@@ -1,6 +1,7 @@
 // Client for the `tent ui` service (contract: Tent Node "Web界面服务接口").
 // The token arrives once in the URL fragment and is kept for this tab only.
 import { t } from "../i18n.js";
+import type { ModuleDependencyResponse } from "../../core/read/module-dependency-query.js";
 import type { DocumentVersion, Snapshot, SyncFlags } from "./types.js";
 
 const TOKEN_KEY = "tent-token";
@@ -165,6 +166,8 @@ export const api = {
   /** Replaces the whole canvas file; a stale ETag is refused with the current file in the details. */
   saveCanvas: (baseEtag: string | null, canvas: unknown) =>
     call<{ etag: string }>("/api/canvas", send("PUT", { baseEtag, canvas })),
+  /** Which Nodes with code directories import which, from the repository's current files. */
+  moduleDeps: () => call<ModuleDependencyResponse>("/api/modules/deps"),
   /** Ahead and behind Nodes, computed fresh: material changes do not move the revision. */
   sync: () => call<{ revision: string; nodes: SyncFlags }>("/api/sync"),
   node: (id: string, capture = false) =>

@@ -101,7 +101,12 @@ const json = <T>(reply: Reply) => JSON.parse(reply.body) as T;
 test("canvas API queues CAS writes and exposes current state, history and security errors", async (t) => {
   const { tent, call } = await fixture(t);
   const target = "/api/canvas";
-  const canvas = { version: 1, forms: {}, positions: {}, drawings: [] };
+  const canvas = {
+    version: 2,
+    positions: { "node-absent": [12, -3] },
+    regions: [{ id: "r1", name: "", box: [0, 0, 100, 80] }],
+    drawings: [{ id: "ink", kind: "pen", points: [[1, 2]], custom: { keep: true } }],
+  };
   assert.deepEqual(json(await call("GET", target)), { etag: null, canvas: null });
   assert.equal(await tent.exists("canvas.json"), false);
   assert.equal((await call("GET", target, { token: null })).status, 401);
@@ -163,7 +168,19 @@ test("canvas API queues CAS writes and exposes current state, history and securi
   );
   assert.equal(historical.status, 200);
   assert.deepEqual(JSON.parse(json<{ raw: string }>(historical).raw), canvas);
-  for (const input of [{ canvas }, { baseEtag: saved.etag, canvas: {} }]) {
+  for (const input of [
+    { canvas },
+    { baseEtag: saved.etag, canvas: {} },
+    { baseEtag: saved.etag, canvas: { version: 1, forms: {}, positions: {}, drawings: [] } },
+    {
+      baseEtag: saved.etag,
+      canvas: { ...canvas, regions: [...canvas.regions, ...canvas.regions] },
+    },
+    {
+      baseEtag: saved.etag,
+      canvas: { ...canvas, drawings: [{ id: "d", kind: "pen", node: null }] },
+    },
+  ]) {
     const invalid = await call("PUT", target, { json: input });
     assert.equal(invalid.status, 422);
     assert.equal(json<{ error: { code: string } }>(invalid).error.code, "INVALID_INPUT");
@@ -173,7 +190,7 @@ test("canvas API queues CAS writes and exposes current state, history and securi
       baseEtag: saved.etag,
       canvas: {
         ...canvas,
-        drawings: [{ id: "x", kind: "text", node: null, text: "x".repeat(5 * 1024 * 1024 + 1024) }],
+        drawings: [{ id: "x", kind: "text", text: "x".repeat(5 * 1024 * 1024 + 1024) }],
       },
     },
   });
@@ -189,7 +206,7 @@ test("canvas API reports a busy workspace lock without writing", async (t) => {
   const { tent, call } = await fixture(t);
   await tent.withLock("mutation.lock", async () => {
     const reply = await call("PUT", "/api/canvas", {
-      json: { baseEtag: null, canvas: { version: 1, forms: {}, positions: {}, drawings: [] } },
+      json: { baseEtag: null, canvas: { version: 2, positions: {}, regions: [], drawings: [] } },
     });
     assert.equal(reply.status, 503);
     assert.equal(json<{ error: { code: string } }>(reply).error.code, "BUSY");
@@ -821,45 +838,63 @@ test("direct Card publication supports immutable reads, pending moves and recept
   assert.equal(await tent.readFile(`cards/${cardId}.md`), cardBytes);
 });
 
-test("a fresh snapshot follows a material change outside Tent at the same revision", async (t) => {
-  const { call, tent, workspace } = await fixture(t);
-  await createRoleContext(tent, { roleId: "role-review", title: "Review", body: "Review" });
-  const created = await call("POST", "/api/cards", {
-    json: {
-      prompt: "Review this",
-      sources: [{ resource: "/Other/Other.md" }],
-      target: "role-review",
-    },
-  });
-  const { cardId } = json<{ cardId: string }>(created);
-  await takeCardDocument(tent, cardId, "role-review");
-  const output = await linkNodeOutput(tent, "node-other", {
-    resource: "docs/notes.txt",
-    roleId: "role-review",
-  });
-  const done = await call("GET", "/api/snapshot");
-  const card = (r: typeof done) => json<Snapshot>(r).cards.find((c) => c.id === cardId)!;
-  assert.equal(card(done).progress, "has-output");
+for (const goalMaterialChanges of [false, true]) {
+  const material = goalMaterialChanges ? "goal" : "output-only";
+  test(`a fresh snapshot follows a ${material} material change outside Tent at the same revision`, async (t) => {
+    const { call, tent, workspace } = await fixture(t);
+    // Output-only material drift keeps completion; a changed goal basis needs new evidence.
+    if (goalMaterialChanges)
+      await tent.writeFile(
+        "Other/Other.md",
+        "---\nid: node-other\ntype: goal\nsources:\n  - resource: ../../docs/notes.txt\n---\nThe goal.\n",
+      );
+    await createRoleContext(tent, { roleId: "role-review", title: "Review", body: "Review" });
+    const created = await call("POST", "/api/cards", {
+      json: {
+        prompt: "Review this",
+        sources: [{ resource: "/Other/Other.md" }],
+        target: "role-review",
+      },
+    });
+    const { cardId } = json<{ cardId: string }>(created);
+    await takeCardDocument(tent, cardId, "role-review");
+    const output = await linkNodeOutput(tent, "node-other", {
+      resource: "docs/notes.txt",
+      roleId: "role-review",
+    });
+    const done = await call("GET", "/api/snapshot");
+    const card = (r: typeof done) => json<Snapshot>(r).cards.find((c) => c.id === cardId)!;
+    assert.equal(card(done).progress, "has-output");
+    const outputAt = json<Snapshot>(done).nodes.find((n) => n.id === output.nodeId)!.outputAt;
+    assert.ok(outputAt);
 
-  // No Tent commit: the revision stays, so the cached snapshot still says done.
-  await fs.writeFile(path.join(workspace, "docs/notes.txt"), "changed outside Tent");
-  const cached = await call("GET", "/api/snapshot");
-  assert.equal(json<Snapshot>(cached).workspace.revision, json<Snapshot>(done).workspace.revision);
-  assert.equal(card(cached).progress, "has-output");
+    // No Tent commit: the revision stays, so the cached snapshot still says done.
+    await fs.writeFile(path.join(workspace, "docs/notes.txt"), "changed outside Tent");
+    const cached = await call("GET", "/api/snapshot");
+    assert.equal(
+      json<Snapshot>(cached).workspace.revision,
+      json<Snapshot>(done).workspace.revision,
+    );
+    assert.equal(card(cached).progress, "has-output");
 
-  const fresh = await call("GET", "/api/snapshot?fresh=1", {
-    headers: { "If-None-Match": done.headers.etag! },
+    const fresh = await call("GET", "/api/snapshot?fresh=1", {
+      headers: { "If-None-Match": done.headers.etag! },
+    });
+    assert.equal(fresh.status, 200);
+    const expectedProgress = goalMaterialChanges ? "needs-review" : "has-output";
+    assert.equal(card(fresh).progress, expectedProgress);
+    assert.deepEqual(
+      goalMaterialChanges ? card(fresh).reviewOutputNodeIds : card(fresh).outputNodeIds,
+      [output.nodeId],
+    );
+    assert.equal(
+      json<Snapshot>(fresh).nodes.find((n) => n.id === output.nodeId)!.outputAt,
+      outputAt,
+    );
+    // Later reads share the rebuilt snapshot.
+    assert.equal(card(await call("GET", "/api/snapshot")).progress, expectedProgress);
   });
-  assert.equal(fresh.status, 200);
-  assert.equal(card(fresh).progress, "needs-review");
-  assert.deepEqual(card(fresh).reviewOutputNodeIds, [output.nodeId]);
-  assert.equal(
-    json<Snapshot>(fresh).nodes.find((n) => n.id === output.nodeId)!.outputAt,
-    undefined,
-  );
-  // Later reads share the rebuilt snapshot.
-  assert.equal(card(await call("GET", "/api/snapshot")).progress, "needs-review");
-});
+}
 
 test("removed Card endpoints and invalid create requests never write Card files", async (t) => {
   const { call } = await fixture(t);

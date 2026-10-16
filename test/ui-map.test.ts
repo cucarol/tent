@@ -13,7 +13,6 @@ import {
   CARD,
   flagRuns,
   lensLayout,
-  moveCards,
   rectOf,
   shownTree,
   treeLayout,
@@ -21,6 +20,7 @@ import {
   type Rect,
 } from "../src/ui/map/layout.js";
 import { nearest, refPath } from "../src/ui/map/geometry.js";
+import { placeCards } from "../src/ui/map/canvas.js";
 import { routeLinks, type Pt } from "../src/ui/map/route.js";
 import { ago, relativeHref, resolveHref, workspaceImagePath } from "../src/ui/util.js";
 import { setLang } from "../src/ui/i18n.js";
@@ -379,7 +379,10 @@ test("a switched-off type leaves no gap: what was under it hangs from the neares
     node("b", null, "goal"),
   ]);
   const noPrompt = shownTree(graph, (id) => graph.nodes.get(id)?.type !== "prompt");
-  assert.deepEqual(noPrompt.kidsOf("g").map((n) => n.id), ["g2"]);
+  assert.deepEqual(
+    noPrompt.kidsOf("g").map((n) => n.id),
+    ["g2"],
+  );
   assert.equal(noPrompt.upOf("g2"), "g");
   const laid = treeLayout(graph, new Set(), new Set(), () => 0, noPrompt.kidsOf);
   assert.deepEqual([...laid.placed.keys()].sort(), ["b", "g", "g2"]);
@@ -387,10 +390,16 @@ test("a switched-off type leaves no gap: what was under it hangs from the neares
   assert.equal(at(laid, "g2").x, at(treeLayout(graph, new Set()), "p").x);
   assert.deepEqual(laid.folds?.get("g2"), ["o"]);
   const noOutput = shownTree(graph, (id) => graph.nodes.get(id)?.type !== "output");
-  assert.equal(treeLayout(graph, new Set(), new Set(), () => 0, noOutput.kidsOf).folds?.has("g2"), false);
+  assert.equal(
+    treeLayout(graph, new Set(), new Set(), () => 0, noOutput.kidsOf).folds?.has("g2"),
+    false,
+  );
   // With the top goal off, its prompt starts the tree.
   const noGoal = shownTree(graph, (id) => graph.nodes.get(id)?.type !== "goal");
-  assert.deepEqual(noGoal.kidsOf(null).map((n) => n.id), ["p"]);
+  assert.deepEqual(
+    noGoal.kidsOf(null).map((n) => n.id),
+    ["p"],
+  );
   assert.equal(noGoal.upOf("p"), null);
   assert.equal(noGoal.upOf("o"), "p");
 });
@@ -410,18 +419,24 @@ test("behind and ahead count only the types switched on and keep the full count"
     { state: "ahead", ids: ["g"], all: 3 },
   ]);
   // Every flagged card switched off: the count stays, at zero.
-  assert.deepEqual(flagRuns(graph, flags, () => false).map((r) => r.ids.length), [0, 0]);
-  assert.deepEqual(flagRuns(graph, {}, () => true), []);
+  assert.deepEqual(
+    flagRuns(graph, flags, () => false).map((r) => r.ids.length),
+    [0, 0],
+  );
+  assert.deepEqual(
+    flagRuns(graph, {}, () => true),
+    [],
+  );
 });
 
-test("a card moved by hand moves alone: its children stay where the tree puts them", () => {
+test("a card placed by hand stands at its corner alone: its children stay where the tree puts them", () => {
   const graph = graphOf([node("a", null), node("a1", "a"), node("b", null)]);
   const laid = treeLayout(graph, new Set());
-  assert.equal(moveCards(laid, {}), laid);
-  assert.equal(moveCards(laid, { gone: [5, 5] }), laid);
-  const moved = moveCards(laid, { a: [40, -20] });
-  assert.equal(at(moved, "a").x, at(laid, "a").x + 40);
-  assert.equal(at(moved, "a").y, at(laid, "a").y - 20);
+  assert.equal(placeCards(laid, {}), laid);
+  assert.equal(placeCards(laid, { gone: [5, 5] }), laid);
+  const moved = placeCards(laid, { a: [-400, 300] });
+  assert.deepEqual([rectOfPlaced(moved, "a").x, rectOfPlaced(moved, "a").y], [-400, 300]);
+  assert.equal(rectOfPlaced(moved, "a").h, rectOfPlaced(laid, "a").h);
   assert.deepEqual(at(moved, "a1"), at(laid, "a1"));
   assert.deepEqual(at(moved, "b"), at(laid, "b"));
 });
