@@ -11,6 +11,7 @@ import { CARDS_DIR, ROLES_DIR, nodeNotePath } from "../core/base/paths.js";
 import { loadTent } from "../core/store/tree.js";
 import type { Node } from "../core/base/types.js";
 import { readOutputActivity } from "../core/graph/card-context.js";
+import { cardOrderKey, validCardOrder } from "../core/base/card-order.js";
 import type {
   Snapshot,
   SnapshotCard,
@@ -188,6 +189,8 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
         typeof d.data.title === "string" && d.data.title
           ? d.data.title
           : plainLine(/^#\s+(.+)$/m.exec(d.body)?.[1] ?? d.body.trim().split(/\r?\n/)[0] ?? "");
+      const publishedAt = commits.find((c) => c.hash === history.at(-1))?.date ?? null;
+      const order = d.data.order;
       return {
         id,
         title,
@@ -201,7 +204,13 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
         sources,
         path: d.file,
         history,
-        publishedAt: commits.find((c) => c.hash === history.at(-1))?.date ?? null,
+        publishedAt,
+        ...(publishedAt && (order === undefined || validCardOrder(id, order))
+          ? {
+              orderKey: cardOrderKey(id, publishedAt, order),
+              ...(order === undefined ? {} : { order }),
+            }
+          : {}),
         updatedAt: commits.find((c) => c.hash === history[0])?.date ?? null,
       };
     });

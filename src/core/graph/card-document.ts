@@ -35,6 +35,7 @@ import {
 import { listWorkspaceRelations, type DocumentRef } from "./workspace-relations.js";
 import { cardSourceIdentityError } from "./card-context.js";
 import { retainedDocumentFs, uncapturedChecker } from "./retained-read.js";
+import { cardOrderKey, cardOrderBetween, validCardOrder } from "../base/card-order.js";
 
 export type CardDocumentState = "pending" | "consumed" | "returned" | "closed";
 type CardFields = Record<string, unknown> & {
@@ -44,6 +45,7 @@ type CardFields = Record<string, unknown> & {
   sources: MaterialSource[];
   title?: string;
   target?: string;
+  order?: string;
   returnTo?: string;
   result?: string;
   state: CardDocumentState;
@@ -119,6 +121,8 @@ function validateCardHeader(id: string, data: Record<string, unknown>) {
     invalid("Card title must be nonempty text");
   if (data.target !== undefined && (typeof data.target !== "string" || !isRoleId(data.target)))
     invalid("Card target must be an explicit Role id");
+  if (data.order !== undefined && !validCardOrder(id, data.order))
+    invalid("Invalid Card queue order; use card move to change position");
   if (
     data.returnTo !== undefined &&
     (typeof data.returnTo !== "string" || !isRoleId(data.returnTo))
@@ -148,7 +152,7 @@ function validateCardHeader(id: string, data: Record<string, unknown>) {
   } else if (data.result !== undefined) invalid("Only returned or closed Cards have a result");
 }
 function inputOf(document: CardDocument) {
-  const { state, receivedBy, result, status, target, ...fields } = document.data;
+  const { state, receivedBy, result, status, target, order, ...fields } = document.data;
   return { fields, body: document.body };
 }
 function stateOf(document: CardDocument) {
@@ -157,6 +161,7 @@ function stateOf(document: CardDocument) {
     receivedBy: document.data.receivedBy,
     result: document.data.result,
     target: document.data.target,
+    order: document.data.order,
     status: document.data.status,
   };
 }
@@ -463,11 +468,11 @@ export function createCardDocument(
   );
 }
 
-/** Published Cards can change destination only before reception. */
+/** Pending destination and queue position share the reception lock and ETag. */
 export function moveCardDocument(
   fs: FsAdapter,
   id: string,
-  input: { target: string | null; expectedEtag: string },
+  input: { target?: string | null; before?: string; after?: string; expectedEtag: string },
 ) {
   return withTentMutation(
     fs,
@@ -476,15 +481,53 @@ export function moveCardDocument(
       if (current.data.state !== "pending")
         cardConflict(current, "RECEPTION_CONFLICT", "Card has already been received");
       checkEtag(current, input.expectedEtag);
-      if (input.target !== null) await roleAvailable(fs, input.target);
-      if (input.target === current.data.returnTo) invalid("Card target must differ from returnTo");
+      if (documentLifecycle(current.data).status === "deprecated")
+        invalid("Cancelled Card cannot move");
+      if (input.before !== undefined && input.after !== undefined)
+        invalid("Choose before or after, not both");
+      const target = input.target === undefined ? current.data.target : (input.target ?? undefined);
+      if (target !== undefined) await roleAvailable(fs, target);
+      if (target !== undefined && target === current.data.returnTo)
+        invalid("Card target must differ from returnTo");
+      const referenceId = input.before ?? input.after;
+      if (referenceId === id) invalid("A Card cannot be its own position reference");
+      const queue = (
+        await listCardDocumentHeaders(await retainedDocumentFs(fs), { state: "pending" })
+      ).items.filter((item) => !item.diagnostic && item.target === target && item.cardId !== id);
+      const reference = referenceId === undefined ? undefined : await checkedCard(fs, referenceId);
+      if (
+        reference &&
+        (reference.current.data.state !== "pending" ||
+          reference.current.data.target !== target ||
+          documentLifecycle(reference.current.data).status === "deprecated")
+      )
+        invalid("Position reference must be pending in the destination queue");
+      let position = queue.length;
+      if (referenceId !== undefined) {
+        position = queue.findIndex((item) => item.cardId === referenceId);
+        if (position < 0) invalid("Position reference is unavailable in the destination queue");
+        if (input.after !== undefined) position++;
+      }
+      const lower = queue[position - 1]?.orderKey as string | undefined;
+      const upper = queue[position]?.orderKey as string | undefined;
+      const publishedAt = (await history.firstCommitTimes([current.path])).get(current.path)!;
+      const oldKey = cardOrderKey(id, publishedAt, current.data.order);
       const fields = { ...current.data };
-      if (input.target === null) delete fields.target;
-      else fields.target = input.target;
+      if (target === undefined) delete fields.target;
+      else fields.target = target;
+      if (
+        target !== current.data.target ||
+        (lower !== undefined && oldKey <= lower) ||
+        (upper !== undefined && oldKey >= upper)
+      ) {
+        if (!queue.length) delete fields.order;
+        else fields.order = cardOrderBetween(id, lower, upper);
+      }
       const raw =
-        current.data.target === fields.target
+        current.data.target === fields.target && current.data.order === fields.order
           ? current.raw
           : serializeFrontmatter(fields, current.body, current.keyOrder);
+      if (reference) await checkUnchanged(fs, reference.current);
       await checkUnchanged(fs, current);
       if (raw === current.raw)
         return {
@@ -492,7 +535,8 @@ export function moveCardDocument(
           path: current.path,
           etag: current.etag,
           state: current.data.state,
-          target: input.target,
+          target: target ?? null,
+          order: fields.order,
           version,
         };
       await fs.writeFile(current.path, raw);
@@ -504,7 +548,8 @@ export function moveCardDocument(
         path: current.path,
         etag: contentEtag(raw),
         state: current.data.state,
-        target: input.target,
+        target: target ?? null,
+        order: fields.order,
         version: captured.versions[0]!,
       };
     },
@@ -666,6 +711,7 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
       sources: current.data.sources,
       title: current.data.title,
       target: current.data.target,
+      order: current.data.order,
       state: current.data.state,
       receivedBy: current.data.receivedBy,
       returnTo: current.data.returnTo,
@@ -729,9 +775,10 @@ export function takeCardDocument(
         current.data.state !== "pending" &&
         current.data.receivedBy !== roleId
       )
-        throw new CardDocumentError(
+        cardConflict(
+          current,
           "RECEPTION_CONFLICT",
-          "Card reception uses a different Role context",
+          `Card was already received by ${current.data.receivedBy ?? "an ordinary session"}`,
         );
       const state = current.data.state;
       const nextState = receivingReturn ? "closed" : "consumed";
@@ -863,12 +910,14 @@ type WatchedCard = {
   state?: "returned";
   receivedBy?: string;
   result?: string;
+  fromPublic?: true;
 };
 /** Wait for published pending input or returned results; idle polls read only Git HEAD. */
 export async function watchCardDocuments(
   fs: FsAdapter,
   roleId: string,
   timeoutSeconds?: number,
+  options: { includeOpen?: boolean } = {},
 ): Promise<WatchedCard[]> {
   if (timeoutSeconds !== undefined && (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0))
     throw new Error("--timeout must be a nonnegative number of seconds");
@@ -882,29 +931,54 @@ export async function watchCardDocuments(
     if (head !== observed) {
       observed = head;
       await roleAvailable(fs, roleId);
-      const items: WatchedCard[] = [];
+      const selected: CardDocument[] = [];
       for (const [path, raw] of head ? await history.readDirectory(head, CARDS_DIR) : []) {
         const name = path.slice(CARDS_DIR.length + 1);
         const id = name.slice(0, -3);
         if (!name.endsWith(".md") || !isCardId(id)) continue;
         const card = parseCardDocument(id, raw);
         if (
-          ((card.data.state === "pending" && card.data.target === roleId) ||
+          ((card.data.state === "pending" &&
+            (card.data.target === roleId ||
+              (options.includeOpen && card.data.target === undefined))) ||
             (card.data.state === "returned" && card.data.returnTo === roleId)) &&
           documentLifecycle(card.data).status !== "deprecated"
         )
-          items.push({
-            cardId: id,
-            ...(card.data.title ? { title: card.data.title } : {}),
-            ...(card.data.state === "returned"
-              ? {
-                  state: "returned" as const,
-                  receivedBy: card.data.receivedBy,
-                  result: card.data.result,
-                }
-              : {}),
-          });
+          selected.push(card);
       }
+      const { published: times, returned: returnedTimes } = head
+        ? await history.cardQueueTimes(
+            head,
+            selected.map((card) => card.path),
+          )
+        : { published: new Map<string, string>(), returned: new Map<string, string>() };
+      const group = (card: CardDocument) =>
+        card.data.state === "returned" ? 2 : card.data.target === roleId ? 0 : 1;
+      selected.sort((a, b) => {
+        const lane = group(a) - group(b);
+        if (lane) return lane;
+        const key = (card: CardDocument) =>
+          card.data.state === "returned"
+            ? (returnedTimes.get(card.path) ?? "~")
+            : cardOrderKey(card.data.id, times.get(card.path)!, card.data.order);
+        const ak = key(a),
+          bk = key(b);
+        return ak < bk ? -1 : ak > bk ? 1 : a.data.id < b.data.id ? -1 : 1;
+      });
+      const items: WatchedCard[] = selected.map((card) => ({
+        cardId: card.data.id,
+        ...(card.data.title ? { title: card.data.title } : {}),
+        ...(card.data.state === "returned"
+          ? {
+              state: "returned" as const,
+              receivedBy: card.data.receivedBy,
+              result: card.data.result,
+            }
+          : {}),
+        ...(card.data.state === "pending" && card.data.target === undefined
+          ? { fromPublic: true as const }
+          : {}),
+      }));
       if (items.length) return items;
     }
     const remaining = deadline - performance.now();
@@ -970,6 +1044,7 @@ export async function listCardDocumentHeaders(
             title: data.title,
             state,
             target: data.target,
+            ...(data.order !== undefined ? { order: data.order } : {}),
             receivedBy: data.receivedBy,
             returnTo: data.returnTo,
             result: data.result,
@@ -996,6 +1071,8 @@ export async function listCardDocumentHeaders(
       for (const item of selected) {
         const time = times.get(item.path);
         item.publishedAt = time ?? null;
+        if (time)
+          item.orderKey = cardOrderKey(String(item.cardId), time, item.order as string | undefined);
       }
     } catch {
       for (let i = 0; i < items.length; i++) {
@@ -1016,6 +1093,14 @@ export async function listCardDocumentHeaders(
     return item.publishedAt !== null;
   });
   visible.sort((a, b) => {
+    if (options.state === "pending" && !a.diagnostic && !b.diagnostic) {
+      const queue = (item: Record<string, unknown>) =>
+        item.target === options.roleId ? "" : String(item.target ?? "~");
+      const aq = queue(a),
+        bq = queue(b);
+      if (aq !== bq) return aq < bq ? -1 : 1;
+      if (a.orderKey !== b.orderKey) return String(a.orderKey) < String(b.orderKey) ? -1 : 1;
+    }
     const aTime = String(a.publishedAt ?? ""),
       bTime = String(b.publishedAt ?? "");
     if (aTime !== bTime) return aTime > bTime ? -1 : 1;

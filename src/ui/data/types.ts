@@ -105,6 +105,9 @@ export type SnapshotCard = {
   path: string;
   history: string[];
   publishedAt: string | null;
+  /** Core's lexicographic pending-queue key, including the publication/id default. */
+  orderKey?: string;
+  order?: string;
   updatedAt: string | null;
 };
 

@@ -1372,6 +1372,26 @@ export class GitDocumentHistory {
     return times;
   }
 
+  /** Watch reads one exact HEAD without creating or refreshing any disk cache. */
+  async cardQueueTimes(head: string, files: readonly string[]) {
+    const selected = new Set(files.map(documentPath));
+    const published = new Map<string, string>();
+    const returned = new Map<string, string>();
+    if (!selected.size) return { published, returned };
+    oid(head);
+    const records = (await this.cachedSnapshot(head))?.records ?? (await this.historyRecords(head));
+    for (const record of records)
+      for (const file of record.files)
+        if (selected.has(file.path) && file.status === "A" && !published.has(file.path))
+          published.set(file.path, record.time);
+    for (const record of this.firstParentRecords({ head, records }))
+      if (/^Tent-Operation: card\.return$/m.test(record.message))
+        for (const file of record.files)
+          if (selected.has(file.path) && file.afterBlob && !returned.has(file.path))
+            returned.set(file.path, record.time);
+    return { published, returned };
+  }
+
   /** Publication and current retained state are derived from this path's reachable history. */
   async pathVersions(file: string): Promise<{ first?: DocumentVersion; latest?: DocumentVersion }> {
     documentPath(file);

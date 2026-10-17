@@ -53,7 +53,7 @@ export async function runCardCommand(
         : sub === "return"
           ? ["role", "result"]
           : sub === "move"
-            ? ["to", "base-etag"]
+            ? ["to", "base-etag", "before", "after"]
             : sub === "deprecate"
               ? ["base-etag"]
               : sub === "list"
@@ -78,6 +78,7 @@ export async function runCardCommand(
             }
           : {}),
         ...(sub === "move" ? { public: { type: "boolean" } as const } : {}),
+        ...(sub === "watch" ? { "include-open": { type: "boolean" } as const } : {}),
       },
     });
     const value = (key: string) => (values as Record<string, unknown>)[key] as string | undefined;
@@ -116,9 +117,14 @@ export async function runCardCommand(
       throw new Error(`${sub} requires --base-etag from a raw read`);
     if (
       sub === "move" &&
-      (!value("base-etag") || (value("to") !== undefined) === (values.public === true))
+      (!value("base-etag") ||
+        (value("to") !== undefined && values.public === true) ||
+        (value("before") !== undefined && value("after") !== undefined) ||
+        ![value("to"), values.public, value("before"), value("after")].some(Boolean))
     )
-      throw new Error("Move requires --base-etag and exactly one of --to role-ID or --public");
+      throw new Error(
+        "Move requires --base-etag and a destination (--to role-ID or --public), a position (--before or --after card-ID), or both",
+      );
     const { systemRoot, workspaceRoot } = await resolveWorkspacePaths({
       cwd: globals.cwd,
       workspace: value("workspace") ?? globals.workspace,
@@ -129,12 +135,14 @@ export async function runCardCommand(
     let result: unknown;
     let warnings: string[] = [];
     if (sub === "watch") {
-      const items = (await watchCardDocuments(fs, value("role")!, number("timeout"))).map(
-        (item) => ({
-          ...item,
-          take: `tent card take ${item.cardId} --role ${value("role")!}`,
-        }),
-      );
+      const items = (
+        await watchCardDocuments(fs, value("role")!, number("timeout"), {
+          includeOpen: values["include-open"] === true,
+        })
+      ).map((item) => ({
+        ...item,
+        take: `tent card take ${item.cardId} --role ${value("role")!}`,
+      }));
       return {
         exitCode: items.length ? 0 : 2,
         stdout: !items.length
@@ -145,7 +153,12 @@ export async function runCardCommand(
                   .map((item) =>
                     item.state === "returned"
                       ? `${item.cardId} returned by ${item.receivedBy}: ${item.result}`
-                      : [item.cardId, item.title?.replace(/\s+/g, " "), item.take]
+                      : [
+                          item.cardId,
+                          item.fromPublic ? "[public]" : undefined,
+                          item.title?.replace(/\s+/g, " "),
+                          item.take,
+                        ]
                           .filter(Boolean)
                           .join("  "),
                   )
@@ -192,7 +205,9 @@ export async function runCardCommand(
     else if (sub === "deprecate") result = await deprecateCardDocument(fs, id, value("base-etag")!);
     else if (sub === "move")
       result = await moveCardDocument(fs, id, {
-        target: values.public === true ? null : value("to")!,
+        target: values.public === true ? null : value("to"),
+        before: value("before"),
+        after: value("after"),
         expectedEtag: value("base-etag")!,
       });
     else if (sub === "list")
@@ -272,13 +287,13 @@ export function cardHelpText(_sub?: string) {
   tent card list [--role role-ID --include-open] [--state pending|consumed|returned|closed] [--include-deprecated]
                  [--start N --expected-revision HASH] [--limit N]
   tent card show card-ID [--view body|raw] [--start N --end N --expected-etag HASH]
-  tent card move card-ID (--to role-ID | --public) --base-etag HASH
+  tent card move card-ID [--to role-ID | --public] [--before card-ID | --after card-ID] --base-etag HASH
   tent card deprecate card-ID --base-etag HASH
   tent card take card-ID [--role role-ID]
   tent card return card-ID --role role-ID --result TEXT
-  tent card watch --role role-ID [--timeout SECONDS]
+  tent card watch --role role-ID [--include-open] [--timeout SECONDS]
 All commands accept --workspace PATH and --json. CLI output is paged; Core returns complete data.
-list prints newest first; --start N continues the same page set under --expected-revision.
+list prints newest first, except --state pending, which prints queue order; --start N continues the same page set under --expected-revision.
 Sources keep their order. Selected Node/Role sources retain commit/path; external sources are addresses only.
 --source file paths use the Workspace root: docs/req.md, ./docs/req.md and /docs/req.md name the same file.
 End a directory source with /, for example src/; its nonignored files form the material.
@@ -288,11 +303,14 @@ A ./, / or .tent/ source that names no existing file, directory, Node or Role pr
 Show is a preview; take records reception and returns an input page. A replay is not a new execution.
 Use page.next for long input. Put requirements in Nodes; a Card briefly points to them. Update Nodes when requirements change.
 Targeted Cards require their Role; untargeted Cards without returnTo can be received without one.
-Watch reads committed pending Cards addressed to that Role and returned Cards whose returnTo names it, writes no files, and exits when input exists.
+Each Role has a queue of pending Cards, and so do untargeted Cards (the public area). A new Card joins the end of its queue; take Cards from the front.
+Watch reads committed pending Cards addressed to that Role in queue order, then returned Cards whose returnTo names it in return order; it writes no files and exits when input exists.
+--include-open adds public pending Cards after the Role's own, marked [public]. Public Cards wake no Role otherwise. Taking one claims it; if another Role took it first, take names that Role.
 It checks HEAD every 3 seconds; omit --timeout to wait indefinitely, or use 0 for one immediate check.
 Watch exit codes: 0 = Cards (one line per Card, or a JSON array); 2 = timeout (no output); 1 = error.
 Cards track delivery only: pending, then consumed; with returnTo, then returned and closed. Without returnTo, take completes a Card. With returnTo, the receiving Role returns one line of at most 200 characters, details in Nodes, and the returnTo Role takes the Card again to close it. An identical return or take is a replay; a different result is rejected.
-Only published pending Cards can move. Requirements awaiting a decision belong in Nodes marked status: draft.
+Only published pending Cards can move. --to or --public picks the queue; --before or --after places the Card next to another pending Card in that queue, otherwise it joins the end. A move writes only the moved Card.
+Requirements awaiting a decision belong in Nodes marked status: draft.
 Cancelled published tasks can be deprecated without changing their input or reception. Deprecated Cards are excluded from lists by default.
 `;
 }

@@ -167,7 +167,19 @@ export function makeContextBrief(
             (card.state === "consumed" && typeof card.returnTo === "string") ||
             (card.state === "returned" && (!options.roleId || card.returnTo === options.roleId))),
       )
-      .sort((a, b) => String(b.publishedAt ?? "").localeCompare(String(a.publishedAt ?? "")))
+      .sort((a, b) => {
+        if ((a.state === "pending") !== (b.state === "pending"))
+          return a.state === "pending" ? -1 : 1;
+        if (a.state === "pending" && b.state === "pending") {
+          const queue = (card: typeof a) =>
+            card.target === options.roleId ? "" : String(card.target ?? "~");
+          const aq = queue(a),
+            bq = queue(b);
+          if (aq !== bq) return aq < bq ? -1 : 1;
+          return String(a.orderKey ?? "") < String(b.orderKey ?? "") ? -1 : 1;
+        }
+        return String(b.publishedAt ?? "").localeCompare(String(a.publishedAt ?? ""));
+      })
       .map((card) => ({
         cardId: String(card.cardId),
         path: `.tent/cards/${card.cardId}.md`,

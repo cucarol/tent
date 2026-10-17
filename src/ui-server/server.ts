@@ -460,7 +460,15 @@ async function startWorkspaceServer(
             const expectedEtag = requiredString(input.baseEtag, "baseEtag");
             return moveCardDocument(fs, id, {
               expectedEtag,
-              target: input.target === null ? null : requiredString(input.target, "target"),
+              target:
+                input.target === undefined
+                  ? undefined
+                  : input.target === null
+                    ? null
+                    : requiredString(input.target, "target"),
+              before:
+                input.before === undefined ? undefined : requiredString(input.before, "before"),
+              after: input.after === undefined ? undefined : requiredString(input.after, "after"),
             });
           }),
         );
