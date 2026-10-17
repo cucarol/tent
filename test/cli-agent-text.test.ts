@@ -523,43 +523,52 @@ test("Next is directly executable by the host shell when the workspace contains 
   assert.match(stdout, /node-goal.*Goal/);
 });
 
-test("Card publication order is applied before filtering/pagination with stable equal-time ties and revision checks", async (t) => {
-  const { adapter } = await fixture(t);
-  await createRoleContext(adapter, { roleId: "role-sort", title: "Sort" });
-  for (const cardId of ["card-zold", "card-bnew", "card-anew"])
-    await createCardDocument(adapter, { cardId, prompt: cardId, target: "role-sort" });
-  const times = new Map([
-    ["cards/card-zold.md", "2026-01-01T00:00:00.000Z"],
-    ["cards/card-bnew.md", "2026-02-01T00:00:00.000Z"],
-    ["cards/card-anew.md", "2026-02-01T00:00:00.000Z"],
-  ]);
-  t.mock.method(adapter.history, "firstCommitTimes", async () => times);
-  const filter = { roleId: "role-sort", state: "pending" as const };
-  const listed = await listCardDocuments(adapter, filter);
-  assert.deepEqual(
-    listed.items.map((item) => item.cardId),
-    ["card-anew", "card-bnew", "card-zold"],
-  );
-  assert.equal((await listCardDocuments(adapter, filter)).revision, listed.revision);
-  const first = pageItems(listed, "card.list", { limit: 1 });
-  assert.equal(first.items[0]!.cardId, "card-anew");
-  const second = pageItems(await listCardDocuments(adapter, filter), "card.list", {
-    start: 1,
-    limit: 1,
-    expectedRevision: listed.revision,
+for (const state of [undefined, "pending"] as const) {
+  test(`Card ${state ?? "publication"} order is applied before filtering/pagination with stable equal-time ties and revision checks`, async (t) => {
+    const { adapter } = await fixture(t);
+    await createRoleContext(adapter, { roleId: "role-sort", title: "Sort" });
+    for (const cardId of ["card-zold", "card-bnew", "card-anew"])
+      await createCardDocument(adapter, { cardId, prompt: cardId, target: "role-sort" });
+    const times = new Map([
+      ["cards/card-zold.md", "2026-01-01T00:00:00.000Z"],
+      ["cards/card-bnew.md", "2026-02-01T00:00:00.000Z"],
+      ["cards/card-anew.md", "2026-02-01T00:00:00.000Z"],
+    ]);
+    t.mock.method(adapter.history, "firstCommitTimes", async () => times);
+    const filter = { roleId: "role-sort", state };
+    const expected =
+      state === "pending"
+        ? ["card-zold", "card-anew", "card-bnew"]
+        : ["card-anew", "card-bnew", "card-zold"];
+    const listed = await listCardDocuments(adapter, filter);
+    assert.deepEqual(
+      listed.items.map((item) => item.cardId),
+      expected,
+    );
+    assert.equal((await listCardDocuments(adapter, filter)).revision, listed.revision);
+    const first = pageItems(listed, "card.list", { limit: 1 });
+    assert.equal(first.items[0]!.cardId, expected[0]);
+    const second = pageItems(await listCardDocuments(adapter, filter), "card.list", {
+      start: 1,
+      limit: 1,
+      expectedRevision: listed.revision,
+    });
+    assert.equal(second.items[0]!.cardId, expected[1]);
+    await createCardDocument(adapter, {
+      cardId: "card-latest",
+      prompt: "Latest",
+      target: "role-sort",
+    });
+    times.set("cards/card-latest.md", "2026-03-01T00:00:00.000Z");
+    const changed = await listCardDocuments(adapter, filter);
+    assert.deepEqual(
+      changed.items.map((item) => item.cardId),
+      state === "pending" ? [...expected, "card-latest"] : ["card-latest", ...expected],
+    );
+    assert.throws(
+      () =>
+        pageItems(changed, "card.list", { start: 1, limit: 1, expectedRevision: listed.revision }),
+      /changed/i,
+    );
   });
-  assert.equal(second.items[0]!.cardId, "card-bnew");
-  await createCardDocument(adapter, {
-    cardId: "card-latest",
-    prompt: "Latest",
-    target: "role-sort",
-  });
-  times.set("cards/card-latest.md", "2026-03-01T00:00:00.000Z");
-  const changed = await listCardDocuments(adapter, filter);
-  assert.equal(changed.items[0]!.cardId, "card-latest");
-  assert.throws(
-    () =>
-      pageItems(changed, "card.list", { start: 1, limit: 1, expectedRevision: listed.revision }),
-    /changed/i,
-  );
-});
+}
