@@ -1,4 +1,5 @@
 import { inspectWorkspaceSync, readOutputComparisons } from "../core/graph/node-sync.js";
+import { readMaterialOverlaps } from "../core/read/material-overlaps.js";
 // The local service behind `tent ui`: serves the bundled Web UI and a small JSON API over Core.
 // Its contract is the Tent Node "Web界面服务接口"; it is not a public protocol.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -271,6 +272,12 @@ async function startWorkspaceServer(
       );
     }
     if (route === "GET /api/modules/deps") return json(res, 200, await dependencyQuery.read());
+    if (route === "GET /api/nodes/material-overlaps")
+      return json(
+        res,
+        200,
+        await readMaterialOverlaps(queryFs, workspaceRoot, url.searchParams.getAll("nodeId")),
+      );
     if (route === "GET /api/outputs/compare")
       return json(
         res,
