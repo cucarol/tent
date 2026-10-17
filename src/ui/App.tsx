@@ -319,7 +319,8 @@ export function App() {
 
   /**
    * Drags a pane edge. The width follows the pointer between min and max and holds there; a line keeps
-   * following, and past `fold` below min or `fill` above max it names what letting go will do.
+   * following and names what pulling on will do, and once past `fold` below min or `fill` above max it is
+   * done at once, without letting go (cuca 2026-10-17: "拖不动 然后继续拖就触发").
    */
   const dragEdge = (
     e: React.PointerEvent,
@@ -338,28 +339,41 @@ export function App() {
     if (e.button !== 0) return;
     e.preventDefault();
     const x0 = e.clientX;
-    let zone: "fold" | "fill" | null = null;
     let width = o.width;
     const move = (ev: PointerEvent) => {
       const raw = o.width + o.sign * (ev.clientX - x0);
       width = Math.round(Math.min(o.max, Math.max(o.min, raw)));
       o.onWidth?.(width);
-      zone =
+      const zone =
         o.fold && raw < o.min - o.fold.by
           ? "fold"
           : o.fill && raw > o.max + o.fill.by
             ? "fill"
             : null;
-      const label = zone === "fold" ? o.fold!.label : zone === "fill" ? o.fill!.label : null;
+      if (zone) {
+        end(zone);
+        // The press that folded or filled is not also a click on what is now under it.
+        const swallow = (c: Event) => c.stopPropagation();
+        window.addEventListener("click", swallow, { capture: true });
+        window.addEventListener(
+          "pointerup",
+          () => setTimeout(() => window.removeEventListener("click", swallow, { capture: true })),
+          { once: true },
+        );
+        return;
+      }
+      const label =
+        o.fold && raw < o.min ? o.fold.label : o.fill && raw > o.max ? o.fill.label : null;
       setEdge(raw < o.min || raw > o.max ? { x: ev.clientX, label } : null);
     };
-    const up = () => {
+    const end = (zone: "fold" | "fill" | null) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       document.body.classList.remove("is-resizing");
       setEdge(null);
       o.onDone(zone, width);
     };
+    const up = () => end(null);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     document.body.classList.add("is-resizing");
