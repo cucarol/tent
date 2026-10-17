@@ -704,6 +704,7 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .outward-how { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-3); }
 .outward-plus { flex: none; font-size: 16px; line-height: 1; color: var(--text-3); }
 .outward-card:hover .outward-plus { color: var(--text); }
+.tool.is-failed { color: var(--warn); }
 .outward-more { padding: 0 2px; font-size: 12px; color: var(--text-3); }
 /* What a region's cards give together: a strip at its foot, opened for every fact above it. */
 .react-at { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }

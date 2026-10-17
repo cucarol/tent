@@ -92,6 +92,7 @@ import {
   type InkSet,
   type Pt,
   type Sizes,
+  aabb,
 } from "./drawings.js";
 import { useCanvas, type Picks } from "./useCanvas.js";
 import {
@@ -114,6 +115,7 @@ import {
   type RegionLineKind,
 } from "./regions.js";
 import { Outward } from "./Outward.js";
+import { pictureName, pictureOf, saveFile, type Crop } from "./picture.js";
 import {
   comparisonsFor,
   outputsToCompare,
@@ -1298,6 +1300,8 @@ function MapContent({
   // One layer out: cards on the map, in no region, that Tent relates directly to a region's cards.
   const [outward, setOutward] = useState<string | null>(null);
   const closeOutward = useCallback(() => setOutward(null), []);
+  const [picturing, setPicturing] = useState(false);
+  const [pictureFailed, setPictureFailed] = useState(false);
   const reach = useMemo(() => {
     const free = [...base.placed.keys()].filter(
       (id) => graph.nodes.has(id) && visible(id) && !regionOfCard.has(id),
@@ -2179,6 +2183,46 @@ function MapContent({
     null;
   const regionEl = (id: string) =>
     box.current?.querySelector<HTMLElement>(`.map-region[data-region="${CSS.escape(id)}"]`) ?? null;
+  /**
+   * The map as it looks, saved as a PNG: the view as it stands, or with cards or drawings picked, the
+   * view fitted round them and cut to them, then put back.
+   */
+  const exportPicture = async () => {
+    const el = box.current;
+    if (!el || picturing) return;
+    setPicturing(true);
+    setPictureFailed(false);
+    const boxes = [
+      ...[...picked].flatMap((id) => {
+        const p = view.placed.get(id);
+        return p ? [rectOf(p)] : [];
+      }),
+      ...drawn.filter((d) => inkPicked.has(d.id)).map((d) => aabb(d, inkSizes)),
+    ];
+    const keep = flow.getViewport();
+    try {
+      let crop: Crop | undefined;
+      if (boxes.length) {
+        const x0 = Math.min(...boxes.map((b) => b.x)),
+          y0 = Math.min(...boxes.map((b) => b.y)),
+          x1 = Math.max(...boxes.map((b) => b.x + b.w)),
+          y1 = Math.max(...boxes.map((b) => b.y + b.h));
+        await flow.fitBounds({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, { padding: 0.15 });
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const at = el.getBoundingClientRect();
+        const a = flow.flowToScreenPosition({ x: x0, y: y0 }),
+          b = flow.flowToScreenPosition({ x: x1, y: y1 });
+        crop = { x: a.x - at.x - 24, y: a.y - at.y - 24, w: b.x - a.x + 48, h: b.y - a.y + 48 };
+      }
+      saveFile(await pictureOf(el, crop), pictureName(graph.snapshot.workspace.name));
+    } catch {
+      setPictureFailed(true);
+      setTimeout(() => setPictureFailed(false), 4000);
+    } finally {
+      if (boxes.length) void flow.setViewport(keep);
+      setPicturing(false);
+    }
+  };
   /** The region under a map point: the last drawn wins where regions overlap. */
   const regionAt = (x: number, y: number) =>
     regionsShown
@@ -2850,6 +2894,17 @@ function MapContent({
           <Icon name="fit" size={15} />
         </button>
         <span className="tool-sep" />
+        <button
+          type="button"
+          className={`tool sq${pictureFailed ? " is-failed" : ""}`}
+          aria-busy={picturing}
+          disabled={picturing}
+          onClick={() => void exportPicture()}
+          aria-label={t.map.picture}
+          data-tip={pictureFailed ? t.map.pictureFailed : t.map.pictureTip}
+        >
+          <Icon name="download" size={15} />
+        </button>
         <button
           type="button"
           className="tool sq"

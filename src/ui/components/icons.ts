@@ -107,5 +107,7 @@ export const ICON_SVG = {
   backward: '<path d="M12 5v13"/><path d="m7 13 5 5 5-5"/>',
   toBack: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/>',
+  download:
+    '<path d="M12 15V3"/><path d="m7 10 5 5 5-5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
 } as const;
 export type IconName = keyof typeof ICON_SVG;

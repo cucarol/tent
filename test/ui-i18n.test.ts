@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setLang, t } from "../src/ui/i18n.js";
 import { ago, pathTail } from "../src/ui/util.js";
+import { readFileSync } from "node:fs";
 
 const now = Date.parse("2026-09-29T12:00:00Z");
 
@@ -112,4 +113,13 @@ test("behind and ahead reasons read by kind, not as file names", () => {
     "Ahead since 3 hours ago: it has outputs, but none was confirmed against it as it is now",
   );
   setLang("zh", false);
+});
+
+test("the page never says module or brief; it names Nodes with code directories and the opening summary", () => {
+  // Words the Agent side uses stay there (node-pa94c6, high goal 2). Comments are not page text.
+  const said = readFileSync(new URL("../src/ui/i18n.ts", import.meta.url), "utf8")
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join("\n");
+  assert.doesNotMatch(said, /模块|brief|\bmodules?\b/i);
 });
