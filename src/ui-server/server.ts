@@ -1,4 +1,5 @@
 import { inspectWorkspaceSync, readOutputComparisons } from "../core/graph/node-sync.js";
+import { readNodeTimes } from "../core/read/node-times.js";
 import { readMaterialOverlaps } from "../core/read/material-overlaps.js";
 // The local service behind `tent ui`: serves the bundled Web UI and a small JSON API over Core.
 // Its contract is the Tent Node "Web界面服务接口"; it is not a public protocol.
@@ -284,6 +285,8 @@ async function startWorkspaceServer(
         200,
         await readOutputComparisons(queryFs, url.searchParams.getAll("nodeId")),
       );
+    if (route === "GET /api/nodes/times")
+      return json(res, 200, await readNodeTimes(queryFs, url.searchParams.getAll("nodeId")));
     if (route === "GET /api/sync") {
       // The initial UI read runs beside the snapshot; keep its starting document revision.
       const revision = await readWorkspaceRevision(queryFs);

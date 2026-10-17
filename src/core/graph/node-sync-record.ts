@@ -82,7 +82,7 @@ export function nodeSemanticFingerprint(
   data: Record<string, unknown>,
   body: string,
   documentPath = "",
-  nodes?: Map<string, CatalogNode>,
+  nodes?: ReadonlyMap<string, Pick<CatalogNode, "nodeId" | "path">>,
   workspaceRoot?: string,
 ): string {
   return createHash("sha256")
@@ -95,7 +95,7 @@ export function nodeSemanticContent(
   data: Record<string, unknown>,
   body: string,
   documentPath = "",
-  nodes?: Map<string, CatalogNode>,
+  nodes?: ReadonlyMap<string, Pick<CatalogNode, "nodeId" | "path">>,
   workspaceRoot?: string,
 ): string {
   const canonicalAddress = (resource: string) => {
