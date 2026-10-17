@@ -18,6 +18,7 @@ export async function buildUi(buildRoot = root, { watch = false, outputDir } = {
   await fs.rm(out, { recursive: true, force: true });
   await fs.mkdir(out, { recursive: true });
   await fs.copyFile(path.join(root, "src/ui/index.html"), path.join(out, "index.html"));
+  await fs.copyFile(path.join(root, "src/ui/theme.js"), path.join(out, "theme.js"));
   await fs.copyFile(
     path.join(root, "assets/icons/tent-mark-transparent-flat.svg"),
     path.join(out, "favicon.svg"),

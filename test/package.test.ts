@@ -239,7 +239,14 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
   const packageInfo = JSON.parse(packed.stdout)[0];
   const packedPaths = packageInfo.files.map((entry: { path: string }) => entry.path);
   assert.ok(packedPaths.includes("cli.mjs"));
-  for (const file of ["index.html", "app.js", "app.css", "favicon.svg", "THIRD_PARTY_NOTICES.txt"])
+  for (const file of [
+    "index.html",
+    "theme.js",
+    "app.js",
+    "app.css",
+    "favicon.svg",
+    "THIRD_PARTY_NOTICES.txt",
+  ])
     assert.ok(packedPaths.includes(`ui-dist/${file}`), `UI asset is packed: ${file}`);
   assert.equal(
     packedPaths.some((file: string) => file.startsWith("ui-dist/fonts/")),

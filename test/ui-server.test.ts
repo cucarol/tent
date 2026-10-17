@@ -1363,3 +1363,13 @@ test("the page deletes a Role only once no pending Card waits for it", async (t)
     404,
   );
 });
+
+test("the page carries no inline script, which its policy would block", async () => {
+  const html = await fs.readFile(path.resolve("src/ui/index.html"), "utf8");
+  const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)];
+  assert.ok(scripts.length > 0);
+  for (const [, attrs, body] of scripts) {
+    assert.match(attrs!, /\bsrc="\/[^"]+"/);
+    assert.equal(body!.trim(), "");
+  }
+});
