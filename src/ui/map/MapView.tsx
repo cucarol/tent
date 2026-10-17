@@ -9,7 +9,9 @@ import {
   useMemo,
   useRef,
   useState,
+  cloneElement,
   type CSSProperties,
+  type ReactElement,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -58,22 +60,45 @@ import { fitZoom, watchSpace } from "./pointer.js";
 import { routeLinks, type Route } from "./route.js";
 import { Timeline } from "./Timeline.js";
 import {
+  INK_STYLE,
+  INK_TOOLS,
   InkEditor,
   InkLayer,
   InkPad,
+  InkStylePanel,
   InkTools,
+  NO_HINTS,
+  loosen,
+  type InkAct,
+  type InkHints,
+  type InkStyle,
   type InkTool,
-  type Moving,
   type Writing,
 } from "./Ink.js";
-import { newId, withNote, type Pt } from "./drawings.js";
-import { useCanvas } from "./useCanvas.js";
+import {
+  anchorsOf,
+  copiesOf,
+  inkChanges,
+  moveBy,
+  newId,
+  restack,
+  restyle,
+  settle,
+  topLayer,
+  withChanges,
+  withWords,
+  type Anchor,
+  type Ink,
+  type InkSet,
+  type Pt,
+  type Sizes,
+} from "./drawings.js";
+import { useCanvas, type Picks } from "./useCanvas.js";
 import {
   boxRect,
   cornerOf,
   fitBox,
   heldBy,
-  inside,
   membersOf,
   newRegionId,
   placeCards,
@@ -493,7 +518,6 @@ function RegionLayer({
   regions,
   members,
   related,
-  draft,
   editing,
   onEdit,
   onName,
@@ -503,7 +527,6 @@ function RegionLayer({
   members: Map<string, string[]>;
   /** Regions with at least one line between their cards. */
   related: ReadonlySet<string>;
-  draft: Region["box"] | null;
   editing: string | null;
   onEdit: (id: string | null) => void;
   onName: (id: string, name: string) => void;
@@ -571,12 +594,6 @@ function RegionLayer({
           </div>
         );
       })}
-      {draft && (
-        <div
-          className="map-region is-draft"
-          style={{ left: draft[0], top: draft[1], width: draft[2], height: draft[3] }}
-        />
-      )}
     </div>,
     host,
   );
@@ -773,6 +790,7 @@ function FlagCounts({
 
 const nodeTypes = { node: NodeCard, label: LensLabel, ghost: GhostCard };
 const edgeTypes = { link: LinkEdge, region: RegionEdge };
+const NOTHING: ReadonlySet<string> = new Set();
 const KEYS: Record<string, [number, number]> = {
   ArrowLeft: [-1, 0],
   ArrowRight: [1, 0],
@@ -955,61 +973,38 @@ function MapContent({
   );
   const ink = canvas;
   const [inkTool, setInkTool] = useState<InkTool | null>(null);
-  const [inkPicked, setInkPicked] = useState<string | null>(null);
-  const [inkMoving, setInkMoving] = useState<Moving | null>(null);
-  const [inkDraft, setInkDraft] = useState<Pt[] | null>(null);
+  const [inkLocked, setInkLocked] = useState(false);
+  const [inkPicked, setInkPicked] = useState<ReadonlySet<string>>(() => new Set());
+  // The drawings as a gesture would leave them, while it is on.
+  const [inkPreview, setInkPreview] = useState<Ink[] | null>(null);
+  const [inkHints, setInkHints] = useState<InkHints>(NO_HINTS);
   const [inkWriting, setInkWriting] = useState<Writing | null>(null);
+  const [inkStyle, setInkStyle] = useState<InkStyle>(INK_STYLE);
+  const [inkSizes, setInkSizes] = useState<Sizes>(() => new Map());
+  const inkClip = useRef<Ink[]>([]);
   const inkShown = !lensId && time === null;
   const inking = inkTool !== null && inkShown;
   useEffect(() => {
     if (inkTool) setPeek(null);
     else {
-      // Leaving mid-stroke or mid-drag drops it: nothing half drawn stays on the map.
-      setInkPicked(null);
+      // Leaving mid-gesture drops it: nothing half drawn stays on the map.
+      setInkPicked(new Set());
       setInkWriting(null);
-      setInkDraft(null);
-      setInkMoving(null);
+      setInkPreview(null);
+      setInkHints(NO_HINTS);
     }
   }, [inkTool]);
-  // Picking belongs to select: the pen and text start with nothing picked, so Esc leaves at once.
+  // Picking belongs to select: the other tools start with nothing picked.
   useEffect(() => {
-    if (inkTool !== "select") setInkPicked(null);
+    if (inkTool && inkTool !== "select") setInkPicked(new Set());
   }, [inkTool]);
-  // A picked drawing undone away is no longer picked.
+  // Drawings undone away are no longer picked.
   useEffect(() => {
-    if (inkPicked && !ink.ink.some((d) => d.id === inkPicked)) setInkPicked(null);
-  }, [ink.ink, inkPicked]);
-  // A note closes into the drawings as they are then, which may have changed while it was open.
-  const writeNote = (w: Writing, text: string | null) => {
-    setInkWriting((open) => (open === w ? null : open));
-    ink.commit((all) => withNote(all, { at: w.at, id: w.note?.id }, text, () => newId("text")));
-  };
-  useEffect(() => {
-    if (!inking || !keys) return;
-    const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement;
-      if (/INPUT|TEXTAREA|SELECT/.test(el.tagName) || el.isContentEditable) return;
-      const key = e.key.toLowerCase();
-      const mod = e.ctrlKey || e.metaKey;
-      if (e.key === "Escape") {
-        if (inkPicked) setInkPicked(null);
-        else setInkTool(null);
-      } else if (mod && key === "z") (e.shiftKey ? ink.redo : ink.undo)();
-      else if (mod && key === "y") ink.redo();
-      else if (mod || e.altKey) return;
-      else if ((e.key === "Delete" || e.key === "Backspace") && inkPicked) {
-        ink.commit(ink.ink.filter((d) => d.id !== inkPicked));
-        setInkPicked(null);
-      } else if (key === "v" || key === "p" || key === "t" || key === "g")
-        setInkTool(key === "v" ? "select" : key === "p" ? "pen" : key === "t" ? "text" : "region");
-      else return;
-      // Capture on the window runs before the page's own keys, which then never see these.
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [inking, keys, inkPicked, ink]);
+    const ids = new Set(ink.ink.map((d) => d.id));
+    setInkPicked((p) =>
+      [...p].every((id) => ids.has(id)) ? p : new Set([...p].filter((id) => ids.has(id))),
+    );
+  }, [ink.ink]);
   useEffect(() => {
     if (selected?.kind !== "node") setLens(false);
   }, [selected?.kind]);
@@ -1051,10 +1046,165 @@ function MapContent({
   );
   const base = useMemo(() => placeCards(tree, canvas.positions), [tree, canvas.positions]);
 
+  // Node cards a drawn line can hold on to, where they stand. It holds only for the look.
+  const cardAnchors = useMemo<Anchor[]>(
+    () =>
+      inkShown
+        ? [...base.placed.values()]
+            .filter((p) => visible(p.id) && exists(p.id))
+            .map((p) => ({ id: p.id, box: rectOf(p), shape: "rect" as const }))
+        : [],
+    [inkShown, base, visible, exists],
+  );
+  const drawn = useMemo(
+    () => settle(ink.ink, anchorsOf(ink.ink, cardAnchors)),
+    [ink.ink, cardAnchors],
+  );
+  const inkLive = useRef({ settled: drawn, inkPicked, undo: () => {}, redo: () => {} });
+  inkLive.current = { settled: drawn, inkPicked, undo: () => undo(), redo: () => redo() };
+  /** A change worked out on the drawings as shown, laid over them as they are when it lands. */
+  const inkChange = (next: Ink[], picks?: Picks) => {
+    const changes = inkChanges(inkLive.current.settled, next);
+    if (changes.size) ink.commit((all) => withChanges(all, changes), picks);
+  };
+  // Undo and redo pick again what was picked on the side they step to.
+  const undo = () => {
+    const back = canvas.undo();
+    if (back && inking) setInkPicked(new Set(back));
+  };
+  const redo = () => {
+    const back = canvas.redo();
+    if (back && inking) setInkPicked(new Set(back));
+  };
+  // A line end held by a card keeps where it last met it, so it stays there when the card is hidden.
+  useEffect(() => {
+    if (!ink.ready || inkPreview) return;
+    const met = inkChanges(ink.ink, drawn);
+    if (met.size) ink.keep(met);
+  }, [drawn]);
+  const inkAct = (a: InkAct) => {
+    const { settled: all, inkPicked: picked } = inkLive.current;
+    const list = all.filter((d) => picked.has(d.id));
+    if (!list.length) return;
+    const before = [...picked];
+    if (a === "delete") {
+      inkChange(
+        all.filter((d) => !picked.has(d.id)),
+        { before, after: [] },
+      );
+      setInkPicked(new Set());
+    } else if (a === "copy") {
+      const z = topLayer(all);
+      const made = copiesOf(list, 16, (d) => newId(d.kind)).map((d, i) => ({ ...d, z: z + i }));
+      const after = made.map((d) => d.id);
+      inkChange([...all, ...made], { before, after });
+      setInkPicked(new Set(after));
+    } else inkChange(restack(all, picked, a), { before, after: before });
+  };
+  const inkSet = (change: InkSet) => {
+    if ("color" in change) setInkStyle((s) => ({ ...s, color: change.color }));
+    if ("fill" in change) setInkStyle((s) => ({ ...s, fill: change.fill }));
+    if ("dash" in change) setInkStyle((s) => ({ ...s, dash: change.dash }));
+    const { settled: all, inkPicked: picked } = inkLive.current;
+    if (picked.size)
+      inkChange(
+        all.map((d) => (picked.has(d.id) ? restyle(d, change) : d)),
+        { before: [...picked], after: [...picked] },
+      );
+  };
+  // Words close into the drawings as they are then, which may have changed while they were open.
+  const openWords = (w: Writing) => setInkWriting({ ...w, before: [...inkLive.current.inkPicked] });
+  const writeWords = (w: Writing, value: string | null) => {
+    setInkWriting((open) => (open === w ? null : open));
+    if (w.fresh && !value?.trim()) return;
+    // An emptied text goes; an emptied label leaves its shape.
+    const gone =
+      !w.fresh &&
+      value !== null &&
+      !value.trim() &&
+      inkLive.current.settled.find((d) => d.id === w.id)?.kind === "text";
+    const now = [...inkLive.current.inkPicked];
+    ink.commit((all) => withWords(w.fresh ? [...all, w.fresh] : all, w.id, value), {
+      before: w.before ?? now,
+      after: gone ? now.filter((id) => id !== w.id) : now,
+    });
+  };
+  useEffect(() => {
+    if (!inking || !keys) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (/INPUT|TEXTAREA|SELECT/.test(el.tagName) || el.isContentEditable) return;
+      const { settled: all, inkPicked: picked } = inkLive.current;
+      const list = all.filter((d) => picked.has(d.id));
+      const key = e.key.toLowerCase();
+      const mod = e.ctrlKey || e.metaKey;
+      if (e.key === "Escape") {
+        if (picked.size) setInkPicked(new Set());
+        else setInkTool(null);
+      } else if (mod && key === "z") (e.shiftKey ? inkLive.current.redo : inkLive.current.undo)();
+      else if (mod && key === "y") inkLive.current.redo();
+      else if (mod && key === "a") {
+        setInkTool("select");
+        setInkPicked(new Set(all.map((d) => d.id)));
+      } else if (mod && key === "d" && list.length) inkAct("copy");
+      else if (mod && key === "c" && list.length) inkClip.current = list;
+      else if (mod && key === "v" && inkClip.current.length) {
+        const z = topLayer(all);
+        const made = copiesOf(inkClip.current, 24, (d) => newId(d.kind)).map((d, i) => ({
+          ...d,
+          z: z + i,
+        }));
+        inkClip.current = made;
+        const after = made.map((d) => d.id);
+        inkChange([...all, ...made], { before: [...picked], after });
+        setInkTool("select");
+        setInkPicked(new Set(after));
+      } else if (mod && (e.key === "]" || e.key === "}") && list.length)
+        inkAct(e.shiftKey ? "front" : "up");
+      else if (mod && (e.key === "[" || e.key === "{") && list.length)
+        inkAct(e.shiftKey ? "back" : "down");
+      else if (mod || e.altKey) return;
+      else if ((e.key === "Delete" || e.key === "Backspace") && list.length) inkAct("delete");
+      else if (e.key === "Enter" && list.length === 1 && list[0].kind !== "pen")
+        openWords({ id: list[0].id });
+      else if (e.key.startsWith("Arrow") && list.length) {
+        const step = e.shiftKey ? 10 : 1;
+        const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0,
+          dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+        inkChange(
+          all.map((d) => (picked.has(d.id) ? loosen(moveBy(d, dx, dy), picked) : d)),
+          { before: [...picked], after: [...picked] },
+        );
+      } else if (key === "q") setInkLocked((l) => !l);
+      else if (key === "h") setInkTool("hand");
+      else {
+        const hit = INK_TOOLS.find((x) => x.key === key);
+        if (!hit) return;
+        setInkTool(hit.tool);
+      }
+      // Capture on the window runs before the page's own keys, which then never see these.
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [inking, keys, ink]);
+  // The style panel stands clear of the dock, which folds while the pen is out.
+  const [inkLeft, setInkLeft] = useState(12);
+  useLayoutEffect(() => {
+    if (!inking) return;
+    const el = box.current?.querySelector<HTMLElement>(".dock");
+    if (!el) return setInkLeft(12);
+    const put = () => setInkLeft(el.offsetLeft + el.offsetWidth + 8);
+    put();
+    const watch = new ResizeObserver(put);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [inking]);
+
   // ---------- regions ----------
   // Like drawings, regions show on the tree only. A card belongs to the region it was put in and stands in.
   const regionsShown = inkShown;
-  const [regionDraft, setRegionDraft] = useState<Region["box"] | null>(null);
   const [naming, setNaming] = useState<string | null>(null);
   const members = useMemo(
     () =>
@@ -1698,6 +1848,8 @@ function MapContent({
     openTime,
     closeTime,
     arrange,
+    undo,
+    redo,
   };
   const latest = useRef(live);
   latest.current = live;
@@ -1739,6 +1891,11 @@ function MapContent({
       const typing = /INPUT|TEXTAREA|SELECT/.test(el.tagName) || el.isContentEditable;
       // Keys belong to the map only while attention is on it.
       if (typing || !(el === document.body || el.closest(".map, .sidebar"))) return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[zy]$/i.test(e.key)) {
+        e.preventDefault();
+        (e.key.toLowerCase() === "y" || e.shiftKey ? latest.current.redo : latest.current.undo)();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "a" && !lensId) {
         e.preventDefault();
         setPicked(new Set([...view.placed.keys()].filter(visible)));
@@ -1759,7 +1916,7 @@ function MapContent({
       if (key === "-") return act(() => void flow.zoomOut({ duration: 200 }));
       if (key === "t")
         return act(() => (timeOpen ? latest.current.closeTime() : latest.current.openTime()));
-      if (key === "p") return act(() => setInkTool("pen"));
+      if (key === "p") return act(() => setInkTool("select"));
       if (key === "?") return act(() => setKeyOpen((o) => !o));
       if (key === "r" && !lensId)
         return act(() => {
@@ -2260,7 +2417,6 @@ function MapContent({
                 regions={canvas.regions}
                 members={members}
                 related={linked}
-                draft={regionDraft}
                 editing={naming}
                 onEdit={setNaming}
                 onName={(rid, name) => {
@@ -2284,11 +2440,12 @@ function MapContent({
             )}
             {inkShown && (
               <InkLayer
-                ink={ink.ink}
-                picked={inking ? inkPicked : null}
-                moving={inkMoving}
-                draft={inkDraft}
-                writing={inkWriting?.note?.id ?? null}
+                ink={inkPreview ?? drawn}
+                picked={inking ? inkPicked : NOTHING}
+                writing={inking ? (inkWriting?.id ?? null) : null}
+                hints={inkHints}
+                framed={inking && inkTool === "select"}
+                onSizes={setInkSizes}
               />
             )}
           </ReactFlow>
@@ -2298,45 +2455,53 @@ function MapContent({
       {inking && (
         <InkPad
           tool={inkTool}
-          store={ink}
+          ink={drawn}
+          anchors={cardAnchors}
+          sizes={inkSizes}
+          picked={inkPicked}
+          style={inkStyle}
           zoom={ZOOM}
           onPick={setInkPicked}
-          onMoving={setInkMoving}
-          onDraft={setInkDraft}
-          writing={!!inkWriting}
-          onWrite={setInkWriting}
-          onRegionDraft={setRegionDraft}
-          onRegion={(box) => {
-            // Cards the pen circled join it where they stand.
-            const id = newRegionId();
-            const at = boxRect({ id, name: "", box });
-            const held: Record<string, Pt> = {};
-            const rects: Rect[] = [];
-            for (const p of base.placed.values()) {
-              const r = rectOf(p);
-              if (visible(p.id) && exists(p.id) && !regionOfCard.has(p.id) && inside(at, r)) {
-                held[p.id] = cornerOf(p);
-                rects.push(r);
-              }
-            }
-            arrange({
-              positions: held,
-              regions: { [id]: { id, name: "", box: rects.length ? fitBox(box, rects) : box } },
-            });
-            setInkTool(null);
-            setNaming(id);
+          onPreview={setInkPreview}
+          onHints={setInkHints}
+          onCommit={(changes, picks) => ink.commit((all) => withChanges(all, changes), picks)}
+          onWrite={(w) => {
+            openWords(w);
+            if (inkTool === "text" && !inkLocked) setInkTool("select");
+          }}
+          onDrawn={(d) => {
+            if (inkLocked) return;
+            setInkTool("select");
+            if (d.kind !== "pen") setInkPicked(new Set([d.id]));
           }}
         />
       )}
       {inking && inkWriting && (
         <InkEditor
-          key={inkWriting.note?.id ?? inkWriting.at.join()}
-          writing={inkWriting}
-          onDone={(text) => writeNote(inkWriting, text)}
+          key={inkWriting.id}
+          d={drawn.find((d) => d.id === inkWriting.id) ?? inkWriting.fresh ?? null}
+          sizes={inkSizes}
+          onDone={(value) => writeWords(inkWriting, value)}
         />
       )}
       {inking && (
-        <InkTools tool={inkTool} store={ink} onTool={setInkTool} onDone={() => setInkTool(null)} />
+        <InkTools
+          tool={inkTool}
+          locked={inkLocked}
+          onTool={setInkTool}
+          onLock={() => setInkLocked((l) => !l)}
+          onDone={() => setInkTool(null)}
+        />
+      )}
+      {inking && !inkWriting && (
+        <InkStylePanel
+          list={drawn.filter((d) => inkPicked.has(d.id))}
+          tool={inkTool}
+          style={inkStyle}
+          left={inkLeft}
+          onSet={inkSet}
+          onAct={inkAct}
+        />
       )}
       {peek && !inking && <PeekCard graph={graph} peek={peek} flag={flags[peek.id]} />}
       <FlagCounts
@@ -2346,7 +2511,9 @@ function MapContent({
         partial={!Object.values(filters.types).every(Boolean)}
         onSelect={onSelect}
       />
-      {dock}
+      {inking && dock
+        ? cloneElement(dock as ReactElement<{ shut?: boolean }>, { shut: true })
+        : dock}
       {hotLane !== null && lit && <DeskWires lane={hotLane} ids={lit} box={box} />}
       {lensName ? (
         <div className="panel map-hint">
@@ -2465,12 +2632,35 @@ function MapContent({
           className="tool tool-ink"
           aria-pressed={inking}
           disabled={!inkShown || !ink.ready}
-          onClick={() => setInkTool((tool) => (tool ? null : "pen"))}
+          onClick={() => setInkTool((tool) => (tool ? null : "select"))}
           aria-label={t.ink.draw}
           data-tip={t.ink.drawTitle}
         >
           <Icon name="pen" size={15} />
           <span className="lbl">{t.ink.draw}</span>
+        </button>
+        <span className="tool-sep" />
+        <button
+          type="button"
+          className="tool sq"
+          disabled={!canvas.canUndo}
+          onClick={undo}
+          aria-label={t.ink.undo}
+          data-tip={t.ink.undo}
+          data-key="Ctrl Z"
+        >
+          <Icon name="undo" size={15} />
+        </button>
+        <button
+          type="button"
+          className="tool sq"
+          disabled={!canvas.canRedo}
+          onClick={redo}
+          aria-label={t.ink.redo}
+          data-tip={t.ink.redo}
+          data-key="Ctrl Shift Z"
+        >
+          <Icon name="redo" size={15} />
         </button>
         <span className="tool-sep" />
         <button

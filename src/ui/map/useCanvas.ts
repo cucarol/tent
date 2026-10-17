@@ -2,12 +2,16 @@
 // whole with its ETag. Every write takes the workspace lock and records a Tent version, so changes gather
 // and go in one write once the page has been quiet for SAVE_AFTER, or when it is hidden. A save from
 // another page meanwhile is read back and this page's unsaved changes are laid over it, entry by entry.
-// Undo and redo cover the drawings only, and live in this page.
+// Undo and redo cover everything arranged by hand here: drawings, card places and regions. They live in
+// this page, and each step turns back only the entries it changed, so what another page saved meanwhile
+// stays. A step also keeps which drawings were picked on either side of it.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, describe } from "../data/api.js";
 import {
   afterSave,
   emptyCanvas,
+  inverseOf,
+  laidOver,
   hasPending,
   noPending,
   readCanvas,
@@ -18,19 +22,25 @@ import {
 } from "./canvas.js";
 import { inkChanges, inkOf, type Ink, type Pt } from "./drawings.js";
 
+/** The drawings picked before and after a step, given back when it is undone or redone. */
+export type Picks = { before: string[]; after: string[] };
+
 export type InkStore = {
   ink: Ink[];
   /** False until the file has been read; nothing can be drawn before then. */
   ready: boolean;
   /** Replace the drawings, as one step of undo; a function gets the drawings as they are now. */
-  commit: (next: Ink[] | ((current: Ink[]) => Ink[])) => void;
-  undo: () => boolean;
-  redo: () => boolean;
-  canUndo: boolean;
-  canRedo: boolean;
+  commit: (next: Ink[] | ((current: Ink[]) => Ink[]), picks?: Picks) => void;
+  /** Keep drawings as they now show, outside undo: a held line end where its card has gone. */
+  keep: (changes: Map<string, Ink | null>) => void;
 };
 
 export type CanvasStore = InkStore & {
+  /** Each returns what was picked on the side it steps to, or null when there is nothing to step. */
+  undo: () => string[] | null;
+  redo: () => string[] | null;
+  canUndo: boolean;
+  canRedo: boolean;
   /** Each hand-placed card's top-left corner. */
   positions: Record<string, Pt>;
   regions: Region[];
@@ -71,7 +81,7 @@ export function useCanvas(
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notice = useRef(onNotice);
   notice.current = onNotice;
-  const [steps, setSteps] = useState<{ past: Ink[][]; future: Ink[][] }>({ past: [], future: [] });
+  const [steps, setSteps] = useState<{ past: Step[]; future: Step[] }>({ past: [], future: [] });
 
   const hold = useCallback((next: Held) => {
     live.current = next;
@@ -151,9 +161,16 @@ export function useCanvas(
   }, [workspace, revision, hold, schedule]);
 
   const shown = useMemo(() => withPending(state.file, state.pending), [state.file, state.pending]);
+  const shownNow = useRef(shown);
+  shownNow.current = shown;
   const ink = useMemo(() => inkOf(shown.drawings), [shown.drawings]);
   const inkNow = useRef(ink);
   inkNow.current = ink;
+  /** A change made here, kept with what turns it back. */
+  const step = useCallback((redo: Pending, picks?: Picks) => {
+    const undo = inverseOf(shownNow.current, redo);
+    setSteps((s) => ({ past: [...s.past.slice(-(DEPTH - 1)), { undo, redo, picks }], future: [] }));
+  }, []);
 
   const change = useCallback(
     (update: (p: Pending) => Pending) => {
@@ -162,55 +179,58 @@ export function useCanvas(
     },
     [hold, schedule],
   );
-  const drawTo = useCallback(
-    (next: Ink[]) =>
-      change((p) => ({
-        ...p,
-        drawings: new Map([...p.drawings, ...inkChanges(inkNow.current, next)]),
-      })),
-    [change],
-  );
-
   const commit = useCallback(
-    (next: Ink[] | ((current: Ink[]) => Ink[])) => {
+    (next: Ink[] | ((current: Ink[]) => Ink[]), picks?: Picks) => {
       if (!live.current.ready) return;
       const before = inkNow.current;
       const after = typeof next === "function" ? next(before) : next;
       if (after === before) return;
-      setSteps((s) => ({ past: [...s.past.slice(-(DEPTH - 1)), before], future: [] }));
-      drawTo(after);
+      const redo = onlyDrawings(inkChanges(before, after));
+      if (!hasPending(redo)) return;
+      step(redo, picks);
+      change((p) => laidOver(p, redo));
     },
-    [drawTo],
+    [change, step],
+  );
+  const keep = useCallback(
+    (changes: Map<string, Ink | null>) => {
+      if (live.current.ready && changes.size) change((p) => laidOver(p, onlyDrawings(changes)));
+    },
+    [change],
   );
   const undo = useCallback(() => {
-    const prev = steps.past.at(-1);
-    if (!live.current.ready || !prev) return false;
-    setSteps({ past: steps.past.slice(0, -1), future: [inkNow.current, ...steps.future] });
-    drawTo(prev);
-    return true;
-  }, [drawTo, steps]);
+    const last = steps.past.at(-1);
+    if (!live.current.ready || !last) return null;
+    setSteps({ past: steps.past.slice(0, -1), future: [last, ...steps.future] });
+    change((p) => laidOver(p, last.undo));
+    return last.picks?.before ?? [];
+  }, [change, steps]);
   const redo = useCallback(() => {
     const next = steps.future[0];
-    if (!live.current.ready || !next) return false;
-    setSteps({ past: [...steps.past, inkNow.current], future: steps.future.slice(1) });
-    drawTo(next);
-    return true;
-  }, [drawTo, steps]);
+    if (!live.current.ready || !next) return null;
+    setSteps({ past: [...steps.past, next], future: steps.future.slice(1) });
+    change((p) => laidOver(p, next.redo));
+    return next.picks?.after ?? [];
+  }, [change, steps]);
 
   const arrange = useCallback<CanvasStore["arrange"]>(
-    ({ positions = {}, regions = {} }) =>
-      change((p) => ({
-        ...p,
-        positions: new Map([...p.positions, ...Object.entries(positions)]),
-        regions: new Map([...p.regions, ...Object.entries(regions)]),
-      })),
-    [change],
+    ({ positions = {}, regions = {} }) => {
+      const redo: Pending = {
+        ...noPending(),
+        positions: new Map(Object.entries(positions)),
+        regions: new Map(Object.entries(regions)),
+      };
+      step(redo);
+      change((p) => laidOver(p, redo));
+    },
+    [change, step],
   );
 
   return {
     ink,
     ready: state.ready,
     commit,
+    keep,
     undo,
     redo,
     canUndo: steps.past.length > 0,
@@ -220,3 +240,9 @@ export function useCanvas(
     arrange,
   };
 }
+
+type Step = { undo: Pending; redo: Pending; picks?: Picks };
+const onlyDrawings = (changes: Map<string, Ink | null>): Pending => ({
+  ...noPending(),
+  drawings: changes,
+});

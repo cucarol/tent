@@ -20,7 +20,7 @@ const canvasSchema = z.strictObject({
     .refine((regions) => new Set(regions.map((region) => region.id)).size === regions.length),
   drawings: z.array(
     z
-      .looseObject({ id: z.string(), kind: z.enum(["pen", "text"]) })
+      .looseObject({ id: z.string(), kind: z.enum(["pen", "text", "shape"]) })
       .refine((drawing) => !Object.prototype.hasOwnProperty.call(drawing, "node")),
   ),
 });

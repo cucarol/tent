@@ -678,8 +678,7 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 /* Regions sit under the cards and lines; only their title takes the pointer. */
 .map-regions { position: absolute; left: 0; top: 0; z-index: -1; user-select: none; -webkit-user-select: none; }
 .map-region { position: absolute; border-radius: 22px; background: var(--region); pointer-events: none; }
-.map-region.is-into, .map-region.is-draft { outline: 1.5px dashed var(--border-strong); outline-offset: -1.5px; }
-.map-region.is-draft { background: color-mix(in srgb, var(--region) 70%, transparent); }
+.map-region.is-into { outline: 1.5px dashed var(--border-strong); outline-offset: -1.5px; }
 .map-region-head { position: absolute; inset: 0 0 auto 0; height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 22px; pointer-events: auto; cursor: grab; }
 .map.is-moving .map-region-head { cursor: grabbing; }
 .map-region-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650; color: var(--text); cursor: text; }
@@ -714,19 +713,60 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .map.is-moving .rline { opacity: 0; }
 .ink-layer { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .ink-line { fill: none; stroke: var(--text-2); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-/* A halo in the map colour keeps a note readable where it crosses a line or a card edge. */
-.ink-note { fill: var(--text-2); font-family: var(--font-sans); font-weight: 500; white-space: pre; paint-order: stroke; stroke: var(--canvas); stroke-width: 3px; stroke-linejoin: round; }
-.ink-pick { fill: none; stroke: var(--accent); stroke-width: 1.25; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
-.ink-pad { position: absolute; inset: 0; z-index: 4; touch-action: none; cursor: default; }
-.ink-pad.is-pen { cursor: crosshair; }
+.ink-fo { overflow: visible; }
+/* Written words are shown and edited with one markup and one style, so writing and reading line up. */
+.ink-text { font-family: var(--font-sans); font-weight: 500; line-height: 1.35; letter-spacing: 0; }
+.ink-text.is-note { display: inline-block; white-space: pre; }
+/* A halo in the map colour keeps a text readable where it crosses a line or a card edge. */
+.ink-layer .ink-text.is-note { text-shadow: 0 0 2px var(--canvas), 0 0 2px var(--canvas), 0 0 3px var(--canvas); }
+.ink-text.is-note.is-wrapped { display: block; width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ink-text.is-centred, .ink-text.is-line { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; white-space: pre-wrap; overflow-wrap: anywhere; text-align: center; }
+.ink-in-shape { width: 100%; }
+.ink-on-line { max-width: 160px; padding: 0 4px; border-radius: 4px; background: var(--canvas); }
+.ink-words { display: block; margin: 0; padding: 0; border: 0; border-radius: 0; font: inherit; color: inherit; line-height: inherit; letter-spacing: inherit; white-space: inherit; overflow-wrap: inherit; text-align: inherit; }
+/* The editor sizes itself on a hidden copy of its text, laid out exactly as the shown words are. */
+.ink-grow { position: relative; display: inline-block; vertical-align: top; min-width: 1em; }
+:is(.is-centred, .is-wrapped) .ink-grow { display: block; width: 100%; }
+.ink-grow::after { content: attr(data-value); display: block; visibility: hidden; white-space: inherit; overflow-wrap: inherit; }
+textarea.ink-words { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; overflow: hidden; outline: none; background: transparent; caret-color: var(--accent); }
+textarea.ink-words::placeholder { color: var(--text-3); opacity: 1; }
+.ink-editor { position: absolute; z-index: 4; left: 0; top: 0; transform-origin: 0 0; pointer-events: auto; }
+.ink-pick { fill: none; stroke: var(--accent); stroke-width: 1.25; vector-effect: non-scaling-stroke; }
+.ink-pick.is-group { stroke-dasharray: 5 4; }
+.ink-pick.is-faint { stroke-opacity: .45; }
+.ink-handle { fill: var(--bg); stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.ink-handle.is-mid { fill: var(--accent); stroke: var(--bg); }
+.ink-handle.is-bar { fill: var(--accent); stroke: none; }
+.ink-bind { fill: none; stroke: var(--accent); stroke-width: 5; stroke-opacity: .3; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.ink-guide { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.ink-marquee { fill: color-mix(in srgb, var(--accent) 8%, transparent); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.ink-pad { position: absolute; inset: 0; z-index: 4; touch-action: none; cursor: crosshair; }
+.ink-pad:is(.is-select) { cursor: default; }
 .ink-pad.is-text { cursor: text; }
+.ink-pad.is-hand { cursor: grab; }
+.ink-pad.is-eraser { cursor: cell; }
 .ink-pad.is-grabbing { cursor: grabbing; }
-.ink-editor { position: absolute; z-index: 4; margin: -3px 0 0 -5px; padding: 2px 4px; border: 1px dashed var(--accent-line); border-radius: 4px; background: color-mix(in srgb, var(--canvas) 85%, transparent); color: var(--text-2); font-family: var(--font-sans); font-weight: 500; resize: none; overflow: hidden; outline: none; pointer-events: auto; transform-origin: 0 0; }
-.ink-editor::placeholder { color: var(--text-3); }
 .inktools { left: 50%; bottom: 64px; transform: translateX(-50%); display: flex; align-items: center; gap: 2px; height: 40px; padding: 0 5px; white-space: nowrap; animation: peek-in .14s ease; }
 .inktools [data-tip]:hover::after { top: auto; bottom: calc(100% + 11px); }
-.inktools .tool[aria-pressed="true"] { background: var(--bg-emphasis); color: var(--text); }
+.inktools .tool { position: relative; }
+.inktools .tool[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .inktools .tool[aria-pressed="false"] { color: var(--text-2); }
+.tool-key { position: absolute; right: 2px; bottom: 1px; font-size: 8.5px; font-weight: 500; line-height: 1; color: var(--text-3); }
+.tool[aria-pressed="true"] .tool-key { color: var(--accent); }
+/* The style panel stands at the map's top left while the pen is out, beside the folded dock. */
+.ink-style { top: 58px; display: grid; gap: 7px; padding: 9px 10px; animation: peek-in .14s ease; }
+.ink-style-row { display: grid; grid-template-columns: 30px auto; align-items: center; gap: 6px; }
+.ink-style-label { font-size: 11.5px; color: var(--text-3); }
+.ink-style-opts { display: flex; align-items: center; gap: 3px; }
+.ink-swatch { width: 20px; height: 20px; border-radius: 6px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent); }
+.ink-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--accent); }
+.ink-swatch.is-none { background: linear-gradient(135deg, transparent 45%, var(--text-3) 46%, var(--text-3) 54%, transparent 55%), var(--bg) !important; }
+.ink-chip { display: inline-grid; place-items: center; width: 30px; height: 26px; border-radius: 7px; background: var(--bg-muted); color: var(--text-2); }
+.ink-chip:hover { color: var(--text); }
+.ink-chip[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.ink-chip svg { width: 20px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ink-style .tool.sq { width: 28px; height: 26px; background: var(--bg-muted); color: var(--text-2); }
+.ink-style .tool.sq:hover { color: var(--text); }
 .inktools-done { gap: 7px; padding: 0 6px 0 10px; }
 .tool-ink[aria-pressed="true"] { background: var(--bg-emphasis); color: var(--text); }
 .tool-ink[aria-pressed="false"]:not(:disabled) { color: var(--text-2); }

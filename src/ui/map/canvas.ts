@@ -114,6 +114,27 @@ export function afterSave(pending: Pending, sent: Pending): Pending {
   };
 }
 
+/**
+ * What turns `change` back on `file`: each entry it touches, as the file holds it now; null where the entry
+ * is not there. Entries it does not touch are left out, so turning it back keeps them as they are then.
+ */
+export function inverseOf(file: CanvasFile, change: Pending): Pending {
+  const back = noPending();
+  for (const id of change.positions.keys()) back.positions.set(id, file.positions[id] ?? null);
+  for (const id of change.regions.keys())
+    back.regions.set(id, file.regions.find((r) => r.id === id) ?? null);
+  for (const id of change.drawings.keys())
+    back.drawings.set(id, file.drawings.find((d) => d.id === id) ?? null);
+  return back;
+}
+
+/** Pending changes with `more` laid over them. */
+export const laidOver = (p: Pending, more: Pending): Pending => ({
+  positions: new Map([...p.positions, ...more.positions]),
+  regions: new Map([...p.regions, ...more.regions]),
+  drawings: new Map([...p.drawings, ...more.drawings]),
+});
+
 /** Map coordinates to a tenth of a unit: finer than any screen shows, and the file stays small. */
 const tenth = (n: number) => Math.round(n * 10) / 10;
 

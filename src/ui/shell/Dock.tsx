@@ -27,6 +27,8 @@ type Props = {
   onPin: (lane: string | null) => void;
   onOpen: (ref: SnapshotRef) => void;
   onPage: (ref: SnapshotRef) => void;
+  /** Folded for now, whatever was chosen: the map's pen is out and wants the room. */
+  shut?: boolean;
 };
 
 /**
@@ -94,7 +96,7 @@ export function Dock(props: Props) {
     .find((c) => c.id === work.openDraft);
   const writingSources = writing ? (work.draft?.input.sources.length ?? writing.sources.length) : 0;
 
-  if (folded)
+  if (folded || props.shut)
     return (
       <section className="dock is-folded panel" aria-label={t.work.title}>
         <button

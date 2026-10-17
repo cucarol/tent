@@ -58,6 +58,21 @@ test("canvas missing reads are inert; writes preserve UI fields and unavailable 
         custom: { untouched: true },
       },
       { id: "d2", kind: "text", text: "计划", at: [8, -9], color: "orange" },
+      {
+        id: "d3",
+        kind: "shape",
+        shape: "rect",
+        box: [-12, 0.5, 80, 40],
+        custom: { untouched: [true, "UI field"] },
+      },
+      {
+        id: "d4",
+        kind: "shape",
+        shape: "arrow",
+        from: [8, -9],
+        to: [32, 40],
+        color: "orange",
+      },
     ],
   };
   const first = await writeCanvasDocument(adapter, { baseEtag: null, canvas });
