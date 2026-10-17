@@ -4,7 +4,14 @@ import { createModuleDependencyQuery } from "../src/core/read/module-dependency-
 import type { ModuleDependencies } from "../src/core/graph/module-dependencies.js";
 
 function graph(head: string): ModuleDependencies {
-  return { basis: { head, dirty: true }, modules: [], edges: [], uncovered: 0, unresolved: 0 };
+  return {
+    basis: { head, dirty: true },
+    modules: [],
+    edges: [],
+    cycles: [],
+    uncovered: 0,
+    unresolved: 0,
+  };
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;

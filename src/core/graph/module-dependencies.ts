@@ -1,3 +1,4 @@
+import { dependencyCycles } from "../base/dependency-cycles.js";
 import path from "node:path";
 import type { FsAdapter } from "../store/adapter.js";
 import { ReaderError } from "./context-reader.js";
@@ -21,6 +22,7 @@ export type ModuleDependencies = {
   basis: ModuleDependencyRepository["basis"];
   modules: Array<{ nodeId: string; files: number }>;
   edges: Array<{ from: string; to: string; imports: number }>;
+  cycles: string[][];
   uncovered: number;
   unresolved: number;
 };
@@ -127,12 +129,15 @@ export async function readModuleDependencies(
       }
   }
   for (const issue of imports.issues) participation(issue.file);
+  const outgoing = new Map(modules.map(({ nodeId }) => [nodeId, new Set<string>()]));
+  for (const edge of edges.values()) outgoing.get(edge.from)!.add(edge.to);
   return {
     basis: { ...repository.basis },
     modules: modules.map(({ nodeId, files }) => ({ nodeId, files })),
     edges: [...edges.values()].sort(
       (a, b) => comparePaths(a.from, b.from) || comparePaths(a.to, b.to),
     ),
+    cycles: dependencyCycles(outgoing),
     uncovered: uncovered.size,
     unresolved,
   };

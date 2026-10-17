@@ -56,6 +56,7 @@ test("module dependencies aggregate imports in both directions without self edge
       { from: "node-a", to: "node-b", imports: 3 },
       { from: "node-b", to: "node-a", imports: 1 },
     ],
+    cycles: [["node-a", "node-b"]],
     uncovered: 0,
     unresolved: 0,
   });
@@ -78,6 +79,7 @@ test("most-specific membership preserves equal ties and counts each file once pe
     { path: "src/b-two.ts", content: "" },
     { path: "src/other.txt" },
   ]);
+  assert.deepEqual(result.cycles, [["node-a", "node-b", "node-shared"]]);
   assert.deepEqual(result.modules, [
     { nodeId: "node-a", files: 1 },
     { nodeId: "node-b", files: 2 },
@@ -103,6 +105,7 @@ test("uncovered counts unique participating files, unresolved counts local impor
     },
     { path: "src/unused.ts", content: "" },
   ]);
+  assert.deepEqual(result.cycles, []);
   assert.deepEqual(result.edges, []);
   assert.equal(result.uncovered, 1);
   assert.equal(result.unresolved, 2);
@@ -187,4 +190,36 @@ test("aliases reuse scan extraction and malformed configuration fails instead of
     read([{ path: "tsconfig.json", content: "{ broken" }, ...sources.slice(1)]),
     { code: "INVALID_INPUT" },
   );
+});
+
+test("cycles group strongly connected modules and refresh with current inputs", async (t) => {
+  const { node, read } = await fixture(t);
+  for (const name of ["f", "e", "d", "c", "b", "a", "isolated"]) await node(name, [name + "/"]);
+  const sources = [
+    { path: "a/x.ts", content: 'import "../b/x.js"; import "../d/x.js";' },
+    { path: "b/x.ts", content: 'import "../c/x.js";' },
+    { path: "c/x.ts", content: 'import "../a/x.js";' },
+    { path: "d/x.ts", content: 'import "../e/x.js";' },
+    { path: "e/x.ts", content: 'import "../d/x.js"; import "../f/x.js";' },
+    { path: "f/x.ts", content: 'import "./x.js";' },
+  ];
+  const result = await read(sources);
+  assert.deepEqual(result.cycles, [
+    ["node-a", "node-b", "node-c"],
+    ["node-d", "node-e"],
+  ]);
+  assert.deepEqual((await read([...sources].reverse())).cycles, result.cycles);
+  assert.deepEqual(
+    (
+      await read(
+        sources.map((source) => ({
+          ...source,
+          content: source.path === "c/x.ts" || source.path === "e/x.ts" ? "" : source.content,
+        })),
+      )
+    ).cycles,
+    [],
+  );
+  await node("b", ["b/"], { status: "archived" });
+  assert.deepEqual((await read(sources)).cycles, [["node-d", "node-e"]]);
 });
