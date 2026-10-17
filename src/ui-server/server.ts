@@ -55,12 +55,16 @@ export type UiServerOptions = {
   port?: number;
   /** The per-user list of opened workspaces behind the page's switcher; without it the list is empty. */
   workspacesFile?: string;
+  /** Seconds without a successful authenticated page request before closing the whole UI session. */
+  idleTimeout?: number;
 };
 export type UiServer = {
   url: string;
   port: number;
   /** The workspace's own port, when something else held it and a free one was used instead. */
   portTaken?: number;
+  /** Resolves after closure, including an automatic idle shutdown. */
+  closed: Promise<void>;
   close(): Promise<void>;
 };
 
@@ -134,6 +138,40 @@ export function workspacePort(workspaceId: string): number {
 }
 
 export async function startUiServer(options: UiServerOptions): Promise<UiServer> {
+  if (
+    options.idleTimeout !== undefined &&
+    (!Number.isSafeInteger(options.idleTimeout) ||
+      options.idleTimeout < 1 ||
+      options.idleTimeout > Math.floor(2_147_483_647 / 1000))
+  )
+    throw new Error("idleTimeout must be an integer between 1 and 2147483 seconds");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let root: UiServer | undefined;
+  let closing = false;
+  // Activity in an opened workspace renews the same session; otherwise switching
+  // away from the first workspace would close a page that is still being used.
+  const activity = () => {
+    if (!options.idleTimeout || !root || closing) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      void root!.close().catch((error) => console.error(error));
+    }, options.idleTimeout * 1000);
+  };
+  root = await startWorkspaceServer(options, activity);
+  const close = root.close;
+  root.close = () => {
+    closing = true;
+    clearTimeout(timer);
+    return close();
+  };
+  activity();
+  return root;
+}
+
+async function startWorkspaceServer(
+  options: UiServerOptions,
+  activity: () => void,
+): Promise<UiServer> {
   const workspaceRoot = path.resolve(options.workspaceRoot);
   const tentRoot = path.join(workspaceRoot, TENT_SYSTEM_DIR);
   const staticDir = path.resolve(options.staticDir);
@@ -205,6 +243,9 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       throw new HttpError(403, "FORBIDDEN_ORIGIN", "Writes must come from the Tent UI page");
     if (write && !/^application\/json\b/.test(req.headers["content-type"] ?? ""))
       throw new HttpError(415, "UNSUPPORTED_MEDIA_TYPE", "Send JSON");
+    res.once("finish", () => {
+      if (res.statusCode >= 200 && res.statusCode < 400) activity();
+    });
     const route = `${method} ${url.pathname}`;
     const nodeId = /^\/api\/nodes\/([^/]+)$/.exec(url.pathname)?.[1];
     const nodeConfirmId = /^\/api\/nodes\/([^/]+)\/confirm$/.exec(url.pathname)?.[1];
@@ -483,11 +524,14 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       return other;
     }
     // Held in the map while it starts, so a second click does not start it twice.
-    const starting = startUiServer({
-      workspaceRoot: root,
-      staticDir,
-      workspacesFile: options.workspacesFile,
-    });
+    const starting = startWorkspaceServer(
+      {
+        workspaceRoot: root,
+        staticDir,
+        workspacesFile: options.workspacesFile,
+      },
+      activity,
+    );
     serving.set(workspaceKey(root), starting);
     opened.add(starting);
     return starting.catch((error: unknown) => {
@@ -640,9 +684,14 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     return listen(server, 0);
   });
   let closing: Promise<void> | undefined;
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
   const self: UiServer = {
     url: `http://127.0.0.1:${port}/#token=${token}`,
     port,
+    closed,
     ...(portTaken === undefined ? {} : { portTaken }),
     // Once is enough: later calls wait for the same close.
     close: () =>
@@ -661,7 +710,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
           }),
         ]);
         opened.clear();
-      })()),
+      })().finally(resolveClosed)),
   };
   const registered = Promise.resolve(self);
   serving.set(key, registered);

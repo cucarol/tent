@@ -4,12 +4,13 @@ import { parseArgs } from "node:util";
 import { defaultWorkspacesFile } from "../ui-server/workspaces.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
 
-export const uiHelpText = `Usage: tent ui [--workspace <path>] [--port <number>] [--no-open]
+export const uiHelpText = `Usage: tent ui [--workspace <path>] [--port <number>] [--no-open] [--idle-timeout <seconds>]
 
 Start the local Web UI in the foreground. Ctrl+C closes its server.
   --workspace <path>   Select an existing Tent workspace.
   --port <number>      Override the workspace's default port (0 selects a free port).
   --no-open            Print the URL without opening a browser.
+  --idle-timeout <s>    Close after this many seconds without authenticated page activity.
   -h, --help           Show this help.
 `;
 
@@ -18,7 +19,8 @@ type StartUiServer = (options: {
   port?: number;
   staticDir: string;
   workspacesFile?: string;
-}) => Promise<{ url: string; portTaken?: number; close(): Promise<void> }>;
+  idleTimeout?: number;
+}) => Promise<{ url: string; portTaken?: number; closed?: Promise<void>; close(): Promise<void> }>;
 
 /** CLI composition supplies the service; workspace and document rules stay outside this entry. */
 export async function runUiCommand(
@@ -31,6 +33,7 @@ export async function runUiCommand(
       workspace: { type: "string" },
       port: { type: "string" },
       "no-open": { type: "boolean" },
+      "idle-timeout": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -44,12 +47,23 @@ export async function runUiCommand(
     (!/^\d+$/.test(values.port) || !Number.isSafeInteger(port) || port! < 0 || port! > 65535)
   )
     throw new Error("--port must be an integer between 0 and 65535");
+  const idleTimeout =
+    values["idle-timeout"] === undefined ? undefined : Number(values["idle-timeout"]);
+  if (
+    values["idle-timeout"] !== undefined &&
+    (!/^\d+$/.test(values["idle-timeout"]) ||
+      !Number.isSafeInteger(idleTimeout) ||
+      idleTimeout! < 1 ||
+      idleTimeout! > Math.floor(2_147_483_647 / 1000))
+  )
+    throw new Error("--idle-timeout must be an integer between 1 and 2147483 seconds");
   const { workspaceRoot } = await resolveWorkspacePaths({ workspace: values.workspace });
   const server = await options.startServer({
     workspaceRoot,
     port,
     staticDir: path.join(options.packageRoot, "ui-dist"),
     workspacesFile: defaultWorkspacesFile(),
+    ...(idleTimeout === undefined ? {} : { idleTimeout }),
   });
   let closing: Promise<void> | undefined;
   const close = () =>
@@ -57,8 +71,7 @@ export async function runUiCommand(
       try {
         await server.close();
       } finally {
-        process.off("SIGINT", stop);
-        process.off("SIGTERM", stop);
+        removeSignals();
       }
     })());
   const stop = () => {
@@ -69,7 +82,16 @@ export async function runUiCommand(
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
+  const removeSignals = () => {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  };
+  void server.closed?.then(removeSignals);
   process.stdout.write(`${server.url}\n`);
+  if (idleTimeout !== undefined)
+    process.stdout.write(
+      `Closes after ${idleTimeout} seconds without authenticated page activity.\n`,
+    );
   if (server.portTaken !== undefined)
     console.error(
       `Workspace port ${server.portTaken} is busy; using the URL above. Browser preferences for the usual address are unavailable on this temporary port.`,

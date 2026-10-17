@@ -14,6 +14,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: tent-plugin-release
+  cancel-in-progress: false
+
 jobs:
   verify-and-pack:
     runs-on: ubuntu-latest
@@ -84,6 +88,9 @@ jobs:
           name: release-packages
           path: release/assets/*
           if-no-files-found: error
+
+      - name: Publish the Git plugin distribution
+        run: node scripts/publish-plugin-dist.mjs release origin
 
   publish-github-release:
     needs: [verify-and-pack]

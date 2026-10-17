@@ -79,6 +79,22 @@ export async function buildPlugin(outputRoot = path.join(root, "release")) {
     const filename = path.join(output, host, catalogue);
     await fs.mkdir(path.dirname(filename), { recursive: true });
     await writeJson(filename, marketplace);
+    // Git installs enter the distribution root; ZIP/local installs keep each
+    // host's existing tent-local catalogue and ./plugins/tent address.
+    const sharedCatalogue = path.join(output, catalogue);
+    await fs.mkdir(path.dirname(sharedCatalogue), { recursive: true });
+    await writeJson(sharedCatalogue, {
+      ...marketplace,
+      name: "tent",
+      ...(host === "codex" ? { interface: { displayName: "Tent" } } : {}),
+      plugins: marketplace.plugins.map((plugin) => ({
+        ...plugin,
+        source:
+          host === "codex"
+            ? { source: "local", path: `./${host}/plugins/tent` }
+            : `./${host}/plugins/tent`,
+      })),
+    });
   }
   return output;
 }

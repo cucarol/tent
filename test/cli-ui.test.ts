@@ -24,6 +24,7 @@ test("UI command selects the workspace and package assets and closes once on Ctr
       assert.equal(options.port, 0);
       assert.equal(options.staticDir, path.join(process.cwd(), "ui-dist"));
       assert.equal(options.workspacesFile, defaultWorkspacesFile());
+      assert.equal(options.idleTimeout, undefined);
       return {
         url: "http://127.0.0.1:12345/#token=test",
         close: async () => {
@@ -48,10 +49,15 @@ test("UI rejects invalid arguments before starting a service", async () => {
   };
   for (const port of ["", "-1", "NaN", "65536", "1.5"])
     await assert.rejects(() => runUiCommand([`--port=${port}`], options), /--port must/);
+  for (const timeout of ["", "0", "-1", "NaN", "1.5", "2147484"])
+    await assert.rejects(
+      () => runUiCommand([`--idle-timeout=${timeout}`], options),
+      /--idle-timeout must/,
+    );
   await assert.rejects(() => runUiCommand(["--unknown"], options), /Unknown option/);
 });
 
-test("CLI ui dispatch starts a real loopback service for the selected workspace", async (t) => {
+test("CLI ui dispatch starts a real loopback service and exits after authenticated activity stops", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-ui-dispatch-"));
   t.after(() => fs.rm(workspace, { recursive: true, force: true }));
   await initializeFixtureWorkspace(workspace);
@@ -75,6 +81,8 @@ test("CLI ui dispatch starts a real loopback service for the selected workspace"
       "--port",
       "0",
       "--no-open",
+      "--idle-timeout",
+      "2",
     ],
     { windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env },
   );
@@ -115,4 +123,6 @@ test("CLI ui dispatch starts a real loopback service for the selected workspace"
   const remembered = await readWorkspaces(defaultWorkspacesFile(env, process.platform, userDir));
   assert.equal(remembered.length, 1);
   assert.equal(remembered[0]!.root, workspace);
+  await closed;
+  assert.equal(child.exitCode, 0);
 });

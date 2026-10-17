@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isTentWorkspacePath } from "../core/base/material-coverage.js";
 import type { WorkspaceScanRepository } from "../core/check/workspace-scan.js";
@@ -8,6 +8,31 @@ import type { WorkspaceModuleMapRepository } from "../core/check/workspace-modul
 import { selectSection } from "../core/base/markdown-section.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { readRepositorySources } from "./repository-sources.js";
+
+/** The explicit draft is a new editable file, never a replacement for live collaboration state. */
+export async function writeWorkspaceDraft(
+  workspaceRoot: string,
+  destination: string,
+  batch: unknown,
+) {
+  const filename = path.resolve(workspaceRoot, destination);
+  const parent = await realpath(path.dirname(filename));
+  const system = await realpath(path.join(workspaceRoot, ".tent"));
+  const relative = path.relative(system, parent);
+  if (
+    !relative ||
+    (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative))
+  )
+    throw new Error(
+      "Draft must be outside .tent; use a new file in the Workspace scratch directory",
+    );
+  await writeFile(
+    path.join(parent, path.basename(filename)),
+    JSON.stringify(batch, null, 2) + "\n",
+    { flag: "wx" },
+  );
+  return filename;
+}
 
 async function git(root: string, args: string[]): Promise<string> {
   const env = Object.fromEntries(

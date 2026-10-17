@@ -55,8 +55,10 @@ export const INTEGRATION_TEST_FILES = Object.freeze([
   "test/role-delete.test.ts",
   "test/root-build-canonical.test.ts",
   "test/ui-server.test.ts",
+  "test/ui-idle.test.ts",
   "test/ui-sync.test.ts",
   "test/workspace-init.test.ts",
+  "test/workspace-draft.test.ts",
 ] as const);
 
 type TestMode = "full" | "fast" | "integration";

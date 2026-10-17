@@ -128,6 +128,66 @@ test("both host packages carry the same common payload and separate native shell
   );
 });
 
+test(
+  "Git distribution has two root catalogues and publishes a single root commit without source or index changes",
+  { timeout: 60_000 },
+  async () => {
+    const { publishPluginDistribution } = await import(
+      new URL("../scripts/publish-plugin-dist.mjs", import.meta.url).href
+    );
+    const remote = path.join(fixture, "distribution-remote.git");
+    const git = async (...args: string[]) =>
+      (await run("git", args, { cwd: root, windowsHide: true })).stdout.trim();
+    await git("init", "--bare", remote);
+    const head = await git("rev-parse", "HEAD");
+    const emptyTree = await git("--git-dir", remote, "write-tree");
+    const main = await git(
+      "--git-dir",
+      remote,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit-tree",
+      emptyTree,
+      "-m",
+      "Preserve this branch",
+    );
+    await git("--git-dir", remote, "update-ref", "refs/heads/main", main);
+    const beforeIndex = await git("diff", "--cached", "--raw");
+    const published = await publishPluginDistribution(distribution, remote);
+    assert.equal(await git("--git-dir", remote, "rev-list", "--count", "plugin-dist"), "1");
+    assert.equal(await git("--git-dir", remote, "rev-parse", "main"), main);
+    assert.equal(await git("rev-parse", "HEAD"), head);
+    assert.equal(await git("diff", "--cached", "--raw"), beforeIndex);
+    const paths = (
+      await git("--git-dir", remote, "ls-tree", "-r", "--name-only", "plugin-dist")
+    ).split("\n");
+    assert.ok(paths.every((file) => /^(codex|claude-code|\.agents|\.claude-plugin)\//.test(file)));
+    for (const [host, cataloguePath] of [
+      ["codex", ".agents/plugins/marketplace.json"],
+      ["claude-code", ".claude-plugin/marketplace.json"],
+    ]) {
+      const catalogue = JSON.parse(
+        await git("--git-dir", remote, "show", `plugin-dist:${cataloguePath}`),
+      );
+      assert.equal(catalogue.name, "tent");
+      assert.deepEqual(
+        catalogue.plugins[0].source,
+        host === "codex"
+          ? { source: "local", path: "./codex/plugins/tent" }
+          : "./claude-code/plugins/tent",
+      );
+      assert.ok(paths.includes(`${host}/plugins/tent/cli.mjs`));
+    }
+    const republished = await publishPluginDistribution(distribution, remote);
+    assert.equal(republished.tree, published.tree);
+    assert.equal(await git("--git-dir", remote, "rev-list", "--count", "plugin-dist"), "1");
+    assert.equal(await git("--git-dir", remote, "rev-parse", "plugin-dist"), republished.commit);
+    assert.equal(await git("--git-dir", remote, "rev-parse", "main"), main);
+  },
+);
+
 test("Claude Code Hook commands use their own bundle even when PLUGIN_ROOT points elsewhere", async () => {
   const bundle = bundleFor("claude-code"),
     workspace = path.join(fixture, "claude user project");

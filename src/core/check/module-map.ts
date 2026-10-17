@@ -73,8 +73,9 @@ export type ModuleMapInput = {
 
 const ordered = (items: Iterable<string>) => [...new Set(items)].sort(comparePaths);
 const vendor = (file: string) => /(^|\/)(vendor|node_modules|third_party|third-party)\//.test(file);
-const production = (file: string) =>
+export const isModuleProductionSource = (file: string) =>
   isCodeSource(file) && !isTestSource(file) && !isGeneratedSource(file) && !vendor(file);
+const production = isModuleProductionSource;
 const barrel = (file: string) => /(^|\/)index\.[^/]+$/.test(file);
 
 const comparable = (file: string) => (process.platform === "win32" ? file.toLowerCase() : file);
@@ -97,6 +98,9 @@ function matches(material: ModuleMapMaterial, file: string): boolean {
 
 export const isModuleMapNode = (node: ModuleMapNode) =>
   node.materials.some((material) => material.track === "structure" && material.kind !== "file");
+
+export const formatModuleImportIssues = (count: number) =>
+  `imports ${count} references Tent could not resolve; they describe the code, not the map (importIssues in --json)`;
 
 export const allowsModuleMapRule = (body: string, code: ModuleMapCode) =>
   new RegExp(`(?<![\\w:.-])allow:${code.replaceAll(".", "\\.")}(?![\\w.-])`).test(body);

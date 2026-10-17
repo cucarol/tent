@@ -11,8 +11,7 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows.
 | --- | --- | --- |
 | Pick the Workspace | The folder the user names, else the project root; reuse an existing `.tent/` | — |
 | Create the Tent | `tent new <root>` | `Created Tent` line |
-| Verify | `tent node list --workspace <root>` | `(empty)` |
 | Enable Hooks | Follow [Hooks](references/host-hooks.md) | `/hooks` |
-| The project has code | [Map its modules](references/modules.md) | module tree |
+| The project has code | [Map its modules](references/modules.md) | the map at the `tent ui` address |
 
 Otherwise a new Tent starts with no Nodes; add them with tent-node as work produces facts.

@@ -17,6 +17,8 @@ npm run plugin:build
 
 ```text
 release/
+  .agents/plugins/marketplace.json       # Git 分发：./codex/plugins/tent
+  .claude-plugin/marketplace.json        # Git 分发：./claude-code/plugins/tent
   codex/
     .agents/plugins/marketplace.json
     plugins/tent/
@@ -59,6 +61,20 @@ claude plugin install tent@tent-local
 
 两套 marketplace 的本地来源都相对各自根目录指向 `./plugins/tent`。清单分别是 `.codex-plugin/plugin.json` 和 `.claude-plugin/plugin.json`；Hook 定义都在包内的 `hooks/hooks.json`。Codex 使用 `PLUGIN_ROOT`，Claude Code 使用 `CLAUDE_PLUGIN_ROOT` 找到自己的启动脚本，各脚本固定传入自己的宿主名。结构与安装格式依据 [OpenAI 插件打包文档](https://developers.openai.com/plugins/build/plugins)和 [Claude Code marketplace 文档](https://code.claude.com/docs/en/plugin-marketplaces)；Claude Code 壳使用其[插件清单](https://code.claude.com/docs/en/plugins-reference)与 [Hook](https://code.claude.com/docs/en/hooks)标准目录。
 
+发布工作流在门禁和打包成功后，将完整双宿主分发发布到 `plugin-dist` 分支。该分支每次替换为一个没有父提交的新提交，只含分发根的两份 `tent` catalogue 与 `codex/`、`claude-code/`；不继承源码历史、不夹带 Release 附件，也不改源码检出和索引。两份根 catalogue 分别指向各自宿主目录。zip 仍附在版本 Release 上，解压后沿用上面的 `tent-local` 安装方式。
+
+`plugin-dist` 首次发布后，可直接从 Git 安装，省去手动下载 zip。支持这些命令的宿主版本中，分别运行以下单行命令（Bash 或 PowerShell 7）：
+
+```sh
+codex plugin marketplace add cucarol/tent --ref plugin-dist && codex plugin add tent@tent
+```
+
+```sh
+claude plugin install tent --marketplace "https://github.com/cucarol/tent.git#plugin-dist"
+```
+
+Codex 的 Git ref 与 catalogue 路径遵循[官方打包文档](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli)，Claude Code 的 `#ref` 遵循[官方 Git marketplace 说明](https://code.claude.com/docs/en/plugins/host-marketplace#host-your-marketplace)。旧版 Claude Code 没有 `--marketplace` 时，先 `claude plugin marketplace add "https://github.com/cucarol/tent.git#plugin-dist"`，再 `claude plugin install tent@tent`。宿主的信任确认仍按正常流程完成。
+
 新安装或修改后的 Hook 按宿主流程启用和审查；Codex 已发布的 Hook 定义逐字节保留。安装后在实际宿主中检查发现、启用和事件投递，配置文件存在不代表已经生效。
 
 npm 包 `vibe-tent` 是单独的 CLI 包，用 `npm install -g vibe-tent` 安装后使用 `tent` 命令。它不包含完整的宿主插件安装结构。
@@ -72,7 +88,7 @@ npm 包 `vibe-tent` 是单独的 CLI 包，用 `npm install -g vibe-tent` 安装
 | 创建、读取、维护持久工作方向 | tent-role | role |
 | 记录、预览、接收一次输入     | tent-card | card |
 
-普通工作不要求创建 Role 或 Card。Role 可以独立建立；没有 Role 的 Session 也可接收无 target 的 Card，有 target 时必须指定对应 Role。初始化不分析项目或生成首批 Node；当前 Agent 在工作中按需维护相关事实，没有额外 Return。
+普通工作不要求创建 Role 或 Card。Role 可以独立建立；没有 Role 的 Session 也可接收无 target 的 Card，有 target 时必须指定对应 Role。`new` 只建立空工作区；init Skill 随后用 `workspace scan --draft <新文件>` 准备模块批量草稿，由 Agent 一轮修订名字、边界、正文和出处，再通过现有 write-many 一次写入并检查。草稿生成不创建 Node，不调用模型；已有图谱进入维护流程。草稿材料地址遵循 CLI 的工作区根目录输入规则，Node 改名或重排后仍由写入入口归一。预检问题随摘要返回，exit 1 时已经创建的草稿仍可编辑。
 
 Skill 与 references 只给 Agent 一张清单：何时行动、运行哪条命令带哪些参数、读回执的哪个字段；机制、理由和概念写在本文与 SPEC。遵循[官方 Skill 编写建议](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices)：每个 SKILL.md 正文少于 500 行；name 不超过 64 个字符，只用小写字母、数字和连字符；description 不超过 1024 个字符，用第三人称说明做什么、何时使用。reference 只从需要它的 SKILL.md 直接链接，不互相链接，也不链接本文；超过 100 行的 reference 开头提供目录。共用 Agent 文字不含宿主名。每次构建和 `test/contract-docs.test.ts` 按两个宿主分别检查这些规则，构建还检查 Hook 指向的包内文件。Skill 不要求每轮固定执行某条命令。
 
@@ -87,7 +103,7 @@ Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.ten
 
 需要画草图时，用 Excalidraw 本身保存工作区文件，再由 Node 引用该文件。
 
-包内包含 CLI 与 Web UI 静态资源。运行同包 `cli.mjs ui --workspace <工作区路径>` 可打开界面（例如 `node <插件路径>/cli.mjs ui --workspace <工作区路径>`）；`--no-open` 只打印地址。服务仅在当前终端前台运行，Ctrl+C 退出，不注册 Session。其他命令直接读写文档和 Git，无需启动 UI 服务。
+包内包含 CLI 与 Web UI 静态资源。运行同包 `cli.mjs ui --workspace <工作区路径>` 可打开界面（例如 `node <插件路径>/cli.mjs ui --workspace <工作区路径>`）；`--no-open` 只打印地址。服务仅在当前终端前台运行，Ctrl+C 退出，不注册 Session。init 使用宿主可见、可停止的后台命令并加 `--idle-timeout 300`，没有成功的已认证页面请求满 5 分钟后自动关闭；页面轮询和从本次启动打开的其他工作区共用续期，退出时关闭所有子服务并清理计时器。CLI 同时打印地址和空闲有效期。不带该参数的普通手动 UI 生命周期不变。其他命令直接读写文档和 Git，无需启动 UI 服务。
 
 ## Node 的维护者说明
 

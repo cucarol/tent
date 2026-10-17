@@ -8,10 +8,13 @@ import { resolveWorkspacePaths } from "./workspace-path.js";
 import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
 import { checkGraph } from "../core/check/graph-check.js";
 import { scanWorkspace, formatWorkspaceScan } from "../core/check/workspace-scan.js";
+import { prepareWorkspaceDraft, formatWorkspaceDraft } from "../core/check/workspace-draft.js";
+import { formatModuleImportIssues } from "../core/check/module-map.js";
 import {
   readWorkspaceScanRepository,
   readModuleMapRepository,
   scanFileKind,
+  writeWorkspaceDraft,
 } from "../fs/workspace-scan.js";
 import {
   checkWorkspaceModules,
@@ -33,7 +36,7 @@ tent workspace check [--json]
 tent workspace check-modules [--json]
 tent workspace brief [--role <roleId>] [--json]
 tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
-tent workspace scan [--json]
+tent workspace scan [--json] [--draft <new-file>]
 Accepts --workspace <root> and --json. check reports broken links, invalid material addresses, missing local files, unavailable Markdown material sections and Node documents whose disk and Tent Git presence differ (node-git-mismatch) after collecting valid native edits; invalid files remain untouched. Exit 1 means issues or inspection errors; JSON remains on stdout. check-modules checks module coverage, size, imports and cochange without collecting edits; a clean map emits no text. brief lists all invalid Nodes and pending Cards, then prioritizes ahead and changed sources; optional detail fits 4 KiB. --role filters Card inputs; Node counts remain Workspace-wide. drift reports ahead and behind Nodes. Use node confirm after reviewing a Node; Tent records hashes itself.`;
 
 export async function runWorkspaceCommand(
@@ -52,6 +55,7 @@ export async function runWorkspaceCommand(
       allowPositionals: true,
       options: {
         output: { type: "string" },
+        draft: { type: "string" },
         limit: { type: "string" },
         cursor: { type: "string" },
         role: { type: "string" },
@@ -64,6 +68,8 @@ export async function runWorkspaceCommand(
     if (values.help || positionals[0] === "help")
       return { exitCode: 0, stdout: workspaceHelpText + "\n", stderr: "" };
     if (positionals.length) throw new Error(workspaceHelpText);
+    if (values.draft !== undefined && sub !== "scan")
+      throw new Error("--draft is only valid for workspace scan");
     if (values.role !== undefined && sub !== "brief")
       throw new Error("--role is only valid for workspace brief");
     if (
@@ -103,10 +109,7 @@ export async function runWorkspaceCommand(
       );
       return {
         exitCode:
-          result.issues.length ||
-          result.inspectionErrors.length ||
-          result.importIssues.length ||
-          result.unassignedImports.length
+          result.issues.length || result.inspectionErrors.length || result.unassignedImports.length
             ? 1
             : 0,
         stdout:
@@ -120,9 +123,9 @@ export async function runWorkspaceCommand(
                 ...result.inspectionErrors.map(
                   (error) => `${error.node}: ${error.resource ?? "Node"}: ${error.reason}`,
                 ),
-                ...result.importIssues.map(
-                  (error) => `${error.file}: ${error.specifier ?? "imports"}: ${error.reason}`,
-                ),
+                ...(result.importIssues.length
+                  ? [formatModuleImportIssues(result.importIssues.length)]
+                  : []),
                 ...result.unassignedImports.map(
                   (error) => `${error.from} -> ${error.to}: ${error.reason}`,
                 ),
@@ -132,12 +135,31 @@ export async function runWorkspaceCommand(
       };
     }
     if (sub === "scan") {
-      const result = await scanWorkspace(
-        fs,
-        roots.workspaceRoot,
-        await readWorkspaceScanRepository(roots.workspaceRoot),
-        scanFileKind,
-      );
+      const draftRepository =
+        values.draft !== undefined ? await readModuleMapRepository(roots.workspaceRoot) : undefined;
+      const repository =
+        draftRepository ?? (await readWorkspaceScanRepository(roots.workspaceRoot));
+      const result = await scanWorkspace(fs, roots.workspaceRoot, repository, scanFileKind);
+      if (values.draft !== undefined) {
+        if (!values.draft.trim()) throw new Error("--draft requires a new file path");
+        const draft = await prepareWorkspaceDraft(fs, result, draftRepository?.commits ?? []);
+        const filename = await writeWorkspaceDraft(roots.workspaceRoot, values.draft, draft.batch);
+        const summary = { draft: filename, ...draft.summary };
+        return {
+          exitCode:
+            summary.issues.length ||
+            summary.inspectionErrors.length ||
+            summary.unassignedImports.length
+              ? 1
+              : 0,
+          stdout:
+            (values.json || globals.json
+              ? JSON.stringify(summary)
+              : `draft-file ${JSON.stringify(filename)}\n${formatWorkspaceDraft(draft.summary)}`) +
+            "\n",
+          stderr: "",
+        };
+      }
       return {
         exitCode: result.inspectionErrors.length ? 1 : 0,
         stdout:
