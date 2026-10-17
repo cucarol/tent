@@ -438,6 +438,7 @@ test("Received Card source inspection compares live content, follows Node identi
       { resource: "https://example.invalid/requirements" },
     ],
     target: "role-a",
+    returnTo: "role-b",
   });
   await takeCardDocument(adapter, received.cardId, "role-a");
   const pending = await createCardDocument(adapter, {
@@ -451,6 +452,7 @@ test("Received Card source inspection compares live content, follows Node identi
     prompt: "Read node",
     sources: [{ resource: "node-main" }],
     target: "role-b",
+    returnTo: "role-a",
   });
   await takeCardDocument(adapter, otherRole.cardId, "role-b");
   const cancelled = await createCardDocument(adapter, {
@@ -558,6 +560,65 @@ test("Received Card source inspection compares live content, follows Node identi
     await listCardDocuments(adapter),
   );
   assert.deepEqual(failedListed.diagnostics, failedAll.diagnostics);
+});
+
+test("completed Cards do not read source history, while invalid headers remain diagnostic", async (t) => {
+  const { adapter } = await fixture(t);
+  const plain = await createCardDocument(adapter, {
+    cardId: "card-completedplain",
+    prompt: "One-way delivery",
+    sources: [{ resource: "node-main" }],
+    target: "role-a",
+  });
+  await takeCardDocument(adapter, plain.cardId, "role-a");
+  const active = await createCardDocument(adapter, {
+    cardId: "card-activework",
+    prompt: "Return the result",
+    sources: [{ resource: "node-main" }],
+    target: "role-a",
+    returnTo: "role-b",
+  });
+  await takeCardDocument(adapter, active.cardId, "role-a");
+  await adapter.writeFile("Main/Main.md", "---\nid: node-main\ntype: prompt\n---\nChanged");
+  const originalRead = adapter.readBinary.bind(adapter);
+  const reads = t.mock.method(adapter, "readBinary", async (file: string) => {
+    assert.notEqual(file, plain.path, "completed Card body must not be loaded");
+    return originalRead(file);
+  });
+  const changes = await inspectReceivedCardSourceChanges(adapter);
+  assert.deepEqual(
+    changes.items.map((item) => item.cardId),
+    [active.cardId],
+  );
+  reads.mock.restore();
+  await returnCardDocument(adapter, active.cardId, { roleId: "role-a", result: "Done" });
+  const returned = await listCardDocuments(adapter);
+  await takeCardDocument(adapter, active.cardId, "role-b");
+  const closed = await listCardDocuments(adapter);
+  const versions = t.mock.method(adapter.history, "readVersions", async () => {
+    throw new Error("completed Cards must not read retained versions");
+  });
+  const bodies = t.mock.method(adapter, "readBinary", async () => {
+    throw new Error("completed Cards must not read document bodies");
+  });
+  for (const listed of [returned, closed])
+    assert.deepEqual(await inspectReceivedCardSourceChanges(adapter, {}, listed), {
+      items: [],
+      diagnostics: [],
+    });
+  const completed = closed.items.find((item) => item.cardId === plain.cardId)!;
+  const large = {
+    items: [
+      ...Array.from({ length: 5000 }, (_, index) => ({ ...completed, cardId: `card-old${index}` })),
+      { cardId: "card-invalid", diagnostic: "Card header unavailable; inspect raw" },
+    ],
+  };
+  assert.deepEqual(await inspectReceivedCardSourceChanges(adapter, {}, large), {
+    items: [],
+    diagnostics: [{ cardId: "card-invalid", message: "Card header unavailable; inspect raw" }],
+  });
+  assert.equal(versions.mock.callCount(), 0);
+  assert.equal(bodies.mock.callCount(), 0);
 });
 
 test("filtered Card lists skip history and keep malformed-header diagnostics", async (t) => {

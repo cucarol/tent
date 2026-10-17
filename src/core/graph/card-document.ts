@@ -1059,7 +1059,7 @@ export type ReceivedCardSourceDiagnostic = {
   message: string;
 };
 
-/** Compare pinned Node bytes with live content. Queries never capture or recover documents. */
+/** Compare in-progress Cards' pinned Node bytes with live content, without capture or recovery. */
 export async function inspectReceivedCardSourceChanges(
   fs: FsAdapter,
   options: { roleId?: string } = {},
@@ -1077,7 +1077,9 @@ export async function inspectReceivedCardSourceChanges(
       if (item.diagnostic && item.state !== "pending")
         diagnostics.push({ cardId: String(item.cardId), message: String(item.diagnostic) });
     }
-    const candidates = listed.items.filter((item) => !item.diagnostic && item.state === "consumed");
+    const candidates = listed.items.filter(
+      (item) => !item.diagnostic && item.state === "consumed" && typeof item.returnTo === "string",
+    );
     if (!candidates.length) return { items, diagnostics };
     const live = new Map<string, string | Error>();
     let nextRead = 0;
@@ -1157,7 +1159,8 @@ export async function inspectReceivedCardSourceChanges(
         validateRetainedCard(current, retainedCard(id, published), previousCard);
         if (
           documentLifecycle(current.data).status === "deprecated" ||
-          current.data.state === "pending" ||
+          current.data.state !== "consumed" ||
+          current.data.returnTo === undefined ||
           (options.roleId && current.data.receivedBy !== options.roleId)
         )
           return { selected };
