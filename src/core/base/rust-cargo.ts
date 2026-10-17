@@ -223,9 +223,11 @@ function cargoWorkspace(manifest: string, manifests: ReadonlyMap<string, Table>)
     .sort(([a], [b]) => b.length - a.length)[0];
 }
 
-function cargoDependencyTables(data: Table) {
+function cargoDependencyTables(data: Table, includeTests = false) {
   const result: Array<{ data: Table; conditional: boolean; build?: boolean }> = [];
   if (table(data.dependencies)) result.push({ data: data.dependencies, conditional: false });
+  if (includeTests && table(data["dev-dependencies"]))
+    result.push({ data: data["dev-dependencies"], conditional: false });
   if (table(data["build-dependencies"]))
     result.push({ data: data["build-dependencies"], conditional: false, build: true });
   if (table(data.target))
@@ -233,6 +235,8 @@ function cargoDependencyTables(data: Table) {
       if (table(target)) {
         if (table(target.dependencies))
           result.push({ data: target.dependencies, conditional: true });
+        if (includeTests && table(target["dev-dependencies"]))
+          result.push({ data: target["dev-dependencies"], conditional: true });
         if (table(target["build-dependencies"]))
           result.push({ data: target["build-dependencies"], conditional: true, build: true });
       }
@@ -240,7 +244,11 @@ function cargoDependencyTables(data: Table) {
 }
 
 /** Required Cargo facts for a narrow Rust observation; no unrelated package is read. */
-export function rustCargoContext(files: readonly RepositorySource[], focus: ReadonlySet<string>) {
+export function rustCargoContext(
+  files: readonly RepositorySource[],
+  focus: ReadonlySet<string>,
+  includeTests = false,
+) {
   const byPath = new Map(files.map((file) => [file.path, file]));
   const candidates = files
     .filter((file) => /(^|\/)Cargo\.toml$/.test(file.path))
@@ -291,7 +299,7 @@ export function rustCargoContext(files: readonly RepositorySource[], focus: Read
         );
       if (!packages.has(manifest)) continue;
       const workspace = cargoWorkspace(manifest, parsed);
-      for (const entry of cargoDependencyTables(data))
+      for (const entry of cargoDependencyTables(data, includeTests))
         for (const [name, raw] of Object.entries(entry.data)) {
           let dep = raw,
             base = path.posix.dirname(manifest);
@@ -312,6 +320,7 @@ export function rustCargo(
   files: readonly RepositorySource[],
   issues: RepositoryImportIssue[],
   packageManifests?: ReadonlySet<string>,
+  includeTests = false,
 ) {
   const paths = new Set(files.map((file) => file.path));
   const manifests = new Map<string, Table>();
@@ -445,6 +454,25 @@ export function rustCargo(
             });
         }
       }
+    if (includeTests) {
+      const prefix = path.posix.join(directory, "tests") + "/";
+      for (const file of paths)
+        if (
+          file.startsWith(prefix) &&
+          /^(?:[^/]+\.rs|[^/]+\/main\.rs)$/.test(file.slice(prefix.length))
+        )
+          add(file);
+      if (Array.isArray(data.test))
+        for (const target of data.test) {
+          if (!table(target)) continue;
+          if (typeof target.path === "string")
+            add(path.posix.join(directory, target.path), true, target.edition ?? edition);
+          else if (typeof target.name === "string") {
+            for (const candidate of [`tests/${target.name}.rs`, `tests/${target.name}/main.rs`])
+              add(path.posix.join(directory, candidate), false, target.edition ?? edition);
+          }
+        }
+    }
     const buildScript =
       pkg.build !== false
         ? typeof pkg.build === "string"
@@ -469,7 +497,7 @@ export function rustCargo(
   for (const crate of crates) {
     const data = manifests.get(crate.manifest)!;
     const workspace = workspaceFor(crate.manifest);
-    for (const entry of cargoDependencyTables(data))
+    for (const entry of cargoDependencyTables(data, includeTests))
       for (const [name, raw] of Object.entries(entry.data)) {
         const dependencies = entry.build ? crate.buildDependencies : crate.dependencies;
         let dep = raw,

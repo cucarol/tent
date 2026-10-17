@@ -220,20 +220,38 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 /** Pure, deterministic, local imports only; no disk, Git, model or package resolution. */
 export function extractRepositoryImports(
   input: readonly RepositorySource[],
-  options: {
-    rust?: boolean;
-    java?: boolean;
-    csharp?: boolean;
-    cfamily?: boolean;
-    php?: boolean;
-  } = {},
+  options: RepositoryImportOptions = {},
+) {
+  return extractImports(input, options, false);
+}
+
+export type RepositoryImportOptions = {
+  rust?: boolean;
+  java?: boolean;
+  csharp?: boolean;
+  cfamily?: boolean;
+  php?: boolean;
+};
+
+/** Direct test-to-production import evidence, not execution coverage or helper traversal. */
+export function extractRepositoryTestImports(
+  input: readonly RepositorySource[],
+  options: RepositoryImportOptions = {},
+) {
+  return extractImports(input, options, true);
+}
+
+function extractImports(
+  input: readonly RepositorySource[],
+  options: RepositoryImportOptions,
+  tests: boolean,
 ) {
   const files = [...input].sort((a, b) => comparePaths(a.path, b.path));
   const byPath = new Map(files.map((file) => [file.path, file]));
   const production = files.filter(
     (file) =>
       isImportSource(file.path) &&
-      !isTestSource(file.path) &&
+      (tests || !isTestSource(file.path)) &&
       (options.rust !== false || !file.path.endsWith(".rs")) &&
       (options.java !== false || !file.path.endsWith(".java")) &&
       (options.csharp !== false || !file.path.endsWith(".cs")) &&
@@ -241,9 +259,12 @@ export function extractRepositoryImports(
       (options.cfamily !== false || !isCFamilySource(file.path)),
   );
   const productionPaths = new Set(production.map((file) => file.path));
+  const importing = production.filter((file) => isTestSource(file.path) === tests);
+  const focus = (source: (file: string) => boolean) =>
+    tests ? importing.filter((file) => source(file.path)).map((file) => file.path) : undefined;
   const goPackageDirectories = new Set(
     production
-      .filter((file) => file.path.endsWith(".go"))
+      .filter((file) => file.path.endsWith(".go") && !isTestSource(file.path))
       .map((file) => path.posix.dirname(file.path)),
   );
   const issues: RepositoryImportIssue[] = [];
@@ -369,7 +390,7 @@ export function extractRepositoryImports(
       productionPaths.has(file),
     );
   };
-  for (const file of production) {
+  for (const file of importing) {
     if (file.content === undefined) continue;
     if (/\.(rs|java|cs|php)$/.test(file.path) || isCFamilySource(file.path)) continue;
     if (file.path.endsWith(".go")) {
@@ -433,37 +454,57 @@ export function extractRepositoryImports(
     }
   }
   if (options.rust !== false) {
-    const rust = extractRustImports(files.filter((file) => !isTestSource(file.path)));
+    const rust = extractRustImports(
+      files.filter((file) => tests || !isTestSource(file.path)),
+      focus((file) => file.endsWith(".rs")),
+      { includeTests: tests },
+    );
     edges.push(...rust.edges);
     issues.push(...rust.issues);
   }
   if (options.java !== false) {
-    const java = extractJavaImports(files.filter((file) => !isTestSource(file.path)));
+    const java = extractJavaImports(
+      files.filter((file) => tests || !isTestSource(file.path)),
+      focus((file) => file.endsWith(".java")),
+    );
     edges.push(...java.edges);
     issues.push(...java.issues);
   }
   if (options.csharp !== false) {
-    const csharp = extractCSharpImports(files.filter((file) => !isTestSource(file.path)));
+    const csharp = extractCSharpImports(
+      files.filter((file) => tests || !isTestSource(file.path)),
+      focus((file) => file.endsWith(".cs")),
+    );
     edges.push(...csharp.edges);
     issues.push(...csharp.issues);
   }
   if (options.cfamily !== false) {
-    const cfamily = extractCFamilyImports(files.filter((file) => !isTestSource(file.path)));
+    const cfamily = extractCFamilyImports(
+      files.filter((file) => tests || !isTestSource(file.path)),
+      focus(isCFamilySource),
+    );
     edges.push(...cfamily.edges);
     issues.push(...cfamily.issues);
   }
   if (options.php !== false) {
-    const php = extractPhpImports(files.filter((file) => !isTestSource(file.path)));
+    const php = extractPhpImports(
+      files.filter((file) => tests || !isTestSource(file.path)),
+      focus((file) => file.endsWith(".php")),
+    );
     edges.push(...php.edges);
     issues.push(...php.issues);
   }
   return {
-    edges: [...new Map(edges.map((edge) => [JSON.stringify(edge), edge])).values()].sort((a, b) =>
-      comparePaths(JSON.stringify(a), JSON.stringify(b)),
-    ),
+    edges: [
+      ...new Map(
+        edges
+          .filter((edge) => isTestSource(edge.from) === tests && !isTestSource(edge.to))
+          .map((edge) => [JSON.stringify(edge), edge]),
+      ).values(),
+    ].sort((a, b) => comparePaths(JSON.stringify(a), JSON.stringify(b))),
     issues: [...new Map(issues.map((issue) => [JSON.stringify(issue), issue])).values()].sort(
       (a, b) => comparePaths(JSON.stringify(a), JSON.stringify(b)),
     ),
-    scannedFiles: production.filter((file) => file.content !== undefined).length,
+    scannedFiles: importing.filter((file) => file.content !== undefined).length,
   };
 }

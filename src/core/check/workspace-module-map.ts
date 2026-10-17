@@ -20,7 +20,11 @@ import {
   isModuleMapNode,
   allowsModuleMapRule,
 } from "./module-map.js";
-import { extractRepositoryImports, comparePaths } from "../base/repository-imports.js";
+import {
+  extractRepositoryImports,
+  extractRepositoryTestImports,
+  comparePaths,
+} from "../base/repository-imports.js";
 import type { WorkspaceScanRepository } from "./workspace-scan.js";
 
 export type WorkspaceModuleMapRepository = WorkspaceScanRepository & { commits: ModuleMapCommit[] };
@@ -133,17 +137,31 @@ export async function checkWorkspaceModules(
     while (parent && !modules.has(parent.id)) parent = parent.parent;
     if (parent) node.parentId = parent.id;
   }
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  for (const node of nodes) {
+    if (modules.has(node.id) || tent.byId.get(node.id)?.fm.type !== "prompt") continue;
+    const owner = node.parentId && byId.get(node.parentId);
+    if (!owner) continue;
+    // Rules can live below the module goal; links were resolved at the rule's own path.
+    owner.body += "\n\n" + node.body;
+    owner.exceptions = [...(owner.exceptions ?? []), ...(node.exceptions ?? [])];
+  }
   const imports = extractRepositoryImports(repository.sources.files);
+  const testImports = extractRepositoryTestImports(repository.sources.files);
   return {
     head: repository.head,
     commitLimit: MODULE_MAP_THRESHOLDS.historyCommitLimit,
     ...checkModuleMap({
       trackedFiles: repository.trackedFiles,
-      imports: imports.edges,
+      imports: [...imports.edges, ...testImports.edges],
       commits: repository.commits,
       nodes,
     }),
-    importIssues: imports.issues,
+    importIssues: [
+      ...new Map(
+        [...imports.issues, ...testImports.issues].map((issue) => [JSON.stringify(issue), issue]),
+      ).values(),
+    ].sort((a, b) => comparePaths(JSON.stringify(a), JSON.stringify(b))),
     inspectionErrors: inspectionErrors.sort((a, b) =>
       comparePaths(JSON.stringify(a), JSON.stringify(b)),
     ),

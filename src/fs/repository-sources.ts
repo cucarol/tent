@@ -8,7 +8,11 @@ import {
 } from "../core/base/repository-imports.js";
 
 /** Read tracked source/config bytes only; no symlinks, package loading, commands or writes. */
-export async function readRepositorySources(root: string, trackedFiles: readonly string[]) {
+export async function readRepositorySources(
+  root: string,
+  trackedFiles: readonly string[],
+  options: { includeTests?: boolean } = {},
+) {
   const files: RepositorySource[] = [];
   const errors: Array<{ file: string; reason: string }> = [];
   const directories = new Map<string, Promise<boolean>>();
@@ -27,7 +31,11 @@ export async function readRepositorySources(root: string, trackedFiles: readonly
   for (const file of [...new Set(trackedFiles)].sort()) {
     const source: RepositorySource = { path: file };
     files.push(source);
-    if (!(isImportConfig(file) || (isImportSource(file) && !isTestSource(file)))) continue;
+    if (!(
+      isImportConfig(file) ||
+      (isImportSource(file) && (options.includeTests || !isTestSource(file)))
+    ))
+      continue;
     try {
       if (!(await plainDirectories(path.posix.dirname(file))))
         throw new Error("Source parent is not a plain directory");

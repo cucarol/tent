@@ -206,11 +206,12 @@ function useTree(
 export function extractRustImports(
   files: readonly RepositorySource[],
   focusedFiles?: readonly string[],
+  options: { includeTests?: boolean } = {},
 ) {
   const edges: RepositoryImport[] = [],
     issues: RepositoryImportIssue[] = [];
   const focus = focusedFiles ? new Set(focusedFiles) : undefined;
-  const context = focus ? rustCargoContext(files, focus) : undefined;
+  const context = focus ? rustCargoContext(files, focus, options.includeTests) : undefined;
   const requiredFiles = new Set(context?.manifests);
   const sources = new Map(
     files.filter((file) => file.path.endsWith(".rs")).map((file) => [file.path, file]),
@@ -224,6 +225,7 @@ export function extractRustImports(
       : files,
     issues,
     context?.packages,
+    options.includeTests,
   );
   const visited = new Set<string>();
   const testOnly = new Set<string>();
@@ -335,8 +337,10 @@ export function extractRustImports(
           name === "test" ||
           (name === "cfg" && attr.map((t) => t.value).join("") === "cfg(test)")
         ) {
-          skip = true;
-          testItem = true;
+          if (!options.includeTests || (focus && !focus.has(module.file))) {
+            skip = true;
+            testItem = true;
+          }
         } else if (["cfg", "cfg_attr", "path"].includes(name)) {
           issue(module.file, name, "Rust conditional or path attribute requires compiler context");
           skip = true;

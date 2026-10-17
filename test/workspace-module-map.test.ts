@@ -191,6 +191,63 @@ test("ordinary directories and files cover without becoming modules, structure t
   assert.deepEqual(await snapshot(root), before);
 });
 
+test("module goals retain exceptions in child prompts, scoped to the nearest module", async (t) => {
+  const { root, adapter, node } = await fixture(t);
+  await node("aaaaaa", { type: "goal", ...structure("../../a/") });
+  await node("bbbbbb", { type: "goal", ...structure("../../b/") });
+  const writeRule = (folder: string, type: string, body: string) =>
+    adapter.writeFile(
+      `${folder}/Rules/Rules.md`,
+      serializeFrontmatter({ id: "node-rule01", type }, body),
+    );
+  const files = Array.from(
+    { length: 30 },
+    (_, i) => `a/${i < 15 ? "first" : "second"}-${i % 15}.ts`,
+  ).concat(["b/first-0.ts", "b/first-1.ts", "b/first-2.ts"]);
+  const repository = {
+    head: null,
+    trackedFiles: files,
+    commits: [],
+    sources: {
+      files: files
+        .slice(0, 3)
+        .concat(files.slice(-3))
+        .map((file) => ({
+          path: file,
+          content: `import '../${file.startsWith("a/") ? "b" : "a"}/${path.posix.basename(file)}';`,
+        })),
+      errors: [],
+    },
+  };
+  const codes = async () =>
+    (await checkWorkspaceModules(adapter, root, repository)).issues.map((issue) => issue.code);
+  assert.ok((await codes()).includes("module.oversized"));
+  assert.ok((await codes()).includes("deps.cycle"));
+  const rules = "allow:module.oversized\nallow:deps.cycle [B](../../bbbbbb/bbbbbb.md)";
+  await writeRule("aaaaaa", "output", rules);
+  assert.ok((await codes()).includes("module.oversized"));
+  assert.ok((await codes()).includes("deps.cycle"));
+  await writeRule("aaaaaa", "prompt", rules);
+  const before = await snapshot(root);
+  assert.ok(!(await codes()).includes("module.oversized"));
+  assert.ok(!(await codes()).includes("deps.cycle"));
+  assert.deepEqual(await snapshot(root), before);
+  await adapter.writeFile(
+    "aaaaaa/Nested/Nested.md",
+    serializeFrontmatter(
+      {
+        id: "node-nested",
+        type: "goal",
+        ...structure("../../../nested/"),
+      },
+      "",
+    ),
+  );
+  await adapter.move("aaaaaa/Rules", "aaaaaa/Nested/Rules");
+  await writeRule("aaaaaa/Nested", "prompt", rules.replace("../../bbbbbb/", "../../../bbbbbb/"));
+  assert.ok((await codes()).includes("deps.cycle"));
+});
+
 test("module command reports covered root code without ownership and clears it only after module attachment", async (t) => {
   const { root, write, node } = await fixture(t);
   // A root build script still needs a valid Cargo context; this test isolates ownership.

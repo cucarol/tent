@@ -1,15 +1,26 @@
 import path from "node:path";
 import {
   comparePaths,
+  extractRepositoryTestImports,
   isCodeSource,
   isGeneratedSource,
   isTestSource,
+  type RepositorySource,
 } from "../base/repository-imports.js";
 import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
 import { loadTent } from "../store/tree.js";
 import { validateNodeName } from "../store/scaffold.js";
 import type { NodeWriteBatchInput } from "../write/node-write-batch.js";
 import type { WorkspaceScanResult } from "./workspace-scan.js";
+import { dependencyCycles } from "../base/dependency-cycles.js";
+import {
+  draftDirectoryUnits,
+  draftRootPackageUnits,
+  draftMaterial as material,
+  draftPrefix as prefix,
+  DRAFT_CODE_FILES,
+  type DraftUnit as Unit,
+} from "./workspace-draft-groups.js";
 import {
   checkModuleMap,
   formatModuleImportIssues,
@@ -19,21 +30,15 @@ import {
   type ModuleMapNode,
 } from "./module-map.js";
 
-type Unit = { key: string; materials: ModuleMapMaterial[]; frozen?: boolean };
 const directory = (file: string) => path.posix.dirname(file);
 const ordered = (values: Iterable<string>) => [...new Set(values)].sort(comparePaths);
-const material = (value: string, structure = true): ModuleMapMaterial => ({
-  path: value.endsWith("/") ? value.slice(0, -1) : value,
-  kind: value.endsWith("/") ? "directory" : "prefix",
-  ...(structure ? { track: "structure" as const } : {}),
-});
-const prefix = (file: string) => file.slice(0, file.length - path.posix.extname(file).length) + ".";
 
 function projection(units: Unit[]): ModuleMapNode[] {
   return units.map((unit) => ({
     id: unit.key,
     path: unit.key,
     name: unit.key,
+    parentId: unit.parentKey,
     body: "",
     materials: unit.materials,
   }));
@@ -60,50 +65,42 @@ function condense(units: Unit[], scan: WorkspaceScanResult): Unit[] {
     }
   const edges = new Map(units.map((unit) => [unit.key, new Set<string>()]));
   for (const edge of scan.imports.edges) {
+    if (isTestSource(edge.from) || isTestSource(edge.to)) continue;
     const from = owner.get(edge.from);
     const targets =
       edge.kind === "file" ? [owner.get(edge.to)] : [...(packages.get(edge.to) ?? [])];
     if (from) for (const to of targets) if (to && to !== from) edges.get(from)!.add(to);
   }
-  let sequence = 0;
-  const indices = new Map<string, number>(),
-    low = new Map<string, number>();
-  const stack: string[] = [],
-    active = new Set<string>(),
-    groups: string[][] = [];
-  const visit = (key: string) => {
-    indices.set(key, sequence);
-    low.set(key, sequence++);
-    stack.push(key);
-    active.add(key);
-    for (const next of edges.get(key)!) {
-      if (!indices.has(next)) {
-        visit(next);
-        low.set(key, Math.min(low.get(key)!, low.get(next)!));
-      } else if (active.has(next)) low.set(key, Math.min(low.get(key)!, indices.get(next)!));
-    }
-    if (low.get(key) !== indices.get(key)) return;
-    const group: string[] = [];
-    let next: string;
-    do {
-      next = stack.pop()!;
-      active.delete(next);
-      group.push(next);
-    } while (next !== key);
-    groups.push(group.sort(comparePaths));
-  };
-  for (const unit of units) if (!indices.has(unit.key)) visit(unit.key);
+  const cycles = dependencyCycles(edges);
+  const grouped = new Set(cycles.flat());
+  const groups = [
+    ...cycles,
+    ...units.filter((unit) => !grouped.has(unit.key)).map((unit) => [unit.key]),
+  ];
   const byKey = new Map(units.map((unit) => [unit.key, unit]));
+  const mergedKeys = new Map(
+    groups.flatMap((group) => group.map((key) => [key, group[0]!] as const)),
+  );
+  const ancestors = (key: string) => {
+    const result: string[] = [];
+    let parent = byKey.get(key)?.parentKey;
+    while (parent) {
+      result.push(parent);
+      parent = byKey.get(parent)?.parentKey;
+    }
+    return result;
+  };
   return groups
-    .map((group) =>
-      group.length === 1
-        ? byKey.get(group[0])!
-        : {
-            key: group[0],
-            materials: group.flatMap((key) => byKey.get(key)!.materials),
-            frozen: true,
-          },
-    )
+    .map((group): Unit => {
+      const parent = ancestors(group[0]!).find(
+        (key) => !group.includes(key) && group.every((member) => ancestors(member).includes(key)),
+      );
+      return {
+        key: group[0]!,
+        materials: group.flatMap((key) => byKey.get(key)!.materials),
+        ...(parent ? { parentKey: mergedKeys.get(parent) } : {}),
+      };
+    })
     .sort((a, b) => comparePaths(a.key, b.key));
 }
 
@@ -140,20 +137,27 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
       if (below.some((file) => directory(file) === dir) || kids.length !== 1) break;
       dir += "/" + kids[0];
     }
-    units.push({ key: dir, materials: [material(dir + "/")] });
+    units.push(
+      ...draftDirectoryUnits(
+        dir,
+        files.filter((file) => file.startsWith(dir + "/")),
+        scan.imports.edges,
+      ),
+    );
     if (!code.some(isModuleProductionSource) && code.some(isGeneratedSource))
       warnings.push(`Generated boundary needs review: ${top}/`);
   }
   const roots = files.filter((file) => !file.includes("/"));
   const rootCode = roots.filter((file) => isCodeSource(file) && !isTestSource(file));
   const rootGo = rootCode.filter((file) => file.endsWith(".go"));
-  if (rootGo.length)
-    units.push({
-      key: "Root Go package",
-      materials: ordered(rootGo.map(prefix)).map((p) => material(p)),
-      frozen: true,
-    });
+  if (rootGo.length) units.push(...draftRootPackageUnits(files, scan.imports.edges));
   for (const file of rootCode.filter((file) => !file.endsWith(".go"))) {
+    if (
+      units.some((unit) =>
+        unit.materials.some((source) => source.kind === "prefix" && source.path === prefix(file)),
+      )
+    )
+      continue;
     const facts = checkModuleMap({
       trackedFiles: files,
       imports: [],
@@ -171,69 +175,42 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
           : edge.to === file
             ? owner.get(edge.from)
             : undefined;
-      if (candidate) scores.set(candidate, (scores.get(candidate) ?? 0) + 1);
+      if (candidate && !isTestSource(edge.from))
+        scores.set(candidate, (scores.get(candidate) ?? 0) + 1);
     }
     const ranked = [...scores].sort((a, b) => b[1] - a[1] || comparePaths(a[0], b[0]));
-    if (ranked.length && ranked[0][1] > (ranked[1]?.[1] ?? 0)) {
+    const unique = ranked.length && ranked[0][1] > (ranked[1]?.[1] ?? 0);
+    const ownerFiles = unique
+      ? facts.modules
+          .find((unit) => unit.id === ranked[0][0])!
+          .files.filter((file) => isCodeSource(file) && !isTestSource(file)).length
+      : 0;
+    if (unique && ownerFiles < DRAFT_CODE_FILES) {
       units.find((unit) => unit.key === ranked[0][0])!.materials.push({ path: file, kind: "file" });
     } else {
       units.push({ key: file, materials: [material(prefix(file))] });
-      warnings.push(`Root boundary needs review (no unique import owner): ${file}`);
+      warnings.push(
+        `Root boundary needs review (${unique ? "import owner at draft size target" : "no unique import owner"}): ${file}`,
+      );
     }
   }
   for (const file of roots.filter((file) => !rootCode.includes(file)))
     (isTestSource(file) ? tests : ordinary).push({ path: file, kind: "file" });
 
-  const importedPackages = new Set(
-    scan.imports.edges.filter((edge) => edge.kind === "directory").map((edge) => edge.to),
-  );
-  // The checker supplies the same directory/prefix size groups that the Agent will see.
-  // Each successful split adds an actual selector; an unsplittable unit is never retried.
-  for (;;) {
-    const check = checkModuleMap({
-      trackedFiles: files,
-      imports: [],
-      commits: [],
-      nodes: projection(units),
-    });
-    const issue = check.issues.find(
-      (item) =>
-        ["module.oversized", "module.skewed"].includes(item.code) &&
-        !units.find((unit) => unit.key === item.object)!.frozen,
-    );
-    if (!issue) break;
-    const unit = units.find((candidate) => candidate.key === issue.object)!;
-    unit.frozen = true;
-    const groups = (issue.facts.groups as { path: string }[]).filter(
-      (group) =>
-        !units.some((other) =>
-          other.materials.some((m) => m.path === group.path.replace(/\/$/, "")),
-        ),
-    );
-    const owned = check.modules.find((candidate) => candidate.id === unit.key)!.files;
-    // Prefix splitting cannot assign one imported Go package to multiple owners.
-    if (
-      owned.some((file) => file.endsWith(".go") && importedPackages.has(directory(file))) &&
-      groups.some((group) => !group.path.endsWith("/"))
-    )
-      continue;
-    if (groups.length < 2) continue;
-    units.push(...groups.map((group) => ({ key: group.path, materials: [material(group.path)] })));
-    // Keep the old selector for the remainder; drop it only if it owns no code.
-    const split = checkModuleMap({
-      trackedFiles: files,
-      imports: [],
-      commits: [],
-      nodes: projection(units),
-    });
-    const remainder = split.modules.find((candidate) => candidate.id === unit.key)!;
-    if (!remainder.productionFiles && !remainder.generatedFiles) {
-      for (const file of remainder.files)
-        (isTestSource(file) ? tests : ordinary).push({ path: file, kind: "file" });
-      units = units.filter((candidate) => candidate !== unit);
-    }
-  }
   units = condense(units, scan);
+  const sizes = checkModuleMap({
+    trackedFiles: files,
+    imports: [],
+    commits: [],
+    nodes: projection(units),
+  });
+  for (const unit of sizes.modules) {
+    const count = unit.files.filter((file) => isCodeSource(file) && !isTestSource(file)).length;
+    if (count > DRAFT_CODE_FILES)
+      warnings.push(
+        `Boundary exceeds ${DRAFT_CODE_FILES}-file draft target; review its import cycle, package or root attachments: ${unit.path} (${count} code files)`,
+      );
+  }
 
   const names = new Set<string>(["setup", "tests"]);
   const nameOf = (key: string) => {
@@ -262,15 +239,28 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
     return name;
   };
   const nodes: ModuleMapNode[] = [];
-  for (const unit of units.sort((a, b) => comparePaths(a.key, b.key))) {
-    const name = nameOf(unit.key);
-    nodes.push({
+  const unitNodes = new Map<string, ModuleMapNode>();
+  const addUnit = (unit: Unit): ModuleMapNode => {
+    const existing = unitNodes.get(unit.key);
+    if (existing) return existing;
+    const parent = unit.parentKey
+      ? addUnit(units.find((candidate) => candidate.key === unit.parentKey)!)
+      : undefined;
+    const name = nameOf(parent ? path.posix.basename(unit.key) : unit.key);
+    const node: ModuleMapNode = {
       id: `m${nodes.length + 1}`,
-      path: name,
+      path: parent ? `${parent.path}/${name}` : name,
       name,
+      ...(parent ? { parentId: parent.id } : {}),
       body: "",
       materials: unit.materials,
-    });
+    };
+    nodes.push(node);
+    unitNodes.set(unit.key, node);
+    return node;
+  };
+  for (const unit of units.sort((a, b) => comparePaths(a.key, b.key))) {
+    addUnit(unit);
   }
   if (ordinary.length)
     nodes.push({
@@ -287,9 +277,9 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
     items: nodes.map((node) => ({
       op: "create",
       ref: node.id,
+      ...(node.parentId ? { parent: `@${node.parentId}` } : {}),
       name: node.name,
-      type: "prompt",
-      tags: ["spec"],
+      type: "goal",
       body: "",
       sources: node.materials.map((m) => ({
         resource:
@@ -307,31 +297,46 @@ export async function prepareWorkspaceDraft(
   fs: FsAdapter,
   scan: WorkspaceScanResult,
   commits: readonly ModuleMapCommit[],
+  sources: readonly RepositorySource[] = [],
 ) {
   if ((await loadTent(readOnlyFs(fs))).byPath.size)
     throw new Error(
       "Existing Nodes: maintain the current module map instead of bootstrapping another one",
     );
   const draft = draftWorkspaceModules(scan);
+  const testImports = extractRepositoryTestImports(sources);
   const check = checkModuleMap({
     trackedFiles: scan.coverage.uncoveredFiles,
-    imports: scan.imports.edges,
+    imports: [...scan.imports.edges, ...testImports.edges],
     commits,
     nodes: draft.nodes,
   });
   return {
     batch: draft.batch,
     summary: {
-      modules: check.modules.map(({ id, name, productionFiles }) => ({
+      modules: check.modules.map(({ id, path, name, productionFiles, testedBy, coChanges }) => ({
         ref: id,
+        path,
         name,
+        ...(draft.nodes.find((node) => node.id === id)?.parentId
+          ? { parent: draft.nodes.find((node) => node.id === id)!.parentId }
+          : {}),
         productionFiles,
+        testedBy,
+        coChanges,
       })),
       guidanceFiles: scan.guidanceFiles,
       warnings: draft.warnings,
       issues: check.issues,
       inspectionErrors: scan.inspectionErrors,
-      importIssues: scan.imports.issues,
+      importIssues: [
+        ...new Map(
+          [...scan.imports.issues, ...testImports.issues].map((issue) => [
+            JSON.stringify(issue),
+            issue,
+          ]),
+        ).values(),
+      ].sort((a, b) => comparePaths(JSON.stringify(a), JSON.stringify(b))),
       unassignedImports: check.unassignedImports,
       trackedFiles: check.trackedFiles,
       historyCommits: check.historyCommits,
@@ -345,9 +350,11 @@ export function formatWorkspaceDraft(
   const safe = (value: unknown) => JSON.stringify(value);
   return [
     `draft ${summary.modules.length} modules; ${summary.trackedFiles} tracked files; ${summary.historyCommits} history commits`,
-    ...summary.modules.map(
-      (module) => `${module.ref} ${safe(module.name)} ${module.productionFiles} production files`,
-    ),
+    ...summary.modules.flatMap((module) => [
+      `${module.ref} ${safe(module.path)} ${module.productionFiles} production files${module.parent ? ` parent @${module.parent}` : ""}`,
+      ...(module.testedBy.length ? [`  tested-by ${safe(module.testedBy)}`] : []),
+      ...(module.coChanges.length ? [`  co-changes ${safe(module.coChanges)}`] : []),
+    ]),
     `guidance ${safe(summary.guidanceFiles.slice(0, 10))}${summary.guidanceFiles.length > 10 ? `; +${summary.guidanceFiles.length - 10} more in --json` : ""}`,
     ...summary.warnings.map((warning) => `review ${safe(warning)}`),
     ...summary.issues.map(

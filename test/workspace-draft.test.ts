@@ -12,6 +12,7 @@ import {
 } from "../src/core/check/workspace-draft.js";
 import { checkModuleMap } from "../src/core/check/module-map.js";
 import { checkWorkspaceModules } from "../src/core/check/workspace-module-map.js";
+import { readModuleDependencies } from "../src/core/graph/module-dependencies.js";
 import type { WorkspaceScanResult } from "../src/core/check/workspace-scan.js";
 import { nodeWriteBatchInputSchema } from "../src/core/write/node-write-batch.js";
 import { loadTent } from "../src/core/store/tree.js";
@@ -95,9 +96,14 @@ test("draft separates tests and generated code, preserves root evidence and stab
     draft.batch,
   );
   assert.ok(draft.batch.items.every((item) => item.op === "create" && item.body === ""));
+  assert.ok(
+    draft.batch.items.every(
+      (item) => item.op === "create" && item.type === "goal" && item.tags === undefined,
+    ),
+  );
 });
 
-test("draft splits large flat prefixes and condenses a three-module cycle after splitting", () => {
+test("draft groups a flat directory by imports, keeps the actual cycle and creates small child goals", () => {
   const files = ["a", "b", "c", "d"].flatMap((group) =>
     Array.from({ length: 8 }, (_, i) => `lib/${group}-${i}.ts`),
   );
@@ -106,9 +112,16 @@ test("draft splits large flat prefixes and condenses a three-module cycle after 
     edge("lib/b-0.ts", "lib/c-0.ts"),
     edge("lib/c-0.ts", "lib/a-0.ts"),
   ];
-  const { check: report } = check(scan(files, edges));
-  assert.equal(report.modules.length, 2);
-  assert.ok(report.modules.some((module) => module.productionFiles === 24));
+  const { draft, check: report } = check(scan(files, edges));
+  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  const cycle = report.modules.find((module) => module.files.includes("lib/a-0.ts"))!;
+  assert.ok(cycle.files.includes("lib/b-0.ts"));
+  assert.ok(cycle.files.includes("lib/c-0.ts"));
+  assert.ok(draft.batch.items.some((item) => item.op === "create" && item.parent));
+  assert.deepEqual(
+    draftWorkspaceModules(scan([...files].reverse(), [...edges].reverse())).batch,
+    draft.batch,
+  );
   assert.equal(
     report.issues.some((issue) =>
       ["map.uncovered", "map.unowned", "deps.cycle"].includes(issue.code),
@@ -117,7 +130,111 @@ test("draft splits large flat prefixes and condenses a three-module cycle after 
   );
 });
 
-test("draft keeps an imported Go package and the root Go package whole", () => {
+test("draft keeps directory layers and nearby tests while bounding a flat Python leaf", () => {
+  const names = [
+    "alpha",
+    "bravo",
+    "charlie",
+    "delta",
+    "echo",
+    "foxtrot",
+    "golf",
+    "hotel",
+    "india",
+    "juliet",
+    "kilo",
+    "lima",
+    "mike",
+    "november",
+    "oscar",
+    "papa",
+    "quebec",
+    "romeo",
+    "sierra",
+    "tango",
+    "uniform",
+  ];
+  const files = names.map((name) => `src/package/${name}.py`);
+  files.push(
+    "src/other/app.py",
+    "src/package/test_alpha.py",
+    "src/package/alpha.test.ts",
+    "src/README.md",
+  );
+  const { draft, check: report } = check(
+    scan(files, [edge("src/package/alpha.py", "src/package/uniform.py")]),
+  );
+  assert.deepEqual(report.issues, []);
+  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  const alpha = report.modules.find((module) => module.files.includes("src/package/alpha.py"))!;
+  assert.ok(
+    alpha.files.includes("src/package/uniform.py"),
+    "import affinity outranks alphabetical order",
+  );
+  assert.ok(alpha.files.includes("src/package/test_alpha.py"));
+  assert.ok(alpha.files.includes("src/package/alpha.test.ts"));
+  const leaf = draft.nodes.find((node) => node.id === alpha.id)!;
+  const parent = draft.nodes.find((node) => node.id === leaf.parentId)!;
+  assert.ok(parent.parentId, "src -> package -> flat group retains two levels");
+  assert.ok(
+    draft.batch.items.every(
+      (item) => item.op === "create" && item.type === "goal" && item.body === "",
+    ),
+  );
+});
+
+test("draft does not break a genuine large cycle to meet its size target", () => {
+  const files = Array.from({ length: 15 }, (_, i) => `lib/file${i}.ts`);
+  const edges = files.map((file, i) => edge(file, files[(i + 1) % files.length]!));
+  const { draft, check: report } = check(scan(files, edges));
+  assert.equal(report.modules.length, 1);
+  assert.equal(report.modules[0]!.productionFiles, 15);
+  assert.match(draft.warnings.join("\n"), /exceeds 10-file draft target/);
+});
+
+test("many root entries cannot grow a unique imported leaf beyond the draft size target", () => {
+  const roots = Array.from({ length: 24 }, (_, i) => `entry${i}.ts`);
+  const { draft, check: report } = check(
+    scan(
+      ["lib/shared.ts", ...roots],
+      roots.map((file) => edge(file, "lib/shared.ts")),
+    ),
+  );
+  assert.deepEqual(report.issues, []);
+  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.match(draft.warnings.join("\n"), /import owner at draft size target/);
+});
+
+test("draft groups cross-directory cycles at their common parent and keeps all ownership", () => {
+  const files = [
+    "src/a/one.ts",
+    "src/b/two.ts",
+    ...Array.from({ length: 11 }, (_, i) => `src/c/file${i}.ts`),
+  ];
+  const { draft, check: report } = check(
+    scan(files, [edge(files[0]!, files[1]!), edge(files[1]!, files[0]!)]),
+  );
+  assert.deepEqual(report.issues, []);
+  const cycle = report.modules.find((module) => module.files.includes(files[0]!))!;
+  assert.ok(cycle.files.includes(files[1]!));
+  assert.ok(draft.nodes.find((node) => node.id === cycle.id)!.parentId);
+});
+
+test("draft preserves generated siblings without attaching them to a different flat group", () => {
+  const files = [
+    "lib/api.ts",
+    "lib/api.pb.ts",
+    "lib/api_pb.ts",
+    ...Array.from({ length: 20 }, (_, i) => `lib/file${i}.ts`),
+  ];
+  const { check: report } = check(scan(files));
+  const api = report.modules.find((module) => module.files.includes("lib/api.ts"))!;
+  assert.ok(api.files.includes("lib/api.pb.ts"));
+  assert.ok(api.files.includes("lib/api_pb.ts"));
+  assert.deepEqual(report.issues, []);
+});
+
+test("draft splits large Go packages by filename while imports keep the package directory owner", () => {
   const files = [
     "main.go",
     "options.go",
@@ -138,7 +255,25 @@ test("draft keeps an imported Go package and the root Go package whole", () => {
       (module) => module.files.includes("main.go") && module.files.includes("options.go"),
     ),
   );
-  assert.ok(report.modules.some((module) => module.productionFiles === 24));
+  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.equal(report.modules.find((module) => module.name === "store")!.productionFiles, 0);
+});
+
+test("draft splits a large root Go package and Java package without manufacturing a package cycle", () => {
+  const files = ["read", "write"].flatMap((group) =>
+    Array.from({ length: 12 }, (_, i) => `${group}_${i}.go`),
+  );
+  files.push(
+    "cmd/main.go",
+    ...["Read", "Write"].flatMap((group) =>
+      Array.from({ length: 12 }, (_, i) => `java/pkg/${group}Handler${i}.java`),
+    ),
+  );
+  const { draft, check: report } = check(scan(files, [edge("cmd/main.go", ".", "directory")]));
+  assert.deepEqual(report.unassignedImports, []);
+  assert.deepEqual(report.issues, []);
+  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.ok(draft.nodes.some((node) => node.name === "Root Go package" && !node.parentId));
 });
 
 test("draft uses valid top-level names and percent-encodes literal material paths", () => {
@@ -276,7 +411,10 @@ test("scan --draft writes only the editable batch; existing write-many produces 
 
 test("history changes preflight findings, never the draft or native Node state", async (t) => {
   const { adapter } = await fixture(t);
-  const input = scan(["a/one.ts", "b/two.ts", "c/three.ts"]);
+  const input = scan(
+    ["a/one.ts", "b/two.ts", "c/three.ts", "tests/one.test.ts"],
+    [edge("tests/one.test.ts", "a/one.ts")],
+  );
   const commits = Array.from({ length: 15 }, (_, i) => ({
     commit: String(i),
     files: i < 5 ? ["a/one.ts", "b/two.ts"] : ["c/three.ts"],
@@ -291,6 +429,121 @@ test("history changes preflight findings, never the draft or native Node state",
     /history.always-together.*fix: Merge these modules/,
   );
   assert.equal(empty.summary.issues.length, 0);
+  const a = history.summary.modules.find((module) => module.name === "a")!;
+  const b = history.summary.modules.find((module) => module.name === "b")!;
+  assert.deepEqual(a.testedBy, ["tests/one.test.ts"]);
+  assert.deepEqual(a.coChanges, [
+    { moduleId: b.ref, sharedCommits: 5, moduleCommits: 5, ratio: 1 },
+  ]);
+  assert.match(formatWorkspaceDraft(history.summary), /tested-by.*tests\/one.test.ts/);
+  assert.match(formatWorkspaceDraft(history.summary), /co-changes.*sharedCommits/);
+  assert.ok(history.batch.items.every((item) => item.op === "create" && item.body === ""));
+});
+
+test("hierarchical draft writes once after renaming a parent and preserves child ownership", async (t) => {
+  const { root, adapter, write } = await fixture(t);
+  for (let i = 0; i < 23; i++) await write(`src/library/file${i}.ts`);
+  await write("src/entry/main.ts", 'import "../library/file0";');
+  await write("README.md", "# Layered project");
+  await write("go.mod", "module example.com/app\n");
+  for (const group of ["read", "write"])
+    for (let i = 0; i < 12; i++) await write(`${group}_${i}.go`, "package app\n");
+  await write("cmd/tool/main.go", 'package main\nimport "example.com/app"\n');
+  await git(root, "add", ".");
+  const prepared = await runWorkspaceCommand(
+    "scan",
+    ["--draft", ".scratch/layers.json", "--json"],
+    { workspace: root },
+  );
+  assert.equal(prepared.exitCode, 0, prepared.stderr || prepared.stdout);
+  const summary = JSON.parse(prepared.stdout);
+  assert.ok(summary.modules.some((module: { parent?: string }) => module.parent));
+  const batch = nodeWriteBatchInputSchema.parse(
+    JSON.parse(await fs.readFile(path.join(root, ".scratch/layers.json"), "utf8")),
+  );
+  const parent = batch.items.find((item) => item.op === "create" && item.name === "src")!;
+  assert.equal(parent.op, "create");
+  if (parent.op === "create") parent.name = "Library product";
+  const result = await runNodeCommand("write-many", ["--input-json", "-", "--json"], {
+    workspace: root,
+    stdin: JSON.stringify(batch),
+  });
+  assert.equal(result.exitCode, 0, result.stderr);
+  const repository = await readModuleMapRepository(root);
+  const actual = await checkWorkspaceModules(adapter, root, repository);
+  assert.deepEqual(actual.issues, []);
+  assert.deepEqual(actual.inspectionErrors, []);
+  assert.equal(
+    actual.modules.reduce((sum, module) => sum + module.productionFiles, 0),
+    49,
+  );
+  assert.ok(actual.modules.every((module) => module.productionFiles <= 10));
+  assert.ok(actual.modules.some((module) => module.path.startsWith("Library product/library/")));
+  const deps = await readModuleDependencies(adapter, root, {
+    basis: { head: repository.head, dirty: false },
+    sources: repository.sources.files,
+  });
+  assert.equal(deps.unresolved, 0);
+  const rootPackage = actual.modules.find((module) => module.name === "Root Go package")!;
+  const command = actual.modules.find((module) => module.files.includes("cmd/tool/main.go"))!;
+  assert.ok(deps.edges.some((edge) => edge.from === command.id && edge.to === rootPackage.id));
+});
+
+test("draft and live module queries derive current Python and script test imports without changing ordinary scan", async (t) => {
+  const { root, write } = await fixture(t);
+  await write("pkg/alpha.py", "def alpha(): pass\n");
+  await write("other/beta.py", "def beta(): pass\n");
+  await write("lib/helper.ts");
+  await write("tests/test_alpha.py", "from pkg.alpha import alpha\n");
+  await write("tests/helper.test.ts", 'import "../lib/helper";');
+  await git(root, "add", ".");
+  const ordinary = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
+  const prepared = await runWorkspaceCommand("scan", ["--draft", ".scratch/tests.json", "--json"], {
+    workspace: root,
+  });
+  assert.equal(prepared.exitCode, 0, prepared.stderr || prepared.stdout);
+  const summary = JSON.parse(prepared.stdout);
+  assert.deepEqual(
+    summary.modules.find((module: { name: string }) => module.name === "pkg").testedBy,
+    ["tests/test_alpha.py"],
+  );
+  assert.deepEqual(
+    summary.modules.find((module: { name: string }) => module.name === "lib").testedBy,
+    ["tests/helper.test.ts"],
+  );
+  const batch = await fs.readFile(path.join(root, ".scratch/tests.json"), "utf8");
+  const written = await runNodeCommand("write-many", ["--input-json", "-"], {
+    workspace: root,
+    stdin: batch,
+  });
+  assert.equal(written.exitCode, 0, written.stderr);
+  const before = await snapshot(path.join(root, ".tent"));
+  const query = async () => {
+    const response = await runWorkspaceCommand("check-modules", ["--json"], { workspace: root });
+    assert.equal(response.exitCode, 0, response.stderr || response.stdout);
+    return JSON.parse(response.stdout);
+  };
+  const first = await query();
+  assert.deepEqual(
+    first.modules.find((module: { name: string }) => module.name === "pkg").testedBy,
+    ["tests/test_alpha.py"],
+  );
+  await write("tests/test_alpha.py", "from other.beta import beta\n");
+  const changed = await query();
+  assert.deepEqual(
+    changed.modules.find((module: { name: string }) => module.name === "pkg").testedBy,
+    [],
+  );
+  assert.deepEqual(
+    changed.modules.find((module: { name: string }) => module.name === "other").testedBy,
+    ["tests/test_alpha.py"],
+  );
+  assert.deepEqual(await snapshot(path.join(root, ".tent")), before);
+  // Ordinary import facts remain production-only, even while the test source changes.
+  const after = JSON.parse(
+    (await runWorkspaceCommand("scan", ["--json"], { workspace: root })).stdout,
+  );
+  assert.deepEqual(after.imports, JSON.parse(ordinary.stdout).imports);
 });
 
 test("unresolved imports are one advisory count in draft and module checks, with full JSON diagnostics", async (t) => {

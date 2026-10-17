@@ -4,13 +4,13 @@ The `type` says how to treat a Node; `tags` name its form and topic.
 
 | Type | Holds | Treat it |
 | --- | --- | --- |
-| `goal` | What the user wants, and why | Work toward it; change it only on the user's decision. |
+| `goal` | What the user or the project intends, and why | Work toward it; change it only on the user's decision. |
 | `prompt` | Rules, decisions, specs, open questions | Follow it; propose an update when reality contradicts it. |
 | `output` | A result, check or problem seen at one time | Check its material first; your conclusions stay `output` until the user agrees. |
 
-Any undeprecated `output` under a goal counts as its result, so keep the goal's open questions in `prompt` Nodes. Leave commit ids, test counts and delivery status to Git and Cards.
+Any undeprecated `output` under a goal counts as its result, and a goal that owns code is carried out by that code; keep the goal's open questions in `prompt` Nodes. Leave commit ids, test counts and delivery status to Git and Cards.
 
-Reuse a tag from `tent node tags` or a preset:
+A Node takes zero or more tags. Reuse one from `tent node tags` or a preset, and add the topic words the project uses:
 
 | Tag | When the Node |
 | --- | --- |

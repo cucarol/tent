@@ -61,6 +61,14 @@ export type ModuleMapModuleFacts = {
   files: string[];
   productionFiles: number;
   generatedFiles: number;
+  testedBy: string[];
+  coChanges: {
+    moduleId: string;
+    sharedCommits: number;
+    /** Eligible commits touching this module, and the share also touching moduleId. */
+    moduleCommits: number;
+    ratio: number;
+  }[];
 };
 export type ModuleMapCommit = { commit: string; files: string[]; changedFiles: number };
 export type ModuleMapInput = {
@@ -186,9 +194,19 @@ export function checkModuleMap(input: ModuleMapInput) {
       files,
       productionFiles: files.filter(production).length,
       generatedFiles: files.filter(isGeneratedSource).length,
+      testedBy: [],
+      coChanges: [],
     };
   });
   const factsById = new Map(moduleFacts.map((facts) => [facts.id, facts]));
+  const recordTest = (node: ModuleMapNode | undefined, source: string) => {
+    for (
+      let current = node;
+      current;
+      current = current.parentId ? byId.get(current.parentId) : undefined
+    )
+      factsById.get(current.id)!.testedBy.push(source);
+  };
   const issues: ModuleMapIssue[] = [];
   const pairExcepted = (code: ModuleMapCode, a: ModuleMapNode, b: ModuleMapNode) =>
     [a, b].some((node) =>
@@ -278,14 +296,17 @@ export function checkModuleMap(input: ModuleMapInput) {
     ...new Map(input.imports.map((edge) => [JSON.stringify(edge), edge])).values(),
   ].sort((a, b) => comparePaths(JSON.stringify(a), JSON.stringify(b)));
   for (const edge of imports) {
-    if (
-      isTentWorkspacePath(edge.from) ||
-      isTentWorkspacePath(edge.to) ||
-      isTestSource(edge.from) ||
-      isTestSource(edge.to) ||
-      barrel(edge.from) ||
-      (edge.kind === "file" && barrel(edge.to))
-    )
+    if (isTentWorkspacePath(edge.from) || isTentWorkspacePath(edge.to)) continue;
+    if (isTestSource(edge.from)) {
+      if (!isCodeSource(edge.from) || isGeneratedSource(edge.from) || vendor(edge.from)) continue;
+      if (edge.kind === "directory") {
+        const files = (packageFiles.get(comparable(edge.to)) ?? []).filter(production);
+        if (files.length) recordTest(directoryOwner(edge.to), edge.from);
+        for (const file of files) recordTest(owner(file)?.node, edge.from);
+      } else if (production(edge.to)) recordTest(owner(edge.to)?.node, edge.from);
+      continue;
+    }
+    if (isTestSource(edge.to) || barrel(edge.from) || (edge.kind === "file" && barrel(edge.to)))
       continue;
     const from = owner(edge.from)?.node;
     const to = edge.kind === "directory" ? packageOwner(edge.to) : owner(edge.to)?.node;
@@ -364,6 +385,7 @@ export function checkModuleMap(input: ModuleMapInput) {
       (a, b) => comparePaths(a.path, b.path) || comparePaths(a.id, b.id),
     );
     const [a, b] = pair as [ModuleMapNode, ModuleMapNode];
+    if (ancestorOf(a, b) || ancestorOf(b, a)) continue;
     const countA = singles.get(a.id)!;
     const countB = singles.get(b.id)!;
     const ratio = shared / Math.min(countA, countB);
@@ -374,6 +396,16 @@ export function checkModuleMap(input: ModuleMapInput) {
       lift < thresholds.minimumLift
     )
       continue;
+    for (const [node, other, count] of [
+      [a, b, countA],
+      [b, a, countB],
+    ] as const)
+      factsById.get(node.id)!.coChanges.push({
+        moduleId: other.id,
+        sharedCommits: shared,
+        moduleCommits: count,
+        ratio: shared / count,
+      });
     const generatedShares = [a, b].map((node) => {
       const facts = factsById.get(node.id)!;
       return facts.generatedFiles / Math.max(1, facts.files.length);
@@ -396,6 +428,14 @@ export function checkModuleMap(input: ModuleMapInput) {
       fix: generated
         ? "Keep the generated output and its source in the same module."
         : "Merge these modules or declare allow:history.always-together with the other module's link and their shared change workflow on one body line.",
+    });
+  }
+  for (const facts of moduleFacts) {
+    facts.testedBy = ordered(facts.testedBy);
+    facts.coChanges.sort((a, b) => {
+      const nodeA = byId.get(a.moduleId)!;
+      const nodeB = byId.get(b.moduleId)!;
+      return comparePaths(nodeA.path, nodeB.path) || comparePaths(nodeA.id, nodeB.id);
     });
   }
   const codes: ModuleMapCode[] = [

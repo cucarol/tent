@@ -102,9 +102,18 @@ test("type guidance names exactly three types and the preset tags", async () => 
     /\b(goal|prompt|output)-(direction|requirement|decision|spec|reference|procedure|asset|evidence|analysis|issue)\b|NODE_TYPE_PRESETS|implementing it/;
   const spec = flat(await read("docs/SPEC.md"));
   assert.match(spec, /a Node has one `type`, exactly `goal`, `prompt` or `output`/);
+  assert.match(spec, /`goal` holds user or project intent/);
+  assert.match(spec, /retains its own semantic intent basis on creation or explicit confirmation/);
+  assert.match(spec, /Ordinary saves and native capture preserve it/);
+  assert.match(spec, /Matching that basis clears ahead independently of outputs/);
   assert.match(
     spec,
-    /Every `goal` is a requirement regardless of tags\. A goal without any active `output` anywhere in its subtree is ahead/,
+    /For goals without this coverage, a goal without any active `output` anywhere in its subtree is ahead/,
+  );
+  assert.match(spec, /Single files, Node\/Role references and external URLs do not qualify/);
+  assert.match(
+    spec,
+    /One output must match the whole goal; partial matches from different outputs cannot be combined/,
   );
   assert.doesNotMatch(spec, formerTypes);
   const types = await read("skill-resources/references/node-types.md");
@@ -135,11 +144,19 @@ test("type guidance names exactly three types and the preset tags", async () => 
     assert.doesNotMatch(await read(file), /\b(?:goal|prompt|output)-(?!id\b)[a-z]+/, file);
 });
 
-test("goal and prompt materials exclude src code, which belongs in body links or outputs", async () => {
+test("goal material guidance distinguishes intent grounds from implementation coverage", async () => {
   const text = flat(await read("skill-resources/references/node-maintenance.md"));
   assert.match(text, /A `goal` or `prompt` takes its grounds as material, not code/);
+  assert.match(
+    text,
+    /a `goal` may still own the code that carries it out, through a plain directory or prefix/,
+  );
+  assert.match(text, /owns a directory or prefix, itself or through a child goal/);
   const plugin = flat(await read("docs/PLUGIN.md"));
-  assert.match(plugin, /不以 `src\/` 下代码为材料/);
+  assert.match(plugin, /goal 也可通过本工作区的目录或前缀材料持有实现它的代码/);
+  assert.match(plugin, /单个文件、Node\/Role 引用和外部 URL 不获得这项豁免/);
+  assert.match(plugin, /自身基线或一份完整匹配的现行 output 任一成立即可清除领先/);
+  assert.doesNotMatch(plugin, /不以 `src\/` 下代码为材料/);
   assert.match(plugin, /\[Codex Hooks\]\(https:\/\/learn\.chatgpt\.com\/docs\/hooks\)/);
 });
 

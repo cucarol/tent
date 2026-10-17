@@ -14,6 +14,7 @@ import { materialContent, markdownMaterialHeading } from "../base/material-secti
 import { recordNodeVerification } from "../base/node-provenance.js";
 import { loadNodeCatalog, type CatalogNode } from "./node-catalog.js";
 import { nodeNotePath } from "../base/paths.js";
+import { isCoverageGoal } from "../base/material-coverage.js";
 import { rewriteMarkdownDestinations } from "../base/links.js";
 import { createHash } from "node:crypto";
 import { assertSystemMaterial, systemMaterialPath } from "./material-target.js";
@@ -42,6 +43,32 @@ export function assertNodeRecordFields(data: Record<string, unknown>): void {
 
 export function isRequirementNode(data: { type?: unknown }): boolean {
   return data.type === "goal";
+}
+/** Ancestors of current coverage goals; callers still require the owner itself to be a goal. */
+export function coverageGoalAncestors(
+  nodes: Map<string, CatalogNode>,
+  workspaceRoot: string | undefined,
+): Set<string> {
+  const ancestors = new Set<string>();
+  if (!workspaceRoot) return ancestors;
+  for (const node of nodes.values()) {
+    if (node.invalid || node.archived || node.type !== "goal") continue;
+    if (
+      !isCoverageGoal(
+        { ...parseFrontmatter(node.header).data, type: node.type },
+        nodeNotePath(node.path),
+        workspaceRoot,
+      )
+    )
+      continue;
+    let parent = node.parentNodeId ? nodes.get(node.parentNodeId) : undefined;
+    while (parent && !parent.invalid) {
+      // Lifecycle is local: an inactive intermediary does not retire its descendants.
+      if (!parent.archived) ancestors.add(parent.nodeId);
+      parent = parent.parentNodeId ? nodes.get(parent.parentNodeId) : undefined;
+    }
+  }
+  return ancestors;
 }
 /** Any output, whatever its tags, is evidence for goals and Cards. */
 export function isOutputNode(data: { type?: unknown }): boolean {
@@ -445,6 +472,23 @@ export async function prepareNodeSyncSave(
     nodes.get(id) ?? [...nodes.values()].find((n) => nodeNotePath(n.path) === documentPath);
   const goals = output && node ? goalAncestors(node, nodes) : [];
   const record: NodeBasisRecord = { v: 1, materials };
+  if (previous?.goalBasis) record.goalBasis = previous.goalBasis;
+  if (
+    (options.created || options.confirm) &&
+    isRequirementNode(parsed.data) &&
+    (isCoverageGoal(parsed.data, documentPath, fs.workspaceRoot) ||
+      coverageGoalAncestors(nodes, fs.workspaceRoot).has(id))
+  )
+    record.goalBasis = {
+      version: nodeSemanticFingerprint(
+        parsed.data,
+        parsed.body,
+        documentPath,
+        nodes,
+        fs.workspaceRoot,
+      ),
+      fingerprintVersion: 2,
+    };
   if (previous?.goals)
     record.goals = previous.goals.map((goal) => {
       const owner = nodes.get(goal.nodeId);

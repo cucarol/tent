@@ -27,6 +27,7 @@ import {
   nodeSemanticFingerprint,
   observeNodeMaterials,
   retainedNodeRecords,
+  coverageGoalAncestors,
 } from "./node-sync-record.js";
 import {
   nodeIsStale,
@@ -41,6 +42,7 @@ import { validateNodeName } from "../store/scaffold.js";
 import { listCardDocuments, readCardDocument } from "./card-document.js";
 import { readCardGoalIds, type CardSourceInput } from "./card-context.js";
 import { changedStructureDependencies } from "../base/structure-material.js";
+import { isCoverageGoal } from "../base/material-coverage.js";
 
 export type NodeSyncState = "synced" | "ahead" | "behind" | "unanchored";
 export type NodeSyncInspection = {
@@ -240,6 +242,16 @@ async function inspectCatalogNodesInScope(
               : {}),
         };
       });
+  const goalIntentMatches = new Map<string, boolean>();
+  const coverageAncestors = new WeakMap<Map<string, CatalogNode>, Set<string>>();
+  const coversThroughGoals = (nodes: Map<string, CatalogNode>, nodeId: string) => {
+    let ancestors = coverageAncestors.get(nodes);
+    if (!ancestors) {
+      ancestors = coverageGoalAncestors(nodes, fs.workspaceRoot);
+      coverageAncestors.set(nodes, ancestors);
+    }
+    return ancestors.has(nodeId);
+  };
   const inspect = async (current: CatalogNode) => {
     let nodeCatalog = catalog;
     let result: NodeSyncInspection | undefined;
@@ -367,6 +379,22 @@ async function inspectCatalogNodesInScope(
           materials,
           reasons,
         };
+        if (
+          data.type === "goal" &&
+          (isCoverageGoal(data, path, fs.workspaceRoot) ||
+            coversThroughGoals(nodeCatalog.byId, current.nodeId))
+        )
+          goalIntentMatches.set(
+            current.nodeId,
+            record?.goalBasis?.version ===
+              nodeSemanticFingerprint(
+                data,
+                raw.slice(current.header.length),
+                path,
+                nodeCatalog.byId,
+                fs.workspaceRoot,
+              ),
+          );
         break;
       } catch (error) {
         if (
@@ -440,17 +468,22 @@ async function inspectCatalogNodesInScope(
       );
     });
     const uncertainSubtree = nodes.some((n) => n.uncertain && n.path.startsWith(goal.path + "/"));
-    if (!subtreeOutputs.length && !uncertainSubtree) requirementsWithoutOutputs.push(goal.nodeId);
-    if (!hasMatchingOutput && (subtreeOutputs.length > 0 || !uncertainSubtree)) {
+    const coverageGoal = goalIntentMatches.has(goal.nodeId);
+    const hasMatchingBasis = goalIntentMatches.get(goal.nodeId) === true || hasMatchingOutput;
+    if (!coverageGoal && !subtreeOutputs.length && !uncertainSubtree)
+      requirementsWithoutOutputs.push(goal.nodeId);
+    if (!hasMatchingBasis && (subtreeOutputs.length > 0 || !uncertainSubtree)) {
       if (!goal.behind) goal.state = "ahead";
       const reasons = [
-        subtreeOutputs.length
-          ? "No output under this goal was saved or confirmed against its current content and materials"
-          : "Goal subtree has no current output Node",
+        coverageGoal
+          ? "Neither confirmed goal intent nor a current output matches this goal's current content and material declarations"
+          : subtreeOutputs.length
+            ? "No output under this goal was saved or confirmed against its current content and materials"
+            : "Goal subtree has no current output Node",
       ];
       goal.reasons.push(...reasons);
       goal.ahead = { reasons };
-    } else if (!goal.behind && hasMatchingOutput) goal.state = "synced";
+    } else if (!goal.behind && hasMatchingBasis) goal.state = "synced";
   }
   const counts: Record<NodeSyncState, number> = { synced: 0, ahead: 0, behind: 0, unanchored: 0 };
   for (const node of nodes) {

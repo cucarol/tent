@@ -143,7 +143,12 @@ export async function runWorkspaceCommand(
       const result = await scanWorkspace(fs, roots.workspaceRoot, repository, scanFileKind);
       if (values.draft !== undefined) {
         if (!values.draft.trim()) throw new Error("--draft requires a new file path");
-        const draft = await prepareWorkspaceDraft(fs, result, draftRepository?.commits ?? []);
+        const draft = await prepareWorkspaceDraft(
+          fs,
+          result,
+          draftRepository?.commits ?? [],
+          repository.sources.files,
+        );
         const filename = await writeWorkspaceDraft(roots.workspaceRoot, values.draft, draft.batch);
         const summary = { draft: filename, ...draft.summary };
         return {

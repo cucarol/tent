@@ -1,5 +1,10 @@
 import path from "node:path";
-import { isDirectoryMaterial, localMaterialPath, materialLocator } from "./material.js";
+import {
+  isDirectoryMaterial,
+  localMaterialPath,
+  materialLocator,
+  materialOccurrences,
+} from "./material.js";
 
 export type MaterialCoverage = { kind: "directory" | "prefix"; prefix: string };
 
@@ -35,6 +40,21 @@ export function structureMaterialCoverage(
   } catch {
     return undefined;
   }
+}
+
+/** Directory/prefix declarations implement a goal; individual references do not. */
+export function isCoverageGoal(
+  data: Record<string, unknown>,
+  documentPath: string,
+  workspaceRoot: string | undefined,
+): boolean {
+  return (
+    data.type === "goal" &&
+    workspaceRoot !== undefined &&
+    materialOccurrences(data).some(({ resource }) =>
+      structureMaterialCoverage(resource, documentPath, workspaceRoot),
+    )
+  );
 }
 
 export function materialCoverageContains(

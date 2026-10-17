@@ -4,6 +4,7 @@ import { readOnlyFs } from "../store/adapter.js";
 import { canonicalDocumentReferencesWithPaths } from "../graph/document-links.js";
 import { validateSystemMaterials } from "../graph/material-target.js";
 import { contentEtag } from "../base/etag.js";
+import { documentLifecycle } from "../base/document-status.js";
 import {
   NODE_FRONTMATTER_KEY_ORDER,
   parseFrontmatter,
@@ -321,7 +322,7 @@ async function writeNodesBatchUnlocked(
       header: node.raw.slice(0, node.raw.length - parsed.body.length),
       parentNodeId: node.parentId ?? nodes.get(node.nodeId)?.parentNodeId ?? null,
       childNodeIds: [],
-      archived: false,
+      archived: documentLifecycle(parsed.data).status === "deprecated",
       invalid: false,
     });
   }

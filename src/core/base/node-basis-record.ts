@@ -25,6 +25,7 @@ export const nodeBasisRecordSchema = z
   .looseObject({
     v: z.literal(1),
     materials: z.array(materialBasisSchema),
+    goalBasis: z.looseObject({ version, fingerprintVersion: z.literal(2) }).optional(),
     goals: z
       .array(
         z.looseObject({

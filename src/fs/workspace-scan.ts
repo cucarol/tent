@@ -130,7 +130,7 @@ export async function readModuleMapRepository(
 ): Promise<WorkspaceModuleMapRepository> {
   const { root, head, trackedFiles, workspaceFile } = await readRepositoryFiles(workspaceRoot);
   const [sources, log] = await Promise.all([
-    readRepositorySources(workspaceRoot, trackedFiles),
+    readRepositorySources(workspaceRoot, trackedFiles, { includeTests: true }),
     head
       ? git(root, [
           "log",
