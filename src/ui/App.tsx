@@ -452,6 +452,21 @@ export function App() {
     setExpanded(true);
   };
   const reading = expanded && !!selected;
+  // One set of robots: in the map's bar, or in a page's bar while the page covers the map.
+  const dock = (
+    <Dock
+      graph={graph}
+      selected={selected}
+      work={work}
+      draftOnPage={selected?.kind === "card" && selected.id === work.openDraft}
+      hotLane={hotLane}
+      pinned={pinnedLane}
+      onHot={setHoverLane}
+      onPin={setPinnedLane}
+      onOpen={open}
+      onPage={openPage}
+    />
+  );
   /** Fold or unfold a Node's children in both the tree and the map; folding away the selection selects the folded Node. */
   const fold = (id: string, expand?: boolean) => {
     const folding = !(expand ?? collapsed.has(id));
@@ -506,7 +521,7 @@ export function App() {
             style={{ "--detail-w": `${detailWidth}px` } as CSSProperties}
           >
             <main className="stage" aria-hidden={reading || undefined}>
-              <StageBar graph={graph} selected={selected} onOpen={open} />
+              <StageBar graph={graph} selected={selected} roles={!reading && dock} onOpen={open} />
               <div className="stage-body">
                 <Boundary label={t.app.map}>
                   <Suspense fallback={<Loader label={t.app.loading} />}>
@@ -518,20 +533,6 @@ export function App() {
                       draft={draftIds}
                       hotLane={hotLane}
                       carriedBy={carriedBy}
-                      dock={
-                        <Dock
-                          graph={graph}
-                          selected={selected}
-                          work={work}
-                          draftOnPage={selected?.kind === "card" && selected.id === work.openDraft}
-                          hotLane={hotLane}
-                          pinned={pinnedLane}
-                          onHot={setHoverLane}
-                          onPin={setPinnedLane}
-                          onOpen={open}
-                          onPage={openPage}
-                        />
-                      }
                       keys={!reading && !overlay}
                       onNotice={setToast}
                       onSelect={open}
@@ -575,6 +576,7 @@ export function App() {
 
             {reading && (
               <Reader
+                roles={dock}
                 graph={graph}
                 target={selected!}
                 startEditing={editOnExpand}

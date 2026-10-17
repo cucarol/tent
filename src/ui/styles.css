@@ -215,9 +215,9 @@ kbd { display: inline-grid; place-items: center; min-width: 18px; height: 18px; 
 body.is-resizing { cursor: col-resize; user-select: none; }
 body.is-resizing iframe, body.is-resizing .stage { pointer-events: none; }
 
-.stage { grid-column: 1; position: relative; display: flex; flex-direction: column; min-width: 0; }
+.stage { grid-column: 1; position: relative; isolation: isolate; display: flex; flex-direction: column; min-width: 0; }
 .stage-body { position: relative; flex: 1; min-height: 0; }
-.stage-bar { display: flex; align-items: center; gap: 8px; height: 46px; flex: none; border-bottom: 1px solid var(--border); }
+.stage-bar { position: relative; z-index: 30; display: flex; align-items: center; gap: 8px; height: 46px; flex: none; border-bottom: 1px solid var(--border); }
 .stage-bar { padding: 0 10px 0 12px; }
 .crumbs { display: flex; align-items: center; gap: 1px; min-width: 0; flex: 1; font-size: 13px; color: var(--text-2); white-space: nowrap; }
 .crumbs > .icon { color: var(--border-strong); }
@@ -227,6 +227,7 @@ body.is-resizing iframe, body.is-resizing .stage { pointer-events: none; }
 .crumb[aria-current], .crumbs > .crumb:only-child { color: var(--text); font-weight: 600; }
 /* The map's own crumb, where the trail starts. */
 .crumb.is-root { flex: none; padding: 0 9px; font-weight: 600; color: var(--text); }
+.crumb-count { font-size: 11.5px; font-weight: 500; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .stage-meta { display: flex; align-items: center; gap: 12px; margin-left: auto; padding-left: 8px; font-size: 12px; color: var(--text-3); white-space: nowrap; }
 
 /* ---------- sidebar: 目录 above, 分工 below ---------- */
@@ -293,35 +294,40 @@ body.is-dragging .row .acts { display: none !important; }
 .acts button.is-in { color: var(--accent); }
 .new-dot, .pending-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--new); }
 
-/* The robot dock on the map's top left: a row per Role and the public area, with what each has in hand.
-   Cards move between rows until a Role receives them. */
-.dock { top: 58px; left: 12px; display: flex; flex-direction: column; width: 248px; max-height: calc(100% - 150px); padding: 4px; user-select: none; }
+/* The robots at the right of the bar: the busiest faces stacked with what all have in hand, opening down
+   into a list with a row per Role and the public area. Cards move between rows until a Role receives them. */
+.roles { position: relative; display: flex; align-items: center; gap: 6px; flex: none; margin-left: auto; user-select: none; }
+.role-stack { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px 0 6px; border-radius: 9px; color: var(--text-2); font-size: 12.5px; white-space: nowrap; transition: background .12s; }
+.role-stack:hover, .role-stack.is-open { background: var(--hover); color: var(--text); }
+.role-stack > .icon { color: var(--text-3); transition: transform .15s; }
+.role-stack.is-open > .icon { transform: rotate(180deg); }
+.role-faces { display: inline-flex; }
+.role-face { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--bg-muted); box-shadow: 0 0 0 2px var(--bg); overflow: hidden; }
+.role-face + .role-face { margin-left: -6px; }
+.role-sum .is-doing { color: var(--new); }
+/* A narrow map column keeps only the faces; the counts are in the list. */
+.stage-bar { container-type: inline-size; }
+@container (max-width: 520px) { .role-sum { display: none; } }
+.roles .dock { top: calc(100% + 6px); right: 0; z-index: 60; display: flex; flex-direction: column; width: 300px; max-height: min(72vh, 620px); padding: 4px; }
 .dock-head { display: flex; align-items: center; gap: 2px; height: 30px; padding-left: 8px; flex: none; font-size: 11.5px; font-weight: 600; color: var(--text-3); }
 .dock-title { margin-right: auto; }
 .dock-head .add { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px 0 7px; border-radius: 7px; font-size: 12px; font-weight: 550; color: var(--text-2); }
 .dock-head .add .icon { color: var(--accent); }
 .dock-head .add:hover { background: var(--hover); color: var(--text); }
 .dock-fold { flex: none; width: 26px; height: 26px; }
-.dock-fold .icon { rotate: 180deg; }
-.dock.is-folded .dock-fold .icon { rotate: 0deg; }
+.dock-filter { flex: none; height: 28px; margin: 2px 4px 6px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-subtle); color: var(--text); font: 12.5px var(--font-sans); outline: none; }
+.dock-filter:focus { border-color: var(--accent-line); }
 .dock-rows { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; }
-/* Folded: a column of faces. Cards in progress sit on a blue badge, Cards waiting on an orange one. */
-.dock.is-folded { width: auto; align-items: center; gap: 6px; padding: 4px 5px 8px; }
-.lane-chip { position: relative; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; transition: background .15s, box-shadow .15s; }
-.lane-chip:hover { background: var(--hover); }
-.lane-chip.is-hot { background: var(--new-soft); box-shadow: inset 0 0 0 1.5px var(--new); }
-.lane-chip.is-over { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent-line); }
-.badge { position: absolute; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; color: #fff; font-size: 10px; font-weight: 650; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums; box-shadow: 0 0 0 2px var(--bg); }
-.badge.is-doing { right: -4px; bottom: -3px; background: var(--new); }
-.badge.is-waiting { left: -4px; top: -3px; background: var(--warn); }
-/* A face being dropped on says what letting go does. */
-.dock.is-folded :is(.lane-chip, .draft-chip).is-over::before { content: attr(data-hint); position: absolute; z-index: 70; top: 50%; left: calc(100% + 10px); translate: 0 -50%; padding: 5px 9px; border-radius: 7px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: var(--shadow-md); pointer-events: none; }
+/* A draft being dropped on, with the list closed, says what letting go does. */
+.roles > .draft-chip.is-over::before { content: attr(data-hint); position: absolute; z-index: 70; top: calc(100% + 8px); right: 0; padding: 5px 9px; border-radius: 7px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: var(--shadow-md); pointer-events: none; }
 .draft-chip { position: relative; display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 7px 0 6px; border-radius: 7px; outline: 1px dashed var(--border-strong); outline-offset: -1px; background: var(--bg-subtle); color: var(--text-2); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .draft-chip .icon { color: var(--text-3); }
 .draft-chip:hover { background: var(--hover); }
 .draft-chip.is-over { background: var(--accent-soft); outline: 1.5px dashed var(--accent); color: var(--accent); } .draft-chip.is-over .icon { color: var(--accent); }
 .lane { flex: none; border-radius: 10px; transition: background .15s, box-shadow .15s; }
 .lane.is-over { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent-line); }
+/* Nothing in hand: quieter until pointed at or dropped on. */
+.lane.is-idle:not(.is-over, .is-hot) .lane-head:not(:hover) .who { opacity: .55; }
 .lane-head { display: flex; align-items: center; gap: 1px; min-height: 48px; padding: 0 2px 0 3px; border-radius: 9px; }
 .lane-head:hover { background: var(--hover); }
 .lane.is-hot .lane-head { background: var(--new-soft); }
@@ -345,9 +351,9 @@ body.is-dragging .lane-acts { opacity: 0; }
 .lane-body { display: flex; flex-direction: column; gap: 5px; padding: 2px 4px 8px; }
 .lane-empty { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 30px; padding: 4px 10px; border-radius: 8px; border: 1px dashed var(--border-strong); color: var(--text-3); font-size: 12px; text-align: center; }
 /* Lines from the lit robot to the cards on its desk. */
-/* Tips in the dock open to its right, over the map, so the window edge never cuts them. Rows sit in a
+/* Tips in the list open to its left, over the map, so the window edge never cuts them. Rows sit in a
    scrolling list that would cut a tip, so they use the browser's own title instead. */
-.dock [data-tip]:hover::after { top: 50%; left: calc(100% + 8px); translate: 0 -50%; }
+.dock [data-tip]:hover::after { top: 50%; left: auto; right: calc(100% + 8px); translate: 0 -50%; }
 .desk-wires { position: absolute; inset: 0; z-index: 4; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .desk-wires path { fill: none; stroke: var(--new); stroke-width: 1.5; stroke-dasharray: 4 4; opacity: .7; }
 /* A Card in a lane: published Cards are blue letters, drafts dashed. */
@@ -925,13 +931,14 @@ button.ref-link:hover, span.ref-link:hover { background: var(--hover); }
 /* A thin bar with where it sits and what to do; a title block; the text in a readable measure with a rail
    of properties beside it. Node, Role, Card and draft share it. */
 .reader { grid-column: 1 / -1; z-index: 10; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
-.pg-top { display: flex; align-items: center; gap: 8px; height: 50px; flex: none; padding: 0 10px 0 22px; border-bottom: 1px solid var(--border); }
+.pg-top { position: relative; z-index: 20; display: flex; align-items: center; gap: 8px; height: 50px; flex: none; padding: 0 10px 0 22px; border-bottom: 1px solid var(--border); }
 .pg-crumbs { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; overflow: hidden; font-size: 12.5px; color: var(--text-3); white-space: nowrap; }
 .pg-crumbs .sep { color: var(--border-strong); }
 .pg-crumb { min-width: 0; max-width: 260px; overflow: hidden; text-overflow: ellipsis; padding: 3px 4px; border-radius: 5px; }
 button.pg-crumb:hover { background: var(--hover); color: var(--text); }
 .pg-crumbs > .pg-crumb:last-child { color: var(--text-2); font-weight: 550; }
 .pg-actions { display: flex; align-items: center; gap: 6px; flex: none; margin-left: auto; }
+.pg-actions .roles { margin-left: 0; }
 .pg-hint { font-size: 12px; margin-right: 4px; white-space: nowrap; }
 .pg-scroll { flex: 1; min-height: 0; overflow: auto; }
 .pg-grid { display: grid; grid-template-columns: minmax(0, 1fr) 244px; gap: 56px; max-width: 1060px; margin: 0 auto; padding: 34px 40px 96px; }

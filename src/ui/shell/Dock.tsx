@@ -1,8 +1,9 @@
-// The robot dock on the map: one row per Role and the public area, with what each has in hand. Nodes,
-// a picked set or a whole region dropped on a robot start a Card for it; Cards drag between rows until
-// received. Folded, it is a column of faces with counts on them. Rules: Tent Node "UI-图谱画模块依赖与状态",
-// "分工搬进图谱" and "机器人工位的样子" (cuca 2026-10-16).
-import { useState, type ReactNode } from "react";
+// The robots, at the right of the bar over the map: the busiest faces stacked with what all of them have
+// in hand, opening down into a list with one row per Role and the public area. Nodes, a picked set or a
+// whole region dropped on a row start a Card for it; Cards drag between rows until received. A drag that
+// rests on the stack opens the list. Rules: Tent Node "UI-图谱画模块依赖与状态", "分工搬进图谱" (cuca
+// 2026-10-16) and "Role 列表放顶栏：头像叠加竖排列表" (cuca 2026-10-17).
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Graph } from "../data/store.js";
 import type { SnapshotCard, SnapshotRef } from "../data/types.js";
 import { isDraft, editDraft, useDraft, type Draft } from "../data/drafts.js";
@@ -27,9 +28,12 @@ type Props = {
   onPin: (lane: string | null) => void;
   onOpen: (ref: SnapshotRef) => void;
   onPage: (ref: SnapshotRef) => void;
-  /** Folded for now, whatever was chosen: the map's pen is out and wants the room. */
-  shut?: boolean;
 };
+
+/** Whether a robot has anything in hand. */
+const busy = (d: Desk) => d.doing + d.waiting + d.returned + d.drafts > 0;
+/** Past this many rows the list offers a filter. */
+const FILTER_FROM = 8;
 
 /**
  * What a robot has in hand, as counts on its row: only those it has, so they fit beside the face; with
@@ -66,14 +70,14 @@ function Tally({ desk, role }: { desk: Desk; role: boolean }) {
 }
 
 export function Dock(props: Props) {
-  const { graph, work, hotLane, onHot } = props;
+  const { graph, work } = props;
   const [lanesOpen, setLanesOpen] = useState<string[]>(() => readStored("tent-lanes-open", []));
-  // Folded to a column of faces, leaving the map the room; they still take drops.
-  const [folded, setFolded] = useState(() => readStored("tent-dock-folded", false));
-  const fold = (next: boolean) => {
-    setFolded(next);
-    writeStored("tent-dock-folded", next);
+  const [open, setOpen] = useState(() => readStored("tent-roles-open", false));
+  const show = (next: boolean) => {
+    setOpen(next);
+    writeStored("tent-roles-open", next);
   };
+  const [filter, setFilter] = useState("");
   const toggleLane = (lane: string) =>
     setLanesOpen((l) => {
       const next = l.includes(lane) ? l.filter((x) => x !== lane) : [...l, lane];
@@ -91,89 +95,129 @@ export function Dock(props: Props) {
     if (!lanesOpen.includes(landed.lane)) toggleLane(landed.lane);
   }
 
+  // A drag resting on the stack opens the list, so it can be let go on a row.
+  const drag = useDragState();
+  const stack = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!drag || open) return;
+    const r = stack.current?.getBoundingClientRect();
+    if (!r || drag.x < r.left || drag.x > r.right || drag.y < r.top || drag.y > r.bottom) return;
+    const wait = setTimeout(() => setOpen(true), 350);
+    return () => clearTimeout(wait);
+  }, [drag, open]);
+  useEffect(() => {
+    if (!open) return;
+    const esc = (e: KeyboardEvent) => {
+      const at = e.target as HTMLElement;
+      if (e.key !== "Escape" || at.closest("input, textarea") || !at.closest(".roles")) return;
+      show(false);
+    };
+    addEventListener("keydown", esc);
+    return () => removeEventListener("keydown", esc);
+  }, [open]);
+
   const writing = work.lanes
     .flatMap((lane) => work.laneCards(lane))
     .find((c) => c.id === work.openDraft);
   const writingSources = writing ? (work.draft?.input.sources.length ?? writing.sources.length) : 0;
-
-  if (folded || props.shut)
-    return (
-      <section className="dock is-folded panel" aria-label={t.work.title}>
-        <button
-          type="button"
-          className="icon-btn dock-fold"
-          onClick={() => fold(false)}
-          aria-label={t.work.unfoldAll}
-          data-tip={t.work.unfoldAll}
-        >
-          <Icon name="chevron" size={13} />
-        </button>
-        {writing && (
-          <DraftChip
-            card={writing}
-            work={work}
-            sources={writingSources}
-            onOpen={() => fold(false)}
-          />
-        )}
-        {work.lanes.map((lane) => (
-          <LaneChip
-            key={lane || "public"}
-            work={work}
-            lane={lane}
-            hot={hotLane === lane}
-            onHot={onHot}
-            onOpen={() => {
-              fold(false);
-              if (!lanesOpen.includes(lane)) toggleLane(lane);
-            }}
-          />
-        ))}
-      </section>
-    );
+  // Robots with something in hand first, each group in its own order.
+  const lanes = [...work.lanes].sort((a, b) => +busy(work.desk(b)) - +busy(work.desk(a)));
+  const roles = work.lanes.filter((l) => l !== PUBLIC).length;
+  const sum = (k: keyof Desk) => work.lanes.reduce((n, l) => n + work.desk(l)[k], 0);
+  const doing = sum("doing"),
+    waiting = sum("waiting") + sum("returned");
+  const q = filter.trim().toLowerCase();
+  const listed = q ? lanes.filter((l) => work.laneName(l).toLowerCase().includes(q)) : lanes;
 
   return (
-    <section className="dock panel" aria-label={t.work.title}>
-      <div className="dock-head">
-        <span className="dock-title">{t.work.title}</span>
-        <button
-          type="button"
-          className="add"
-          onClick={() => void work.newCard(null)}
-          aria-label={t.side.newCard}
-          data-tip={t.work.newTip}
-          data-key="C"
-        >
-          <Icon name="addToCard" size={14} />
-          {t.side.newCard}
-        </button>
-        <button
-          type="button"
-          className="icon-btn dock-fold"
-          onClick={() => fold(true)}
-          aria-label={t.work.foldAll}
-          data-tip={t.work.foldAll}
-          data-tip-end=""
-        >
-          <Icon name="chevron" size={13} />
-        </button>
-      </div>
-      <div className="dock-rows">
-        {work.lanes.map((lane) => (
-          <Lane
-            key={lane || "public"}
-            {...props}
-            lane={lane}
-            shown={laneShown(lane)}
-            onToggle={() => {
-              // Folding the row of the draft being written puts the draft away.
-              if (laneShown(lane) && draftLane === lane) work.setOpenDraft(null);
-              if (lanesOpen.includes(lane) || draftLane !== lane) toggleLane(lane);
-            }}
-          />
-        ))}
-      </div>
-    </section>
+    <div className="roles">
+      {writing && !open && (
+        <DraftChip card={writing} work={work} sources={writingSources} onOpen={() => show(true)} />
+      )}
+      <button
+        ref={stack}
+        type="button"
+        className={`role-stack${open ? " is-open" : ""}`}
+        aria-expanded={open}
+        aria-label={t.work.title}
+        data-tip={open ? undefined : t.work.stackTip}
+        data-tip-end=""
+        onClick={() => show(!open)}
+      >
+        <span className="role-faces">
+          {lanes.slice(0, 3).map((lane) => (
+            <span key={lane || "public"} className="role-face">
+              {lane === PUBLIC ? (
+                <Tray size={17} />
+              ) : (
+                <Pet id={lane} size={17} mood={moodOf(work.desk(lane), work.gone(lane))} />
+              )}
+            </span>
+          ))}
+        </span>
+        <span className="role-sum">
+          {t.work.roles(roles)}
+          {doing > 0 && <span className="is-doing"> · {t.work.doingN(doing)}</span>}
+          {waiting > 0 && <span> · {t.work.waitingN(waiting)}</span>}
+        </span>
+        <Icon name="down" size={14} />
+      </button>
+      {open && (
+        <section className="dock panel" aria-label={t.work.title}>
+          <div className="dock-head">
+            <span className="dock-title">{t.work.title}</span>
+            <button
+              type="button"
+              className="add"
+              onClick={() => void work.newCard(null)}
+              aria-label={t.side.newCard}
+              data-tip={t.work.newTip}
+              data-key="C"
+            >
+              <Icon name="addToCard" size={14} />
+              {t.side.newCard}
+            </button>
+            <button
+              type="button"
+              className="icon-btn dock-fold"
+              onClick={() => show(false)}
+              aria-label={t.work.foldAll}
+              data-tip={t.work.foldAll}
+              data-key="Esc"
+              data-tip-end=""
+            >
+              <Icon name="close" size={13} />
+            </button>
+          </div>
+          {lanes.length > FILTER_FROM && (
+            <input
+              className="dock-filter"
+              type="search"
+              value={filter}
+              placeholder={t.work.filter}
+              aria-label={t.work.filter}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+          )}
+          <div className="dock-rows">
+            {listed.map((lane) => (
+              <Lane
+                key={lane || "public"}
+                {...props}
+                lane={lane}
+                idle={!busy(work.desk(lane)) && draftLane !== lane}
+                shown={laneShown(lane)}
+                onToggle={() => {
+                  // Folding the row of the draft being written puts the draft away.
+                  if (laneShown(lane) && draftLane === lane) work.setOpenDraft(null);
+                  if (lanesOpen.includes(lane) || draftLane !== lane) toggleLane(lane);
+                }}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -183,6 +227,7 @@ function Lane({
   selected,
   work,
   lane,
+  idle,
   shown,
   draftOnPage,
   hotLane,
@@ -193,6 +238,8 @@ function Lane({
   onPage,
 }: Props & {
   lane: string;
+  /** Nothing in hand: the row stays quieter. */
+  idle: boolean;
   shown: boolean;
   onToggle: () => void;
 }) {
@@ -205,6 +252,7 @@ function Lane({
   const hint = drag ? laneHint(work, drag.item, lane) : "";
   const cls = [
     "lane",
+    idle ? "is-idle" : "",
     over ? "is-over" : "",
     hotLane === lane ? "is-hot" : "",
     selected?.kind === "role" && selected.id === lane ? "is-active" : "",
@@ -343,7 +391,7 @@ function laneHint(work: Work, item: { kind: "node" | "card"; ids?: string[] }, l
       : t.work.dropTo(name);
 }
 
-/** The draft being written, while the dock is folded: a pencil and its number of sources. Takes Nodes. */
+/** The draft being written, while the list is closed: a pencil and its number of sources. Takes Nodes. */
 function DraftChip({
   card,
   work,
@@ -369,54 +417,6 @@ function DraftChip({
     >
       <Icon name={over ? "drop" : "draft"} size={13} />
       {over ? sources + 1 : sources}
-    </button>
-  );
-}
-
-/**
- * A robot while the dock is folded: its face, Cards in progress on a blue badge, and Cards waiting or
- * results to collect on an orange one. The name and all counts show on hover. Still takes Nodes or a Card.
- */
-function LaneChip({
-  work,
-  lane,
-  hot,
-  onHot,
-  onOpen,
-}: {
-  work: Work;
-  lane: string;
-  hot: boolean;
-  onHot: (lane: string | null) => void;
-  onOpen: () => void;
-}) {
-  const drag = useDragState();
-  const desk = work.desk(lane);
-  const name = work.laneName(lane);
-  const role = lane !== PUBLIC;
-  const over = drag?.over === `lane:${lane}`;
-  return (
-    <button
-      type="button"
-      className={`lane-chip${over ? " is-over" : ""}${hot ? " is-hot" : ""}`}
-      data-drop={`lane:${lane}`}
-      data-lane={lane}
-      data-hint={over ? laneHint(work, drag.item, lane) : undefined}
-      data-tip={t.work.chipTip(name, t.work.tally(desk, role))}
-      aria-label={name}
-      onClick={onOpen}
-      onPointerEnter={() => !drag && onHot(lane)}
-      onPointerLeave={() => onHot(null)}
-    >
-      {lane === PUBLIC ? (
-        <Tray size={28} />
-      ) : (
-        <Pet id={lane} size={28} mood={moodOf(desk, work.gone(lane))} />
-      )}
-      {role && desk.doing > 0 && <span className="badge is-doing">{desk.doing}</span>}
-      {desk.waiting + desk.returned > 0 && (
-        <span className="badge is-waiting">{desk.waiting + desk.returned}</span>
-      )}
     </button>
   );
 }

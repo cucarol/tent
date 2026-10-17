@@ -9,9 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
-  cloneElement,
   type CSSProperties,
-  type ReactElement,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -724,8 +722,9 @@ function PeekCard({ graph, peek, flag }: { graph: Graph; peek: Peek; flag?: Sync
 }
 
 /**
- * Lines from the robot lit in the dock to the cards on screen that the Cards on its desk carry, drawn
- * over the map in screen space and redrawn as the map moves.
+ * Lines from the robot lit in the bar to the cards on screen that the Cards on its desk carry, drawn over
+ * the map in screen space and redrawn as the map moves. From its row when the list is open, falling in
+ * from the left of the row; from the stack of faces when it is closed, falling from the top of the map.
  */
 function DeskWires({
   lane,
@@ -738,36 +737,52 @@ function DeskWires({
 }) {
   const transform = useStore((s) => s.transform);
   const [paths, setPaths] = useState<string[]>([]);
-  // The dock folding, a row opening or the window resizing moves where the lines start.
+  // The list opening, a row opening or the window resizing moves where the lines start.
   const [moved, setMoved] = useState(0);
   useEffect(() => {
-    const dock = box.current?.querySelector(".dock");
-    if (!dock) return;
+    const roles = document.querySelector(".roles");
+    if (!roles) return;
     const watch = new ResizeObserver(() => setMoved((n) => n + 1));
-    watch.observe(dock);
-    return () => watch.disconnect();
+    watch.observe(roles);
+    const list = new MutationObserver(() => setMoved((n) => n + 1));
+    list.observe(roles, { childList: true });
+    return () => (watch.disconnect(), list.disconnect());
   }, [box]);
   useLayoutEffect(() => {
     const host = box.current;
-    const row = host?.querySelector(`.dock [data-lane="${CSS.escape(lane)}"]`);
+    const row = document.querySelector(`.roles .dock [data-lane="${CSS.escape(lane)}"]`);
     const from = row?.querySelector(".lane-head") ?? row;
-    if (!host || !from) return setPaths([]);
-    const o = host.getBoundingClientRect(),
-      a = from.getBoundingClientRect();
-    const x1 = a.right - o.left,
-      y1 = a.top + a.height / 2 - o.top;
+    const stack = document.querySelector(".roles .role-stack");
+    if (!host || !(from || stack)) return setPaths([]);
+    const o = host.getBoundingClientRect();
+    const list = from?.closest(".dock")?.getBoundingClientRect();
     const next: string[] = [];
     for (const id of ids) {
       const card = host.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"] .mcard`);
       if (!card) continue;
       const b = card.getBoundingClientRect();
-      const x2 = b.left - o.left,
-        y2 = b.top + Math.min(b.height, 48) / 2 - o.top;
-      // Off screen, or tucked under the dock.
+      // Off screen, or under the open list.
       if (b.right < o.left || b.left > o.right || b.bottom < o.top || b.top > o.bottom) continue;
-      if (x2 < x1 + 12) continue;
-      const mx = x1 + (x2 - x1) / 2;
-      next.push(`M${x1} ${y1}C${mx} ${y1},${mx} ${y2},${x2} ${y2}`);
+      if (list && b.right > list.left && b.left < list.right && b.top < list.bottom) continue;
+      if (from) {
+        const a = from.getBoundingClientRect();
+        const x1 = a.left - o.left,
+          y1 = a.top + a.height / 2 - o.top;
+        const x2 = b.right - o.left,
+          y2 = b.top + Math.min(b.height, 48) / 2 - o.top;
+        if (x2 > x1 - 12) continue;
+        const mx = x2 + (x1 - x2) / 2;
+        next.push(`M${x1} ${y1}C${mx} ${y1},${mx} ${y2},${x2} ${y2}`);
+      } else {
+        const a = stack!.getBoundingClientRect();
+        const x1 = a.left + a.width / 2 - o.left,
+          y1 = Math.max(0, a.bottom - o.top);
+        const x2 = b.left + b.width / 2 - o.left,
+          y2 = b.top - o.top;
+        if (y2 < y1 + 12) continue;
+        const my = y1 + (y2 - y1) / 2;
+        next.push(`M${x1} ${y1}C${x1} ${my},${x2} ${my},${x2} ${y2}`);
+      }
     }
     setPaths((was) => (was.join() === next.join() ? was : next));
   }, [lane, ids, transform, box, moved]);
@@ -853,8 +868,6 @@ type MapProps = {
   /** The robot lit in the dock, and the Nodes the Cards on a robot's desk carry. */
   hotLane: string | null;
   carriedBy: (lane: string) => ReadonlySet<string>;
-  /** The robot dock, laid over the map's top left; cards and regions dragged onto it go to a robot. */
-  dock?: ReactNode;
   /** Whether arrow keys, Enter and Space drive the map right now. */
   keys: boolean;
   onSelect: (ref: SnapshotRef | null) => void;
@@ -880,7 +893,6 @@ function MapContent({
   draft,
   hotLane,
   carriedBy,
-  dock,
   keys,
   onSelect,
   onFold,
@@ -2293,7 +2305,7 @@ function MapContent({
     if (!inView(boxRect({ id, name: "", box }))) fitRects([boxRect({ id, name: "", box })], 1);
   };
   const overDock = (ev: PointerEvent) =>
-    !!document.elementFromPoint(ev.clientX, ev.clientY)?.closest(".dock");
+    !!document.elementFromPoint(ev.clientX, ev.clientY)?.closest(".roles");
   const onPress = (e: React.PointerEvent) => {
     const el = box.current;
     const target = e.target as HTMLElement;
@@ -2713,9 +2725,6 @@ function MapContent({
         partial={!Object.values(filters.types).every(Boolean)}
         onSelect={onSelect}
       />
-      {inking && dock
-        ? cloneElement(dock as ReactElement<{ shut?: boolean }>, { shut: true })
-        : dock}
       {hotLane !== null && lit && <DeskWires lane={hotLane} ids={lit} box={box} />}
       {lensName ? (
         <div className="panel map-hint">

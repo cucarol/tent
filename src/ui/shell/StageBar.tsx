@@ -1,18 +1,21 @@
-import { Fragment } from "react";
+import { Fragment, type ReactNode } from "react";
 import { cardTitle, type Graph } from "../data/store.js";
 import type { SnapshotRef } from "../data/types.js";
 import { CardGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
 import { t } from "../i18n.js";
 
-/** The bar over the stage: the map, and where the selection sits on it. */
+/** The bar over the stage: the map and how many Nodes it holds, where the selection sits, and the robots. */
 export function StageBar({
   graph,
   selected,
+  roles,
   onOpen,
 }: {
   graph: Graph;
   selected: SnapshotRef | null;
+  /** The robots, at the right end. */
+  roles?: ReactNode;
   onOpen: (ref: SnapshotRef | null) => void;
 }) {
   const crumbs: { ref: SnapshotRef; name: string; glyph: React.ReactNode }[] = [];
@@ -45,8 +48,10 @@ export function StageBar({
           className="crumb is-root"
           onClick={() => onOpen(null)}
           aria-current={crumbs.length ? undefined : "location"}
+          title={t.bar.nodes(graph.snapshot.nodes.length)}
         >
           {t.app.map}
+          <span className="crumb-count">{graph.snapshot.nodes.length}</span>
         </button>
         {crumbs.map((c, i) => (
           <Fragment key={c.ref.id}>
@@ -63,9 +68,7 @@ export function StageBar({
           </Fragment>
         ))}
       </nav>
-      <div className="stage-meta">
-        {!selected && <span>{t.bar.nodes(graph.snapshot.nodes.length)}</span>}
-      </div>
+      {roles}
     </header>
   );
 }

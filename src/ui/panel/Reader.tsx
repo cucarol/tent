@@ -63,6 +63,8 @@ type Props = {
   onExpand?: (edit?: boolean) => void;
   onLocate: (ref: SnapshotRef) => void;
   onToast: (text: string) => void;
+  /** The robots, in a page's bar while the page covers the map and its bar. */
+  roles?: ReactNode;
 };
 /**
  * What a page is laid out for; narrow puts the rail into the one column. Past is set once the title block
@@ -187,7 +189,8 @@ function PageTop({
   onCollapse,
   onExpand,
   onClose,
-}: Pick<PageProps, "mode" | "past" | "toTop" | "onCollapse" | "onExpand" | "onClose"> & {
+  roles,
+}: Pick<PageProps, "mode" | "past" | "toTop" | "onCollapse" | "onExpand" | "onClose" | "roles"> & {
   /**
    * Beside the map, whose bar already shows where it sits, the panel's bar stays quiet until the title
    * block scrolls away, then names the object; clicking the name goes back up.
@@ -226,6 +229,12 @@ function PageTop({
         </nav>
       )}
       <div className="pg-actions">
+        {mode !== "panel" && roles && (
+          <>
+            {roles}
+            <span className="vsep" />
+          </>
+        )}
         {actions}
         {actions && <span className="vsep" />}
         {mode === "panel" ? (
