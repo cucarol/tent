@@ -1,4 +1,4 @@
-import { inspectWorkspaceSync } from "../core/graph/node-sync.js";
+import { inspectWorkspaceSync, readOutputComparisons } from "../core/graph/node-sync.js";
 // The local service behind `tent ui`: serves the bundled Web UI and a small JSON API over Core.
 // Its contract is the Tent Node "Web界面服务接口"; it is not a public protocol.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -271,6 +271,12 @@ async function startWorkspaceServer(
       );
     }
     if (route === "GET /api/modules/deps") return json(res, 200, await dependencyQuery.read());
+    if (route === "GET /api/outputs/compare")
+      return json(
+        res,
+        200,
+        await readOutputComparisons(queryFs, url.searchParams.getAll("nodeId")),
+      );
     if (route === "GET /api/sync") {
       // The initial UI read runs beside the snapshot; keep its starting document revision.
       const revision = await readWorkspaceRevision(queryFs);

@@ -1,5 +1,6 @@
 import type { InvalidNativeNode } from "./node-native-capture.js";
-import { withTentMutation, type FsAdapter } from "../store/adapter.js";
+import { readOnlyFs, withTentMutation, type FsAdapter } from "../store/adapter.js";
+import { isNodeId } from "../base/id.js";
 import { contentEtag } from "../base/etag.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import {
@@ -268,49 +269,70 @@ async function inspectCatalogNodesInScope(
           });
         const goalChecks = await Promise.all(
           goals.map(async (goal) => {
-            const checkedMaterials: NodeSyncInspection["materials"] = [];
-            if (attempt === 0 && !goalsRead.has(goal.path))
-              goalsRead.set(goal.path, readGoal(goal, nodeCatalog, false));
-            const {
-              raw: goalRaw,
-              parsed,
-              version: currentVersion,
-            } = await (attempt > 0 ? readGoal(goal, nodeCatalog, true) : goalsRead.get(goal.path)!);
-            const basis = record?.goals?.find((entry) => entry.nodeId === goal.nodeId);
-            const recordedVersion = basis?.version;
-            checkedMaterials.push({
-              resource: `/${nodeNotePath(goal.path)}`,
-              goalId: goal.nodeId,
-              currentVersion,
-              ...(recordedVersion ? { recordedVersion } : {}),
-              state: recordedVersion
-                ? currentVersion === recordedVersion
-                  ? "current"
-                  : "changed"
-                : hasRetainedHistory
-                  ? "unavailable"
-                  : "unanchored",
-              ...(!recordedVersion && hasRetainedHistory
-                ? { reason: "Output has no retained baseline for this ancestor goal" }
-                : {}),
-            });
-            const goalMaterials = await observeMaterials(
-              parsed.data,
-              nodeNotePath(goal.path),
-              nodeCatalog,
-              attempt > 0,
-            );
-            checkedMaterials.push(
-              ...comparedMaterials(
-                goalMaterials,
-                basis?.materials ?? [],
-                goal.nodeId,
-                hasRetainedHistory && !basis,
-              ),
-            );
-            if ((await fs.readFile(nodeNotePath(goal.path))) !== goalRaw)
-              throw new NodeWriteError("ETAG_CONFLICT", "Goal changed during sync inspection");
-            return checkedMaterials;
+            try {
+              const checkedMaterials: NodeSyncInspection["materials"] = [];
+              if (attempt === 0 && !goalsRead.has(goal.path))
+                goalsRead.set(goal.path, readGoal(goal, nodeCatalog, false));
+              const {
+                raw: goalRaw,
+                parsed,
+                version: currentVersion,
+              } = await (attempt > 0
+                ? readGoal(goal, nodeCatalog, true)
+                : goalsRead.get(goal.path)!);
+              const basis = record?.goals?.find((entry) => entry.nodeId === goal.nodeId);
+              const recordedVersion = basis?.version;
+              checkedMaterials.push({
+                resource: `/${nodeNotePath(goal.path)}`,
+                goalId: goal.nodeId,
+                currentVersion,
+                ...(recordedVersion ? { recordedVersion } : {}),
+                state: recordedVersion
+                  ? currentVersion === recordedVersion
+                    ? "current"
+                    : "changed"
+                  : hasRetainedHistory
+                    ? "unavailable"
+                    : "unanchored",
+                ...(!recordedVersion && hasRetainedHistory
+                  ? { reason: "Output has no retained baseline for this ancestor goal" }
+                  : {}),
+              });
+              const goalMaterials = await observeMaterials(
+                parsed.data,
+                nodeNotePath(goal.path),
+                nodeCatalog,
+                attempt > 0,
+              );
+              checkedMaterials.push(
+                ...comparedMaterials(
+                  goalMaterials,
+                  basis?.materials ?? [],
+                  goal.nodeId,
+                  hasRetainedHistory && !basis,
+                ),
+              );
+              if ((await fs.readFile(nodeNotePath(goal.path))) !== goalRaw)
+                throw new NodeWriteError("ETAG_CONFLICT", "Goal changed during sync inspection");
+              return checkedMaterials;
+            } catch (error) {
+              if (
+                !["ENOENT", "EACCES", "EPERM", "EISDIR", "ENOTDIR", "EIO"].includes(
+                  (error as NodeJS.ErrnoException).code ?? "",
+                )
+              )
+                throw error;
+              // A failed ancestor read does not invalidate another ancestor's
+              // completed comparison. Changed metadata still retries above.
+              return [
+                {
+                  resource: `/${nodeNotePath(goal.path)}`,
+                  goalId: goal.nodeId,
+                  state: "unavailable" as const,
+                  reason: `Goal could not be read: ${error instanceof Error ? error.message : String(error)}`,
+                },
+              ];
+            }
           }),
         );
         materials.push(...goalChecks.flat());
@@ -492,17 +514,15 @@ export type OutputChange =
   | { kind: "material"; resource: string }
   | { kind: "goal" | "ancestor-goal"; nodeId: string; name: string };
 
-/** Informational comparisons never contribute output behind findings. */
-export async function readOutputChanges(fs: FsAdapter, nodeId: string) {
-  const catalog = await loadNodeCatalog(fs);
-  const target = catalog.byId.get(nodeId);
-  if (!target) throw new NodeWriteError("NOT_FOUND", `Node not found: ${nodeId}`);
-  if (!isOutputNode(target)) return undefined;
-  const inspection = (
-    await inspectCatalogNodes(fs, catalog, [target], new Date().toISOString(), nodeId)
-  ).nodes[0]!;
+export type OutputComparison = {
+  nodeId: string;
+  /** Nearest goal first. Unknown never implies a change or a match. */
+  goals: Array<{ goalId: string; state: "current" | "changed" | "unknown" }>;
+  changedSince: OutputChange[];
+};
+
+function outputChanges(inspection: NodeSyncInspection, catalog: NodeCatalog): OutputChange[] {
   const changed = inspection.materials.filter((material) => material.state === "changed");
-  if (!changed.length) return undefined;
   const own: OutputChange[] = changed
     .filter((material) => !material.goalId)
     .map((material) => ({ kind: "material", resource: material.resource }));
@@ -514,6 +534,56 @@ export async function readOutputChanges(fs: FsAdapter, nodeId: string) {
     name: catalog.byId.get(id)!.name,
   }));
   return [...own, ...goals];
+}
+
+/** One selected batch shares the existing sync observation; it never acknowledges a baseline. */
+export async function readOutputComparisons(
+  fs: FsAdapter,
+  nodeIds: readonly string[],
+): Promise<OutputComparison[]> {
+  if (!Array.isArray(nodeIds) || nodeIds.some((id) => !isNodeId(id)))
+    throw new ReaderError("INVALID_INPUT", "Expected canonical output Node ids");
+  if (!nodeIds.length) return [];
+  fs = readOnlyFs(fs);
+  const catalog = await loadNodeCatalog(fs);
+  const selected = [...new Set(nodeIds)].map((id) => {
+    const node = catalog.byId.get(id);
+    if (!node) throw new ReaderError("NOT_FOUND", `Node not found: ${id}`);
+    if (!isOutputNode(node))
+      throw new ReaderError("INVALID_INPUT", `Expected an output Node: ${id}`);
+    return node;
+  });
+  const inspections = await inspectCatalogNodes(fs, catalog, selected, new Date().toISOString());
+  return inspections.nodes.map((inspection, index) => ({
+    nodeId: inspection.nodeId,
+    goals: (
+      inspection.goalIds ?? goalAncestors(selected[index]!, catalog.byId).map((g) => g.nodeId)
+    ).map((goalId) => {
+      const materials = inspection.materials.filter((material) => material.goalId === goalId);
+      const state: OutputComparison["goals"][number]["state"] = inspection.uncertain
+        ? "unknown"
+        : materials.some((material) => material.state === "changed")
+          ? "changed"
+          : materials.length && materials.every((material) => material.state === "current")
+            ? "current"
+            : "unknown";
+      return { goalId, state };
+    }),
+    changedSince: outputChanges(inspection, catalog),
+  }));
+}
+
+/** Informational comparisons never contribute output behind findings. */
+export async function readOutputChanges(fs: FsAdapter, nodeId: string) {
+  const catalog = await loadNodeCatalog(fs);
+  const target = catalog.byId.get(nodeId);
+  if (!target) throw new NodeWriteError("NOT_FOUND", `Node not found: ${nodeId}`);
+  if (!isOutputNode(target)) return undefined;
+  const inspection = (
+    await inspectCatalogNodes(fs, catalog, [target], new Date().toISOString(), nodeId)
+  ).nodes[0]!;
+  const changes = outputChanges(inspection, catalog);
+  return changes.length ? changes : undefined;
 }
 
 export function confirmNodeSync(
