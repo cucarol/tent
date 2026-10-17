@@ -106,16 +106,50 @@ export async function readModuleDependencies(
     return modules;
   };
   const edges = new Map<string, ModuleDependencies["edges"][number]>();
+  const directoryOwners = (directory: string) => {
+    const comparable = (value: string) =>
+      process.platform === "win32" ? value.toLowerCase() : value;
+    const prefix = directory === "." ? "" : `${directory}/`;
+    let longest = -1;
+    let matches: string[] = [];
+    for (const module of modules) {
+      const specificity = Math.max(
+        -1,
+        ...module.coverage
+          .filter(
+            (coverage) =>
+              coverage.kind === "directory" &&
+              (comparable(coverage.prefix) === comparable(prefix) ||
+                materialCoverageContains(coverage, directory)),
+          )
+          .map((coverage) => coverage.prefix.length),
+      );
+      if (specificity < 0 || specificity < longest) continue;
+      if (specificity > longest) {
+        longest = specificity;
+        matches = [];
+      }
+      matches.push(module.nodeId);
+    }
+    return matches;
+  };
+  const packageDirectories = new Map(
+    [...goPackages.keys()].map((directory) => [directory, directoryOwners(directory)]),
+  );
   let unresolved = imports.issues.length;
   for (const edge of imports.edges) {
     const from = participation(edge.from);
     const targets = edge.kind === "file" ? [edge.to] : (goPackages.get(edge.to) ?? []);
     const targetOwners = targets.map(participation);
-    // A package import can name only modules owning every production file in that package.
+    // A directory module owns the package even when finer modules own its individual files.
+    const direct = edge.kind === "file" ? [] : (packageDirectories.get(edge.to) ?? []);
     const to = new Set(
-      (targetOwners[0] ?? []).filter(
-        (owner) => edge.kind === "file" || targetOwners.every((owners) => owners.includes(owner)),
-      ),
+      direct.length
+        ? direct
+        : (targetOwners[0] ?? []).filter(
+            (owner) =>
+              edge.kind === "file" || targetOwners.every((owners) => owners.includes(owner)),
+          ),
     );
     if (edge.kind !== "file" && !to.size && targetOwners.some((owners) => owners.length))
       unresolved++;

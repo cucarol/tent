@@ -173,6 +173,86 @@ test("Go package ownership requires complete coverage and distinguishes partial 
   assert.equal(shared.unresolved, 0);
 });
 
+test("split Go packages retain directory import owners while files belong to finer modules", async (t) => {
+  const { node, read } = await fixture(t);
+  await node("root", ["./"]);
+  await node("a", ["a/"]);
+  await node("package", ["b/"], { type: "goal" });
+  await node("one", ["b/one*"]);
+  await node("two", ["b/two*"]);
+  const sources = [
+    { path: "go.mod", content: "module example.test/app" },
+    { path: "a/main.go", content: 'package a\nimport "example.test/app/b"' },
+    { path: "b/one.go", content: "package b" },
+    { path: "b/two.go", content: "package b" },
+  ];
+  const result = await read(sources);
+  assert.deepEqual(result.edges, [{ from: "node-a", to: "node-package", imports: 1 }]);
+  assert.deepEqual(result.modules, [
+    { nodeId: "node-a", files: 1 },
+    { nodeId: "node-one", files: 1 },
+    { nodeId: "node-package", files: 0 },
+    { nodeId: "node-root", files: 1 },
+    { nodeId: "node-two", files: 1 },
+  ]);
+  assert.equal(result.unresolved, 0);
+  assert.equal(result.uncovered, 0);
+  assert.deepEqual(await read([...sources].reverse()), result);
+
+  await node("shared", ["b/", "b/"]);
+  assert.deepEqual((await read(sources)).edges, [
+    { from: "node-a", to: "node-package", imports: 1 },
+    { from: "node-a", to: "node-shared", imports: 1 },
+  ]);
+  await node("package", ["b/"], { status: "deprecated" });
+  await node("shared", ["b/"], { status: "deprecated" });
+  const fallback = await read(sources);
+  assert.deepEqual(fallback.edges, [{ from: "node-a", to: "node-root", imports: 1 }]);
+  assert.equal(fallback.unresolved, 0);
+});
+
+test("Go imports to the root package preserve its directory owner after prefix splitting", async (t) => {
+  const { node, read } = await fixture(t);
+  await node("root", ["./"]);
+  await node("command", ["command*"]);
+  await node("flags", ["flags*"]);
+  await node("cli", ["cmd/"]);
+  const result = await read([
+    { path: "go.mod", content: "module example.test/app" },
+    { path: "command.go", content: "package app" },
+    { path: "flags.go", content: "package app" },
+    { path: "cmd/main.go", content: 'package main\nimport "example.test/app"' },
+  ]);
+  assert.deepEqual(result.edges, [{ from: "node-cli", to: "node-root", imports: 1 }]);
+  assert.equal(result.unresolved, 0);
+  assert.equal(result.uncovered, 0);
+});
+
+test("package directory ownership ignores ordinary materials and sibling path prefixes", async (t) => {
+  const { node, read } = await fixture(t);
+  await node("a", ["a/"]);
+  await node("sibling", ["b-other/"]);
+  await node("ordinary", [], { resource: "../../b/" });
+  await node("one", ["b/one*"]);
+  await node("two", ["b/two*"]);
+  const sources = [
+    { path: "go.mod", content: "module example.test/app" },
+    { path: "a/main.go", content: 'package a\nimport "example.test/app/b"' },
+    { path: "b/one.go", content: "package b" },
+    { path: "b/two.go", content: "package b" },
+  ];
+  const split = await read(sources);
+  assert.deepEqual(split.edges, []);
+  assert.equal(split.unresolved, 1);
+  assert.equal(split.uncovered, 0);
+  if (process.platform === "win32") {
+    await node("package", ["B/"]);
+    const result = await read(sources);
+    assert.deepEqual(result.edges, [{ from: "node-a", to: "node-package", imports: 1 }]);
+    assert.equal(result.unresolved, 0);
+  }
+});
+
 test("aliases reuse scan extraction and malformed configuration fails instead of a false graph", async (t) => {
   const { node, read } = await fixture(t);
   await node("a", ["src/a/"]);
