@@ -22,6 +22,11 @@ import { extractJavaImports } from "../core/base/java-imports.js";
 import { isJavaConfig } from "../core/base/java-build.js";
 import { extractCSharpImports } from "../core/base/csharp-imports.js";
 import { isCSharpConfig } from "../core/base/csharp-build.js";
+import {
+  extractCFamilyImports,
+  isCFamilySource,
+  isCFamilyConfig,
+} from "../core/base/cfamily-imports.js";
 import { sourceDirectoryPaths } from "./directory-observation.js";
 import { observeSourceFile } from "./source-observation.js";
 import { checkedSourceFile } from "./checked-source-file.js";
@@ -115,7 +120,13 @@ export async function observeStructureMaterial(
   const rustMembers = memberSources.filter((member) => member.endsWith(".rs"));
   const neededConfig = (file: string) => {
     if (!isImportConfig(file)) return false;
-    if (/(^|\/)Cargo\.toml$/.test(file) || isJavaConfig(file) || isCSharpConfig(file)) return false;
+    if (
+      /(^|\/)Cargo\.toml$/.test(file) ||
+      isJavaConfig(file) ||
+      isCSharpConfig(file) ||
+      isCFamilyConfig(file)
+    )
+      return false;
     const configDirectory = path.posix.dirname(file);
     return memberSources.some(
       (member) =>
@@ -192,19 +203,42 @@ export async function observeStructureMaterial(
     }
     csharp = extractCSharpImports(csharpSources, csharpMembers);
   }
-  const imports = extractRepositoryImports(files, { rust: false, java: false, csharp: false });
+  const cfamilySources = files.filter((file) => !isTestSource(file.path));
+  const cfamilyMembers = memberSources.filter(isCFamilySource);
+  let cfamily = extractCFamilyImports(cfamilySources, cfamilyMembers);
+  while (true) {
+    const required = cfamily.requiredFiles.filter(
+      (file) => byPath.get(file)?.content === undefined,
+    );
+    if (!required.length) break;
+    for (const file of required) {
+      const source = byPath.get(file);
+      if (!source) throw new Error(`Required C/C++ source is absent: ${file}`);
+      source.content = await readSource(file, path.join(workspaceRoot, file));
+    }
+    cfamily = extractCFamilyImports(cfamilySources, cfamilyMembers);
+  }
+  const imports = extractRepositoryImports(files, {
+    rust: false,
+    java: false,
+    csharp: false,
+    cfamily: false,
+  });
   imports.edges.push(...rust.edges);
   imports.issues.push(...rust.issues);
   imports.edges.push(...java.edges);
   imports.issues.push(...java.issues);
   imports.edges.push(...csharp.edges);
   imports.issues.push(...csharp.issues);
+  imports.edges.push(...cfamily.edges);
+  imports.issues.push(...cfamily.issues);
   const issue = imports.issues.find(
     (issue) =>
       isImportConfig(issue.file) ||
       materialCoverageContains(coverage, issue.file) ||
       java.requiredFiles.includes(issue.file) ||
-      csharp.requiredFiles.includes(issue.file),
+      csharp.requiredFiles.includes(issue.file) ||
+      cfamily.requiredFiles.includes(issue.file),
   );
   if (issue)
     throw new Error(
