@@ -688,6 +688,23 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .map-region-dissolve { margin-left: auto; opacity: 0; transition: opacity .12s ease; }
 .map-region-head:hover .map-region-dissolve, .map-region-dissolve:focus-visible { opacity: 1; }
 .map-region-none { position: absolute; inset: auto 0 14px 0; text-align: center; font-size: 13px; color: var(--text-3); }
+/* One layer out: a chip on the title, and the related cards outside shown faded beside the region. */
+.map-region-out { flex: none; padding: 2px 9px; border: 1px dashed var(--border-strong); border-radius: 999px; background: transparent; color: var(--text-2); font: 12px var(--font-sans); cursor: pointer; transition: background .12s ease, color .12s ease; }
+.map-region-out:hover, .map-region-out:focus-visible { color: var(--text); background: var(--bg); }
+.map-region-out.is-on { border-style: solid; background: var(--bg); color: var(--text); }
+.outward { position: absolute; left: 0; top: 0; width: 280px; display: grid; gap: 8px; pointer-events: auto; user-select: none; -webkit-user-select: none; cursor: default; }
+.outward-head { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 2px; font-size: 12px; color: var(--text-3); }
+.outward-head > span { flex: 1; min-width: 0; }
+.outward-act { flex: none; padding: 3px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font: 12px var(--font-sans); cursor: pointer; }
+.outward-act:hover, .outward-act:focus-visible { color: var(--text); background: var(--bg-muted); }
+.outward-card { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border: 1px dashed var(--border-strong); border-radius: 12px; background: color-mix(in srgb, var(--bg) 72%, transparent); color: var(--text); text-align: left; font: inherit; opacity: .72; cursor: pointer; transition: opacity .12s ease, box-shadow .12s ease; }
+.outward-card:hover, .outward-card:focus-visible { opacity: 1; border-style: solid; box-shadow: var(--shadow-sm, none); }
+.outward-text { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.outward-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
+.outward-how { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-3); }
+.outward-plus { flex: none; font-size: 16px; line-height: 1; color: var(--text-3); }
+.outward-card:hover .outward-plus { color: var(--text); }
+.outward-more { padding: 0 2px; font-size: 12px; color: var(--text-3); }
 /* What a region's cards give together: a strip at its foot, opened for every fact above it. */
 .react-at { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
 .react-product { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); pointer-events: auto; user-select: none; }

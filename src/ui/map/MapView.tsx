@@ -96,6 +96,7 @@ import {
 import { useCanvas, type Picks } from "./useCanvas.js";
 import {
   boxRect,
+  REGION_PAD,
   cornerOf,
   fitBox,
   heldBy,
@@ -105,7 +106,14 @@ import {
   shifted,
   type Region,
 } from "./canvas.js";
-import { regionLines, type CodeEdge, type RegionLine, type RegionLineKind } from "./regions.js";
+import {
+  reachOut,
+  regionLines,
+  type CodeEdge,
+  type RegionLine,
+  type RegionLineKind,
+} from "./regions.js";
+import { Outward } from "./Outward.js";
 import {
   comparisonsFor,
   outputsToCompare,
@@ -529,6 +537,9 @@ function RegionLayer({
   members,
   related,
   reactions,
+  outside,
+  outward,
+  onOutward,
   editing,
   onEdit,
   onName,
@@ -540,6 +551,11 @@ function RegionLayer({
   related: ReadonlySet<string>;
   /** What each region's cards give together, by region; a region with one shows it instead of the no-relation line. */
   reactions: Map<string, Reaction[]>;
+  /** How many cards outside each region its members are directly related to. */
+  outside: Map<string, number>;
+  /** The region looking one layer out, if any. */
+  outward: string | null;
+  onOutward: (id: string | null) => void;
   editing: string | null;
   onEdit: (id: string | null) => void;
   onName: (id: string, name: string) => void;
@@ -591,6 +607,17 @@ function RegionLayer({
                 </span>
               )}
               <span className="map-region-count">{t.map.region.count(ids.length)}</span>
+              {(outside.get(r.id) ?? 0) > 0 && (
+                <button
+                  type="button"
+                  className={`map-region-out${outward === r.id ? " is-on" : ""}`}
+                  aria-pressed={outward === r.id}
+                  title={t.map.region.outTitle}
+                  onClick={() => onOutward(outward === r.id ? null : r.id)}
+                >
+                  {t.map.region.out(outside.get(r.id)!)}
+                </button>
+              )}
               <button
                 type="button"
                 className="icon-btn map-region-dissolve"
@@ -1268,6 +1295,47 @@ function MapContent({
     () => new Set([...lines].flatMap(([rid, l]) => (l.length ? [rid] : []))),
     [lines],
   );
+  // One layer out: cards on the map, in no region, that Tent relates directly to a region's cards.
+  const [outward, setOutward] = useState<string | null>(null);
+  const closeOutward = useCallback(() => setOutward(null), []);
+  const reach = useMemo(() => {
+    const free = [...base.placed.keys()].filter(
+      (id) => graph.nodes.has(id) && visible(id) && !regionOfCard.has(id),
+    );
+    return new Map(
+      canvas.regions.map((r) => [
+        r.id,
+        reachOut(graph, members.get(r.id) ?? [], free, shown.upOf, code),
+      ]),
+    );
+  }, [canvas.regions, members, base, graph, visible, regionOfCard, shown, code]);
+  const outCount = useMemo(
+    () => new Map([...reach].map(([rid, m]) => [rid, m.size] as const)),
+    [reach],
+  );
+  const outwardRegion = canvas.regions.find((r) => r.id === outward);
+  /** Cards brought in from outside: stacked under the region's cards, the region grown to hold them. */
+  const joinOut = (r: Region, ids: string[]) => {
+    const here = (members.get(r.id) ?? []).flatMap((m) => {
+      const p = base.placed.get(m);
+      return p ? [rectOf(p).x] : [];
+    });
+    // In line with the cards already there.
+    const x = here.length ? Math.min(...here) : r.box[0] + REGION_PAD.side;
+    let top = r.box[1] + r.box[3] - REGION_PAD.bottom + 16;
+    const positions: Record<string, Pt> = {};
+    const rects: Rect[] = [];
+    for (const id of ids) {
+      const p = base.placed.get(id);
+      if (!p) continue;
+      const q = rectOf(p);
+      positions[id] = [x, top];
+      rects.push({ ...q, x, y: top });
+      top += (q.head ?? q.h) + 16;
+    }
+    if (rects.length)
+      arrange({ positions, regions: { [r.id]: { ...r, box: fitBox(r.box, rects) } } });
+  };
   // Outputs that meet a goal in a region are compared with it by Core, on demand; material changes
   // move no revision, so each sync asks again.
   const [held, setHeld] = useState<Answer | null>(null);
@@ -2484,6 +2552,9 @@ function MapContent({
                 members={members}
                 related={linked}
                 reactions={reactions}
+                outside={outCount}
+                outward={outwardRegion ? outward : null}
+                onOutward={setOutward}
                 editing={naming}
                 onEdit={setNaming}
                 onName={(rid, name) => {
@@ -2515,6 +2586,19 @@ function MapContent({
                 onSizes={setInkSizes}
               />
             )}
+            {regionsShown &&
+              !inking &&
+              outwardRegion &&
+              (reach.get(outwardRegion.id)?.size ?? 0) > 0 && (
+                <Outward
+                  region={outwardRegion}
+                  reach={reach.get(outwardRegion.id)!}
+                  nameOf={(id) => graph.nodes.get(id)?.name ?? id}
+                  typeOf={(id) => graph.nodes.get(id)?.type ?? ""}
+                  onJoin={(ids) => joinOut(outwardRegion, ids)}
+                  onClose={closeOutward}
+                />
+              )}
             {regionsShown && !inking && (
               <RegionProducts
                 regions={canvas.regions}

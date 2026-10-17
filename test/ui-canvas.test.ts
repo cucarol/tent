@@ -17,7 +17,7 @@ import {
   type Region,
 } from "../src/ui/map/canvas.js";
 import type { Layout, Placed } from "../src/ui/map/layout.js";
-import { regionLines } from "../src/ui/map/regions.js";
+import { reachOut, regionLines } from "../src/ui/map/regions.js";
 import { regionPath } from "../src/ui/map/geometry.js";
 
 const region = (id: string, box: Region["box"], name = ""): Region => ({ id, name, box });
@@ -216,6 +216,19 @@ test("a region draws only relations Tent records between its own cards", () => {
   assert.deepEqual(lines.find((l) => l.kind === "card")?.cards, ["验收"]);
   // Cards with nothing between them draw nothing.
   assert.deepEqual(regionLines(graph, ["code", "away"], up), []);
+  // One layer out from goal and out: only cards outside related to a member, never two outside ones.
+  const reach = reachOut(graph, ["goal", "out"], ["rule", "code", "away", "out"], up);
+  assert.deepEqual([...reach].map(([id, l]) => `${id}:${l.map((x) => x.kind).sort()}`).sort(), [
+    "rule:card,link,material",
+  ]);
+  assert.deepEqual(
+    reachOut(graph, ["away"], ["goal", "out", "code"], up, [
+      { from: "code", to: "away", imports: 1 },
+    ])
+      .get("code")
+      ?.map((l) => l.kind),
+    ["code"],
+  );
 });
 
 test("lines between stacked cards stay in the region's margin: the tree's on the left, others right", () => {
