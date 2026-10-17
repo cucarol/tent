@@ -37,6 +37,17 @@ export type SyncFlag = {
 };
 export type SyncFlags = Record<string, SyncFlag>;
 
+/** One output against every goal above it, nearest first (Core readOutputComparisons). */
+export type OutputComparison = {
+  nodeId: string;
+  /** Unknown never claims a change or a match. */
+  goals: { goalId: string; state: "current" | "changed" | "unknown" }[];
+  changedSince: (
+    | { kind: "material"; resource: string }
+    | { kind: "goal" | "ancestor-goal"; nodeId: string; name: string }
+  )[];
+};
+
 export type SnapshotNode = {
   id: string;
   name: string;

@@ -106,6 +106,15 @@ import {
   type Region,
 } from "./canvas.js";
 import { regionLines, type CodeEdge, type RegionLine, type RegionLineKind } from "./regions.js";
+import {
+  comparisonsFor,
+  outputsToCompare,
+  reactionsIn,
+  reactsWith,
+  type Answer,
+  type Reaction,
+} from "./reactions.js";
+import { RegionProducts } from "./Reaction.js";
 import { api } from "../data/api.js";
 import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
@@ -518,6 +527,7 @@ function RegionLayer({
   regions,
   members,
   related,
+  reactions,
   editing,
   onEdit,
   onName,
@@ -527,6 +537,8 @@ function RegionLayer({
   members: Map<string, string[]>;
   /** Regions with at least one line between their cards. */
   related: ReadonlySet<string>;
+  /** What each region's cards give together, by region; a region with one shows it instead of the no-relation line. */
+  reactions: Map<string, Reaction[]>;
   editing: string | null;
   onEdit: (id: string | null) => void;
   onName: (id: string, name: string) => void;
@@ -588,7 +600,7 @@ function RegionLayer({
                 <Icon name="ungroup" size={14} />
               </button>
             </div>
-            {ids.length > 1 && !related.has(r.id) && (
+            {ids.length > 1 && !related.has(r.id) && !reactions.get(r.id)?.length && (
               <div className="map-region-none">{t.map.region.none}</div>
             )}
           </div>
@@ -1255,6 +1267,49 @@ function MapContent({
     () => new Set([...lines].flatMap(([rid, l]) => (l.length ? [rid] : []))),
     [lines],
   );
+  // Outputs that meet a goal in a region are compared with it by Core, on demand; material changes
+  // move no revision, so each sync asks again.
+  const [held, setHeld] = useState<Answer | null>(null);
+  const [asked, setAsked] = useState({ key: "", ask: 0 });
+  const toCompare = useMemo(
+    () =>
+      [
+        ...new Set(
+          [...members.values()].flatMap((ids) =>
+            ids.length > 1 ? outputsToCompare(graph, ids.filter(visible)) : [],
+          ),
+        ),
+      ].sort(),
+    [members, graph, visible],
+  );
+  const workspaceId = graph.snapshot.workspace.id;
+  const compareKey = toCompare.length ? `${workspaceId}:${toCompare.join(" ")}` : "";
+  const asks = useRef(0);
+  useEffect(() => {
+    if (!compareKey) return;
+    const ask = { key: compareKey, ask: ++asks.current };
+    setAsked(ask);
+    // A late answer to an earlier ask is dropped; the held one only counts for the ask it answered.
+    let current = true;
+    api
+      .compareOutputs(toCompare)
+      .then(
+        (list) =>
+          current &&
+          setHeld({ ...ask, map: new Map(list.map((c) => [c.nodeId, c])), failed: false }),
+      )
+      .catch(() => current && setHeld({ ...ask, map: new Map(), failed: true }));
+    return () => {
+      current = false;
+    };
+  }, [compareKey, graph.snapshot.workspace.revision, flags]);
+  const compared = useMemo(() => comparisonsFor(held, asked), [held, asked]);
+  const reactions = useMemo(() => {
+    const out = new Map<string, Reaction[]>();
+    for (const [rid, ids] of members)
+      if (ids.length > 1) out.set(rid, reactionsIn(graph, compared, ids.filter(visible)));
+    return out;
+  }, [members, graph, compared, visible]);
   const regionName = (rid: string) =>
     canvas.regions.find((r) => r.id === rid)?.name || t.map.region.unnamed;
   // The selected Node's references, marked on the cards at either end instead of drawn as lines.
@@ -2187,6 +2242,18 @@ function MapContent({
         onto: string | null = null,
         into: string | null = null;
       let wait: ReturnType<typeof setTimeout> | undefined;
+      // Cards the dragged ones would react with light up while they move.
+      const kinds = new Set(ids.flatMap((i) => reactsWith(graph.nodes.get(i)?.type ?? "")));
+      const glow = regionsShown
+        ? [...view.placed.keys()]
+            .filter(
+              (q) =>
+                !ids.includes(q) &&
+                visible(q) &&
+                kinds.has(primaryOf(graph.nodes.get(q)?.type ?? "")),
+            )
+            .flatMap((q) => cardEl(q) ?? [])
+        : [];
       const mark = (kind: "join" | "into", id: string | null) => {
         const was = kind === "join" ? onto : into;
         if (was === id) return;
@@ -2199,6 +2266,7 @@ function MapContent({
         clearTimeout(wait);
         mark("join", null);
         mark("into", null);
+        glow.forEach((n) => n.classList.remove("is-react"));
       };
       track(
         e,
@@ -2222,6 +2290,7 @@ function MapContent({
             return false;
           }
           els.forEach((n) => (n.style.translate = `${dx / zoom}px ${dy / zoom}px`));
+          glow.forEach((n) => n.classList.add("is-react"));
           if (!regionsShown) return;
           const p = flow.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
           const under = [...view.placed.values()].find((q) => {
@@ -2417,6 +2486,7 @@ function MapContent({
                 regions={canvas.regions}
                 members={members}
                 related={linked}
+                reactions={reactions}
                 editing={naming}
                 onEdit={setNaming}
                 onName={(rid, name) => {
@@ -2446,6 +2516,13 @@ function MapContent({
                 hints={inkHints}
                 framed={inking && inkTool === "select"}
                 onSizes={setInkSizes}
+              />
+            )}
+            {regionsShown && !inking && (
+              <RegionProducts
+                regions={canvas.regions}
+                reactions={reactions}
+                nameOf={(id) => graph.nodes.get(id)?.name ?? id}
               />
             )}
           </ReactFlow>
