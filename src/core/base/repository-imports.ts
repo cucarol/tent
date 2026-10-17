@@ -1,5 +1,7 @@
 import path from "node:path";
 import { extractRustImports } from "./rust-imports.js";
+import { extractJavaImports } from "./java-imports.js";
+import { isJavaConfig } from "./java-build.js";
 
 /** Workspace-relative POSIX paths. Omit content for files that need no parsing. */
 export type RepositorySource = { path: string; content?: string };
@@ -21,9 +23,9 @@ export const isCodeSource = (file: string) =>
   /\.(go|[cm]?[jt]sx?|py|rs|java|kt|swift|rb|php|cs|c|cc|cpp|h|hpp|vue|svelte)$/.test(file);
 export const isGeneratedSource = (file: string) =>
   /(^|\/)(gen|generated|__generated__)\/|\.pb\.go$|_pb\.ts$|\.pb\.ts$|\.g\.dart$/.test(file);
-export const isImportSource = (file: string) => /\.(go|[cm]?[jt]sx?|py|rs)$/.test(file);
+export const isImportSource = (file: string) => /\.(go|[cm]?[jt]sx?|py|rs|java)$/.test(file);
 export const isImportConfig = (file: string) =>
-  /(^|\/)(go\.mod|tsconfig[^/]*\.json|Cargo\.toml)$/.test(file);
+  /(^|\/)(go\.mod|tsconfig[^/]*\.json|Cargo\.toml)$/.test(file) || isJavaConfig(file);
 
 type Token = { value: string; kind: "word" | "string" | "symbol"; start: number; end: number };
 
@@ -208,7 +210,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 /** Pure, deterministic, local imports only; no disk, Git, model or package resolution. */
 export function extractRepositoryImports(
   input: readonly RepositorySource[],
-  options: { rust?: boolean } = {},
+  options: { rust?: boolean; java?: boolean } = {},
 ) {
   const files = [...input].sort((a, b) => comparePaths(a.path, b.path));
   const byPath = new Map(files.map((file) => [file.path, file]));
@@ -216,7 +218,8 @@ export function extractRepositoryImports(
     (file) =>
       isImportSource(file.path) &&
       !isTestSource(file.path) &&
-      (options.rust !== false || !file.path.endsWith(".rs")),
+      (options.rust !== false || !file.path.endsWith(".rs")) &&
+      (options.java !== false || !file.path.endsWith(".java")),
   );
   const productionPaths = new Set(production.map((file) => file.path));
   const goPackageDirectories = new Set(
@@ -349,7 +352,7 @@ export function extractRepositoryImports(
   };
   for (const file of production) {
     if (file.content === undefined) continue;
-    if (file.path.endsWith(".rs")) continue;
+    if (/\.(rs|java)$/.test(file.path)) continue;
     if (file.path.endsWith(".go")) {
       const module = modules.find(
         (mod) => mod.directory === "." || file.path.startsWith(mod.directory + "/"),
@@ -414,6 +417,11 @@ export function extractRepositoryImports(
     const rust = extractRustImports(files.filter((file) => !isTestSource(file.path)));
     edges.push(...rust.edges);
     issues.push(...rust.issues);
+  }
+  if (options.java !== false) {
+    const java = extractJavaImports(files.filter((file) => !isTestSource(file.path)));
+    edges.push(...java.edges);
+    issues.push(...java.issues);
   }
   return {
     edges: [...new Map(edges.map((edge) => [JSON.stringify(edge), edge])).values()].sort((a, b) =>
