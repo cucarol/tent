@@ -700,6 +700,7 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .react-mark.is-ok { color: var(--output); background: color-mix(in srgb, var(--output) 15%, var(--bg)); }
 .react-mark.is-warn { color: var(--warn); background: var(--warn-soft); }
 .react-mark.is-none { color: var(--text-3); background: var(--bg-muted); }
+.react-mark.is-info { color: var(--text-2); background: transparent; box-shadow: inset 0 0 0 1px var(--border); font-size: 14px; }
 .react-pop { position: absolute; left: 50%; bottom: calc(100% + 8px); z-index: 1; transform: translateX(-50%); width: 300px; max-height: 480px; overflow: auto; padding: 12px 14px; border-radius: 12px; background: var(--bg); box-shadow: var(--shadow-md); display: grid; gap: 10px; font-size: 13px; line-height: 1.45; color: var(--text); cursor: default; }
 .react-pair { display: grid; gap: 7px; }
 .react-pair + .react-pair { padding-top: 10px; border-top: 1px solid var(--border); }
@@ -709,6 +710,7 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .react-row small { display: block; font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
 .react-pill.is-again { opacity: .62; }
 .react-again { font-size: 12px; color: var(--text-3); }
+.react-quiet { font-size: 12px; color: var(--text-3); }
 .react-foot { padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-3); }
 /* While a card is dragged, the cards it would react with glow softly. */
 .react-flow__node.is-react .mcard { box-shadow: var(--shadow-sm, none), 0 0 0 4px color-mix(in srgb, var(--new) 16%, transparent); transition: box-shadow .2s ease; }

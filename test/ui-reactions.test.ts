@@ -6,14 +6,22 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   comparisonsFor,
+  constrainOf,
+  contrastOf,
+  governOf,
   headOf,
+  listed,
+  loopOf,
   noComparisons,
   outputsToCompare,
+  overlapOf,
   reactionsIn,
-  reactsWith,
+  reacts,
+  sequenceOf,
   summaryOf,
   verifyOf,
   type Answer,
+  type Reaction,
   type Verify,
 } from "../src/ui/map/reactions.js";
 import { RegionProduct } from "../src/ui/map/Reaction.js";
@@ -129,20 +137,146 @@ test("unknown claims neither a match nor a change; the output's own materials ar
   assert.deepEqual(headOf(moved), { mark: "warn", says: "materials" });
 });
 
-test("a region reacts each goal with each output; prompts wait for the next recipes", () => {
+const file = (path: string) => ({ kind: "file" as const, resource: path, workspacePath: path });
+const by = (from: string, via: "link" | "card-source" = "link") => ({
+  from: { kind: "node" as const, id: from },
+  via,
+});
+const world = graphOf([
+  node("app", null, { materials: [file("src/app/"), file("docs/auth.md")] }),
+  node("login", "app", { materials: [file("src/app/")] }),
+  node("lint", "app", { type: "prompt", materials: [file("src/app/")] }),
+  node("style", null, {
+    type: "prompt",
+    materials: [file("src/app/")],
+    incoming: [by("app"), by("note", "card-source")],
+  }),
+  node("spare", null, { type: "prompt", materials: [file("README.md")] }),
+  node("note", "app", {
+    type: "output",
+    outputAt: "2026-10-15T00:00:00Z",
+    materials: [file("src/app/"), file("a.md")],
+  }),
+  node("note2", "login", {
+    type: "output",
+    outputAt: "2026-10-16T00:00:00Z",
+    materials: [file("src/app/"), file("b.md")],
+    incoming: [],
+  }),
+  node("loose", null, { type: "output" }),
+  node("other", null),
+]);
+// note2 cites lint; note names style only as a Card source, which is not citing it.
+world.nodes.get("lint")!.incoming.push(by("note2"));
+
+test("goal and rule: whether the rule hangs on the goal, what both name, and whether it fell behind", () => {
+  const child = constrainOf(world, {}, "app", "lint");
+  assert.equal(child.on, "child");
+  assert.deepEqual(child.shared, ["app/"]);
+  assert.deepEqual(headOf(child), { mark: "ok", says: "on" });
+  assert.equal(constrainOf(world, {}, "app", "style").on, "link");
+  // Fallen behind, or no basis to tell: never a plain match.
+  const moved = { lint: { behind: { reasons: ["Material changed: src/app/x.ts"] } } };
+  assert.deepEqual(headOf(constrainOf(world, moved, "app", "lint")), {
+    mark: "warn",
+    says: "behind",
+  });
+  const gaps = { lint: { behind: { reasons: ["no retained baseline for src/app/"] } } };
+  assert.deepEqual(headOf(constrainOf(world, gaps, "app", "lint")).mark, "none");
+  // Not hanging on it and naming nothing in common: only counted.
+  const off = constrainOf(world, {}, "app", "spare");
+  assert.deepEqual(headOf(off), { mark: "info", says: "off" });
+  assert.equal(listed(off), false);
+});
+
+test("rule and conclusion: citing counts; a Card source does not", () => {
+  assert.equal(contrastOf(world, "lint", "note2").cites, true);
+  const silent = contrastOf(world, "style", "note");
+  assert.equal(silent.cites, false);
+  assert.equal(listed(silent), false);
+});
+
+test("two goals, two rules, two conclusions say only what the tree and materials hold", () => {
+  const family = overlapOf(world, "login", "app");
+  assert.equal(family.family, "b");
+  assert.deepEqual(family.shared, ["app/"]);
+  assert.deepEqual(overlapOf(world, "app", "other"), {
+    kind: "overlap",
+    a: "app",
+    b: "other",
+    family: null,
+    shared: [],
+    rules: [],
+  });
+  assert.deepEqual(overlapOf(world, "app", "login").rules, []);
+  assert.deepEqual(governOf(world, "lint", "style").shared, ["app/"]);
+  assert.equal(listed(governOf(world, "lint", "spare")), false);
+  const seq = sequenceOf(world, "note2", "note");
+  assert.deepEqual(seq.goals, ["login", "app"]);
+  assert.equal(seq.first, "b");
+  assert.deepEqual([seq.onlyA, seq.onlyB, seq.both], [["b.md"], ["a.md"], 1]);
+  // No time on one of them: no order claimed.
+  assert.equal(sequenceOf(world, "note", "loose").first, null);
+  assert.equal(listed(sequenceOf(world, "note", "loose")), false);
+});
+
+test("a goal, a rule and a conclusion close a loop only when all three links hold", () => {
+  // The rule hangs on the goal and the note is its evidence, but the note never cites the rule.
+  const open = loopOf(world, "app", "lint", "note");
+  assert.deepEqual([open.ruleOn, open.evidence, open.cites], [true, true, false]);
+  assert.deepEqual(headOf(open), { mark: "warn", says: "missing" });
+  // Further down counts as evidence; citing closes it.
+  assert.deepEqual(headOf(loopOf(world, "app", "lint", "note2")), { mark: "ok", says: "whole" });
+  const side = loopOf(world, "login", "lint", "note2");
+  assert.deepEqual([side.ruleOn, side.evidence, side.cites], [false, true, true]);
+});
+
+test("a region lists loops first, then each pair by its recipe; unrelated pairs only count", () => {
+  const all = reactionsIn(world, {}, noComparisons, ["app", "lint", "note", "spare"]);
   assert.deepEqual(
-    reactionsIn(graph, noComparisons, ["goal", "rule", "out", "step"]).map(
-      (r) => `${r.goal}>${r.output}`,
-    ),
-    ["goal>out", "step>out"],
+    all.map((r) => r.kind),
+    ["loop", "verify", "constrain", "constrain", "contrast", "contrast", "govern"],
   );
-  assert.deepEqual(reactionsIn(graph, noComparisons, ["goal", "step", "rule"]), []);
+  assert.deepEqual(
+    all.filter(listed).map((r) => r.kind),
+    ["loop", "verify", "constrain"],
+  );
+  // A goal, a rule and a conclusion with no link between them are not a loop.
+  assert.deepEqual(
+    reactionsIn(world, {}, noComparisons, ["other", "spare", "loose"]).map((r) => r.kind),
+    ["verify", "constrain", "contrast"],
+  );
   // Only outputs that meet a goal are compared.
   assert.deepEqual(outputsToCompare(graph, ["out", "rule", "goal"]), ["out"]);
   assert.deepEqual(outputsToCompare(graph, ["out", "aside", "rule"]), []);
-  assert.deepEqual(reactsWith("goal"), ["output"]);
-  assert.deepEqual(reactsWith("output"), ["goal"]);
-  assert.deepEqual(reactsWith("prompt"), []);
+  // A dragged card lights up only the cards it has something to say with.
+  assert.equal(reacts(world, {}, "app", "note"), true);
+  assert.equal(reacts(world, {}, "lint", "app"), true);
+  assert.equal(reacts(world, {}, "spare", "app"), false);
+  assert.equal(reacts(world, {}, "loose", "other"), false);
+});
+
+test("mixed kinds read as items; plain facts read as nothing moved, never as all matching", () => {
+  const facts: Reaction[] = [
+    overlapOf(world, "login", "app"),
+    governOf(world, "lint", "style"),
+    governOf(world, "lint", "spare"),
+  ];
+  assert.deepEqual(summaryOf(facts.filter(listed)), {
+    mark: "info",
+    says: "facts",
+    moved: 0,
+    unclear: 0,
+  });
+  const html = renderToStaticMarkup(
+    createElement(RegionProduct, { list: facts, nameOf: (id: string) => id }),
+  );
+  assert.match(html, /2 项|2 items/);
+  assert.doesNotMatch(html, /都对得上|All match/);
+  const lone = renderToStaticMarkup(
+    createElement(RegionProduct, { list: [governOf(world, "lint", "spare")], nameOf: (id) => id }),
+  );
+  assert.equal(lone, "");
 });
 
 const pair = (more: Partial<Verify>): Verify => ({

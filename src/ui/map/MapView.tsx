@@ -109,8 +109,9 @@ import { regionLines, type CodeEdge, type RegionLine, type RegionLineKind } from
 import {
   comparisonsFor,
   outputsToCompare,
+  listed,
   reactionsIn,
-  reactsWith,
+  reacts,
   type Answer,
   type Reaction,
 } from "./reactions.js";
@@ -600,7 +601,7 @@ function RegionLayer({
                 <Icon name="ungroup" size={14} />
               </button>
             </div>
-            {ids.length > 1 && !related.has(r.id) && !reactions.get(r.id)?.length && (
+            {ids.length > 1 && !related.has(r.id) && !reactions.get(r.id)?.some(listed) && (
               <div className="map-region-none">{t.map.region.none}</div>
             )}
           </div>
@@ -1307,9 +1308,9 @@ function MapContent({
   const reactions = useMemo(() => {
     const out = new Map<string, Reaction[]>();
     for (const [rid, ids] of members)
-      if (ids.length > 1) out.set(rid, reactionsIn(graph, compared, ids.filter(visible)));
+      if (ids.length > 1) out.set(rid, reactionsIn(graph, flags, compared, ids.filter(visible)));
     return out;
-  }, [members, graph, compared, visible]);
+  }, [members, graph, flags, compared, visible]);
   const regionName = (rid: string) =>
     canvas.regions.find((r) => r.id === rid)?.name || t.map.region.unnamed;
   // The selected Node's references, marked on the cards at either end instead of drawn as lines.
@@ -2243,14 +2244,10 @@ function MapContent({
         into: string | null = null;
       let wait: ReturnType<typeof setTimeout> | undefined;
       // Cards the dragged ones would react with light up while they move.
-      const kinds = new Set(ids.flatMap((i) => reactsWith(graph.nodes.get(i)?.type ?? "")));
       const glow = regionsShown
         ? [...view.placed.keys()]
             .filter(
-              (q) =>
-                !ids.includes(q) &&
-                visible(q) &&
-                kinds.has(primaryOf(graph.nodes.get(q)?.type ?? "")),
+              (q) => !ids.includes(q) && visible(q) && ids.some((i) => reacts(graph, flags, i, q)),
             )
             .flatMap((q) => cardEl(q) ?? [])
         : [];

@@ -220,7 +220,19 @@ const zh = {
     },
     react: {
       verify: "验证",
+      name: {
+        verify: "验证",
+        constrain: "约束",
+        contrast: "对照",
+        overlap: "重叠",
+        govern: "同管",
+        sequence: "前后",
+        loop: "闭环",
+        any: "反应",
+      },
       pairs: (n: number) => `${n} 对`,
+      items: (n: number) => `${n} 项`,
+      unit: "项",
       pair: (goal: string, output: string) => `${goal} · ${output}`,
       open: "看反应的细节",
       head: {
@@ -233,12 +245,78 @@ const zh = {
         ok: "证据对得上",
       },
       many: {
-        moved: (n: number, unclear: number) =>
-          unclear ? `${n} 对有变化 · ${unclear} 对看不出` : `${n} 对有变化`,
+        moved: (n: number, unclear: number, unit = "对") =>
+          unclear ? `${n} ${unit}有变化 · ${unclear} ${unit}看不出` : `${n} ${unit}有变化`,
+        // Mixed kinds, or loops: a missing link is not a change, so say only that it needs a look.
+        notice: (n: number, unclear: number, unit = "项") =>
+          unclear ? `${n} ${unit}要留意 · ${unclear} ${unit}看不出` : `${n} ${unit}要留意`,
         all: "都对得上",
-        unclear: (n: number) => `${n} 对看不出`,
+        unclear: (n: number, unit = "对") => `${n} ${unit}看不出`,
         waiting: "正在比对…",
         failed: "没读到比对结果",
+        facts: "没有变化",
+      },
+      quiet: (n: number) => `另有 ${n} 对之间没有直接关系`,
+      judgeAll: "是否满足目标、规则有没有矛盾，Tent 判断不了 · 拖到机器人身上交给 Agent",
+      constrain: {
+        head: {
+          off: "规则没挂在这个目标上",
+          behind: "规则落后了",
+          unknown: "看不出规则落没落后",
+          on: "规则挂在目标上",
+        },
+        child: "规则挂在目标下面",
+        below: "规则在目标的下层",
+        link: "规则和目标链在一起",
+        off: "规则没挂在这个目标上，也没链到它",
+        shared: (list: string[]) => `共用材料：${list.join("、")}`,
+        fresh: "规则没有落后",
+        behind: "规则落后了",
+        behindNote: "它的材料在它写下之后改过",
+        gaps: "看不出规则落没落后",
+        gapsNote: "缺基线，或有材料读不到",
+      },
+      contrast: {
+        head: { cites: "结论引用了这条规则", silent: "结论没有引用这条规则" },
+      },
+      overlap: {
+        head: {
+          family: (a: string, b: string) => `「${a}」是「${b}」的上级`,
+          shares: (files: number, rules: number) =>
+            [files ? `共用 ${files} 份材料` : "", rules ? `共用 ${rules} 条规则` : ""]
+              .filter(Boolean)
+              .join(" · "),
+          nothing: "没有共用的东西",
+        },
+        above: (a: string, b: string) => `「${a}」在「${b}」上面`,
+        shared: (list: string[]) => `共用材料：${list.join("、")}`,
+        noShared: "没有共用的材料",
+        rules: (list: string[]) => `共用的规则：${list.join("、")}`,
+      },
+      govern: {
+        head: { shares: (n: number) => `同管 ${n} 份文件`, nothing: "没管着相同的文件" },
+        shared: (list: string[]) => `都管着：${list.join("、")}`,
+      },
+      sequence: {
+        head: { same: "同属一个目标", apart: "属于不同目标" },
+        same: (goal: string) => `同属「${goal}」`,
+        apart: (a: string, b: string) => `分属「${a}」和「${b}」`,
+        noGoal: "不在任何目标下",
+        first: (name: string) => `「${name}」先写下`,
+        together: "同时写下",
+        noOrder: "看不出谁先谁后",
+        noOrderNote: "有一份没有写下时间",
+        only: (name: string, list: string[]) => `只有「${name}」有：${list.join("、")}`,
+        both: (n: number) => `共用 ${n} 份材料`,
+      },
+      loop: {
+        head: { whole: "闭环齐全", missing: (n: number) => `缺 ${n} 环` },
+        ruleOn: "规则挂在目标上",
+        ruleOff: "规则没挂在目标上",
+        evidence: "结论是目标的证据",
+        noEvidence: "结论不在目标下面",
+        cites: "结论引用了规则",
+        silent: "结论没引用规则",
       },
       refreshing: "正在重新比对，下面是上一次的结果",
       failed: "这次没读到比对结果",
@@ -860,7 +938,19 @@ const en: Messages = {
     },
     react: {
       verify: "Verify",
+      name: {
+        verify: "Verify",
+        constrain: "Constrain",
+        contrast: "Contrast",
+        overlap: "Overlap",
+        govern: "Co-govern",
+        sequence: "Sequence",
+        loop: "Loop",
+        any: "Reactions",
+      },
       pairs: (n) => count(n, "pair"),
+      items: (n) => count(n, "item"),
+      unit: "item",
       pair: (goal, output) => `${goal} · ${output}`,
       open: "Show what the reaction found",
       head: {
@@ -873,14 +963,83 @@ const en: Messages = {
         ok: "Evidence matches",
       },
       many: {
-        moved: (n, unclear) =>
+        moved: (n, unclear, unit = "pair") =>
+          unclear ? `${count(n, unit)} changed · ${unclear} unclear` : `${count(n, unit)} changed`,
+        notice: (n, unclear, unit = "item") =>
           unclear
-            ? `${count(n, "pair")} changed · ${unclear} unclear`
-            : `${count(n, "pair")} changed`,
+            ? `${count(n, unit)} to look at · ${unclear} unclear`
+            : `${count(n, unit)} to look at`,
         all: "All match",
-        unclear: (n) => `${count(n, "pair")} unclear`,
+        unclear: (n, unit = "pair") => `${count(n, unit)} unclear`,
         waiting: "Comparing…",
         failed: "Comparison not read",
+        facts: "Nothing moved",
+      },
+      quiet: (n) => `${count(n, "more pair")} with no direct relation`,
+      judgeAll:
+        "Whether goals are met or rules contradict is for an Agent: drag the region onto a robot",
+      constrain: {
+        head: {
+          off: "Rule not on this goal",
+          behind: "Rule is behind",
+          unknown: "Cannot tell if the rule is behind",
+          on: "Rule hangs on the goal",
+        },
+        child: "The rule hangs right under the goal",
+        below: "The rule is further down under the goal",
+        link: "The rule and the goal link to each other",
+        off: "The rule is neither under nor linked to this goal",
+        shared: (list) => `Shared materials: ${list.join(", ")}`,
+        fresh: "The rule is not behind",
+        behind: "The rule is behind",
+        behindNote: "Its materials changed after it was written",
+        gaps: "Cannot tell if the rule is behind",
+        gapsNote: "No basis kept, or a material cannot be read",
+      },
+      contrast: {
+        head: { cites: "The output cites this rule", silent: "The output does not cite this rule" },
+      },
+      overlap: {
+        head: {
+          family: (a, b) => `"${a}" is above "${b}"`,
+          shares: (files, rules) =>
+            [
+              files ? `${count(files, "shared material")}` : "",
+              rules ? `${count(rules, "shared rule")}` : "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+          nothing: "Nothing shared",
+        },
+        above: (a, b) => `"${a}" is above "${b}"`,
+        shared: (list) => `Shared materials: ${list.join(", ")}`,
+        noShared: "No shared materials",
+        rules: (list) => `Rules on both: ${list.join(", ")}`,
+      },
+      govern: {
+        head: { shares: (n) => `Both govern ${count(n, "file")}`, nothing: "No file in common" },
+        shared: (list) => `Both govern: ${list.join(", ")}`,
+      },
+      sequence: {
+        head: { same: "Same goal", apart: "Different goals" },
+        same: (goal) => `Both answer "${goal}"`,
+        apart: (a, b) => `One answers "${a}", the other "${b}"`,
+        noGoal: "under no goal",
+        first: (name) => `"${name}" was written first`,
+        together: "Written at the same time",
+        noOrder: "Cannot tell which came first",
+        noOrderNote: "One has no written time",
+        only: (name, list) => `Only "${name}" has: ${list.join(", ")}`,
+        both: (n) => count(n, "shared material"),
+      },
+      loop: {
+        head: { whole: "Loop closed", missing: (n) => `${count(n, "link")} missing` },
+        ruleOn: "The rule hangs on the goal",
+        ruleOff: "The rule is not on the goal",
+        evidence: "The output is the goal's evidence",
+        noEvidence: "The output is not under the goal",
+        cites: "The output cites the rule",
+        silent: "The output does not cite the rule",
       },
       refreshing: "Comparing again; below is the last answer",
       failed: "The comparison could not be read",
