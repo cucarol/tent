@@ -5,6 +5,7 @@ import { isJavaConfig } from "./java-build.js";
 import { extractCSharpImports } from "./csharp-imports.js";
 import { isCSharpConfig } from "./csharp-build.js";
 import { extractCFamilyImports, isCFamilySource, isCFamilyConfig } from "./cfamily-imports.js";
+import { extractPhpImports, isPhpConfig } from "./php-imports.js";
 
 /** Workspace-relative POSIX paths. Omit content for files that need no parsing. */
 export type RepositorySource = { path: string; content?: string };
@@ -28,11 +29,12 @@ export const isCodeSource = (file: string) =>
 export const isGeneratedSource = (file: string) =>
   /(^|\/)(gen|generated|__generated__)\/|\.pb\.go$|_pb\.ts$|\.pb\.ts$|\.g\.dart$/.test(file);
 export const isImportSource = (file: string) =>
-  /\.(go|[cm]?[jt]sx?|py|rs|java|cs)$/.test(file) || isCFamilySource(file);
+  /\.(go|[cm]?[jt]sx?|py|rs|java|cs|php)$/.test(file) || isCFamilySource(file);
 export const isImportConfig = (file: string) =>
   /(^|\/)(go\.mod|tsconfig[^/]*\.json|Cargo\.toml)$/.test(file) ||
   isJavaConfig(file) ||
   isCSharpConfig(file) ||
+  isPhpConfig(file) ||
   isCFamilyConfig(file);
 
 type Token = { value: string; kind: "word" | "string" | "symbol"; start: number; end: number };
@@ -218,7 +220,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 /** Pure, deterministic, local imports only; no disk, Git, model or package resolution. */
 export function extractRepositoryImports(
   input: readonly RepositorySource[],
-  options: { rust?: boolean; java?: boolean; csharp?: boolean; cfamily?: boolean } = {},
+  options: {
+    rust?: boolean;
+    java?: boolean;
+    csharp?: boolean;
+    cfamily?: boolean;
+    php?: boolean;
+  } = {},
 ) {
   const files = [...input].sort((a, b) => comparePaths(a.path, b.path));
   const byPath = new Map(files.map((file) => [file.path, file]));
@@ -229,6 +237,7 @@ export function extractRepositoryImports(
       (options.rust !== false || !file.path.endsWith(".rs")) &&
       (options.java !== false || !file.path.endsWith(".java")) &&
       (options.csharp !== false || !file.path.endsWith(".cs")) &&
+      (options.php !== false || !file.path.endsWith(".php")) &&
       (options.cfamily !== false || !isCFamilySource(file.path)),
   );
   const productionPaths = new Set(production.map((file) => file.path));
@@ -362,7 +371,7 @@ export function extractRepositoryImports(
   };
   for (const file of production) {
     if (file.content === undefined) continue;
-    if (/\.(rs|java|cs)$/.test(file.path) || isCFamilySource(file.path)) continue;
+    if (/\.(rs|java|cs|php)$/.test(file.path) || isCFamilySource(file.path)) continue;
     if (file.path.endsWith(".go")) {
       const module = modules.find(
         (mod) => mod.directory === "." || file.path.startsWith(mod.directory + "/"),
@@ -442,6 +451,11 @@ export function extractRepositoryImports(
     const cfamily = extractCFamilyImports(files.filter((file) => !isTestSource(file.path)));
     edges.push(...cfamily.edges);
     issues.push(...cfamily.issues);
+  }
+  if (options.php !== false) {
+    const php = extractPhpImports(files.filter((file) => !isTestSource(file.path)));
+    edges.push(...php.edges);
+    issues.push(...php.issues);
   }
   return {
     edges: [...new Map(edges.map((edge) => [JSON.stringify(edge), edge])).values()].sort((a, b) =>

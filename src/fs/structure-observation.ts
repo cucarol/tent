@@ -21,6 +21,7 @@ import { extractRustImports } from "../core/base/rust-imports.js";
 import { extractJavaImports } from "../core/base/java-imports.js";
 import { isJavaConfig } from "../core/base/java-build.js";
 import { extractCSharpImports } from "../core/base/csharp-imports.js";
+import { extractPhpImports, isPhpConfig } from "../core/base/php-imports.js";
 import { isCSharpConfig } from "../core/base/csharp-build.js";
 import {
   extractCFamilyImports,
@@ -124,6 +125,7 @@ export async function observeStructureMaterial(
       /(^|\/)Cargo\.toml$/.test(file) ||
       isJavaConfig(file) ||
       isCSharpConfig(file) ||
+      isPhpConfig(file) ||
       isCFamilyConfig(file)
     )
       return false;
@@ -218,11 +220,25 @@ export async function observeStructureMaterial(
     }
     cfamily = extractCFamilyImports(cfamilySources, cfamilyMembers);
   }
+  const phpSources = files.filter((file) => !isTestSource(file.path));
+  const phpMembers = memberSources.filter((member) => member.endsWith(".php"));
+  let php = extractPhpImports(phpSources, phpMembers);
+  while (true) {
+    const required = php.requiredFiles.filter((file) => byPath.get(file)?.content === undefined);
+    if (!required.length) break;
+    for (const file of required) {
+      const source = byPath.get(file);
+      if (!source) throw new Error(`Required PHP source is absent: ${file}`);
+      source.content = await readSource(file, path.join(workspaceRoot, file));
+    }
+    php = extractPhpImports(phpSources, phpMembers);
+  }
   const imports = extractRepositoryImports(files, {
     rust: false,
     java: false,
     csharp: false,
     cfamily: false,
+    php: false,
   });
   imports.edges.push(...rust.edges);
   imports.issues.push(...rust.issues);
@@ -232,13 +248,16 @@ export async function observeStructureMaterial(
   imports.issues.push(...csharp.issues);
   imports.edges.push(...cfamily.edges);
   imports.issues.push(...cfamily.issues);
+  imports.edges.push(...php.edges);
+  imports.issues.push(...php.issues);
   const issue = imports.issues.find(
     (issue) =>
       isImportConfig(issue.file) ||
       materialCoverageContains(coverage, issue.file) ||
       java.requiredFiles.includes(issue.file) ||
       csharp.requiredFiles.includes(issue.file) ||
-      cfamily.requiredFiles.includes(issue.file),
+      cfamily.requiredFiles.includes(issue.file) ||
+      php.requiredFiles.includes(issue.file),
   );
   if (issue)
     throw new Error(
