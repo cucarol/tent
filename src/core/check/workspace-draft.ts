@@ -243,7 +243,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
         .replace(/^[. ]+|[. ]+$/g, "")
         .slice(0, 170) || "Code";
     try {
-      validateNodeName(base, "Modules");
+      validateNodeName(base.toLowerCase());
     } catch {
       base = `Module ${base}`;
     }
@@ -251,7 +251,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
       n = 2;
     for (;;) {
       try {
-        validateNodeName(name, "Modules");
+        validateNodeName(name.toLowerCase());
         if (!names.has(name.toLowerCase())) break;
       } catch {
         /* Use a safe suffix for reserved names. */
@@ -261,14 +261,12 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
     names.add(name.toLowerCase());
     return name;
   };
-  const nodes: ModuleMapNode[] = [
-    { id: "map", path: "Modules", name: "Modules", body: "", materials: [] },
-  ];
+  const nodes: ModuleMapNode[] = [];
   for (const unit of units.sort((a, b) => comparePaths(a.key, b.key))) {
     const name = nameOf(unit.key);
     nodes.push({
-      id: `m${nodes.length}`,
-      path: `Modules/${name}`,
+      id: `m${nodes.length + 1}`,
+      path: name,
       name,
       body: "",
       materials: unit.materials,
@@ -277,18 +275,18 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
   if (ordinary.length)
     nodes.push({
       id: "setup",
-      path: "Modules/Setup",
+      path: "Setup",
       name: "Setup",
       body: "",
       materials: ordinary,
     });
   if (tests.length)
-    nodes.push({ id: "tests", path: "Modules/Tests", name: "Tests", body: "", materials: tests });
+    nodes.push({ id: "tests", path: "Tests", name: "Tests", body: "", materials: tests });
+  if (!nodes.length) throw new Error("No tracked Workspace materials to draft");
   const batch: NodeWriteBatchInput = {
     items: nodes.map((node) => ({
       op: "create",
       ref: node.id,
-      ...(node.id === "map" ? {} : { parent: "@map" }),
       name: node.name,
       type: "prompt",
       tags: ["spec"],

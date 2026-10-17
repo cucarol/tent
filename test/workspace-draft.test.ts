@@ -14,8 +14,11 @@ import { checkModuleMap } from "../src/core/check/module-map.js";
 import { checkWorkspaceModules } from "../src/core/check/workspace-module-map.js";
 import type { WorkspaceScanResult } from "../src/core/check/workspace-scan.js";
 import { nodeWriteBatchInputSchema } from "../src/core/write/node-write-batch.js";
+import { loadTent } from "../src/core/store/tree.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
+import { runRoleCommand } from "../src/cli/role-commands.js";
+import { runCardCommand } from "../src/cli/card-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { readModuleMapRepository } from "../src/fs/workspace-scan.js";
 import { testScratchRoot } from "./scratch.js";
@@ -138,13 +141,56 @@ test("draft keeps an imported Go package and the root Go package whole", () => {
   assert.ok(report.modules.some((module) => module.productionFiles === 24));
 });
 
-test("draft uses valid names for reserved device names and percent-encodes literal material paths", () => {
-  const { draft, check: report } = check(scan(["con.ts", "data space/a#b.ts", "docs/100%.md"]));
+test("draft uses valid top-level names and percent-encodes literal material paths", () => {
+  const { draft, check: report } = check(
+    scan(["con.ts", "cards/a.ts", "roles/a.ts", "data space/a#b.ts", "docs/100%.md"]),
+  );
   assert.equal(report.issues.length, 0);
   const text = JSON.stringify(draft.batch);
   assert.match(text, /Module con.ts/);
+  assert.match(text, /Module cards/);
+  assert.match(text, /Module roles/);
   assert.match(text, /data%20space/);
   assert.ok(!text.includes('"resource":"src/'));
+});
+
+test("an empty repository rejects draft creation without writing a batch", async (t) => {
+  const { root } = await fixture(t);
+  const before = await snapshot(root);
+  const result = await runWorkspaceCommand("scan", ["--draft", ".scratch/empty.json", "--json"], {
+    workspace: root,
+  });
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /No tracked Workspace materials/);
+  assert.deepEqual(await snapshot(root), before);
+});
+
+test("mixed-case operational names yield a directly writable top-level draft", async (t) => {
+  const { root, adapter, write } = await fixture(t);
+  await git(path.join(root, ".tent"), "init", "-b", "main");
+  const options = { workspace: root, json: true };
+  const role = await runRoleCommand("create", ["--title", "Owner"], options);
+  assert.equal(role.exitCode, 0, role.stderr);
+  const roleId = JSON.parse(role.stdout).roleId;
+  const card = await runCardCommand("create", ["--prompt", "Keep", "--target", roleId], options);
+  assert.equal(card.exitCode, 0, card.stderr);
+  const originalRole = await adapter.readFile(`roles/${roleId}.md`);
+  for (const name of ["Cards", "Roles", "TEMP", "Attachments"]) await write(`${name}/part.ts`);
+  await git(root, "add", "Cards", "Roles", "TEMP", "Attachments");
+  const scanned = await runWorkspaceCommand(
+    "scan",
+    ["--draft", ".scratch/batch.json", "--json"],
+    options,
+  );
+  assert.equal(scanned.exitCode, 0, scanned.stderr);
+  const batch = await fs.readFile(path.join(root, ".scratch/batch.json"), "utf8");
+  const written = await runNodeCommand("write-many", ["--input-json", "-", "--json"], {
+    ...options,
+    stdin: batch,
+  });
+  assert.equal(written.exitCode, 0, written.stderr);
+  assert.equal(await adapter.readFile(`roles/${roleId}.md`), originalRole);
+  assert.equal((await loadTent(adapter)).byPath.size, 4);
 });
 
 async function fixture(t: TestContext) {
@@ -201,13 +247,21 @@ test("scan --draft writes only the editable batch; existing write-many produces 
     JSON.parse(await fs.readFile(path.join(root, ".scratch/batch.json"), "utf8")),
   );
   // Exercise the CLI material-input boundary, not only the lower-level Core writer.
-  const map = batch.items.find((item) => item.op === "create" && item.ref === "map")!;
-  if (map.op === "create") map.name = "Renamed modules";
+  assert.ok(batch.items.every((item) => item.op === "create" && !item.parent));
+  assert.ok(!batch.items.some((item) => item.op === "create" && item.ref === "map"));
+  const first = batch.items[0];
+  if (first.op === "create") first.name = "Renamed code";
   const written = await runNodeCommand("write-many", ["--input-json", "-", "--json"], {
     workspace: root,
     stdin: JSON.stringify(batch),
   });
   assert.equal(written.exitCode, 0, written.stderr);
+  const tree = await loadTent(adapter);
+  assert.equal(tree.byPath.size, batch.items.length);
+  assert.ok([...tree.byPath.keys()].every((nodePath) => !nodePath.includes("/")));
+  assert.ok(tree.byPath.has("Renamed code"));
+  assert.ok(tree.byPath.has("Setup"));
+  assert.ok(tree.byPath.has("Tests"));
   const actual = await checkWorkspaceModules(adapter, root, await readModuleMapRepository(root));
   assert.deepEqual(actual.inspectionErrors, []);
   assert.deepEqual(actual.issues, summary.issues);
