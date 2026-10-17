@@ -238,3 +238,55 @@ test("concurrent queries retain their own heads while a newer query extends the 
   assert.deepEqual(previous, { commits: [first], latest: first, changed: false });
   assert.deepEqual(next, { commits: [first, second], latest: second, changed: true });
 });
+
+for (const query of ["nodeRecords", "firstCommitTimes"] as const) {
+  test(`${query} waits for its history cache publication before returning`, async (t) => {
+    const { root, commit, cache, history } = await fixture(t);
+    await commit("Retained input");
+    const publisher = history as unknown as {
+      saveCache(file: string, value: unknown): Promise<void>;
+    };
+    const save = publisher.saveCache.bind(history);
+    let entered!: () => void, release!: () => void, finished!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const published = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    t.mock.method(publisher, "saveCache", async (file: string, value: unknown) => {
+      // Keep unrelated derived indexes immediate: only the history publication is blocked.
+      if (file !== cache) return;
+      entered();
+      await gate;
+      await save(file, value);
+      finished();
+    });
+    let returned = false;
+    const pending = (
+      query === "nodeRecords" ? history.nodeRecords() : history.firstCommitTimes([file])
+    ).then((value) => {
+      returned = true;
+      return value;
+    });
+    try {
+      await started;
+      assert.equal(returned, false, "the public query must still own the unfinished publication");
+    } finally {
+      release();
+      await pending;
+      await published;
+    }
+    assert.equal(
+      (JSON.parse(await fs.readFile(cache, "utf8")) as Snapshot).head,
+      await history.currentCommit(),
+    );
+    assert.deepEqual(
+      (await fs.readdir(path.join(root, ".git"))).filter((name) => name.endsWith(".tmp")),
+      [],
+    );
+  });
+}

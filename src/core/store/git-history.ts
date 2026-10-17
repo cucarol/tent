@@ -691,9 +691,13 @@ export class GitDocumentHistory {
   }
 
   private async snapshotRecords(head: string) {
-    // Message/path consumers can start live inspection while the blob batch runs.
-    void this.snapshot(head).catch(() => {});
-    return this.snapshotRecordsPromise!;
+    const snapshot = this.snapshot(head);
+    try {
+      return await this.snapshotRecordsPromise!;
+    } finally {
+      // Metadata survives a later blob failure, but cache publication cannot outlive its query.
+      await snapshot.catch(() => {});
+    }
   }
 
   private snapshotDigest(snapshot: HistorySnapshot) {
