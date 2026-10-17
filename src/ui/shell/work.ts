@@ -28,6 +28,39 @@ export type Work = ReturnType<typeof useWork>;
 /** What a robot has in hand: Cards it is doing, Cards waiting for it, results returned to it, drafts. */
 export type Desk = { doing: number; waiting: number; returned: number; drafts: number };
 
+/** A place in a queue: just before or after another waiting Card. */
+export type Place = { ref: string; side: "before" | "after" };
+
+/** Published Cards in queue order, with places just chosen applied before the workspace has them. */
+export function inQueue(cards: SnapshotCard[], placed: ReadonlyMap<string, Place>) {
+  const queue = [...cards].sort((a, b) =>
+    queueKey(a) < queueKey(b) ? -1 : queueKey(a) > queueKey(b) ? 1 : 0,
+  );
+  for (const [id, p] of placed) {
+    const from = queue.findIndex((c) => c.id === id);
+    if (from < 0 || !queue.some((c) => c.id === p.ref)) continue;
+    const [card] = queue.splice(from, 1);
+    queue.splice(queue.findIndex((c) => c.id === p.ref) + (p.side === "after" ? 1 : 0), 0, card!);
+  }
+  return queue;
+}
+
+/** Which place, counted from 1, a Card takes in a queue of ids; null when that changes nothing. */
+export function placeIn(queue: readonly string[], cardId: string, at: Place): number | null {
+  if (cardId === at.ref || !queue.includes(at.ref)) return null;
+  const from = queue.indexOf(cardId);
+  const to = queue.indexOf(at.ref) + (at.side === "after" ? 1 : 0);
+  // Letting go just before or after itself changes nothing.
+  if (from >= 0 && (to === from || to === from + 1)) return null;
+  const rest = queue.filter((id) => id !== cardId);
+  return rest.indexOf(at.ref) + (at.side === "after" ? 2 : 1);
+}
+
+/** Core's key for a Card's place in its queue: a set order, or else its publication time and id. */
+export const queueKey = (card: SnapshotCard | undefined) =>
+  card?.orderKey ??
+  (card?.publishedAt ? `${new Date(card.publishedAt).toISOString()}|${card.id}` : "");
+
 /**
  * A robot is doing while it holds a Card to return, waiting when only Cards to take or results to collect
  * are left.
@@ -86,6 +119,8 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
   }, [workspaceId]);
   // Moves shown before the workspace catches up with them.
   const [moved, setMoved] = useState<ReadonlyMap<string, string>>(new Map());
+  // Places in a queue shown before the workspace catches up with them, kept while the Card's key is the old one.
+  const [placed, setPlaced] = useState<ReadonlyMap<string, Place & { key: string }>>(new Map());
   // The lane a Card was last put in, so the sidebar can open it.
   const [publishing, setPublishing] = useState<string | null>(null);
   const [landed, setLanded] = useState<{ lane: string; at: number } | null>(null);
@@ -105,6 +140,9 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
         ? new Map([...m].filter(([id, at]) => (graph.cards.get(id)?.target ?? PUBLIC) !== at))
         : m,
     );
+    setPlaced((m) =>
+      m.size ? new Map([...m].filter(([id, p]) => queueKey(graph.cards.get(id)) === p.key)) : m,
+    );
     if (openDraft && !graph.cards.has(openDraft)) setOpenDraft(null);
   }, [graph]);
 
@@ -112,7 +150,10 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     (card: SnapshotCard) => card.receivedBy ?? moved.get(card.id) ?? card.target ?? PUBLIC,
     [moved],
   );
-  /** Cards still moving between lanes (withdrawn ones are done with): drafts first, then the newest published ones. */
+  /**
+   * Cards still moving between lanes (withdrawn ones are done with): drafts first, then the published ones in
+   * their queue's order, the one its Role does next first.
+   */
   const laneCards = useCallback(
     (lane: string) => {
       if (!graph) return [];
@@ -121,16 +162,18 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
         (c) =>
           c.state === "pending" && !c.receivedBy && c.status !== "deprecated" && laneOf(c) === lane,
       );
+      const queue = inQueue(
+        here.filter((c) => !isDraft(c)),
+        placed,
+      );
       // The draft being written leads, so it stays put when the workspace catches up.
       return [
         ...here.filter((c) => c.id === openDraft),
         ...here.filter((c) => isDraft(c) && c.id !== openDraft),
-        ...here
-          .filter((c) => !isDraft(c))
-          .sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "")),
+        ...queue,
       ];
     },
-    [graph, laneOf, openDraft],
+    [graph, laneOf, openDraft, placed],
   );
   /** Results returned to a lane's Role and not collected yet, newest first. */
   const laneReturned = useCallback(
@@ -203,10 +246,31 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     else void newCard(null, [nodeId]);
   };
 
-  const move = async (cardId: string, lane: string) => {
+  /** Where a waiting Card lands next to another, and so in that one's lane. */
+  const placeOf = (cardId: string, at: Place) => {
+    const ref = graph?.cards.get(at.ref);
+    if (
+      !ref ||
+      isDraft(ref) ||
+      ref.state !== "pending" ||
+      ref.receivedBy ||
+      ref.status === "deprecated"
+    )
+      return null;
+    const lane = laneOf(ref);
+    const queue = laneCards(lane)
+      .filter((c) => !isDraft(c))
+      .map((c) => c.id);
+    const nth = placeIn(queue, cardId, at);
+    return nth ? { lane, nth } : null;
+  };
+
+  const move = async (cardId: string, lane: string, at?: Place) => {
     if (publishing === cardId) return;
     const card = graph?.cards.get(cardId);
-    if (!card || laneOf(card) === lane) return;
+    const spot = at ? placeOf(cardId, at) : null;
+    if (!card || (at && !spot) || (!at && laneOf(card) === lane)) return;
+    const across = laneOf(card) !== lane;
     if (card.state !== "pending" || card.receivedBy) {
       toast(t.work.fixed);
       return;
@@ -217,19 +281,28 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
       return;
     }
     const dropsReturn = card.returnTo === lane;
-    setMoved((m) => new Map([...m, [cardId, lane]]));
+    if (across) setMoved((m) => new Map([...m, [cardId, lane]]));
+    if (at) setPlaced((m) => new Map([...m, [cardId, { ...at, key: queueKey(card) }]]));
     setLanded({ lane, at: Date.now() });
     try {
-      await moveCard(card, lane === PUBLIC ? null : lane);
+      await moveCard(card, {
+        ...(across ? { target: lane === PUBLIC ? null : lane } : {}),
+        ...(at ? { [at.side]: at.ref } : {}),
+      });
       toast(
-        lane === PUBLIC
-          ? t.work.movedPublic(title(card))
-          : dropsReturn
-            ? t.work.returnDropped(laneName(lane))
-            : t.work.movedTo(title(card), laneName(lane)),
+        spot && !across
+          ? t.work.placed(title(card), spot.nth)
+          : spot
+            ? t.work.placedTo(title(card), laneName(lane), spot.nth)
+            : lane === PUBLIC
+              ? t.work.movedPublic(title(card))
+              : dropsReturn
+                ? t.work.returnDropped(laneName(lane))
+                : t.work.movedTo(title(card), laneName(lane)),
       );
     } catch (error) {
       setMoved((m) => new Map([...m].filter(([id]) => id !== cardId)));
+      setPlaced((m) => new Map([...m].filter(([id]) => id !== cardId)));
       // A Role received it while the page still showed it waiting.
       toast(
         error instanceof ApiError && error.code === "RECEPTION_CONFLICT"
@@ -306,6 +379,21 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
           (isDraft(card) || card.returnTo !== id)
         );
       }
+      // Next to a waiting Card: only published ones have a place in a queue.
+      if (kind === "at") {
+        const card = graph.cards.get(item.id);
+        const [ref = "", side] = id.split(":");
+        const spot =
+          item.kind === "card" ? placeOf(item.id, { ref, side: side as Place["side"] }) : null;
+        return (
+          !!card &&
+          !!spot &&
+          !isDraft(card) &&
+          card.state === "pending" &&
+          !card.receivedBy &&
+          (laneOf(card) === spot.lane || card.returnTo !== spot.lane)
+        );
+      }
       if (kind === "card" && item.kind === "node") {
         if (publishing === id) return false;
         const card = graph.cards.get(id);
@@ -318,7 +406,11 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
       if (kind === "lane" && item.kind === "node")
         void newCard(id === PUBLIC ? null : id, item.ids ?? [item.id]);
       else if (kind === "lane") void move(item.id, id);
-      else if (kind === "card") {
+      else if (kind === "at") {
+        const [ref = "", side] = id.split(":");
+        const next = graph?.cards.get(ref);
+        if (next) void move(item.id, laneOf(next), { ref, side: side as Place["side"] });
+      } else if (kind === "card") {
         if (id !== openDraft) setOpenDraft(id);
         for (const nodeId of item.ids ?? [item.id]) toggleSource(id, nodeId, true);
       }

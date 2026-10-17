@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { carried, deskOf, moodOf } from "../src/ui/shell/work.js";
+import { carried, deskOf, inQueue, moodOf, placeIn } from "../src/ui/shell/work.js";
 import type { Graph } from "../src/ui/data/store.js";
 import type { SnapshotCard } from "../src/ui/data/types.js";
 
@@ -51,4 +51,31 @@ test("a robot shows doing while it holds a Card to return, waiting for Cards to 
   assert.equal(moodOf(desk(0, 0, 1), false), "waiting");
   assert.equal(moodOf(desk(0, 0), false), undefined);
   assert.equal(moodOf(desk(1, 0), true), "gone");
+});
+
+test("waiting Cards line up by Core's key, oldest first, and a place just chosen shows at once", () => {
+  const pub = (id: string, publishedAt: string, orderKey?: string) =>
+    card(id, { state: "pending", receivedBy: null, publishedAt, orderKey });
+  const a = pub("card-a", "2026-10-17T01:00:00.000Z");
+  const b = pub("card-b", "2026-10-17T02:00:00.000Z");
+  // Moved to the end: the last key with its own id joined on, before anything published later.
+  const c = pub("card-c", "2026-10-17T00:00:00.000Z", "2026-10-17T02:00:00.000Z|card-b~card-c");
+  const d = pub("card-d", "2026-10-17T03:00:00.000Z");
+  const ids = (cards: SnapshotCard[]) => cards.map((x) => x.id);
+  assert.deepEqual(ids(inQueue([d, c, b, a], new Map())), ["card-a", "card-b", "card-c", "card-d"]);
+  assert.deepEqual(
+    ids(inQueue([d, c, b, a], new Map([["card-d", { ref: "card-a", side: "before" }]]))),
+    ["card-d", "card-a", "card-b", "card-c"],
+  );
+});
+
+test("a Card let go next to another takes that place, and next to itself changes nothing", () => {
+  const q = ["card-a", "card-b", "card-c"];
+  assert.equal(placeIn(q, "card-c", { ref: "card-a", side: "before" }), 1);
+  assert.equal(placeIn(q, "card-a", { ref: "card-c", side: "after" }), 3);
+  assert.equal(placeIn(q, "card-a", { ref: "card-b", side: "before" }), null);
+  assert.equal(placeIn(q, "card-b", { ref: "card-a", side: "after" }), null);
+  assert.equal(placeIn(q, "card-b", { ref: "card-b", side: "after" }), null);
+  // From another lane, before the second.
+  assert.equal(placeIn(q, "card-x", { ref: "card-b", side: "before" }), 2);
 });

@@ -1,6 +1,6 @@
 // Unsent Card composition stays in this browser, isolated by Workspace identity.
 import { useSyncExternalStore } from "react";
-import { api, type CardSourceInput, type CardInput } from "./api.js";
+import { api, type CardMove, type CardSourceInput, type CardInput } from "./api.js";
 import type { SnapshotCard } from "./types.js";
 import { t } from "../i18n.js";
 
@@ -134,8 +134,12 @@ export function setDraftReturn(id: string, returnTo: string | null) {
   });
 }
 
-/** Local targets can change while composing; sent Cards use their observed version. */
-export async function moveCard(card: SnapshotCard, target: string | null) {
+/**
+ * Local targets can change while composing; sent Cards use their observed version, and can also take a place
+ * in their queue. Drafts are in no queue yet, so only their lane changes.
+ */
+export async function moveCard(card: SnapshotCard, to: CardMove) {
+  const target = to.target === undefined ? card.target : to.target;
   if (isDraft(card)) {
     // A Card cannot return to its own receiver, so going to the Role it returns to drops the return.
     editDraft(card.id, (input) => {
@@ -146,5 +150,5 @@ export async function moveCard(card: SnapshotCard, target: string | null) {
     return;
   }
   const doc = await api.card(card.id);
-  await api.moveCard(card.id, doc.etag, target);
+  await api.moveCard(card.id, doc.etag, to);
 }

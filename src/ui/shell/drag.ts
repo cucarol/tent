@@ -1,7 +1,9 @@
 // Dragging Nodes and Cards with the pointer. A Node dropped on a draft becomes its next source; dropped on a
 // robot (a lane) it starts a new Card there. Several Nodes travel together when a picked set or a region is
-// dragged. A Card dropped on a lane moves there until a Role receives it.
-// Drop targets carry data-drop: "lane:<roleId>" ("lane:" is the public area) or "card:<cardId>".
+// dragged. A Card dropped on a lane moves there until a Role receives it; dropped on a waiting Card it takes
+// the place before or after it, in that Card's lane.
+// Drop targets carry data-drop: "lane:<roleId>" ("lane:" is the public area), "card:<cardId>", or
+// "at:<cardId>", which data-drop-split turns into "at:<cardId>:before" or ":after" by the pointer's height.
 import { useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
 
 /** `ids`, for Nodes carried together, lists all of them in order, `id` first. */
@@ -47,11 +49,21 @@ export function continueDrag(item: Dragged, at: { x: number; y: number }) {
   set({ item, ...at, over: targetAt(item, at.x, at.y) });
 }
 
-/** The drop target under a point that takes this item, or null. */
+/** The nearest drop target under a point that takes this item, or null; one refusing passes to the next out. */
 function targetAt(item: Dragged, x: number, y: number) {
-  const target =
-    document.elementFromPoint(x, y)?.closest("[data-drop]")?.getAttribute("data-drop") ?? null;
-  return target && handler?.accepts(item, target) ? target : null;
+  for (
+    let el = document.elementFromPoint(x, y)?.closest("[data-drop]");
+    el;
+    el = el.parentElement?.closest("[data-drop]")
+  ) {
+    let target = el.getAttribute("data-drop")!;
+    if (el.hasAttribute("data-drop-split")) {
+      const r = el.getBoundingClientRect();
+      target += y < r.top + r.height / 2 ? ":before" : ":after";
+    }
+    if (handler?.accepts(item, target)) return target;
+  }
+  return null;
 }
 
 function watch(item: Dragged, start: { x: number; y: number }, moving: boolean) {

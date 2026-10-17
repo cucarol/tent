@@ -441,6 +441,9 @@ export function Letter({
   const back = card.state === "returned";
   const over = draft && drag?.over === `card:${card.id}`;
   const lifted = drag?.item.kind === "card" && drag.item.id === card.id;
+  // A published Card still waiting has a place in its queue; another one let go on it goes before or after.
+  const queued = !draft && !back && card.state === "pending" && !card.receivedBy;
+  const at = queued && drag?.over?.startsWith(`at:${card.id}:`) ? drag.over.slice(-6) : "";
   // The draft being written counts what is on screen; others count what is saved.
   const sources =
     card.id === work.openDraft && work.draft
@@ -453,8 +456,9 @@ export function Letter({
       : `${cardStateLabel(card)} · ${ago(card.publishedAt)}`;
   return (
     <div
-      className={`letter ${draft ? "is-draft" : back ? "is-back" : "is-pub"}${over ? " is-over" : ""}${lifted ? " is-lifted" : ""}${active ? " is-active" : ""}`}
-      data-drop={draft ? `card:${card.id}` : undefined}
+      className={`letter ${draft ? "is-draft" : back ? "is-back" : "is-pub"}${over ? " is-over" : ""}${lifted ? " is-lifted" : ""}${active ? " is-active" : ""}${at === "before" ? " is-before" : at ? " is-after" : ""}`}
+      data-drop={draft ? `card:${card.id}` : queued ? `at:${card.id}` : undefined}
+      data-drop-split={queued ? "" : undefined}
       role="button"
       tabIndex={0}
       title={draft ? t.work.letterDraft : back ? t.work.letterBack : t.work.letterPub}

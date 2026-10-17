@@ -212,12 +212,16 @@ export const api = {
     wrote(call(`/api/cards/${encodeURIComponent(id)}/deprecate`, send("POST", { baseEtag }))),
   card: (id: string) => call<CardDocument>(`/api/cards/${encodeURIComponent(id)}`),
   createCard: (input: CardInput) => wrote(call<SavedCard>("/api/cards", send("POST", input))),
-  /** A published Card changes lane until a Role receives it; null returns it to the public area. */
-  moveCard: (id: string, baseEtag: string, target: string | null) =>
+  /**
+   * A published Card changes lane or place until a Role receives it. A null target returns it to the public
+   * area and a missing one keeps its lane; before or after puts it next to another waiting Card of that lane,
+   * and without either it goes to the end.
+   */
+  moveCard: (id: string, baseEtag: string, to: CardMove) =>
     wrote(
       call<SavedCard>(
         `/api/cards/${encodeURIComponent(id)}/move`,
-        send("POST", { baseEtag, target }),
+        send("POST", { baseEtag, ...to }),
       ),
     ),
   document: (version: DocumentVersion) =>
@@ -229,6 +233,8 @@ export const api = {
   diff: (from: DocumentVersion, to: DocumentVersion) =>
     call<{ text: string; pathChanged: boolean }>(`/api/history/diff?from=${at(from)}&to=${at(to)}`),
 };
+
+export type CardMove = { target?: string | null; before?: string; after?: string };
 
 /** What `/api/files/info` says of each path: its size and time, or null when it is not there. */
 export type FileInfo = { size: number; modifiedAt: string } | null;

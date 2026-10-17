@@ -60,7 +60,7 @@ test("unsent editing, source order, local retargeting and discard never call the
     sources: [...input.sources].reverse(),
   }));
   // A Card cannot return to its own receiver: going to the Role it returns to drops the return.
-  await moveCard(localDraftCards()[0]!, "role-ui");
+  await moveCard(localDraftCards()[0]!, { target: "role-ui" });
   assert.equal(localDraftCards()[0]!.body, "Local only");
   assert.equal(localDraftCards()[0]!.target, "role-ui");
   assert.equal(localDraftCards()[0]!.returnTo, undefined);

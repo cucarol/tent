@@ -502,6 +502,9 @@ const zh = {
     takenOut: (name: string) => `已把「${name}」从草稿里拿出来。`,
     movedTo: (title: string, lane: string) => `「${title}」交给了 ${lane}。`,
     movedPublic: (title: string) => `「${title}」放回了公共区。`,
+    placed: (title: string, n: number) => `「${title}」排到了第 ${n} 张。`,
+    placedTo: (title: string, lane: string, n: number) =>
+      `「${title}」交给了 ${lane}，排第 ${n} 张。`,
     fixed: "已经接收的 Card 固定在接收它的 Role，不能再换。",
     published: (lane: string) => `已发布，放在${lane}。正文和来源从此固定，接收之前还能换栏。`,
     discarded: "草稿已丢掉。",
@@ -546,7 +549,7 @@ const zh = {
     emptyPublic: "把 Node 拖到这里，写一张 Card",
     emptyRole: (name: string) => `没有等 ${name} 接的 Card`,
     letterDraft: "草稿：点开接着写；可以拖到别的栏",
-    letterPub: "已发布：点开看详情；接收之前可以拖到别的栏",
+    letterPub: "已发布：点开看详情；接收之前可以上下拖动排先后，或拖到别的栏",
     letterBack: "交回的结果：点开看详情",
     toCollect: "待收回",
     returnTo: "交回给",
@@ -1242,6 +1245,8 @@ const en: Messages = {
     takenOut: (name) => `Took “${name}” out of the draft.`,
     movedTo: (title, lane) => `Handed “${title}” to ${lane}.`,
     movedPublic: (title) => `Put “${title}” back in the public area.`,
+    placed: (title, n) => `Moved “${title}” to place ${n}.`,
+    placedTo: (title, lane, n) => `Handed “${title}” to ${lane}, at place ${n}.`,
     fixed: "A received Card stays with the Role that received it.",
     published: (lane) =>
       `Published, in ${lane}. Its text and sources are now fixed; until it is received it can still change lanes.`,
@@ -1284,7 +1289,8 @@ const en: Messages = {
     emptyPublic: "Drag a Node here to write a Card",
     emptyRole: (name) => `Nothing waiting for ${name}`,
     letterDraft: "Draft: click to keep writing; drag it to another lane",
-    letterPub: "Published: click for details; drag it to another lane until it is received",
+    letterPub:
+      "Published: click for details; until it is received, drag it up or down to reorder, or to another lane",
     letterBack: "Returned result: click for details",
     toCollect: "To collect",
     returnTo: "Return to",

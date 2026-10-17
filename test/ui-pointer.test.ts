@@ -33,7 +33,12 @@ test("Space lets go when the window loses focus, even without its key going up",
 
 function page(t: TestContext, under: string | null) {
   const win = new EventTarget();
-  const lane = { getAttribute: () => under, closest: () => (under ? lane : null) };
+  const lane = {
+    getAttribute: () => under,
+    hasAttribute: () => false,
+    closest: () => (under ? lane : null),
+    parentElement: null,
+  };
   const doc = Object.assign(new EventTarget(), {
     body: { classList: { add() {}, remove() {} } },
     elementFromPoint: () => (under ? lane : null),

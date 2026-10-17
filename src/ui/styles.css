@@ -372,6 +372,10 @@ body.is-dragging .lane-acts { opacity: 0; }
 .letter.is-over { background: var(--accent-soft); outline: 1.5px dashed var(--accent); }
 .letter.is-over :is(.t, .icon, .m) { color: var(--accent); font-weight: 600; }
 .letter.is-lifted, .draft.is-lifted { opacity: .4; }
+/* Where a Card let go here lands in the queue: a line in the gap before or after this one. */
+.letter:is(.is-before, .is-after)::before { content: ""; position: absolute; left: 4px; right: 4px; height: 2px; border-radius: 2px; background: var(--accent); box-shadow: -4px 0 0 1px var(--accent); pointer-events: none; }
+.letter.is-before::before { top: -4.5px; }
+.letter.is-after::before { bottom: -4.5px; }
 /* The draft being written, open in its lane. */
 .draft { position: relative; container-type: inline-size; padding: 4px 10px 10px; border-radius: 12px; background: var(--bg); box-shadow: var(--shadow-md); transition: box-shadow .15s, opacity .15s; }
 .draft.is-over { box-shadow: 0 0 0 1.5px var(--accent-line), var(--shadow-md); }
