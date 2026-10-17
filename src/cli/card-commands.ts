@@ -1,4 +1,5 @@
 import { workspaceReadPaths } from "./read-paths.js";
+import { formatCliTime } from "./time-text.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -431,7 +432,7 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
             item.result,
             item.status === "deprecated" ? item.status : undefined,
             item.title,
-            item.publishedAt,
+            item.publishedAt ? formatCliTime(item.publishedAt) : undefined,
             item.diagnostic,
             item.uncaptured ? uncapturedNotice : undefined,
           ]

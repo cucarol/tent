@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { formatCliTime } from "./time-text.js";
 
 export interface BuildIdentity {
   version: string;
@@ -47,7 +48,7 @@ export async function readBuildIdentity(packageRoot: string): Promise<BuildIdent
 
 export function formatBuildIdentity(identity: BuildIdentity): string {
   return `Tent ${identity.version} (commit ${identity.commit?.slice(0, 12) ?? "unknown"}; ${
-    identity.builtAt ? `built ${identity.builtAt}` : "source"
+    identity.builtAt ? `built ${formatCliTime(identity.builtAt)}` : "source"
   }${identity.dirty === true ? "; dirty" : identity.dirty === null ? "; dirty unknown" : ""})`;
 }
 

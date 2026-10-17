@@ -1,4 +1,5 @@
 import { workspaceReadPaths } from "./read-paths.js";
+import { formatCliTime } from "./time-text.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
 import { linkOutputResource, workspaceMaterialFields } from "./material-input.js";
@@ -1090,7 +1091,7 @@ function formatReaderContent(value: unknown): string {
             ? `${[item.nodeId, item.name].filter(Boolean).join("  ")}\n${formatTextPage(item)}`
             : [
                 item.commit,
-                item.time,
+                item.time ? formatCliTime(item.time) : undefined,
                 item.operation,
                 item.nodeId,
                 item.path,
