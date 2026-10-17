@@ -3,6 +3,7 @@ import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
 import { stat } from "node:fs/promises";
 import { NodeFs } from "../fs/node-fs.js";
+import { withDocumentHeaderCache } from "../fs/document-header-cache.js";
 import { exportGraph } from "../fs/graph-export.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
 import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
@@ -174,17 +175,20 @@ export async function runWorkspaceCommand(
       };
     }
     const captureFs = new NodeFs(roots.systemRoot, "cli");
-    const nodes = captureNativeNodeEdits(captureFs).then((result) => {
-      fs.invalidNodeEdits = captureFs.invalidNodeEdits;
-      return result;
-    });
+    const captureNodes = () =>
+      captureNativeNodeEdits(captureFs).then((result) => {
+        fs.invalidNodeEdits = captureFs.invalidNodeEdits;
+        return result;
+      });
     if (sub === "brief") {
-      const brief = makeContextBrief(
-        await inspectCurrentContext(fs, {
-          roleId: values.role,
-          nodes,
-        }),
-        { roleId: values.role },
+      const brief = await withDocumentHeaderCache(roots.systemRoot, async () =>
+        makeContextBrief(
+          await inspectCurrentContext(fs, {
+            roleId: values.role,
+            nodes: captureNodes(),
+          }),
+          { roleId: values.role },
+        ),
       );
       return {
         exitCode: 0,
@@ -193,7 +197,7 @@ export async function runWorkspaceCommand(
         stderr: "",
       };
     }
-    const { invalidNodes: invalidNativeNodes } = await nodes;
+    const { invalidNodes: invalidNativeNodes } = await captureNodes();
     if (sub === "drift") {
       const inspected = await inspectWorkspaceDrift(fs);
       const result = pageItems(

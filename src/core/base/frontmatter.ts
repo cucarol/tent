@@ -9,6 +9,8 @@ import {
   visit,
   type Node as YamlNode,
 } from "yaml";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { contentEtag } from "./etag.js";
 
 export interface ParsedFrontmatter {
   data: Record<string, unknown>;
@@ -24,9 +26,55 @@ export function syncNodeTitle(data: Record<string, unknown>, nodePath: string): 
   if (data.title !== undefined) data.title = nodePath.slice(nodePath.lastIndexOf("/") + 1);
 }
 
-type Source = { document: Document; prefix: string; eol: string; bom: string; keys: string[] };
+type Source = {
+  document?: Document;
+  yaml: string;
+  prefix: string;
+  eol: string;
+  bom: string;
+  keys: string[];
+};
 // keyOrder carries the original document through callers that shallow-copy data.
 const sources = new WeakMap<object, Source>();
+
+export type FrontmatterCacheEntry = { data: Record<string, unknown>; keys: string[] };
+export type FrontmatterCache = Map<string, FrontmatterCacheEntry>;
+const caches = new AsyncLocalStorage<{ previous: FrontmatterCache; used: FrontmatterCache }>();
+
+/** Cache only the parse of exact header bytes; callers must still read live documents. */
+export async function withFrontmatterCache<T>(
+  previous: FrontmatterCache,
+  action: () => Promise<T>,
+): Promise<{ result: T; used: FrontmatterCache }> {
+  const used: FrontmatterCache = new Map();
+  const result = await caches.run({ previous, used }, action);
+  return { result, used };
+}
+
+/** Validate disposable decoded values without reparsing their YAML on every process. */
+export function validFrontmatterCache(value: unknown): value is FrontmatterCache {
+  if (!(value instanceof Map)) return false;
+  try {
+    for (const [etag, entry] of value) {
+      if (
+        typeof etag !== "string" ||
+        !/^[a-f0-9]{24}$/.test(etag) ||
+        !isRecord(entry) ||
+        !isRecord(entry.data) ||
+        !Array.isArray(entry.keys) ||
+        !entry.keys.every((key) => typeof key === "string") ||
+        new Set(entry.keys).size !== entry.keys.length ||
+        entry.keys.length !== Object.keys(entry.data).length ||
+        !entry.keys.every((key) => Object.prototype.hasOwnProperty.call(entry.data, key))
+      )
+        return false;
+      assertJsonValue(entry.data);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function parseFrontmatter(raw: string): ParsedFrontmatter {
   const opening = /^(\uFEFF)?---[\t ]*(\r?\n)/.exec(raw);
@@ -36,14 +84,30 @@ export function parseFrontmatter(raw: string): ParsedFrontmatter {
   const closing = fence.exec(raw);
   if (!closing) throw invalidYaml("unterminated frontmatter fence.");
 
-  const { document, data } = readYaml(raw.slice(opening[0].length, closing.index));
-  const keyOrder = isMap(document.contents)
-    ? document.contents.items.map((pair) => String((pair.key as Scalar).value))
-    : [];
   const end = closing.index + closing[0].length;
+  const prefix = raw.slice(0, end);
+  const yaml = raw.slice(opening[0].length, closing.index);
+  const cache = caches.getStore();
+  const etag = cache ? contentEtag(prefix) : undefined;
+  let entry = etag ? (cache?.used.get(etag) ?? cache?.previous.get(etag)) : undefined;
+  let document: Document | undefined;
+  let data: Record<string, unknown>;
+  let keyOrder: string[];
+  if (entry) {
+    data = structuredClone(entry.data);
+    keyOrder = entry.keys.slice();
+  } else {
+    ({ document, data } = readYaml(yaml));
+    keyOrder = isMap(document.contents)
+      ? document.contents.items.map((pair) => String((pair.key as Scalar).value))
+      : [];
+    if (cache) entry = { data: structuredClone(data), keys: keyOrder.slice() };
+  }
+  if (cache && entry) cache.used.set(etag!, entry);
   const source = {
     document,
-    prefix: raw.slice(0, end),
+    yaml,
+    prefix,
     eol: opening[2],
     bom: opening[1] ?? "",
     keys: keyOrder.slice(),
@@ -116,12 +180,17 @@ export function serializeFrontmatter(
   assertJsonValue(data);
   const keys = orderedKeys(data, keyOrder);
   const source = sources.get(data) ?? sources.get(keyOrder);
-  const original = source?.document.toJS({ maxAliasCount: 100 }) ?? {};
+  // Reads need only values. A later edit still uses the original YAML AST so
+  // comments, aliases, scalar styles and key order retain their normal behavior.
+  const originalDocument = source
+    ? (source.document ??= readYaml(source.yaml).document)
+    : undefined;
+  const original = originalDocument?.toJS({ maxAliasCount: 100 }) ?? {};
   if (source && sameValue(keys, source.keys) && sameValue(data, original)) {
     return source.prefix + (body && !source.prefix.endsWith("\n") ? source.eol : "") + body;
   }
 
-  const document = source?.document.clone() ?? new Document({});
+  const document = originalDocument?.clone() ?? new Document({});
   if (!isMap(document.contents)) document.contents = document.createNode({});
   const mapping = document.contents;
   if (!isMap(mapping)) throw invalidYaml("frontmatter must be a mapping.");
