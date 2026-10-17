@@ -20,6 +20,8 @@ import {
 import { extractRustImports } from "../core/base/rust-imports.js";
 import { extractJavaImports } from "../core/base/java-imports.js";
 import { isJavaConfig } from "../core/base/java-build.js";
+import { extractCSharpImports } from "../core/base/csharp-imports.js";
+import { isCSharpConfig } from "../core/base/csharp-build.js";
 import { sourceDirectoryPaths } from "./directory-observation.js";
 import { observeSourceFile } from "./source-observation.js";
 import { checkedSourceFile } from "./checked-source-file.js";
@@ -113,7 +115,7 @@ export async function observeStructureMaterial(
   const rustMembers = memberSources.filter((member) => member.endsWith(".rs"));
   const neededConfig = (file: string) => {
     if (!isImportConfig(file)) return false;
-    if (/(^|\/)Cargo\.toml$/.test(file) || isJavaConfig(file)) return false;
+    if (/(^|\/)Cargo\.toml$/.test(file) || isJavaConfig(file) || isCSharpConfig(file)) return false;
     const configDirectory = path.posix.dirname(file);
     return memberSources.some(
       (member) =>
@@ -177,16 +179,32 @@ export async function observeStructureMaterial(
     }
     java = extractJavaImports(javaSources, javaMembers);
   }
-  const imports = extractRepositoryImports(files, { rust: false, java: false });
+  const csharpMembers = memberSources.filter((member) => member.endsWith(".cs"));
+  const csharpSources = files.filter((file) => !isTestSource(file.path));
+  let csharp = extractCSharpImports(csharpSources, csharpMembers);
+  while (true) {
+    const required = csharp.requiredFiles.filter((file) => byPath.get(file)?.content === undefined);
+    if (!required.length) break;
+    for (const file of required) {
+      const source = byPath.get(file);
+      if (!source) throw new Error(`Required C# source is absent: ${file}`);
+      source.content = await readSource(file, path.join(workspaceRoot, file));
+    }
+    csharp = extractCSharpImports(csharpSources, csharpMembers);
+  }
+  const imports = extractRepositoryImports(files, { rust: false, java: false, csharp: false });
   imports.edges.push(...rust.edges);
   imports.issues.push(...rust.issues);
   imports.edges.push(...java.edges);
   imports.issues.push(...java.issues);
+  imports.edges.push(...csharp.edges);
+  imports.issues.push(...csharp.issues);
   const issue = imports.issues.find(
     (issue) =>
       isImportConfig(issue.file) ||
       materialCoverageContains(coverage, issue.file) ||
-      java.requiredFiles.includes(issue.file),
+      java.requiredFiles.includes(issue.file) ||
+      csharp.requiredFiles.includes(issue.file),
   );
   if (issue)
     throw new Error(
