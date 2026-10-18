@@ -33,8 +33,10 @@ export type Answer = {
 export function comparisonsFor(
   held: Answer | null,
   asked: { key: string; ask: number },
+  key = asked.key,
 ): Comparisons {
-  if (!held || held.key !== asked.key) return noComparisons;
+  // `key` is the outputs this render shows; the ask for new ones is only made after the render.
+  if (!key || asked.key !== key || !held || held.key !== key) return noComparisons;
   if (held.failed) return { map: new Map(), status: "failed" };
   return { map: held.map, status: held.ask === asked.ask ? "ready" : "refreshing" };
 }
@@ -70,8 +72,44 @@ export type Constrain = {
   rule: "fresh" | "behind" | "gaps";
 };
 
-/** prompt + output: does the conclusion cite the rule. */
-export type Contrast = { kind: "contrast"; prompt: string; output: string; cites: boolean };
+/**
+ * When Core says each card last changed: a body or material address, not a confirmation or other
+ * metadata; and for an output, when it was last recorded or confirmed. Null when history cannot show it.
+ */
+export type NodeTime = { contentChangedAt: string | null; recordedAt: string | null };
+export type Times = ReadonlyMap<string, NodeTime>;
+export const noTimes: Times = new Map();
+
+/** One answer to a times read: for which Nodes at which revision, which ask it answered, and what came. */
+export type TimesAnswer = { key: string; ask: number; map: Times; failed: boolean };
+
+/**
+ * The times the page may judge by: only the answer to the very read it asked last, for the Nodes and
+ * revision it shows now (`key`, empty when it reads none). While that read is on its way, after it failed,
+ * and in the render where the Nodes or the revision just changed, before the new read is even asked,
+ * nothing is judged by time, so an order from an earlier revision is never shown as current.
+ */
+export function timesFor(
+  held: TimesAnswer | null,
+  asked: { key: string; ask: number },
+  key: string,
+): Times {
+  if (!key || asked.key !== key) return noTimes;
+  if (!held || held.failed || held.key !== key || held.ask !== asked.ask) return noTimes;
+  return held.map;
+}
+
+/**
+ * prompt + output: does the conclusion cite the rule, and was the rule last changed before the conclusion
+ * was last recorded or after it. The order is null when history cannot tell, absent while not read yet.
+ */
+export type Contrast = {
+  kind: "contrast";
+  prompt: string;
+  output: string;
+  cites: boolean;
+  order?: "before" | "after" | "same" | null;
+};
 
 /** goal + goal: one above the other, materials they share, rules hanging on both. */
 export type Overlap = {
@@ -135,6 +173,7 @@ export function headOf(r: Reaction): Head {
       if (r.rule === "gaps") return { mark: "none", says: "unknown" };
       return { mark: "ok", says: "on" };
     case "contrast":
+      if (r.order === "after") return { mark: "warn", says: "after" };
       return r.cites ? { mark: "ok", says: "cites" } : { mark: "info", says: "silent" };
     case "overlap":
       if (r.family) return { mark: "info", says: "family" };
@@ -162,7 +201,7 @@ export function matters(r: Reaction): boolean {
     case "constrain":
       return r.on !== "none" || r.shared.length > 0;
     case "contrast":
-      return r.cites;
+      return r.cites || r.order === "after";
     case "overlap":
       return !!r.family || r.shared.length > 0 || r.rules.length > 0;
     case "govern":
@@ -325,12 +364,27 @@ export function constrainOf(
   };
 }
 
-export const contrastOf = (graph: Graph, prompt: string, output: string): Contrast => ({
-  kind: "contrast",
-  prompt,
-  output,
-  cites: names(graph, output, prompt),
-});
+export function contrastOf(
+  graph: Graph,
+  prompt: string,
+  output: string,
+  times: Times = noTimes,
+): Contrast {
+  const rule = times.get(prompt),
+    told = times.get(output);
+  const contrast: Contrast = {
+    kind: "contrast",
+    prompt,
+    output,
+    cites: names(graph, output, prompt),
+  };
+  if (!rule || !told) return contrast;
+  const a = Date.parse(rule.contentChangedAt ?? ""),
+    b = Date.parse(told.recordedAt ?? "");
+  contrast.order =
+    Number.isNaN(a) || Number.isNaN(b) ? null : a < b ? "before" : a > b ? "after" : "same";
+  return contrast;
+}
 
 export function overlapOf(graph: Graph, a: string, b: string): Overlap {
   const theirs = rulesOf(graph, b);
@@ -351,9 +405,11 @@ export const governOf = (graph: Graph, a: string, b: string): Govern => ({
   shared: sharedOf(graph, a, b),
 });
 
-export function sequenceOf(graph: Graph, a: string, b: string): Sequence {
+export function sequenceOf(graph: Graph, a: string, b: string, times: Times = noTimes): Sequence {
+  // When each was last recorded or confirmed, once Core has said so for both; else when it was written.
+  const recorded = !!times.get(a)?.recordedAt && !!times.get(b)?.recordedAt;
   const at = (id: string) => {
-    const t = graph.nodes.get(id)?.outputAt;
+    const t = recorded ? times.get(id)!.recordedAt : graph.nodes.get(id)?.outputAt;
     return t ? Date.parse(t) : NaN;
   };
   const ta = at(a),
@@ -402,6 +458,7 @@ export function pairOf(
   compared: Comparisons,
   x: string,
   y: string,
+  times: Times = noTimes,
 ): Reaction | null {
   const tx = typeOf(graph, x),
     ty = typeOf(graph, y);
@@ -414,13 +471,13 @@ export function pairOf(
     case "goal+prompt":
       return constrainOf(graph, flags, by("goal"), by("prompt"));
     case "output+prompt":
-      return contrastOf(graph, by("prompt"), by("output"));
+      return contrastOf(graph, by("prompt"), by("output"), times);
     case "goal+goal":
       return overlapOf(graph, x, y);
     case "prompt+prompt":
       return governOf(graph, x, y);
     case "output+output":
-      return sequenceOf(graph, x, y);
+      return sequenceOf(graph, x, y, times);
   }
   return null;
 }
@@ -439,12 +496,13 @@ export function reactionsIn(
   flags: SyncFlags,
   compared: Comparisons,
   members: readonly string[],
+  times: Times = noTimes,
 ): Reaction[] {
   const ids = members.filter((id) => graph.nodes.has(id));
   const out: Reaction[] = [];
   for (let i = 0; i < ids.length; i++)
     for (let j = i + 1; j < ids.length; j++) {
-      const r = pairOf(graph, flags, compared, ids[i], ids[j]);
+      const r = pairOf(graph, flags, compared, ids[i], ids[j], times);
       if (r) out.push(r);
     }
   const of = (type: string) => ids.filter((id) => typeOf(graph, id) === type);

@@ -205,10 +205,19 @@ function Facts({ r, nameOf }: { r: Reaction; nameOf: NameOf }) {
       return <ConstrainFacts r={r} />;
     case "contrast":
       return (
-        <Row
-          mark={r.cites ? "ok" : "info"}
-          says={r.cites ? x.contrast.head.cites : x.contrast.head.silent}
-        />
+        <>
+          <Row
+            mark={r.cites ? "ok" : "info"}
+            says={r.cites ? x.contrast.head.cites : x.contrast.head.silent}
+          />
+          {r.order === null ? (
+            <Row mark="none" says={x.contrast.noOrder} note={x.contrast.noOrderNote} />
+          ) : r.order === "after" ? (
+            <Row mark="warn" says={x.contrast.after} note={x.contrast.afterNote} />
+          ) : r.order ? (
+            <Row mark="info" says={r.order === "same" ? x.contrast.same : x.contrast.before} />
+          ) : null}
+        </>
       );
     case "overlap":
       return <OverlapFacts r={r} nameOf={nameOf} />;

@@ -118,10 +118,13 @@ import {
   comparisonsFor,
   outputsToCompare,
   listed,
+  noTimes,
   reactionsIn,
   reacts,
+  timesFor,
   type Answer,
   type Reaction,
+  type TimesAnswer,
 } from "./reactions.js";
 import { RegionProducts } from "./Reaction.js";
 import { api } from "../data/api.js";
@@ -1388,13 +1391,67 @@ function MapContent({
       current = false;
     };
   }, [compareKey, graph.snapshot.workspace.revision, flags]);
-  const compared = useMemo(() => comparisonsFor(held, asked), [held, asked]);
+  const compared = useMemo(
+    () => comparisonsFor(held, asked, compareKey),
+    [held, asked, compareKey],
+  );
+  // When the rules and outputs in regions last changed or were recorded, for "对照" and "前后"; they
+  // move only with commits, so each revision asks again.
+  const toTime = useMemo(
+    () =>
+      [
+        ...new Set(
+          [...members.values()].flatMap((ids) =>
+            ids.length > 1
+              ? ids.filter(
+                  (id) =>
+                    visible(id) && ["prompt", "output"].includes(graph.nodes.get(id)?.type ?? ""),
+                )
+              : [],
+          ),
+        ),
+      ].sort(),
+    [members, graph, visible],
+  );
+  const revision = graph.snapshot.workspace.revision;
+  const timeKey = toTime.length ? `${workspaceId}@${revision}:${toTime.join(" ")}` : "";
+  const [heldTimes, setHeldTimes] = useState<TimesAnswer | null>(null);
+  const [askedTimes, setAskedTimes] = useState({ key: "", ask: 0 });
+  const timeAsks = useRef(0);
+  useEffect(() => {
+    if (!timeKey) return;
+    const ask = { key: timeKey, ask: ++timeAsks.current };
+    setAskedTimes(ask);
+    // A late answer to an earlier ask is dropped; a failure clears what the last answer said.
+    let current = true;
+    api
+      .nodeTimes(toTime)
+      .then(
+        (list) =>
+          current &&
+          setHeldTimes({
+            ...ask,
+            map: new Map(list.map(({ nodeId, ...time }) => [nodeId, time])),
+            failed: false,
+          }),
+      )
+      .catch(() => current && setHeldTimes({ ...ask, map: noTimes, failed: true }));
+    return () => {
+      current = false;
+    };
+  }, [timeKey]);
+  // Checked against the key of this render, not only the last ask: the ask for a new key is made after it.
+  const timed = useMemo(
+    () => timesFor(heldTimes, askedTimes, timeKey),
+    [heldTimes, askedTimes, timeKey],
+  );
   const reactions = useMemo(() => {
     const out = new Map<string, Reaction[]>();
     for (const [rid, ids] of members)
-      if (ids.length > 1) out.set(rid, reactionsIn(graph, flags, compared, ids.filter(visible)));
+      if (ids.length > 1)
+        out.set(rid, reactionsIn(graph, flags, compared, ids.filter(visible), timed));
     return out;
-  }, [members, graph, flags, compared, visible]);
+  }, [members, graph, flags, compared, visible, timed]);
   const regionName = (rid: string) =>
     canvas.regions.find((r) => r.id === rid)?.name || t.map.region.unnamed;
   // The selected Node's references, marked on the cards at either end instead of drawn as lines.

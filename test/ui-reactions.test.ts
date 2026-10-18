@@ -18,6 +18,8 @@ import {
   reactionsIn,
   reacts,
   sequenceOf,
+  timesFor,
+  noTimes,
   summaryOf,
   verifyOf,
   type Answer,
@@ -347,9 +349,124 @@ test("an answer counts only for the ask it answered; a failure keeps no old verd
   // Other outputs, or another workspace: nothing from before.
   assert.equal(comparisonsFor(answer(1), { key: "ws:out o2", ask: 2 }).status, "waiting");
   // The latest read failed: no verdict, not even the old green.
+  // The render where the outputs just changed, before the effect asks for them: nothing old is shown.
+  assert.equal(comparisonsFor(answer(1), { key: "ws:out", ask: 1 }, "ws:out o2").status, "waiting");
+  assert.equal(comparisonsFor(answer(1), { key: "ws:out", ask: 1 }, "").status, "waiting");
   const failed = comparisonsFor(answer(2, true), { key: "ws:out", ask: 2 });
   assert.equal(failed.status, "failed");
   const v = verifyOf(graph, failed, "goal", "out");
   assert.equal(v.goalState, null);
   assert.deepEqual(headOf(v), { mark: "none", says: "failed" });
+});
+
+test("rule and conclusion: a rule changed after the conclusion was recorded is worth a look", () => {
+  const at = (contentChangedAt: string | null, recordedAt: string | null) => ({
+    contentChangedAt,
+    recordedAt,
+  });
+  // Not read yet: no order claimed either way.
+  assert.equal(contrastOf(world, "style", "note").order, undefined);
+  const before = contrastOf(
+    world,
+    "style",
+    "note",
+    new Map([
+      ["style", at("2026-10-14T00:00:00Z", null)],
+      ["note", at(null, "2026-10-15T00:00:00Z")],
+    ]),
+  );
+  assert.equal(before.order, "before");
+  assert.equal(listed(before), false);
+  const after = contrastOf(
+    world,
+    "style",
+    "note",
+    new Map([
+      ["style", at("2026-10-16T00:00:00Z", null)],
+      ["note", at(null, "2026-10-15T00:00:00Z")],
+    ]),
+  );
+  assert.equal(after.order, "after");
+  assert.deepEqual(headOf(after), { mark: "warn", says: "after" });
+  assert.equal(listed(after), true);
+  // History cannot show one side: unknown, not a guess.
+  const unknown = contrastOf(
+    world,
+    "style",
+    "note",
+    new Map([
+      ["style", at(null, null)],
+      ["note", at(null, "2026-10-15T00:00:00Z")],
+    ]),
+  );
+  assert.equal(unknown.order, null);
+  assert.deepEqual(headOf(unknown), { mark: "info", says: "silent" });
+});
+
+test("two conclusions are ordered by when each was last recorded once Core says so for both", () => {
+  const times = new Map([
+    ["note2", { contentChangedAt: null, recordedAt: "2026-10-01T00:00:00Z" }],
+    ["note", { contentChangedAt: null, recordedAt: "2026-10-02T00:00:00Z" }],
+  ]);
+  assert.equal(sequenceOf(world, "note2", "note").first, "b");
+  assert.equal(sequenceOf(world, "note2", "note", times).first, "a");
+  // Only one recorded: both fall back to when they were written.
+  const one = new Map([["note2", times.get("note2")!]]);
+  assert.equal(sequenceOf(world, "note2", "note", one).first, "b");
+});
+
+test("times count only for the read asked last: waiting, failing or a late answer judge nothing", () => {
+  const at = (rule: string, told: string) =>
+    new Map([
+      ["style", { contentChangedAt: rule, recordedAt: null }],
+      ["note", { contentChangedAt: null, recordedAt: told }],
+    ]);
+  const orderOf = (times: ReturnType<typeof timesFor>) =>
+    contrastOf(world, "style", "note", times).order;
+  const r1 = { key: "ws@r1:note style", ask: 1 };
+  const answered = {
+    ...r1,
+    map: at("2026-10-14T00:00:00Z", "2026-10-15T00:00:00Z"),
+    failed: false,
+  };
+  assert.equal(orderOf(timesFor(answered, r1, r1.key)), "before");
+  // The same cards at a new revision: while that read is on its way, the old order is not shown.
+  const r2 = { key: "ws@r2:note style", ask: 2 };
+  assert.equal(orderOf(timesFor(answered, r2, r2.key)), undefined);
+  // It failed: still nothing judged, the old answer is not brought back.
+  assert.equal(orderOf(timesFor({ ...r2, map: noTimes, failed: true }, r2, r2.key)), undefined);
+  // Asked again and answered: the new order.
+  const r3 = { key: "ws@r2:note style", ask: 3 };
+  const fresh = { ...r3, map: at("2026-10-16T00:00:00Z", "2026-10-15T00:00:00Z"), failed: false };
+  assert.equal(orderOf(timesFor(fresh, r3, r3.key)), "after");
+  // A late answer to an earlier ask of the same key does not stand for the newer one.
+  const late = { ...r2, map: at("2026-10-14T00:00:00Z", "2026-10-15T00:00:00Z"), failed: false };
+  assert.equal(orderOf(timesFor(late, r3, r3.key)), undefined);
+});
+
+test("in the render where the revision changes, before the new read is asked, the old times are not used", () => {
+  const times = new Map([
+    ["style", { contentChangedAt: "2026-10-14T00:00:00Z", recordedAt: null }],
+    ["note", { contentChangedAt: null, recordedAt: "2026-10-15T00:00:00Z" }],
+  ]);
+  const r1 = { key: "ws@r1:note style", ask: 1 };
+  const held = { ...r1, map: times, failed: false };
+  // The effect has not asked for r2 yet, so the last ask is still r1's: the render must not judge by it.
+  assert.equal(
+    contrastOf(world, "style", "note", timesFor(held, r1, "ws@r2:note style")).order,
+    undefined,
+  );
+  // No cards to time any more: nothing, whatever was held.
+  assert.equal(timesFor(held, r1, "").size, 0);
+  // Same key as asked and answered: used.
+  assert.equal(contrastOf(world, "style", "note", timesFor(held, r1, r1.key)).order, "before");
+});
+
+test("the map checks times against the key of the render, not only the ask its effect made", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/ui/map/MapView.tsx", import.meta.url), "utf8");
+  // The ask for a new key is made in an effect, after the render that first shows that key.
+  assert.match(source, /timesFor\(\s*heldTimes,\s*askedTimes,\s*timeKey\s*\)/);
+  assert.match(source, /\[heldTimes, askedTimes, timeKey\]/);
+  assert.match(source, /comparisonsFor\(\s*held,\s*asked,\s*compareKey\s*\)/);
 });

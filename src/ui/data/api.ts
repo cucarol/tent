@@ -179,6 +179,14 @@ export const api = {
     call<{ etag: string }>("/api/canvas", send("PUT", { baseEtag, canvas })),
   /** Which Nodes with code directories import which, from the repository's current files. */
   moduleDeps: () => call<ModuleDependencyResponse>("/api/modules/deps"),
+  /**
+   * When each Node's body or material addresses last changed, and when each output was last recorded or
+   * confirmed; null where history cannot show it. Confirmations and other metadata do not count.
+   */
+  nodeTimes: (ids: readonly string[]) =>
+    call<{ nodeId: string; contentChangedAt: string | null; recordedAt: string | null }[]>(
+      `/api/nodes/times?${ids.map((id) => `nodeId=${encodeURIComponent(id)}`).join("&")}`,
+    ),
   /** Tests covering each Node that holds code, and what it often changes with; worked out on each read. */
   codeFacts: () => call<CodeFacts>("/api/modules/facts"),
   /** How each output stands to every goal above it, and what changed since it was written. */

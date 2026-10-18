@@ -295,7 +295,17 @@ const zh = {
         gapsNote: "缺基线，或有材料读不到",
       },
       contrast: {
-        head: { cites: "结论引用了这条规则", silent: "结论没有引用这条规则" },
+        head: {
+          cites: "结论引用了这条规则",
+          silent: "结论没有引用这条规则",
+          after: "规则在结论之后改过",
+        },
+        before: "规则在结论记下之前就定了",
+        after: "规则在结论记下之后改过",
+        afterNote: "结论可能没按现在的规则做，值得再对一遍",
+        same: "规则改动和结论记下在同一时刻",
+        noOrder: "看不出规则和结论谁先谁后",
+        noOrderNote: "有一边的时间从历史里证实不了",
       },
       overlap: {
         head: {
@@ -320,10 +330,10 @@ const zh = {
         same: (goal: string) => `同属「${goal}」`,
         apart: (a: string, b: string) => `分属「${a}」和「${b}」`,
         noGoal: "不在任何目标下",
-        first: (name: string) => `「${name}」先写下`,
+        first: (name: string) => `「${name}」先记下`,
         together: "同时写下",
         noOrder: "看不出谁先谁后",
-        noOrderNote: "有一份没有写下时间",
+        noOrderNote: "有一份没有记下时间",
         only: (name: string, list: string[]) => `只有「${name}」有：${list.join("、")}`,
         both: (n: number) => `共用 ${n} 份材料`,
       },
@@ -1047,7 +1057,17 @@ const en: Messages = {
         gapsNote: "No basis kept, or a material cannot be read",
       },
       contrast: {
-        head: { cites: "The output cites this rule", silent: "The output does not cite this rule" },
+        head: {
+          cites: "The output cites this rule",
+          silent: "The output does not cite this rule",
+          after: "The rule changed after the output",
+        },
+        before: "The rule was set before the output was recorded",
+        after: "The rule changed after the output was recorded",
+        afterNote: "The output may not follow the rule as it is now; worth checking again",
+        same: "The rule changed as the output was recorded",
+        noOrder: "Cannot tell which came first, the rule or the output",
+        noOrderNote: "History cannot show the time on one side",
       },
       overlap: {
         head: {
@@ -1075,10 +1095,10 @@ const en: Messages = {
         same: (goal) => `Both answer "${goal}"`,
         apart: (a, b) => `One answers "${a}", the other "${b}"`,
         noGoal: "under no goal",
-        first: (name) => `"${name}" was written first`,
+        first: (name) => `"${name}" was recorded first`,
         together: "Written at the same time",
         noOrder: "Cannot tell which came first",
-        noOrderNote: "One has no written time",
+        noOrderNote: "One has no recorded time",
         only: (name, list) => `Only "${name}" has: ${list.join(", ")}`,
         both: (n) => count(n, "shared material"),
       },
