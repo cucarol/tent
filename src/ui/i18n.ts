@@ -599,10 +599,11 @@ const zh = {
     dragNode: "拖到顶栏右边的机器人身上，写一张 Card",
     carried: (n: number) => `带过它的 Card · ${n}`,
     testedBy: (n: number) => `覆盖它的测试 · ${n}`,
-    testedByTip: "Tent 看哪些测试文件 import 了它下面的代码，每次打开现算",
+    testedByTip:
+      "Tent 看哪些测试文件 import 了它下面的代码；打开时现算，半分钟内来回切换会沿用上次的结果",
     changesWith: (n: number) => `常和它一起改 · ${n}`,
     changesWithTip: (commits: number) =>
-      `最近 ${commits} 次提交里，改到它的提交中也改到对方的次数；每次打开现算`,
+      `仓库最近 ${commits} 次提交里，改到它的那些提交中也改到对方的次数；打开时现算，半分钟内沿用上次的结果`,
     changedTogether: (shared: number, all: number) => `${all} 次里 ${shared} 次`,
     showAllOf: (n: number) => `全部 ${n} 个`,
     noCards: "还没有",
@@ -1357,10 +1358,11 @@ const en: Messages = {
     dragNode: "Drag onto a robot at the right of the top bar to write a Card",
     carried: (n) => `Cards that carried it · ${n}`,
     testedBy: (n) => `Tests covering it · ${n}`,
-    testedByTip: "Test files that import the code under it, worked out by Tent each time it opens",
+    testedByTip:
+      "Test files that import the code under it, worked out by Tent when the page opens and reused for half a minute",
     changesWith: (n) => `Often changed with · ${n}`,
     changesWithTip: (commits) =>
-      `Of the last ${commits} commits that changed it, how many also changed the other; worked out each time it opens`,
+      `Among the repository's last ${commits} commits, how many of those that changed it also changed the other; worked out when the page opens and reused for half a minute`,
     changedTogether: (shared, all) => `${shared} of ${all}`,
     showAllOf: (n) => `All ${n}`,
     noCards: "None yet",
