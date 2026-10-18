@@ -427,10 +427,13 @@ test("one Node excludes its structure-source union while retaining each material
   );
   const current = await readNodeForEdit(adapter, goal);
   await writeNodeDocument(adapter, goal, { baseEtag: current.etag, body: "Keep existing bases\n" });
-  assert.equal((await run("check", [goal])).state, "behind");
+  check = await run("check", [goal]);
+  assert.equal(check.state, "behind");
+  assert.ok(check.ahead, "editing intent still requires review while structure is behind");
   await confirm(goal);
   check = await run("check", [goal]);
-  assert.equal(check.state, "ahead");
+  assert.equal(check.state, "synced");
+  assert.equal(check.ahead, undefined, "confirmation records the coverage goal's own intent");
   assert.ok(check.materials.every((material: any) => material.state === "current"));
   assert.equal((await run("check", [output])).state, "synced");
   assert.ok(
