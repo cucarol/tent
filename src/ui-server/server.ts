@@ -39,10 +39,12 @@ import { findTentSystemRoot } from "../core/workspace/status.js";
 import { readWorkspaceRevision } from "../core/workspace/workspace-revision.js";
 import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
 import { readModuleDependencies } from "../core/graph/module-dependencies.js";
+import { checkWorkspaceModules } from "../core/check/workspace-module-map.js";
 import { createModuleDependencyQuery } from "../core/read/module-dependency-query.js";
 import { validationIssueText } from "../core/base/validation-message.js";
 import { NodeFs, SystemClock } from "../fs/node-fs.js";
 import { createModuleDependencyRepositoryReader } from "../fs/module-dependencies.js";
+import { readModuleMapRepository } from "../fs/workspace-scan.js";
 import { createModuleDependencyWatch } from "../fs/module-dependency-watch.js";
 import type { Snapshot } from "../ui/data/types.js";
 import { buildSnapshot } from "./snapshot.js";
@@ -179,6 +181,7 @@ async function startWorkspaceServer(
   const staticDir = path.resolve(options.staticDir);
   const fs = new NodeFs(tentRoot, "ui");
   const queryFs = shareInFlightReads(fs);
+  let codeFacts: Promise<unknown> | undefined;
   const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot };
   const dependencyRepository = createModuleDependencyRepositoryReader(workspaceRoot);
   const dependencyQuery = createModuleDependencyQuery({
@@ -273,6 +276,23 @@ async function startWorkspaceServer(
       );
     }
     if (route === "GET /api/modules/deps") return json(res, 200, await dependencyQuery.read());
+    // Which tests cover each part that holds code, and what it often changes with: worked out from the
+    // current files and history on each read, never written anywhere. Reads in flight are shared.
+    if (route === "GET /api/modules/facts") {
+      codeFacts ??= readModuleMapRepository(workspaceRoot)
+        .then((repository) => checkWorkspaceModules(queryFs, workspaceRoot, repository))
+        .then((check) => ({
+          head: check.head,
+          commitLimit: check.commitLimit,
+          modules: check.modules.map(({ id, testedBy, coChanges }) => ({
+            id,
+            testedBy,
+            coChanges,
+          })),
+        }))
+        .finally(() => (codeFacts = undefined));
+      return json(res, 200, await codeFacts);
+    }
     if (route === "GET /api/nodes/material-overlaps")
       return json(
         res,

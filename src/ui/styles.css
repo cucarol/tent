@@ -1009,6 +1009,18 @@ button.pg-crumb:hover { background: var(--hover); color: var(--text); }
 .more-btn { display: inline-flex; align-self: flex-start; align-items: center; gap: 5px; height: 26px; margin-top: 2px; padding: 0 8px; border-radius: 7px; font-size: 12px; color: var(--text-3); }
 .more-btn:hover { background: var(--hover); color: var(--text); }
 .more-btn .icon { transition: rotate .15s; } .more-btn.is-open .icon { rotate: 180deg; }
+/* What Tent works out for a Node covering code: the tests importing it, the others it changes with. */
+.fact-list { display: flex; flex-direction: column; gap: 1px; }
+.fact-file { display: flex; align-items: center; gap: 7px; min-width: 0; height: 26px; padding: 0 8px; color: var(--text-2); }
+.fact-file > .icon { flex: none; color: var(--text-3); }
+.fact-file .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.fact-file .dir { color: var(--text-3); }
+.fact-node { display: grid; grid-template-columns: auto minmax(0, 1fr) 36px auto; align-items: center; gap: 7px; width: 100%; height: 30px; padding: 0 8px; border-radius: 8px; color: var(--text-2); text-align: left; }
+.fact-node:hover { background: var(--hover); color: var(--text); }
+.fact-node .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fact-node .share { height: 4px; border-radius: 2px; background: var(--bg-muted); overflow: hidden; }
+.fact-node .share i { display: block; height: 100%; border-radius: inherit; background: var(--text-3); }
+.fact-node .w { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* A Card's way: written, published, handed to a lane, received. */
 .journey { display: flex; align-items: center; max-width: 700px; margin-top: 24px; }
 .step { display: flex; align-items: center; gap: 8px; flex: none; }

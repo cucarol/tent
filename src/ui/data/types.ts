@@ -19,6 +19,20 @@ export type SnapshotMaterial = {
 
 export type DocumentVersion = { commit: string; path: string };
 
+/**
+ * What Tent works out for a Node that covers code, on each read and never stored: the test files that
+ * import it, and the other such Nodes its files often change with in recent history.
+ */
+export type CodeFacts = {
+  head: string | null;
+  commitLimit: number;
+  modules: {
+    id: string;
+    testedBy: string[];
+    coChanges: { moduleId: string; sharedCommits: number; moduleCommits: number; ratio: number }[];
+  }[];
+};
+
 export type SnapshotIncoming = {
   from: SnapshotRef;
   via: "link" | "mention" | "resource" | "sources" | "card-source";

@@ -13,6 +13,7 @@ import {
 import { api, ApiError, describe, type NodeDocument } from "../data/api.js";
 import { cardTitle, primaryOf, type Graph } from "../data/store.js";
 import type {
+  CodeFacts,
   SnapshotCard,
   SnapshotCommit,
   SnapshotNode,
@@ -327,10 +328,13 @@ function Section({
 function More({
   count,
   shown,
+  all: allLabel = t.page.showAll,
   children,
 }: {
   count: number;
   shown: number;
+  /** How the button names everything, "全部 N 张" for Cards. */
+  all?: (n: number) => string;
   children: (n: number) => ReactNode;
 }) {
   const [all, setAll] = useState(false);
@@ -344,7 +348,7 @@ function More({
           onClick={() => setAll(!all)}
         >
           <Icon name="down" size={13} />
-          {all ? t.page.showLess : t.page.showAll(count)}
+          {all ? t.page.showLess : allLabel(count)}
         </button>
       )}
     </>
@@ -357,6 +361,101 @@ function RailSection({ title, children }: { title: string; children: ReactNode }
       <h4>{title}</h4>
       {children}
     </div>
+  );
+}
+
+// Worked out by the service from the current files and history; kept briefly so moving between pages
+// does not read the whole history again each time.
+const FACTS_FOR = 30_000;
+let factsRead: { revision: string; at: number; facts: Promise<CodeFacts | null> } | null = null;
+function useCodeFacts(revision: string, nodeId: string) {
+  const [facts, setFacts] = useState<CodeFacts | null>(null);
+  useEffect(() => {
+    if (!factsRead || factsRead.revision !== revision || Date.now() - factsRead.at > FACTS_FOR)
+      factsRead = { revision, at: Date.now(), facts: api.codeFacts().catch(() => null) };
+    let current = true;
+    void factsRead.facts.then((f) => current && setFacts(f));
+    return () => {
+      current = false;
+    };
+  }, [revision, nodeId]);
+  return facts;
+}
+
+/**
+ * For a Node that covers code: the tests that import it, and the others it often changes with. Tent works
+ * them out on each read rather than keeping them in the text, where they would go stale.
+ */
+function CodeFactsSections({
+  graph,
+  node,
+  narrow,
+  onOpen,
+}: {
+  graph: Graph;
+  node: SnapshotNode;
+  narrow: boolean;
+  onOpen: (ref: SnapshotRef) => void;
+}) {
+  const facts = useCodeFacts(graph.snapshot.workspace.revision, node.id);
+  const mine = facts?.modules.find((m) => m.id === node.id);
+  if (!mine) return null;
+  const withNodes = mine.coChanges.filter((c) => graph.nodes.has(c.moduleId));
+  return (
+    <>
+      {mine.testedBy.length > 0 && (
+        <RailSection title={t.page.testedBy(mine.testedBy.length)}>
+          <div className="fact-list" title={t.page.testedByTip}>
+            <More count={mine.testedBy.length} shown={narrow ? 3 : 6} all={t.page.showAllOf}>
+              {(n) =>
+                mine.testedBy.slice(0, n).map((file) => {
+                  const at = file.lastIndexOf("/");
+                  return (
+                    <span key={file} className="fact-file" title={file}>
+                      <Icon name="file" size={13} />
+                      <span className="mono">
+                        {at >= 0 && <span className="dir">{file.slice(0, at + 1)}</span>}
+                        {file.slice(at + 1)}
+                      </span>
+                    </span>
+                  );
+                })
+              }
+            </More>
+          </div>
+        </RailSection>
+      )}
+      {withNodes.length > 0 && (
+        <RailSection title={t.page.changesWith(withNodes.length)}>
+          <div className="fact-list" title={t.page.changesWithTip(facts!.commitLimit)}>
+            <More count={withNodes.length} shown={narrow ? 3 : 6} all={t.page.showAllOf}>
+              {(n) =>
+                withNodes.slice(0, n).map((c) => {
+                  const other = graph.nodes.get(c.moduleId)!;
+                  return (
+                    <button
+                      key={c.moduleId}
+                      type="button"
+                      className="fact-node"
+                      onClick={() => onOpen({ kind: "node", id: other.id })}
+                    >
+                      <TypeGlyph type={other.type} size={13} />
+                      <span className="t">{other.name}</span>
+                      <span className="share" aria-hidden="true">
+                        <i style={{ width: `${Math.round(c.ratio * 100)}%` }} />
+                      </span>
+                      <span className="w">
+                        {t.page.changedTogether(c.sharedCommits, c.moduleCommits)}
+                      </span>
+                    </button>
+                  );
+                })
+              }
+            </More>
+          </div>
+        </RailSection>
+      )}
+    </>
   );
 }
 
@@ -891,6 +990,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
               </NodeProps>
             </RailSection>
             {!carriedFirst && carriedSection}
+            <CodeFactsSections graph={graph} node={node} narrow={narrow} onOpen={onOpen} />
           </>
         }
         tail={

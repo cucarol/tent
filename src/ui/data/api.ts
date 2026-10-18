@@ -2,7 +2,14 @@
 // The token arrives once in the URL fragment and is kept for this tab only.
 import { t } from "../i18n.js";
 import type { ModuleDependencyResponse } from "../../core/read/module-dependency-query.js";
-import type { CardState, DocumentVersion, OutputComparison, Snapshot, SyncFlags } from "./types.js";
+import type {
+  CardState,
+  CodeFacts,
+  DocumentVersion,
+  OutputComparison,
+  Snapshot,
+  SyncFlags,
+} from "./types.js";
 
 const TOKEN_KEY = "tent-token";
 
@@ -172,6 +179,8 @@ export const api = {
     call<{ etag: string }>("/api/canvas", send("PUT", { baseEtag, canvas })),
   /** Which Nodes with code directories import which, from the repository's current files. */
   moduleDeps: () => call<ModuleDependencyResponse>("/api/modules/deps"),
+  /** Tests covering each Node that holds code, and what it often changes with; worked out on each read. */
+  codeFacts: () => call<CodeFacts>("/api/modules/facts"),
   /** How each output stands to every goal above it, and what changed since it was written. */
   compareOutputs: (ids: readonly string[]) =>
     call<OutputComparison[]>(

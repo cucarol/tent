@@ -20,7 +20,7 @@ import {
   readWorkspaces,
   rememberWorkspace,
 } from "../src/ui-server/workspaces.js";
-import type { Snapshot } from "../src/ui/data/types.js";
+import type { CodeFacts, Snapshot } from "../src/ui/data/types.js";
 import { testScratchRoot } from "./scratch.js";
 import { incompleteNodeReadEtag } from "../src/core/base/node-read-basis.js";
 import { contentEtag } from "../src/core/base/etag.js";
@@ -1372,4 +1372,42 @@ test("the page carries no inline script, which its policy would block", async ()
     assert.match(attrs!, /\bsrc="\/[^"]+"/);
     assert.equal(body!.trim(), "");
   }
+});
+
+test("code facts endpoint is protected, read-only and names the tests importing each part", async (t) => {
+  const { call, tent, workspace } = await fixture(t);
+  await git(workspace, "init", "-b", "main");
+  await fs.writeFile(path.join(workspace, ".gitignore"), ".tent/\n");
+  for (const dir of ["a", "b", "test"]) await fs.mkdir(path.join(workspace, dir));
+  await fs.writeFile(path.join(workspace, "a/main.ts"), 'import "../b/lib.js";');
+  await fs.writeFile(path.join(workspace, "b/lib.ts"), "export const n = 1;");
+  await fs.writeFile(path.join(workspace, "test/main.test.ts"), 'import "../a/main.js";');
+  for (const name of ["a", "b"])
+    await tent.writeFile(
+      `${name}/${name}.md`,
+      serializeFrontmatter(
+        {
+          id: `node-${name}`,
+          type: "goal",
+          sources: [{ resource: `../../${name}/`, track: "structure" }],
+        },
+        "What this part is for.",
+      ),
+    );
+  await git(workspace, "add", ".");
+  await git(workspace, "commit", "-m", "fixture");
+  const head = (await git(workspace, "rev-parse", "HEAD")).trim();
+  const index = await fs.readFile(path.join(workspace, ".git/index"));
+  const endpoint = "/api/modules/facts";
+  assert.equal((await call("GET", endpoint, { token: null })).status, 401);
+  assert.equal((await call("POST", endpoint, { json: {} })).status, 404);
+  const reply = await call("GET", endpoint);
+  assert.equal(reply.status, 200, reply.body);
+  const facts = json<CodeFacts>(reply);
+  assert.equal(facts.head, head);
+  const a = facts.modules.find((m) => m.id === "node-a");
+  assert.deepEqual(a?.testedBy, ["test/main.test.ts"]);
+  assert.ok(Array.isArray(a?.coChanges));
+  assert.deepEqual(await fs.readFile(path.join(workspace, ".git/index")), index);
+  assert.equal((await git(workspace, "rev-parse", "HEAD")).trim(), head);
 });
