@@ -63,14 +63,18 @@ export function summarizeBehind(reasons: readonly string[]): BehindSummary {
 }
 
 /**
- * Why a goal is ahead: nothing answers it yet, or it has outputs but none was saved or confirmed
- * against its current content and materials. The second says nothing about what changed: a missing
- * baseline reads the same as a known change.
+ * Why a goal is ahead: nothing answers it yet; it has outputs but none was saved or confirmed against its
+ * current content and materials; or, for a goal that covers directories or prefixes and so is carried out
+ * by them, neither the goal itself as it is now nor a current output was confirmed. The last two say
+ * nothing about what changed: a missing baseline reads the same as a known change.
  */
-export const aheadKind = (reasons: readonly string[] = []) =>
-  reasons.some((r) => r.startsWith("No output under this goal was saved or confirmed"))
-    ? ("unmatched" as const)
-    : ("empty" as const);
+export type AheadKind = "empty" | "unmatched" | "intent";
+export const aheadKind = (reasons: readonly string[] = []): AheadKind =>
+  reasons.some((r) => r.startsWith("Neither confirmed goal intent nor a current output matches"))
+    ? "intent"
+    : reasons.some((r) => r.startsWith("No output under this goal was saved or confirmed"))
+      ? "unmatched"
+      : "empty";
 
 /**
  * Behind only because a baseline is missing or a material cannot be compared: nothing is known to have

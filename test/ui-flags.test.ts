@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { ApiError, api, changes } from "../src/ui/data/api.js";
+import { aheadKind } from "../src/ui/data/reasons.js";
+import { t } from "../src/ui/i18n.js";
 import {
   snapshotDisagrees,
   snapshotRebuilder,
@@ -261,4 +263,26 @@ test("a rebuilt snapshot is dropped when the revision moved meanwhile", async (t
   finish(snapshot);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(shown, newer);
+});
+
+test("an ahead goal says whether nothing answers it, no output was confirmed, or the goal itself was not", () => {
+  assert.equal(aheadKind(["Goal subtree has no current output Node"]), "empty");
+  assert.equal(
+    aheadKind([
+      "No output under this goal was saved or confirmed against its current content and materials",
+    ]),
+    "unmatched",
+  );
+  assert.equal(
+    aheadKind([
+      "Neither confirmed goal intent nor a current output matches this goal's current content and material declarations",
+    ]),
+    "intent",
+  );
+  assert.equal(aheadKind([]), "empty");
+  // Each kind reads differently, and the goal's own kind never says it has no output.
+  const kinds = ["empty", "unmatched", "intent"] as const;
+  assert.equal(new Set(kinds.map((k) => t.map.aheadWhy(null, k))).size, 3);
+  assert.equal(new Set(kinds.map((k) => t.map.aheadNext(k))).size, 3);
+  assert.doesNotMatch(t.map.aheadWhy(null, "intent"), /还没有产出/);
 });

@@ -1,5 +1,5 @@
 import { createElement, Fragment, type ReactNode } from "react";
-import { summarizeBehind } from "./data/reasons.js";
+import { summarizeBehind, type AheadKind } from "./data/reasons.js";
 
 /**
  * The interface speaks Chinese or English. Workspace content (names, bodies, commit messages) stays as written.
@@ -152,12 +152,20 @@ const zh = {
     },
     behindNext: "Agent 复核这些材料并确认后，标记会消失",
     /** Why a goal is ahead; `since` is when it last became ahead. */
-    aheadWhy: (since: string | null, kind: "empty" | "unmatched") =>
-      `领先${since ? `（${since}起）` : ""}：${kind === "unmatched" ? "已有产出，但都没按现在的内容确认过" : "还没有产出"}`,
-    aheadNext: (kind: "empty" | "unmatched"): string =>
-      kind === "unmatched"
-        ? "Agent 确认一个仍然成立的产出，或挂上新的产出后，标记会消失"
-        : "它下面挂上产出后，标记会消失",
+    aheadWhy: (since: string | null, kind: AheadKind) =>
+      `领先${since ? `（${since}起）` : ""}：${
+        kind === "intent"
+          ? "它现在的内容还没被确认过，也没有对得上的产出"
+          : kind === "unmatched"
+            ? "已有产出，但都没按现在的内容确认过"
+            : "还没有产出"
+      }`,
+    aheadNext: (kind: AheadKind): string =>
+      kind === "intent"
+        ? "Agent 对照它覆盖的目录复核后确认它，或确认一个仍然成立的产出，标记会消失"
+        : kind === "unmatched"
+          ? "Agent 确认一个仍然成立的产出，或挂上新的产出后，标记会消失"
+          : "它下面挂上产出后，标记会消失",
     commitOnlyOther: "这次只改了 Role、Card 或其他文件",
     /** What a commit did to Nodes, e.g. "新建 1 · 修改 2：A、B 等 3 个". */
     commitSummary: (added: number, changed: number, names: string[]) =>
@@ -889,11 +897,19 @@ const en: Messages = {
     },
     behindNext: "The mark clears once an Agent reviews those materials and confirms",
     aheadWhy: (since, kind) =>
-      `Ahead${since ? ` since ${since}` : ""}: ${kind === "unmatched" ? "it has outputs, but none was confirmed against it as it is now" : "no output yet"}`,
+      `Ahead${since ? ` since ${since}` : ""}: ${
+        kind === "intent"
+          ? "it was not confirmed as it is now, and no output matches it either"
+          : kind === "unmatched"
+            ? "it has outputs, but none was confirmed against it as it is now"
+            : "no output yet"
+      }`,
     aheadNext: (kind) =>
-      kind === "unmatched"
-        ? "The mark clears once an Agent confirms an output that still holds, or adds a new one"
-        : "The mark clears once an output is added under it",
+      kind === "intent"
+        ? "The mark clears once an Agent reviews it against the directories it covers and confirms it, or confirms an output that still holds"
+        : kind === "unmatched"
+          ? "The mark clears once an Agent confirms an output that still holds, or adds a new one"
+          : "The mark clears once an output is added under it",
     commitOnlyOther: "This commit only changed Roles, Cards or other files",
     commitSummary: (added, changed, names) =>
       `${[added > 0 && `${added} added`, changed > 0 && `${changed} changed`].filter(Boolean).join(" · ")}: ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` and ${names.length - 2} more` : ""}`,

@@ -28,7 +28,8 @@ export type SnapshotIncoming = {
 
 /**
  * A Node that needs attention, computed from the real workspace on each request: a goal whose intent
- * has no current output (ahead), or a Node whose materials moved on (behind). The two are independent,
+ * has no current output, or, for a goal carried out by the directories it covers, whose own content was
+ * not confirmed as it is now either (ahead); or a Node whose materials moved on (behind). The two are independent,
  * so a goal with no output whose materials changed carries both. Every other Node is absent.
  */
 export type SyncFlag = {
