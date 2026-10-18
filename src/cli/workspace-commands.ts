@@ -223,7 +223,7 @@ export async function runWorkspaceCommand(
           : [
               ...result.items.map(
                 (item) =>
-                  `${item.kind === "node-ahead" ? "ahead" : "behind"}  ${item.nodeId}  ${item.path}  ${item.reasons.join("; ")}`,
+                  `${item.kind === "node-ahead" ? "ahead" : "behind"}  ${item.nodeId}  ${item.path}  ${item.reasons.join("; ")}${"inspectionRead" in item ? `\nFull current inspection: tent node check ${item.nodeId} --json` : ""}`,
               ),
               ...(result.page.hasMore ? [`Continue with --cursor ${result.page.nextCursor}`] : []),
               ...(inspected.synchronizationUncertain

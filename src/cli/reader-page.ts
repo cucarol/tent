@@ -110,6 +110,44 @@ export function compactItem<T>(item: T): T {
   );
   return { ...identity, metadataOmitted: true, metadataRead: exactRead(original) } as T;
 }
+
+/** Computed evidence must continue through inspection, not a raw document metadata read. */
+function compactDriftItem<T>(item: T): T {
+  if (fits(item, 8 * 1024)) return item;
+  const original = item as Record<string, unknown> & { nodeId: string; reasons: string[] };
+  const { materials, ...summary } = original;
+  const result = {
+    ...summary,
+    ...(Array.isArray(materials)
+      ? { materialsOmitted: true, materialCount: materials.length }
+      : {}),
+    inspectionRead: {
+      nodeId: original.nodeId,
+      command: `tent node check ${original.nodeId} --json`,
+    },
+  };
+  if (fits(result, 8 * 1024)) return result as T;
+
+  // Preserve kind, identity and a usable reason even when the reasons themselves are large.
+  const bounded: Record<string, unknown> & { reasons: string[] } = {
+    ...result,
+    reasons: original.reasons.map((reason) => Array.from(reason).slice(0, 256).join("")),
+    reasonsTruncated: original.reasons.some((reason) => Array.from(reason).length > 256),
+    reasonsOmitted: 0,
+  };
+  for (const key of ["path", "address"]) {
+    const value = bounded[key];
+    if (typeof value === "string" && Array.from(value).length > 256) {
+      bounded[key] = Array.from(value).slice(0, 256).join("");
+      bounded[`${key}Truncated`] = true;
+    }
+  }
+  while (!fits(bounded, 8 * 1024) && bounded.reasons.length > 1) {
+    bounded.reasons.pop();
+    bounded.reasonsOmitted = original.reasons.length - bounded.reasons.length;
+  }
+  return bounded as T;
+}
 export const uncapturedNotice = "有未收录的改动，下一次写命令、brief 或 hook 时收录。";
 
 export function formatTextPage(value: unknown): string {
@@ -173,7 +211,9 @@ export function pageItems<T extends { items: unknown[]; revision?: string }>(
     input: "scope" in result ? result.scope : undefined,
   });
   const compacted = result.items.map((item) =>
-    compactItem(operation.startsWith("node.") ? incompleteNodeRead(item) : item),
+    operation === "workspace.drift"
+      ? compactDriftItem(item)
+      : compactItem(operation.startsWith("node.") ? incompleteNodeRead(item) : item),
   );
   const { scope: visibleScope, ...other } = result as T & { scope?: unknown };
   const base =

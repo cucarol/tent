@@ -135,6 +135,58 @@ async function fixture(t: TestContext) {
   return { root, options, node, workspace };
 }
 
+test("drift keeps oversized material findings readable and points to the complete current inspection", async (t) => {
+  const f = await fixture(t);
+  const files = Array.from({ length: 40 }, (_, i) => `material-${i}.md`);
+  for (const file of files) await fs.writeFile(path.join(f.root, file), "old material\n");
+  const many = await f.node(
+    "create",
+    ["Many", "--type", "prompt", "--sources-json", "-"],
+    files.map((resource) => ({ resource })),
+  );
+  const later = await f.node("create", ["Later", "--type", "prompt", "--resource", files[0]!]);
+  for (const file of files) await fs.writeFile(path.join(f.root, file), "new material\n");
+  const id = many.node.nodeId;
+  const checked = await f.node("check", [id]);
+  assert.equal(checked.materials.length, 40);
+  assert.ok(checked.materials.every((item: { state: string }) => item.state === "changed"));
+  assert.ok(Buffer.byteLength(JSON.stringify(checked.materials)) > 8 * 1024);
+  const first = await f.workspace("drift", ["--limit", "1"]);
+  assert.ok(Buffer.byteLength(first.stdout.trim()) <= 16 * 1024);
+  // Tree order is stable; find and follow both pages without assuming the created Node's id order.
+  const second = await f.workspace("drift", ["--cursor", first.value.page.nextCursor]);
+  const rows = [...first.value.items, ...second.value.items];
+  assert.deepEqual(
+    new Set(rows.map((item: { nodeId: string }) => item.nodeId)),
+    new Set([id, later.node.nodeId]),
+  );
+  const row = rows.find((item: { nodeId: string }) => item.nodeId === id);
+  assert.equal(row.kind, "node-behind");
+  assert.equal(row.path, many.node.path);
+  assert.deepEqual(row.reasons, checked.behind.reasons);
+  assert.equal(row.materialsOmitted, true);
+  assert.equal(row.materialCount, 40);
+  assert.equal("materials" in row, false);
+  assert.equal("metadataRead" in row, false);
+  assert.deepEqual(row.inspectionRead, { nodeId: id, command: `tent node check ${id} --json` });
+  const complete = await f.node("check", [row.inspectionRead.nodeId]);
+  assert.deepEqual(complete.materials, checked.materials);
+  const text = await runWorkspaceCommand("drift", [], { workspace: f.root });
+  assert.equal(text.exitCode, 0, text.stderr);
+  assert.ok(text.stdout.includes(`behind  ${id}`));
+  assert.ok(text.stdout.includes(row.inspectionRead.command));
+  assert.equal((await f.workspace("brief")).value.counts.behind, 2);
+  // Even omitted evidence participates in the list revision; a continuation cannot hide a change.
+  await fs.writeFile(path.join(f.root, files[1]!), "third version\n");
+  const changed = await runWorkspaceCommand(
+    "drift",
+    ["--cursor", first.value.page.nextCursor],
+    f.options,
+  );
+  assert.equal(changed.exitCode, 1);
+  assert.match(changed.stderr, /SOURCE_CHANGED|source changed/i);
+});
+
 test("brief ignores retained session logs and has no unrecorded-file section", async (t) => {
   const f = await fixture(t);
   const adapter = new NodeFs(path.join(f.root, ".tent"));
@@ -249,6 +301,13 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   assert.deepEqual(brief.value.behind.map((item: { nodeId: string }) => item.nodeId).sort(), [id]);
   assert.ok(Buffer.byteLength(brief.stdout) <= 4096);
   let drift = (await f.workspace("drift")).value;
+  const behind = drift.items.find(
+    (item: { kind: string; nodeId: string }) => item.kind === "node-behind" && item.nodeId === id,
+  );
+  const checked = await f.node("check", [id]);
+  assert.deepEqual(behind.materials, checked.materials);
+  assert.equal(behind.materials[0].state, "changed");
+  assert.notEqual(behind.materials[0].recordedVersion, behind.materials[0].currentVersion);
   assert.equal(
     drift.items.some((item: { kind: string }) => item.kind === "unlinked-output"),
     false,
@@ -660,4 +719,36 @@ test("brief and drift both show a dual-status goal and leave neutral recorded ou
       ["node-ahead", "node-goal"],
     ],
   );
+  const materials: CurrentContext["sync"]["nodes"][number]["materials"] = [
+    {
+      resource: "../../src/",
+      track: "structure",
+      goalId: "node-parent",
+      state: "changed",
+      recordedVersion: "old-structure",
+      currentVersion: "new-structure",
+      reason: "External dependencies changed",
+      changedDependencies: [
+        { target: "old/", state: "deleted" },
+        { target: "new/", state: "added" },
+      ],
+      changedDependenciesOverflow: 3,
+    },
+    { resource: "../../missing.md", state: "unavailable", reason: "ENOENT" },
+    { resource: "External discussion", state: "unanchored" },
+    {
+      resource: "../../current.md",
+      state: "current",
+      recordedVersion: "same",
+      currentVersion: "same",
+    },
+  ];
+  context.sync.nodes[0]!.materials = materials;
+  const detailed = contextDriftItems(context);
+  assert.equal(detailed.length, 2);
+  const behind = detailed.find((item) => item.kind === "node-behind")!;
+  assert.deepEqual(behind.materials, materials);
+  assert.deepEqual(JSON.parse(JSON.stringify(behind)).materials, materials);
+  assert.equal("materials" in detailed.find((item) => item.kind === "node-ahead")!, false);
+  assert.deepEqual(makeContextBrief(context), brief, "drift details do not consume brief budget");
 });

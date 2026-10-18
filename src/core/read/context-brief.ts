@@ -84,6 +84,7 @@ export function contextDriftItems(context: Pick<CurrentContext, "sync">) {
             path: node.path,
             address: node.resource,
             reasons: node.behind.reasons,
+            materials: node.materials,
           },
         ]
       : []),
