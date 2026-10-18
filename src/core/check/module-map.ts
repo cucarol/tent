@@ -325,6 +325,7 @@ export function checkModuleMap(input: ModuleMapInput) {
           "Package import has no directory material owner or unique module owning all its production Go files.",
       });
     if (!from || !to || from.id === to.id) continue;
+    if (edge.execution !== "module-load") continue;
     const key = JSON.stringify([from.id, to.id]);
     edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
   }

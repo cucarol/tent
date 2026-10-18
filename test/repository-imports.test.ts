@@ -19,7 +19,13 @@ test("extensionless imports prefer TS source, then declarations, before JavaScri
       ]);
       assert.deepEqual(result.issues, []);
       assert.deepEqual(result.edges, [
-        { from: "entry.ts", to: stem + candidates[first], kind: "file", specifier: "./dep" },
+        {
+          from: "entry.ts",
+          to: stem + candidates[first],
+          kind: "file",
+          specifier: "./dep",
+          execution: "module-load" as const,
+        },
       ]);
     }
   }
@@ -143,7 +149,13 @@ test("Go local imports require a production Go file in the target package direct
     ]);
     if (target === "web/view.go") {
       assert.deepEqual(result.edges, [
-        { from: "cmd/main.go", to: "web", kind: "directory", specifier: "example.test/app/web" },
+        {
+          from: "cmd/main.go",
+          to: "web",
+          kind: "directory",
+          specifier: "example.test/app/web",
+          execution: "module-load" as const,
+        },
       ]);
       assert.deepEqual(result.issues, []);
     } else {
@@ -182,7 +194,13 @@ test("invalid TypeScript path configuration shapes report issues and preserve ot
       source("src/helper.ts"),
     ]);
     assert.deepEqual(result.edges, [
-      { from: "src/main.ts", to: "src/helper.ts", kind: "file", specifier: "./helper" },
+      {
+        from: "src/main.ts",
+        to: "src/helper.ts",
+        kind: "file",
+        specifier: "./helper",
+        execution: "module-load" as const,
+      },
     ]);
     assert.deepEqual(
       result.issues,

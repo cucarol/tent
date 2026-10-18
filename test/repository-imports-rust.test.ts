@@ -269,7 +269,13 @@ test("Rust ambiguous/missing module candidates and unavailable source/config byt
     source("src/orphan.rs", "use std::io;"),
   ]);
   assert.deepEqual(result.edges, [
-    { from: "src/lib.rs", to: "src/unreadable.rs", kind: "file", specifier: "mod unreadable" },
+    {
+      from: "src/lib.rs",
+      to: "src/unreadable.rs",
+      kind: "file",
+      specifier: "mod unreadable",
+      execution: "compile-time" as const,
+    },
   ]);
   for (const reason of [/multiple source/, /absent/, /content is unavailable/, /no unambiguous/])
     assert.ok(result.issues.some((issue) => reason.test(issue.reason)));
@@ -394,6 +400,7 @@ test("Rust block imports inside ordinary expression groups are traversed indepen
           to: "src/model.rs",
           kind: "file",
           specifier: "crate::model::Item",
+          execution: "compile-time" as const,
         },
       ],
       expression,
@@ -409,7 +416,13 @@ test("Rust explicit library survives disabled auto-discovery with its default pa
   ]);
   assert.deepEqual(result.issues, []);
   assert.deepEqual(result.edges, [
-    { from: "src/lib.rs", to: "src/model.rs", kind: "file", specifier: "mod model" },
+    {
+      from: "src/lib.rs",
+      to: "src/model.rs",
+      kind: "file",
+      specifier: "mod model",
+      execution: "compile-time" as const,
+    },
   ]);
 });
 

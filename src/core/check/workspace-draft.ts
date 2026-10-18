@@ -5,6 +5,7 @@ import {
   isCodeSource,
   isGeneratedSource,
   isTestSource,
+  type RepositoryImport,
   type RepositorySource,
 } from "../base/repository-imports.js";
 import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
@@ -44,10 +45,10 @@ function projection(units: Unit[]): ModuleMapNode[] {
   }));
 }
 
-/** Condense whole import cycles after ownership changes, including cycles with >2 modules. */
-function condense(units: Unit[], scan: WorkspaceScanResult): Unit[] {
+/** Condense only cycles that still fit the size target after ownership changes. */
+function condense(units: Unit[], files: string[], imports: readonly RepositoryImport[]): Unit[] {
   const facts = checkModuleMap({
-    trackedFiles: scan.coverage.uncoveredFiles,
+    trackedFiles: files,
     imports: [],
     commits: [],
     nodes: projection(units),
@@ -64,14 +65,22 @@ function condense(units: Unit[], scan: WorkspaceScanResult): Unit[] {
       packages.set(dir, members);
     }
   const edges = new Map(units.map((unit) => [unit.key, new Set<string>()]));
-  for (const edge of scan.imports.edges) {
+  for (const edge of imports) {
     if (isTestSource(edge.from) || isTestSource(edge.to)) continue;
     const from = owner.get(edge.from);
     const targets =
       edge.kind === "file" ? [owner.get(edge.to)] : [...(packages.get(edge.to) ?? [])];
     if (from) for (const to of targets) if (to && to !== from) edges.get(from)!.add(to);
   }
-  const cycles = dependencyCycles(edges);
+  const counts = new Map(
+    facts.modules.map((unit) => [
+      unit.id,
+      unit.files.filter((file) => isCodeSource(file) && !isTestSource(file)).length,
+    ]),
+  );
+  const cycles = dependencyCycles(edges).filter(
+    (cycle) => cycle.reduce((count, key) => count + (counts.get(key) ?? 0), 0) <= DRAFT_CODE_FILES,
+  );
   const grouped = new Set(cycles.flat());
   const groups = [
     ...cycles,
@@ -111,6 +120,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
       "Existing coverage: maintain the current module map instead of bootstrapping another one",
     );
   const files = ordered(scan.coverage.uncoveredFiles);
+  const imports = scan.imports.edges.filter((edge) => edge.execution === "module-load");
   const warnings: string[] = [];
   const ordinary: ModuleMapMaterial[] = [],
     tests: ModuleMapMaterial[] = [];
@@ -141,7 +151,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
       ...draftDirectoryUnits(
         dir,
         files.filter((file) => file.startsWith(dir + "/")),
-        scan.imports.edges,
+        imports,
       ),
     );
     if (!code.some(isModuleProductionSource) && code.some(isGeneratedSource))
@@ -150,7 +160,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
   const roots = files.filter((file) => !file.includes("/"));
   const rootCode = roots.filter((file) => isCodeSource(file) && !isTestSource(file));
   const rootGo = rootCode.filter((file) => file.endsWith(".go"));
-  if (rootGo.length) units.push(...draftRootPackageUnits(files, scan.imports.edges));
+  if (rootGo.length) units.push(...draftRootPackageUnits(files, imports));
   for (const file of rootCode.filter((file) => !file.endsWith(".go"))) {
     if (
       units.some((unit) =>
@@ -168,7 +178,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
       facts.modules.flatMap((unit) => unit.files.map((f) => [f, unit.id] as const)),
     );
     const scores = new Map<string, number>();
-    for (const edge of scan.imports.edges) {
+    for (const edge of imports) {
       const candidate =
         edge.from === file && edge.kind === "file"
           ? owner.get(edge.to)
@@ -197,7 +207,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
   for (const file of roots.filter((file) => !rootCode.includes(file)))
     (isTestSource(file) ? tests : ordinary).push({ path: file, kind: "file" });
 
-  units = condense(units, scan);
+  units = condense(units, files, imports);
   const sizes = checkModuleMap({
     trackedFiles: files,
     imports: [],
@@ -208,7 +218,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
     const count = unit.files.filter((file) => isCodeSource(file) && !isTestSource(file)).length;
     if (count > DRAFT_CODE_FILES)
       warnings.push(
-        `Boundary exceeds ${DRAFT_CODE_FILES}-file draft target; review its import cycle, package or root attachments: ${unit.path} (${count} code files)`,
+        `Boundary exceeds ${DRAFT_CODE_FILES}-file draft target; review its generated-source family: ${unit.path} (${count} code files)`,
       );
   }
 

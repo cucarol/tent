@@ -231,7 +231,13 @@ export function extractCSharpImports(
       }
       if (targets.length === 1 && (imported.static || imported.alias)) {
         if (targets[0] !== file.path)
-          edges.push({ from: file.path, to: targets[0]!, kind: "file", specifier });
+          edges.push({
+            from: file.path,
+            to: targets[0]!,
+            kind: "file",
+            specifier,
+            execution: "compile-time",
+          });
       } else if (targets.length > 1)
         issue(
           "C# imported type has multiple local definitions, including possible partial declarations",

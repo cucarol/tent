@@ -20,7 +20,7 @@ export const draftMaterial = (value: string, structure = true): ModuleMapMateria
 export const draftPrefix = (file: string) =>
   file.slice(0, file.length - path.posix.extname(file).length).replace(/\.pb$/, "") + ".";
 
-/** Flat groups are consecutive in a topological order, so packing cannot invent an import cycle. */
+/** Prefer topological packing, but split an oversized cycle instead of abandoning the size target. */
 function flatGroups(files: string[], imports: readonly RepositoryImport[]): string[][] {
   const buckets = new Map<string, string[]>();
   for (const file of files) {
@@ -35,6 +35,8 @@ function flatGroups(files: string[], imports: readonly RepositoryImport[]): stri
     if (from && to && from !== to) outgoing.get(from)!.add(to);
   }
   for (const cycle of dependencyCycles(outgoing)) {
+    if (cycle.reduce((count, key) => count + buckets.get(key)!.length, 0) > DRAFT_CODE_FILES)
+      continue;
     const key = cycle[0]!;
     buckets.set(
       key,
@@ -54,6 +56,7 @@ function flatGroups(files: string[], imports: readonly RepositoryImport[]): stri
     }
   }
   const ready = new Set([...incoming].filter(([, count]) => count === 0).map(([key]) => key));
+  const remaining = new Set(buckets.keys());
   const groups: string[][] = [];
   let group: string[] = [],
     keys: string[] = [];
@@ -66,8 +69,12 @@ function flatGroups(files: string[], imports: readonly RepositoryImport[]): stri
       .replace(/\.[^.]+$/, "")
       .split(/[-_]|(?<=[a-z])(?=[A-Z])/)[0];
   };
-  while (ready.size) {
-    const candidates = [...ready].sort((a, b) => affinity(b) - affinity(a) || comparePaths(a, b));
+  while (remaining.size) {
+    // A large SCC has no ready vertex. Break it deterministically, keeping import neighbours close.
+    const candidates = [...(ready.size ? ready : remaining)].sort(
+      (a, b) =>
+        affinity(b) - affinity(a) || incoming.get(a)! - incoming.get(b)! || comparePaths(a, b),
+    );
     const key = candidates[0]!,
       members = buckets.get(key)!;
     const named = filenameGroup(key),
@@ -85,7 +92,9 @@ function flatGroups(files: string[], imports: readonly RepositoryImport[]): stri
     group.push(...members);
     keys.push(key);
     ready.delete(key);
+    remaining.delete(key);
     for (const next of graph.get(key)!) {
+      if (!remaining.has(next)) continue;
       incoming.set(next, incoming.get(next)! - 1);
       if (!incoming.get(next)) ready.add(next);
     }
@@ -116,7 +125,7 @@ export function draftDirectoryUnits(
   );
   const direct = sources.filter((file) => path.posix.dirname(file) === directory);
   const groups = flatGroups(direct, imports);
-  // One indivisible import cycle is already represented by its directory.
+  // A single bounded group (or generated-source family) is represented by its directory.
   if (!children.length && groups.length <= 1) return [unit];
   return [
     unit,

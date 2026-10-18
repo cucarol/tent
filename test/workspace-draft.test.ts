@@ -46,6 +46,7 @@ const edge = (from: string, to: string, kind: "file" | "directory" = "file"): Re
   to,
   kind,
   specifier: to,
+  execution: "module-load" as const,
 });
 function check(input: WorkspaceScanResult) {
   const draft = draftWorkspaceModules(input);
@@ -60,6 +61,86 @@ function check(input: WorkspaceScanResult) {
     }),
   };
 }
+
+test("non-load imports cannot merge directories, attract flat members or attach root code", () => {
+  for (const execution of ["deferred", "type-only", "compile-time"] as const) {
+    const cross = [edge("a/one.ts", "b/two.ts"), edge("b/two.ts", "a/one.ts")];
+    const directories = ["a/one.ts", "b/two.ts"];
+    assert.equal(check(scan(directories, cross)).check.modules.length, 1);
+    const classified = cross.map((edge) => ({ ...edge, execution }));
+    assert.deepEqual(
+      draftWorkspaceModules(scan(directories, classified)).batch,
+      draftWorkspaceModules(scan(directories)).batch,
+    );
+    const flat = Array.from({ length: 22 }, (_, i) => `lib/part${String(i).padStart(2, "0")}.ts`);
+    const affinity = [edge(flat[0]!, flat[21]!), edge(flat[21]!, flat[0]!)];
+    assert.notDeepEqual(
+      draftWorkspaceModules(scan(flat, affinity)).batch,
+      draftWorkspaceModules(scan(flat)).batch,
+    );
+    assert.deepEqual(
+      draftWorkspaceModules(
+        scan(
+          flat,
+          affinity.map((edge) => ({ ...edge, execution })),
+        ),
+      ).batch,
+      draftWorkspaceModules(scan(flat)).batch,
+    );
+    const roots = ["entry.ts", "lib/main.ts"];
+    assert.deepEqual(
+      draftWorkspaceModules(scan(roots, [{ ...edge(roots[0]!, roots[1]!), execution }])).batch,
+      draftWorkspaceModules(scan(roots)).batch,
+    );
+  }
+});
+
+test("parsed Python guards and function imports do not form a draft or checked loading cycle", () => {
+  const files = ["a", "b"].flatMap((dir) =>
+    Array.from({ length: 3 }, (_, i) => `${dir}/part${i}.py`),
+  );
+  for (const context of ["type-only", "deferred", "module-load"] as const) {
+    const sources = files.map((file) => {
+      const number = /part(\d)/.exec(file)![1]!;
+      const statement = `from a.part${number} import value`;
+      return {
+        path: file,
+        content: file.startsWith("a/")
+          ? `from b.part${number} import value`
+          : context === "type-only"
+            ? `from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    ${statement}\n`
+            : context === "deferred"
+              ? `def load():\n    ${statement}\n`
+              : statement,
+      };
+    });
+    const facts = repositoryFacts(sources);
+    assert.equal(facts.imports.edges.length, 6);
+    assert.ok(
+      facts.imports.edges
+        .filter((edge) => edge.from.startsWith("b/"))
+        .every((edge) => edge.execution === context),
+    );
+    const { check: drafted } = check(scan(files, facts.imports.edges));
+    assert.equal(drafted.modules.length, context === "module-load" ? 1 : 2);
+    const report = checkModuleMap({
+      trackedFiles: files,
+      imports: facts.imports.edges,
+      commits: [],
+      nodes: ["a", "b"].map((dir) => ({
+        id: dir,
+        name: dir,
+        path: dir,
+        body: "",
+        materials: [{ path: dir, kind: "directory", track: "structure" }],
+      })),
+    });
+    assert.equal(
+      report.issues.filter((issue) => issue.code === "deps.cycle").length,
+      context === "module-load" ? 1 : 0,
+    );
+  }
+});
 
 test("draft separates tests and generated code, preserves root evidence and stable batch bytes", () => {
   const files = [
@@ -130,6 +211,53 @@ test("draft groups a flat directory by imports, keeps the actual cycle and creat
   );
 });
 
+test("draft splits a large dense import cycle without losing files or suppressing cross-part facts", () => {
+  const files = Array.from({ length: 53 }, (_, i) => `lib/part-${String(i).padStart(2, "0")}.py`);
+  files.push("lib/test_part-00.py");
+  const sources = files.slice(0, -1);
+  const edges = sources.flatMap((from) =>
+    sources.filter((to) => from !== to).map((to) => edge(from, to)),
+  );
+  const input = scan(files, edges);
+  const { draft, check: report } = check(input);
+  assert.equal(
+    report.modules.reduce((sum, module) => sum + module.productionFiles, 0),
+    53,
+  );
+  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.equal(report.modules.filter((module) => module.productionFiles > 0).length, 6);
+  assert.deepEqual(report.modules.flatMap((module) => module.files).sort(), [...files].sort());
+  assert.ok(
+    report.modules.find((module) => module.files.includes(files[0]!))!.files.includes(files[53]!),
+  );
+  assert.ok(report.issues.some((issue) => issue.code === "deps.cycle"));
+  assert.ok(
+    !report.issues.some((issue) => issue.code === "map.unowned" || issue.code === "map.uncovered"),
+  );
+  assert.ok(draft.batch.items.every((item) => item.op === "create" && item.body === ""));
+  assert.deepEqual(
+    draftWorkspaceModules(scan([...files].reverse(), [...edges].reverse())).batch,
+    draft.batch,
+  );
+});
+
+test("cross-directory cycles cannot reassemble small leaves beyond the draft target", () => {
+  const files = ["render", "layout", "style"].flatMap((group) =>
+    Array.from({ length: 8 }, (_, i) => `src/${group}/part${i}.ts`),
+  );
+  const edges = files.flatMap((from) =>
+    files.filter((to) => from !== to).map((to) => edge(from, to)),
+  );
+  const { draft, check: report } = check(scan(files, edges));
+  assert.equal(
+    report.modules.reduce((sum, module) => sum + module.productionFiles, 0),
+    24,
+  );
+  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.equal(draft.nodes.filter((node) => node.parentId).length, 3);
+  assert.ok(report.issues.some((issue) => issue.code === "deps.cycle"));
+});
+
 test("draft keeps directory layers and nearby tests while bounding a flat Python leaf", () => {
   const names = [
     "alpha",
@@ -183,13 +311,17 @@ test("draft keeps directory layers and nearby tests while bounding a flat Python
   );
 });
 
-test("draft does not break a genuine large cycle to meet its size target", () => {
+test("draft splits a genuine large cycle to meet its size target", () => {
   const files = Array.from({ length: 15 }, (_, i) => `lib/file${i}.ts`);
   const edges = files.map((file, i) => edge(file, files[(i + 1) % files.length]!));
   const { draft, check: report } = check(scan(files, edges));
-  assert.equal(report.modules.length, 1);
-  assert.equal(report.modules[0]!.productionFiles, 15);
-  assert.match(draft.warnings.join("\n"), /exceeds 10-file draft target/);
+  assert.equal(report.modules.length, 3);
+  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.equal(
+    report.modules.reduce((sum, module) => sum + module.productionFiles, 0),
+    15,
+  );
+  assert.deepEqual(draft.warnings, []);
 });
 
 test("many root entries cannot grow a unique imported leaf beyond the draft size target", () => {
@@ -487,6 +619,59 @@ test("hierarchical draft writes once after renaming a parent and preserves child
   const rootPackage = actual.modules.find((module) => module.name === "Root Go package")!;
   const command = actual.modules.find((module) => module.files.includes("cmd/tool/main.go"))!;
   assert.ok(deps.edges.some((edge) => edge.from === command.id && edge.to === rootPackage.id));
+});
+
+test("a size-split cycle stays small when the Agent records its linked exception in a child prompt", async (t) => {
+  const { root, adapter, write } = await fixture(t);
+  const files = Array.from({ length: 12 }, (_, i) => `lib/part${i}.ts`);
+  for (const file of files)
+    await write(
+      file,
+      files
+        .filter((other) => other !== file)
+        .map((other) => `import './${path.basename(other)}';`)
+        .join("\n"),
+    );
+  await git(root, "add", ".");
+  const prepared = await runWorkspaceCommand("scan", ["--draft", ".scratch/cycle.json", "--json"], {
+    workspace: root,
+  });
+  assert.equal(
+    prepared.exitCode,
+    1,
+    "the draft exposes a decision for the Agent, not an automatic exception",
+  );
+  const summary = JSON.parse(prepared.stdout);
+  const cycle = summary.issues.find((issue: { code: string }) => issue.code === "deps.cycle");
+  assert.ok(cycle);
+  assert.ok(
+    summary.modules.every((module: { productionFiles: number }) => module.productionFiles <= 10),
+  );
+  const batch = nodeWriteBatchInputSchema.parse(
+    JSON.parse(await fs.readFile(path.join(root, ".scratch/cycle.json"), "utf8")),
+  );
+  assert.ok(batch.items.every((item) => item.op === "create" && item.body === ""));
+  const [first, second] = cycle.facts.nodeIds as string[];
+  batch.items.push({
+    op: "create",
+    ref: "rule",
+    parent: `@${first}`,
+    name: "Rendering contract",
+    type: "prompt",
+    body: `allow:deps.cycle [Partner](@${second}) Keep both parts small; coordinate the rendering contract.`,
+  });
+  const written = await runNodeCommand("write-many", ["--input-json", "-"], {
+    workspace: root,
+    stdin: JSON.stringify(batch),
+  });
+  assert.equal(written.exitCode, 0, written.stderr);
+  const report = await checkWorkspaceModules(adapter, root, await readModuleMapRepository(root));
+  assert.deepEqual(report.issues, []);
+  assert.equal(
+    report.modules.reduce((sum, module) => sum + module.productionFiles, 0),
+    12,
+  );
+  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
 });
 
 test("draft and live module queries derive current Python and script test imports without changing ordinary scan", async (t) => {

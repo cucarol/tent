@@ -251,7 +251,7 @@ export function extractRustImports(
     };
   }
   function edge(from: string, to: string, specifier: string) {
-    if (from !== to) edges.push({ from, to, kind: "file", specifier });
+    if (from !== to) edges.push({ from, to, kind: "file", specifier, execution: "compile-time" });
   }
   function markTestModules(ts: readonly RustToken[], directory: string) {
     for (let i = 0; i < ts.length; i++) {

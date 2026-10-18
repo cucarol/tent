@@ -6,6 +6,8 @@ import { extractCSharpImports } from "./csharp-imports.js";
 import { isCSharpConfig } from "./csharp-build.js";
 import { extractCFamilyImports, isCFamilySource, isCFamilyConfig } from "./cfamily-imports.js";
 import { extractPhpImports, isPhpConfig } from "./php-imports.js";
+import { deferredImportTokens } from "./import-execution.js";
+import { pythonImports } from "./python-imports.js";
 
 /** Workspace-relative POSIX paths. Omit content for files that need no parsing. */
 export type RepositorySource = { path: string; content?: string };
@@ -15,6 +17,8 @@ export type RepositoryImport = {
   to: string;
   kind: "file" | "directory";
   specifier: string;
+  /** Source-level loading evidence; does not infer calls, compiler elision or initialization. */
+  execution: "module-load" | "deferred" | "type-only" | "compile-time";
 };
 export type RepositoryImportIssue = { file: string; specifier?: string; reason: string };
 
@@ -113,16 +117,27 @@ function tokens(text: string, python = false, go = false): Token[] {
   return result;
 }
 
-function scriptImports(text: string): string[] {
+function scriptImports(text: string, declaration: boolean) {
   const ts = tokens(text),
-    imports: string[] = [];
+    deferred = deferredImportTokens(ts, false, text),
+    imports: Array<{ specifier: string; execution: RepositoryImport["execution"] }> = [];
+  const add = (specifier: string, index: number, typeOnly = false) =>
+    imports.push({
+      specifier,
+      execution:
+        declaration || typeOnly ? "type-only" : deferred.has(index) ? "deferred" : "module-load",
+    });
   for (let i = 0; i < ts.length; i++) {
     const token = ts[i]!;
     if (token.kind !== "word" || ts[i - 1]?.value === ".") continue;
     if (token.value === "require" || token.value === "import") {
       if (ts[i + 1]?.value === "(" && ts[i + 2]?.kind === "string" && ts[i + 3]?.value === ")")
-        imports.push(ts[i + 2]!.value);
-      if (token.value === "import" && ts[i + 1]?.kind === "string") imports.push(ts[i + 1]!.value);
+        add(
+          ts[i + 2]!.value,
+          i,
+          token.value === "require" && ts[i - 4]?.value === "import" && ts[i - 3]?.value === "type",
+        );
+      if (token.value === "import" && ts[i + 1]?.kind === "string") add(ts[i + 1]!.value, i);
     }
     if (!["import", "export"].includes(token.value) || ts[i + 1]?.value === "(") continue;
     for (let j = i + 1; j < ts.length; j++) {
@@ -130,7 +145,11 @@ function scriptImports(text: string): string[] {
       if (next.value === ";" || (next.kind === "word" && ["import", "export"].includes(next.value)))
         break;
       if (next.value === "from" && ts[j + 1]?.kind === "string") {
-        imports.push(ts[j + 1]!.value);
+        add(
+          ts[j + 1]!.value,
+          i,
+          ts[i + 1]?.value === "type" && !["from", ","].includes(ts[i + 2]?.value ?? ""),
+        );
         break;
       }
       // An export declaration with a body is not a re-export.
@@ -155,43 +174,6 @@ function goImports(text: string): string[] {
     }
   }
   return imports;
-}
-
-function pythonImports(text: string): Array<{ module: string; names: string[] }> {
-  // Preserve newlines but mask strings/comments so only real statements match.
-  const ts = tokens(text, true);
-  let masked = "",
-    cursor = 0;
-  for (const token of ts) {
-    masked += text.slice(cursor, token.start).replace(/[^\r\n]/g, " ");
-    masked +=
-      token.kind === "string"
-        ? text.slice(token.start, token.end).replace(/[^\r\n]/g, " ")
-        : token.value;
-    cursor = token.end;
-  }
-  masked += text.slice(cursor).replace(/[^\r\n]/g, " ");
-  const result: Array<{ module: string; names: string[] }> = [];
-  for (const match of masked.matchAll(
-    /(?:^|[;\n])\s*(?:from\s+([\w.]+)\s+import\s+(\([^)]*\)|[^;\n]+)|import\s+([^;\n]+))/g,
-  )) {
-    if (match[1]) {
-      result.push({
-        module: match[1],
-        names: (match[2] ?? "")
-          .replace(/[()]/g, "")
-          .split(",")
-          .map((part) => part.trim().split(/\s+/)[0]!)
-          .filter(Boolean),
-      });
-    } else {
-      for (const part of (match[3] ?? "").split(",")) {
-        const module = part.trim().split(/\s+/)[0];
-        if (module) result.push({ module, names: [] });
-      }
-    }
-  }
-  return result;
 }
 
 function jsonConfig(text: string): unknown {
@@ -381,8 +363,14 @@ function extractImports(
     return undefined;
   }
   const edges: RepositoryImport[] = [];
-  const add = (from: string, to: string, kind: RepositoryImport["kind"], specifier: string) => {
-    if (from !== to && !isTestSource(to)) edges.push({ from, to, kind, specifier });
+  const add = (
+    from: string,
+    to: string,
+    kind: RepositoryImport["kind"],
+    specifier: string,
+    execution: RepositoryImport["execution"],
+  ) => {
+    if (from !== to && !isTestSource(to)) edges.push({ from, to, kind, specifier, execution });
   };
   const pythonFile = (target: string) => {
     if (!inWorkspace(target)) return;
@@ -404,7 +392,8 @@ function extractImports(
           module.directory,
           specifier.slice(module.module.length).replace(/^\//, ""),
         );
-        if (goPackageDirectories.has(target)) add(file.path, target, "directory", specifier);
+        if (goPackageDirectories.has(target))
+          add(file.path, target, "directory", specifier, "module-load");
         else
           issues.push({
             file: file.path,
@@ -413,7 +402,7 @@ function extractImports(
           });
       }
     } else if (file.path.endsWith(".py")) {
-      for (const imported of pythonImports(file.content)) {
+      for (const imported of pythonImports(file.content, tokens(file.content, true))) {
         const level = /^\.+/.exec(imported.module)?.[0].length ?? 0;
         const name = imported.module.slice(level).replace(/\./g, "/");
         let base = path.posix.dirname(file.path);
@@ -428,8 +417,9 @@ function extractImports(
             .map((member) => pythonFile(path.posix.join(target, member)))
             .filter((member): member is string => member !== undefined);
           if (!resolved && !members.length) continue;
-          if (resolved) add(file.path, resolved, "file", imported.module);
-          for (const member of members) add(file.path, member, "file", imported.module);
+          if (resolved) add(file.path, resolved, "file", imported.module, imported.execution);
+          for (const member of members)
+            add(file.path, member, "file", imported.module, imported.execution);
           found = true;
           break;
         }
@@ -441,9 +431,12 @@ function extractImports(
           });
       }
     } else {
-      for (const specifier of scriptImports(file.content)) {
+      for (const { specifier, execution } of scriptImports(
+        file.content,
+        /\.d\.[cm]?ts$/.test(file.path),
+      )) {
         const target = resolveScript(file.path, specifier);
-        if (target) add(file.path, target, "file", specifier);
+        if (target) add(file.path, target, "file", specifier, execution);
         else if (specifier.startsWith("."))
           issues.push({
             file: file.path,

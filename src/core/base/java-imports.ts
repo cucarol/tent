@@ -193,7 +193,8 @@ export function extractJavaImports(
           : types.get(name);
       if (targets?.size === 1) {
         const to = [...targets][0]!;
-        if (to !== file.path) edges.push({ from: file.path, to, kind: "file", specifier });
+        if (to !== file.path)
+          edges.push({ from: file.path, to, kind: "file", specifier, execution: "compile-time" });
       } else if (targets?.size)
         issue("Java imported type has multiple local definitions; classpath is unknown");
       else if (!/^(?:java|javax|jdk)\./.test(imported.name))

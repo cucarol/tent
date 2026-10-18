@@ -318,6 +318,7 @@ test("scan reports source facts with no writes and never follows tracked source 
       to: "src/core/value.ts",
       kind: "file",
       specifier: "../core/value.js",
+      execution: "module-load" as const,
     },
   ]);
   assert.deepEqual(report.guidanceFiles, ["AGENTS.md"]);
@@ -410,7 +411,13 @@ test("scan JSON preserves repository facts and a diagnostic for invalid TypeScri
   assert.equal(report.coverage.trackedFiles, 3);
   assert.equal(report.imports.scannedFiles, 2);
   assert.deepEqual(report.imports.edges, [
-    { from: "src/main.ts", to: "src/helper.ts", kind: "file", specifier: "./helper" },
+    {
+      from: "src/main.ts",
+      to: "src/helper.ts",
+      kind: "file",
+      specifier: "./helper",
+      execution: "module-load" as const,
+    },
   ]);
   assert.deepEqual(report.imports.issues, [
     { file: "tsconfig.json", reason: "Invalid TypeScript path configuration" },

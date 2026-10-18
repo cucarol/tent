@@ -136,7 +136,13 @@ export function extractCFamilyImports(
           : undefined;
       if (local) {
         if (file.path !== local.path)
-          edges.push({ from: file.path, to: local.path, kind: "file", specifier: include.name });
+          edges.push({
+            from: file.path,
+            to: local.path,
+            kind: "file",
+            specifier: include.name,
+            execution: "compile-time",
+          });
       } else if (include.quoted)
         issues.push({
           file: file.path,

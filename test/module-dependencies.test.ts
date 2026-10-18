@@ -63,6 +63,25 @@ test("module dependencies aggregate imports in both directions without self edge
   assert.deepEqual(await read([...sources].reverse()), result);
 });
 
+test("module dependency edges retain all four execution classes", async (t) => {
+  const { node, read } = await fixture(t);
+  await node("a", ["src/a/"]);
+  await node("b", ["src/b/"]);
+  const sources = [
+    { path: "src/a/eager.ts", content: 'import "../b/value.js";' },
+    { path: "src/a/lazy.ts", content: 'function load() { return require("../b/value.js"); }' },
+    { path: "src/a/types.ts", content: 'import type { Value } from "../b/value.js";' },
+    { path: "src/a/header.c", content: '#include "../b/part.h"' },
+    { path: "src/b/value.ts", content: "export type Value = string;" },
+    { path: "src/b/part.h", content: "" },
+  ];
+  const result = await read(sources);
+  assert.deepEqual(result.edges, [{ from: "node-a", to: "node-b", imports: 4 }]);
+  assert.equal(result.uncovered, 0);
+  assert.equal(result.unresolved, 0);
+  assert.deepEqual(await read([...sources].reverse()), result);
+});
+
 test("most-specific membership preserves equal ties and counts each file once per module", async (t) => {
   const { node, read } = await fixture(t);
   await node("parent", ["src/"]);

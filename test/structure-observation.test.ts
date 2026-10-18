@@ -293,6 +293,7 @@ test("partial Go package targets are unavailable and complete internal packages 
     to: "pkg",
     kind: "directory" as const,
     specifier: "example/pkg",
+    execution: "module-load" as const,
   };
   assert.throws(
     () =>
@@ -345,12 +346,19 @@ test("Node union excludes complete Go packages without mixing other sources' out
     externalStructureDependencies(
       coverage,
       [
-        { from: "pkg/card-main.go", to: "pkg", kind: "directory", specifier: "example/pkg" },
+        {
+          from: "pkg/card-main.go",
+          to: "pkg",
+          kind: "directory",
+          specifier: "example/pkg",
+          execution: "module-load" as const,
+        },
         {
           from: "pkg/role-main.go",
           to: "outside",
           kind: "directory",
           specifier: "example/outside",
+          execution: "module-load" as const,
         },
       ],
       files,
@@ -362,7 +370,15 @@ test("Node union excludes complete Go packages without mixing other sources' out
     () =>
       externalStructureDependencies(
         coverage,
-        [{ from: "pkg/card-main.go", to: "pkg", kind: "directory", specifier: "example/pkg" }],
+        [
+          {
+            from: "pkg/card-main.go",
+            to: "pkg",
+            kind: "directory",
+            specifier: "example/pkg",
+            execution: "module-load" as const,
+          },
+        ],
         [...files, "pkg/nonmember.go"],
         members,
       ),

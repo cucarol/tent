@@ -43,6 +43,7 @@ const imports = (from: string, to: string, count: number, kind: "file" | "direct
     to: kind === "file" ? `${to}/file-0.ts` : to,
     kind,
     specifier: to,
+    execution: "module-load" as const,
   }));
 const commit = (id: string, files: string[], changedFiles = files.length): ModuleMapCommit => ({
   commit: id,
@@ -57,6 +58,32 @@ const codes = (result: ReturnType<typeof checkModuleMap>) =>
   result.issues.map((issue) => issue.code);
 const coverageOnly = (trackedFiles: string[]) =>
   node("setup", { materials: trackedFiles.map((path) => ({ path, kind: "file" })) });
+
+test("cycle counts use only module-load occurrences while non-load test evidence remains", () => {
+  const tracked = [...files("a", 3), ...files("b", 3), "tests/a.test.ts"];
+  const nodes = [node("a"), node("b"), coverageOnly(["tests/a.test.ts"])];
+  const eager = [...imports("a", "b", 3), ...imports("b", "a", 3)];
+  for (const execution of ["deferred", "type-only", "compile-time"] as const) {
+    const other = eager.map((edge) => ({ ...edge, execution }));
+    const onlyNonLoad = checkModuleMap(input(tracked, nodes, { imports: other }));
+    assert.deepEqual(codes(onlyNonLoad), []);
+    const oneWay = checkModuleMap(
+      input(tracked, nodes, { imports: [...eager.slice(0, 3), ...other.slice(3)] }),
+    );
+    assert.deepEqual(codes(oneWay), []);
+    const mixed = checkModuleMap(
+      input(tracked, nodes, {
+        imports: [...other, ...eager, { ...other[0]!, from: "tests/a.test.ts", to: "a/file-0.ts" }],
+      }),
+    );
+    assert.deepEqual(codes(mixed), ["deps.cycle"]);
+    assert.equal(mixed.issues[0]!.facts.forwardImports, 3);
+    assert.equal(mixed.issues[0]!.facts.reverseImports, 3);
+    assert.deepEqual(mixed.modules.find((module) => module.id === "a")!.testedBy, [
+      "tests/a.test.ts",
+    ]);
+  }
+});
 
 test("coverage includes file-only Nodes, while module membership uses the most specific material", () => {
   const tracked = [
@@ -127,6 +154,7 @@ test("internal .tent files never enter broad module coverage, imports or history
         to: internal,
         kind: "file" as const,
         specifier: "../.tent/cache/generated",
+        execution: "module-load" as const,
       },
     ],
     commits: [{ commit: "a".repeat(40), files: [internal], changedFiles: 1 }],
@@ -411,10 +439,34 @@ test("cycles count real imports, ignore tests/barrels and discard weak reverse e
           imports: [
             ...imports("a", "b", 3),
             ...imports("b", "a", 2),
-            { from: "b/index.ts", to: "a/file-0.ts", kind: "file", specifier: "a" },
-            { from: "b/file-0.ts", to: "a/index.ts", kind: "file", specifier: "a" },
-            { from: "b/file-0.ts", to: "a/x.test.ts", kind: "file", specifier: "a" },
-            { from: "a/x.test.ts", to: "b/file-0.ts", kind: "file", specifier: "b" },
+            {
+              from: "b/index.ts",
+              to: "a/file-0.ts",
+              kind: "file",
+              specifier: "a",
+              execution: "module-load" as const,
+            },
+            {
+              from: "b/file-0.ts",
+              to: "a/index.ts",
+              kind: "file",
+              specifier: "a",
+              execution: "module-load" as const,
+            },
+            {
+              from: "b/file-0.ts",
+              to: "a/x.test.ts",
+              kind: "file",
+              specifier: "a",
+              execution: "module-load" as const,
+            },
+            {
+              from: "a/x.test.ts",
+              to: "b/file-0.ts",
+              kind: "file",
+              specifier: "b",
+              execution: "module-load" as const,
+            },
           ],
         }),
       ),
@@ -494,7 +546,13 @@ test("a Go package whose production files share one module has that owner even t
     node("other"),
   ];
   const edges: RepositoryImport[] = [
-    { from: "cmd/main.go", to: "server", kind: "directory", specifier: "example/server" },
+    {
+      from: "cmd/main.go",
+      to: "server",
+      kind: "directory",
+      specifier: "example/server",
+      execution: "module-load" as const,
+    },
   ];
   const result = checkModuleMap(input(tracked, nodes, { imports: edges }));
   assert.deepEqual(result.issues, []);

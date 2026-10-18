@@ -5,6 +5,7 @@ import type {
   RepositoryImportIssue,
 } from "./repository-imports.js";
 import { phpTokens, type PhpToken } from "./php-lex.js";
+import { deferredImportTokens } from "./import-execution.js";
 
 export const isPhpConfig = (file: string) => /(^|\/)composer\.json$/.test(file);
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -190,7 +191,8 @@ function includePath(tokens: PhpToken[], start: number, file: string) {
 function references(file: RepositorySource, issues: RepositoryImportIssue[]) {
   const { tokens, errors } = phpTokens(file.content!);
   const uses: Use[] = [];
-  const includes: StaticPath[] = [];
+  const includes: Array<StaticPath & { execution: RepositoryImport["execution"] }> = [];
+  const deferred = deferredImportTokens(tokens, true);
   const issue = (reason: string) => issues.push({ file: file.path, reason });
   for (const error of errors) issue(`Cannot parse PHP source: ${error}`);
   let depth = 0;
@@ -236,7 +238,8 @@ function references(file: RepositorySource, issues: RepositoryImportIssue[]) {
       )
         continue;
       const target = includePath(tokens, i + 1, file.path);
-      if (target) includes.push(target);
+      if (target)
+        includes.push({ ...target, execution: deferred.has(i) ? "deferred" : "module-load" });
       else issue("PHP include/require expression is not a supported static path");
     } else if (token.kind === "symbol" && token.value === "{") depth++;
     else if (token.kind === "symbol" && token.value === "}") {
@@ -283,8 +286,8 @@ export function extractPhpImports(input: readonly RepositorySource[], focus?: re
     const refs = references(file, issues);
     const issue = (specifier: string, reason: string) =>
       issues.push({ file: file.path, specifier, reason });
-    const add = (to: string, specifier: string) => {
-      if (to !== file.path) edges.push({ from: file.path, to, kind: "file", specifier });
+    const add = (to: string, specifier: string, execution: RepositoryImport["execution"]) => {
+      if (to !== file.path) edges.push({ from: file.path, to, kind: "file", specifier, execution });
     };
     for (const imported of refs.uses) {
       if (imported.kind !== "class") {
@@ -305,7 +308,7 @@ export function extractPhpImports(input: readonly RepositorySource[], focus?: re
           ),
         )
         .find((candidate) => localPath(candidate) && byPath.has(candidate));
-      if (target) add(target, imported.name);
+      if (target) add(target, imported.name, "compile-time");
       else
         issue(
           imported.name,
@@ -329,7 +332,7 @@ export function extractPhpImports(input: readonly RepositorySource[], focus?: re
           ]),
         ].filter((candidate) => localPath(candidate) && byPath.has(candidate));
         for (const candidate of candidates) {
-          add(candidate, specifier);
+          add(candidate, specifier, included.execution);
           issue(
             specifier,
             `PHP include/require candidate ${candidate}: runtime include_path and working directory are not evaluated`,
@@ -347,7 +350,7 @@ export function extractPhpImports(input: readonly RepositorySource[], focus?: re
         issue(specifier, "PHP include/require path is outside supported Workspace-local paths");
         continue;
       }
-      if (byPath.has(candidate)) add(candidate, specifier);
+      if (byPath.has(candidate)) add(candidate, specifier, included.execution);
       else issue(specifier, "PHP include/require target is absent from supplied local files");
     }
   }

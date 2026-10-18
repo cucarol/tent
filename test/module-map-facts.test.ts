@@ -28,6 +28,7 @@ const edge = (from: string, to: string, kind: RepositoryImport["kind"] = "file")
   to,
   kind,
   specifier: to,
+  execution: "module-load" as const,
 });
 const commit = (id: string, files: string[], changedFiles = files.length): ModuleMapCommit => ({
   commit: id,

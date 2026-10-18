@@ -50,7 +50,13 @@ test("test script imports reuse aliases and literal import forms without followi
   );
   assert.deepEqual(extractRepositoryTestImports([...files].reverse()), result);
   assert.deepEqual(extractRepositoryImports(files).edges, [
-    { from: "src/main.ts", to: "src/value.ts", kind: "file", specifier: "./value.js" },
+    {
+      from: "src/main.ts",
+      to: "src/value.ts",
+      kind: "file",
+      specifier: "./value.js",
+      execution: "module-load" as const,
+    },
   ]);
 });
 
@@ -117,6 +123,7 @@ test("Go test imports retain production package directory targets", () => {
       to: "store",
       kind: "directory",
       specifier: "example.test/app/store",
+      execution: "module-load" as const,
     },
   ]);
   assert.equal(result.issues.length, 1);
@@ -186,7 +193,13 @@ test("Rust conventional integration tests and dev path dependencies use existing
     ],
   );
   assert.deepEqual(extractRepositoryImports(files).edges, [
-    { from: "src/lib.rs", to: "src/value.rs", kind: "file", specifier: "mod value" },
+    {
+      from: "src/lib.rs",
+      to: "src/value.rs",
+      kind: "file",
+      specifier: "mod value",
+      execution: "compile-time" as const,
+    },
   ]);
   assert.deepEqual(extractRepositoryTestImports(files, { rust: false }).edges, []);
 });
