@@ -24,6 +24,8 @@ export interface FsAdapter {
   }>;
   /** Share one Workspace observation among the materials of a single inspection. */
   observationScope?<T>(action: () => Promise<T>): Promise<T>;
+  /** Git index membership of an explicit local file; undefined when it cannot be established. */
+  materialIsTracked?(resource: string, documentPath: string): Promise<boolean | undefined>;
   readonly history?: GitDocumentHistory;
   /** File paths in the independent Tent Git HEAD tree; undefined without Tent Git. */
   retainedDocumentPaths?(): Promise<string[] | undefined>;

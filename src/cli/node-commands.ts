@@ -9,6 +9,7 @@ import { isNodeId } from "../core/base/id.js";
 // Agent-facing parsing and rendering; document semantics and locking belong to Core.
 
 import { materialFields } from "../core/base/material.js";
+import { nodeMaterialWarnings } from "../core/graph/node-material-warnings.js";
 import { isNodeType } from "../core/base/node-type.js";
 import { normalizeTagName, NODE_TAG_PRESETS, type NodeTagCount } from "../core/base/tags.js";
 import { nodeWriteInputSchema } from "../core/write/node-write.js";
@@ -195,10 +196,9 @@ export async function runNodeCommand(
     const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot: systemRoot };
     const mutationPrint = <T>(result: T, json: boolean, format: (value: T) => string) => {
       const readable = workspaceReadPaths(result, workspaceRoot);
-      return print(
-        { ...readable, workspaceRoot },
-        json,
-        () => `${format(readable)}\nWorkspace: ${workspaceRoot}`,
+      const warnings = (readable as { warnings?: string[] }).warnings ?? [];
+      return print({ ...readable, workspaceRoot }, json, () =>
+        [format(readable), ...warnings, `Workspace: ${workspaceRoot}`].join("\n"),
       );
     };
 
@@ -233,11 +233,11 @@ export async function runNodeCommand(
           roleId: flags.role,
           tags: parseCsv(flags.tags).map(normalizeTagName),
         });
-        return mutationPrint(result, json, (value) =>
-          [
+        return mutationPrint(
+          result,
+          json,
+          (value) =>
             `Created ${value.nodeId}  ${value.path}  ${value.etag}${value.cardId ? `\nCard: ${value.cardId}` : ""}`,
-            ...(value.warnings ?? []),
-          ].join("\n"),
         );
       }
       case "confirm": {
@@ -602,7 +602,16 @@ export async function runNodeCommand(
                 })
               : compactItem(result.node),
         };
-        return mutationPrint(output, json, (value) => `Created ${formatNode(value)}`);
+        const warnings = await nodeMaterialWarnings(
+          fs,
+          { id: created, type, ...normalizedMaterials },
+          nodeNotePath(parentPath ? `${parentPath}/${name}` : name),
+        );
+        return mutationPrint(
+          { ...output, ...(warnings.length ? { warnings } : {}) },
+          json,
+          (value) => `Created ${formatNode(value)}`,
+        );
       }
       case "append": {
         const target = oneTarget(positionals, nodeHelpText(sub));
@@ -624,6 +633,7 @@ export async function runNodeCommand(
           etag: saved.etag,
           changed: saved.changed,
           ...(saved.version ? { version: saved.version } : {}),
+          ...(saved.warnings ? { warnings: saved.warnings } : {}),
         };
         return mutationPrint(result, json, () => `Updated ${nodeId}  ${saved.etag}`);
       }
@@ -703,6 +713,7 @@ export async function runNodeCommand(
             written: "node-document",
             changed: saved.changed,
             ...(saved.version ? { version: saved.version } : {}),
+            ...(saved.warnings ? { warnings: saved.warnings } : {}),
           },
           workspaceRoot,
         );
@@ -724,9 +735,10 @@ export async function runNodeCommand(
         const output = (readBack ? readBack.partial : input.body === undefined)
           ? incompleteNodeRead(result)
           : result;
-        return mutationPrint(output, json, (value) =>
-          input.readBack ? JSON.stringify(value, null, 2) : `Updated ${ref}`,
-        );
+        return mutationPrint(output, json, (value) => {
+          const { warnings: _warnings, ...readback } = value;
+          return input.readBack ? JSON.stringify(readback, null, 2) : `Updated ${ref}`;
+        });
       }
       case "rename": {
         if (positionals.length !== 2) return usage("tent node rename <nodeId> <new-name> [--json]");

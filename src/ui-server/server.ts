@@ -386,6 +386,7 @@ async function startWorkspaceServer(
           version: saved.version,
           body: parsed.body,
           trustTier: nodeTrustTier(parsed.data),
+          ...(saved.warnings ? { warnings: saved.warnings } : {}),
         });
       } catch (error) {
         if (error instanceof NodeWriteError && error.code === "ETAG_CONFLICT") {

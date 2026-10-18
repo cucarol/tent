@@ -17,6 +17,7 @@ import { validateSystemMaterials } from "./material-target.js";
 import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "../base/node-read-basis.js";
 import { assertNodeRecordFields, prepareNodeSyncSave } from "./node-sync-record.js";
 import { prepareNodeProvenanceSave, assertNodeProvenanceEdit } from "../base/node-provenance.js";
+import { nodeMaterialWarnings } from "./node-material-warnings.js";
 
 export class NodeWriteError extends Error {
   constructor(
@@ -130,6 +131,7 @@ export async function savePreparedNodeDocumentUnlocked(
   );
   const changed = raw !== diskRaw;
   const path = nodeNotePath(node.path);
+  const warnings = await nodeMaterialWarnings(fs, parseFrontmatter(raw).data, path);
   const currentRaw = await fs.readFile(path);
   if (currentRaw !== diskRaw)
     throw new NodeWriteError(
@@ -162,6 +164,7 @@ export async function savePreparedNodeDocumentUnlocked(
     etag: contentEtag(raw),
     changed,
     version,
+    ...(warnings.length ? { warnings } : {}),
   };
 }
 

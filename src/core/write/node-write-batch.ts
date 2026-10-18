@@ -26,6 +26,7 @@ import { loadOrder, ROOT_KEY } from "../store/order.js";
 import { MUTATION_LOCK_PATH, nodeNotePath, ORDER_PATH } from "../base/paths.js";
 import { validateNodeName } from "../store/scaffold.js";
 import { normalizeTagList } from "../base/tags.js";
+import { nodeMaterialWarnings } from "../graph/node-material-warnings.js";
 import { rewriteMarkdownDestinations } from "../base/links.js";
 import { ReaderError } from "../graph/context-reader.js";
 import { recoverPendingNodeMoveUnlocked } from "../store/node-move-recovery.js";
@@ -96,6 +97,7 @@ export type NodeWriteBatchInput = z.infer<typeof nodeWriteBatchInputSchema>;
 export type NodeWriteBatchResult = {
   results: { nodeId: string; path: string; etag: string }[];
   commit?: string;
+  warnings?: string[];
 };
 type PlannedNode = {
   nodeId: string;
@@ -349,6 +351,11 @@ async function writeNodesBatchUnlocked(
     }
   }
   const beforeOrder = (await fs.exists(ORDER_PATH)) ? await fs.readFile(ORDER_PATH) : null;
+  const warnings: string[] = [];
+  for (const node of planned)
+    warnings.push(
+      ...(await nodeMaterialWarnings(fs, parseFrontmatter(node.raw).data, nodeNotePath(node.path))),
+    );
   const order = await loadOrder(readOnlyFs(fs));
   for (const node of planned.filter((n) => n.before === null)) {
     const key = node.parentId ?? ROOT_KEY;
@@ -402,6 +409,7 @@ async function writeNodesBatchUnlocked(
     return {
       results: planned.map((n) => ({ nodeId: n.nodeId, path: n.path, etag: contentEtag(n.raw) })),
       ...(captured?.commit ? { commit: captured.commit } : {}),
+      ...(warnings.length ? { warnings } : {}),
     };
   } catch (error) {
     const failures: unknown[] = [],

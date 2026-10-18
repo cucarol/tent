@@ -23,6 +23,7 @@ import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { loadNodeCatalog } from "../core/graph/node-catalog.js";
 import { materialLocator } from "../core/base/material.js";
 import { assertSystemMaterial } from "../core/graph/material-target.js";
+import { materialIsTracked } from "./material-tracking.js";
 
 export class NodeFs implements FsAdapter {
   private root: string;
@@ -43,6 +44,12 @@ export class NodeFs implements FsAdapter {
 
   observationScope<T>(action: () => Promise<T>): Promise<T> {
     return withStructureSnapshot(action);
+  }
+
+  async materialIsTracked(resource: string, documentPath: string) {
+    return this.workspaceRoot
+      ? materialIsTracked(this.workspaceRoot, resource, documentPath)
+      : undefined;
   }
 
   async observeMaterial(
