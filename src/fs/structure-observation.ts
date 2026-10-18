@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { lstat, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import {
@@ -28,7 +28,11 @@ import {
   isCFamilySource,
   isCFamilyConfig,
 } from "../core/base/cfamily-imports.js";
-import { sourceDirectoryPaths } from "./directory-observation.js";
+import {
+  sourceDirectoryPaths,
+  sourcePathType,
+  type SourcePathTypes,
+} from "./directory-observation.js";
 import { observeSourceFile } from "./source-observation.js";
 import { checkedSourceFile } from "./checked-source-file.js";
 import { directoryRepository } from "./repository-material.js";
@@ -42,14 +46,14 @@ type StructureSnapshot = {
   repository?: ReturnType<typeof directoryRepository>;
   listings: Map<string, Promise<string[]>>;
   sources: Map<string, Promise<string>>;
-  directories: Map<string, Promise<boolean>>;
+  types: SourcePathTypes;
 };
 const structureSnapshot = new AsyncLocalStorage<StructureSnapshot>();
 
 export function withStructureSnapshot<T>(action: () => Promise<T>): Promise<T> {
   if (structureSnapshot.getStore()) return action();
   return structureSnapshot.run(
-    { listings: new Map(), sources: new Map(), directories: new Map() },
+    { listings: new Map(), sources: new Map(), types: new Map() },
     action,
   );
 }
@@ -105,7 +109,7 @@ export async function observeStructureMaterial(
     : await directoryRepository(workspaceRoot);
   const listing = (trackedOnly: boolean) =>
     shared(snapshot?.listings, JSON.stringify([workspaceRoot, cacheDir ?? null, trackedOnly]), () =>
-      sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir, trackedOnly),
+      sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir, trackedOnly, snapshot?.types),
     );
   const livePaths = await listing(false);
   const trackedPaths = repository ? await listing(true) : undefined;
@@ -156,12 +160,11 @@ export async function observeStructureMaterial(
     const file: RepositorySource = { path: workspacePath };
     if (members.has(workspacePath) || neededConfig(workspacePath)) {
       file.content = await readSource(workspacePath, filename);
-    } else if (
-      await shared(snapshot?.directories, filename, async () =>
-        (await lstat(filename)).isDirectory(),
-      )
-    )
-      continue;
+    } else {
+      const type = await sourcePathType(filename, snapshot?.types);
+      if (!type) throw new Error(`ENOENT: Structure source disappeared: ${workspacePath}`);
+      if (type === "directory") continue;
+    }
     files.push(file);
   }
   // Core requests only Cargo ancestry/path-dependency facts and source bytes

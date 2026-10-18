@@ -238,3 +238,91 @@ test("structure inspections keep Git listings constant as materials grow and ref
     syncBuiltinESMExports();
   }
 });
+
+test("structure listings and nonmembers share types only within the current inspection", async (t) => {
+  const root = await fs.mkdtemp(path.join(testScratchRoot(), "structure-types-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  await fs.mkdir(path.join(root, "src/core"), { recursive: true });
+  await fs.mkdir(path.join(root, "src/out"), { recursive: true });
+  await fs.mkdir(path.join(root, ".tent"));
+  await fs.writeFile(path.join(root, ".gitignore"), ".tent/\n");
+  await fs.writeFile(path.join(root, "src/core/card-main.ts"), 'import "../out/api.js";\n');
+  const target = path.join(root, "src/out/api.ts");
+  await fs.writeFile(target, "export const api = true;\n");
+  await git(root, "init", "--quiet");
+  await git(root, "add", ".");
+  const adapter = new NodeFs(path.join(root, ".tent"));
+  const original = fs.lstat;
+  let calls = 0;
+  let denied = false;
+  const mocked = t.mock.method(fs, "lstat", (...args: Parameters<typeof original>) => {
+    if (String(args[0]) === target) {
+      calls++;
+      if (denied) return Promise.reject(Object.assign(new Error("denied"), { code: "EACCES" }));
+    }
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    const inspect = () =>
+      adapter.observationScope(async () => {
+        const a = await adapter.observeMaterial("../src/core/", "index.md", "structure");
+        const b = await adapter.observeMaterial("../src/core/card-*", "index.md", "structure");
+        assert.deepEqual(a.structureDependencies, ["src/out/"]);
+        assert.deepEqual(b.structureDependencies, a.structureDependencies);
+      });
+    await inspect();
+    assert.equal(calls, 1, "live, tracked and both material resolvers reuse one nonmember type");
+    calls = 0;
+    denied = true;
+    await assert.rejects(inspect(), { code: "EACCES" });
+    assert.equal(calls, 1, "a later inspection must observe current permission failures");
+    denied = false;
+    await fs.rm(target);
+    await assert.rejects(inspect(), /absent from tracked files/);
+    await fs.writeFile(target, "export const api = false;\n");
+    calls = 0;
+    await inspect();
+    assert.equal(calls, 1, "failed or missing types must not outlive an inspection");
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+test("a listed regular source is still rejected if it becomes a link before content reading", async (t) => {
+  const root = await fs.mkdtemp(path.join(testScratchRoot(), "structure-type-link-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  await fs.mkdir(path.join(root, "src"));
+  await fs.mkdir(path.join(root, ".tent"));
+  await fs.writeFile(path.join(root, ".gitignore"), ".tent/\n");
+  const target = path.join(root, "src/main.ts");
+  await fs.writeFile(target, "export const value = true;\n");
+  await git(root, "init", "--quiet");
+  await git(root, "add", ".");
+  const adapter = new NodeFs(path.join(root, ".tent"));
+  const original = fs.lstat;
+  let calls = 0;
+  const mocked = t.mock.method(fs, "lstat", async (...args: Parameters<typeof original>) => {
+    const info = await original(...args);
+    if (String(args[0]) !== target || ++calls === 1) return info;
+    return new Proxy(info, {
+      get(value, key) {
+        if (key === "isSymbolicLink") return () => true;
+        const member = Reflect.get(value, key);
+        return typeof member === "function" ? member.bind(value) : member;
+      },
+    });
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      adapter.observationScope(() => adapter.observeMaterial("../src/", "index.md", "structure")),
+      /Symbolic links/,
+    );
+    assert.ok(calls > 1, "source safety checks must not trust the listing's earlier type");
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+});

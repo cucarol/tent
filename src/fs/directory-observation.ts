@@ -5,6 +5,35 @@ import { checkedSourceFile } from "./checked-source-file.js";
 import { directoryRepository } from "./repository-material.js";
 import { isTentWorkspacePath } from "../core/base/material-coverage.js";
 
+type SourcePathType = "file" | "directory" | "link" | "other";
+export type SourcePathTypes = Map<string, Promise<SourcePathType | undefined>>;
+
+/** Listing metadata only; reading source bytes still performs its own safety checks. */
+export function sourcePathType(filename: string, observations?: SourcePathTypes) {
+  const read = () =>
+    lstat(filename).then(
+      (info): SourcePathType =>
+        info.isSymbolicLink()
+          ? "link"
+          : info.isDirectory()
+            ? "directory"
+            : info.isFile()
+              ? "file"
+              : "other",
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      },
+    );
+  if (!observations) return read();
+  let pending = observations.get(filename);
+  if (!pending) {
+    pending = read();
+    observations.set(filename, pending);
+  }
+  return pending;
+}
+
 /** No caller Git environment or external filters affect the observed bytes. */
 async function git(
   root: string,
@@ -157,6 +186,7 @@ export async function sourceDirectoryPaths(
   directory: string,
   cacheDir?: string,
   trackedOnly = false,
+  types?: SourcePathTypes,
 ): Promise<string[]> {
   if (isTentWorkspacePath(path.relative(root, directory).split(path.sep).join("/"))) return [];
   await checkedSourceFile(root, directory, true);
@@ -168,7 +198,7 @@ export async function sourceDirectoryPaths(
     const files: string[] = [];
     for (const entry of entries) {
       if (entry.directory)
-        files.push(...(await sourceDirectoryPaths(root, entry.filename, cacheDir)));
+        files.push(...(await sourceDirectoryPaths(root, entry.filename, cacheDir, false, types)));
       else files.push(entry.filename);
     }
     return files;
@@ -225,21 +255,18 @@ export async function sourceDirectoryPaths(
         const filename = path.join(repo.root, name);
         if (isTentWorkspacePath(path.relative(root, filename).split(path.sep).join("/")))
           return undefined;
-        const info = await lstat(filename).catch((error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return undefined;
-          throw error;
-        });
-        return info ? { filename, info } : undefined;
+        const type = await sourcePathType(filename, types);
+        return type ? { filename, type } : undefined;
       }),
     );
     for (const entry of observed) {
       if (!entry) continue;
-      const { filename, info } = entry;
-      if (info.isSymbolicLink()) {
+      const { filename, type } = entry;
+      if (type === "link") {
         files.add(filename);
         continue;
       }
-      if (info.isDirectory()) {
+      if (type === "directory") {
         if (trackedOnly) {
           files.add(filename);
           continue;
@@ -263,15 +290,15 @@ export async function sourceDirectoryPaths(
             const child = path.join(repo.root, member);
             if (isTentWorkspacePath(path.relative(root, child).split(path.sep).join("/"))) continue;
             if (member.endsWith("/"))
-              for (const nested of await sourceDirectoryPaths(root, child, cacheDir))
+              for (const nested of await sourceDirectoryPaths(root, child, cacheDir, false, types))
                 files.add(nested);
             else files.add(child);
           }
         } else {
-          for (const member of await sourceDirectoryPaths(root, filename, cacheDir))
+          for (const member of await sourceDirectoryPaths(root, filename, cacheDir, false, types))
             files.add(member);
         }
-      } else if (info.isFile()) files.add(filename);
+      } else if (type === "file") files.add(filename);
       else throw new Error("Directory member is not a readable source file");
     }
   }
