@@ -59,7 +59,10 @@ export async function workspaceMaterialFields(
         throw error;
       }
     }
-    const relative = path.posix.relative(path.posix.dirname(documentPath), locator.target);
+    const relative = path.posix.relative(
+      path.posix.join("/.tent", path.posix.dirname(documentPath)),
+      path.posix.join("/.tent", locator.target),
+    );
     const encoded = relative.split("/").map(encodeURIComponent).join("/");
     return (
       (encoded === ".." || encoded.startsWith("../") ? encoded : `./${encoded}`) +

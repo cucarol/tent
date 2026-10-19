@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import test, { type TestContext } from "node:test";
+import { testScratchRoot, initializeFixtureWorkspace } from "./scratch.js";
 import { nodeHelpText, runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
@@ -45,6 +49,82 @@ async function fixture(t: TestContext) {
   };
   return { root, globals, parse, cli, get };
 }
+
+test("CLI material paths stay Workspace-rooted from different process working directories", async (t) => {
+  const parent = await fs.mkdtemp(path.join(testScratchRoot(), "material-cwd-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  const workspace = path.join(parent, "rich");
+  const sibling = path.join(parent, "mapper-run");
+  const nested = path.join(workspace, "nested");
+  for (const directory of [path.join(workspace, "rich"), sibling, nested])
+    await fs.mkdir(directory, { recursive: true });
+  await initializeFixtureWorkspace(workspace);
+  await fs.writeFile(path.join(workspace, "rich/console.py"), "# Width\nconsole = 1\n");
+  const declaration = {
+    resource: "./rich/console.py#Width",
+    sources: [
+      { resource: "./rich/console.*", track: "structure" },
+      { resource: "rich/console.*", track: "structure" },
+      { resource: "/rich/" },
+    ],
+  };
+  const expected = {
+    resource: "../../../rich/console.py#Width",
+    sources: [
+      { resource: "../../../rich/console.*", track: "structure" },
+      { resource: "../../../rich/console.*", track: "structure" },
+      { resource: "../../../rich/" },
+    ],
+  };
+  const execute = promisify(execFile);
+  const loader = import.meta.resolve("tsx");
+  const document = "Rich library/Console/Console.md";
+  const moduleUrl = new URL("../src/cli/material-input.ts", import.meta.url).href;
+  const script = `import {workspaceMaterialFields} from ${JSON.stringify(moduleUrl)};
+    console.log(JSON.stringify(await workspaceMaterialFields(${JSON.stringify(declaration)}, ${JSON.stringify(document)}, ${JSON.stringify(workspace)})));`;
+  for (const cwd of [workspace, nested, sibling]) {
+    const { stdout } = await execute(
+      process.execPath,
+      ["--import", loader, "--input-type=module", "--eval", script],
+      { cwd, windowsHide: true },
+    );
+    assert.deepEqual(JSON.parse(stdout), expected, `process cwd: ${cwd}`);
+  }
+  const batch = {
+    items: [
+      { op: "create", ref: "library", name: "Rich library", type: "goal" },
+      {
+        op: "create",
+        ref: "console",
+        parent: "@library",
+        name: "Console",
+        type: "goal",
+        sources: [declaration.sources[0]],
+      },
+    ],
+  };
+  const cli = fileURLToPath(new URL("../src/cli/tent.ts", import.meta.url));
+  await execute(
+    process.execPath,
+    [
+      "--import",
+      loader,
+      cli,
+      "node",
+      "write-many",
+      "--workspace",
+      workspace,
+      "--json",
+      "--input-json",
+      JSON.stringify(batch),
+    ],
+    { cwd: workspace, windowsHide: true },
+  );
+  const saved = parseFrontmatter(
+    await fs.readFile(path.join(workspace, ".tent", document), "utf8"),
+  );
+  assert.deepEqual(saved.data.sources, [expected.sources[0]]);
+});
 
 test("cold-start material declarations share the Workspace root and detect subsequent drift", async (t) => {
   const { root, globals, parse, cli, get } = await fixture(t);
