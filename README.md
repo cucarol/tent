@@ -49,7 +49,7 @@ Dependencies between parts come from imports in TypeScript, JavaScript, Python, 
 The web page shows Nodes as cards on one canvas, linked to their parents and to the parts they depend on. Behind and ahead are marked on the cards.
 
 - Drop one card on another and they form a group. Tent states what it can check from facts it holds, for example whether an output still matches its goal or whether a rule's material changed after it was written. Whether the work is right is for an agent to judge.
-- Roles sit at the top left as robots, with the Cards they hold. Drop cards on a robot to write it a Card.
+- Roles sit in the top bar as a stack of avatars that opens into a list, with what each one is working on and waiting for. Drag cards onto the stack and drop them on a Role to write it a Card.
 - Edit Nodes in place, and switch between the workspaces you have opened.
 
 ## Install
