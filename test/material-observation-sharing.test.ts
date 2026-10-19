@@ -152,6 +152,63 @@ test("shared structure observations distinguish the owning Node's structure-sour
   assert.equal(scopes.length, 3);
 });
 
+test(
+  "a subtree waiting for one ancestor cannot starve independent material observations",
+  { timeout: 5000 },
+  async (t) => {
+    const root = await fs.mkdtemp(path.join(testScratchRoot(), "material-scheduling-"));
+    t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+    const adapter = new NodeFs(path.join(root, ".tent"));
+    for (const name of ["A", "B"])
+      await adapter.writeFile(
+        `${name}/${name}.md`,
+        serializeFrontmatter(
+          {
+            id: `node-${name.toLowerCase()}`,
+            type: "goal",
+            sources: [{ resource: `../../${name}/`, track: "structure" }],
+          },
+          "",
+        ),
+      );
+    for (let index = 0; index < 40; index++) {
+      const name = `Out${String(index).padStart(2, "0")}`;
+      await adapter.writeFile(
+        `A/${name}/${name}.md`,
+        serializeFrontmatter(
+          {
+            id: `node-out${index}`,
+            type: "output",
+          },
+          "",
+        ),
+      );
+    }
+    let release!: () => void;
+    const secondStarted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    t.after(() => release());
+    const seen: string[] = [];
+    adapter.observeMaterial = async (_resource, owner) => {
+      seen.push(owner);
+      if (owner === "B/B.md") release();
+      else await secondStarted;
+      return {
+        canonicalPath: root,
+        observedVersion: structureFingerprint([]),
+        structureDependencies: [],
+      };
+    };
+    const result = await inspectWorkspaceSync(adapter);
+    assert.equal(result.nodes.length, 42);
+    assert.deepEqual(seen.sort(), ["A/A.md", "B/B.md"]);
+    assert.equal(result.nodes[0]!.nodeId, "node-a");
+    assert.equal(result.nodes.at(-1)!.nodeId, "node-b");
+    assert.ok(result.nodes.every((node) => !node.uncertain));
+  },
+);
+
 test("structure inspections keep Git listings constant as materials grow and refresh the next inspection", async (t) => {
   const scratch = path.resolve(testScratchRoot());
   const root = await fs.mkdtemp(path.join(scratch, "structure-inspection-"));

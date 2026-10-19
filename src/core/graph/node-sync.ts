@@ -434,6 +434,36 @@ async function inspectCatalogNodesInScope(
     }
     return result!;
   };
+  // Schedule material declarations independently of their dependants. Otherwise
+  // an entire worker group can wait on one ancestor's structure scan while the
+  // next subtree's independent material has not even started.
+  const materialNodes = new Map(selected.map((node) => [node.nodeId, node]));
+  for (const node of selected)
+    if (isOutputNode(catalog.tree.byPath.get(node.path)!.fm))
+      for (const goal of goalAncestors(node, catalog.byId)) materialNodes.set(goal.nodeId, goal);
+  const declarations = [...materialNodes.values()].filter(
+    (node) => materialOccurrences(catalog.tree.byPath.get(node.path)!.fm).length > 0,
+  );
+  let nextMaterial = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(32, declarations.length) }, async () => {
+      for (;;) {
+        const node = declarations[nextMaterial++];
+        if (!node) return;
+        try {
+          await readDocument(node, false);
+          await observeMaterials(
+            catalog.tree.byPath.get(node.path)!.fm,
+            nodeNotePath(node.path),
+            catalog,
+            false,
+          );
+        } catch {
+          // The normal inspection below owns errors and fresh-catalog retries.
+        }
+      }
+    }),
+  );
   const nodes: NodeSyncInspection[] = new Array(selected.length);
   let next = 0;
   await Promise.all(

@@ -107,11 +107,33 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
       after: change.after,
     })),
   }));
+  const commitPositions = new Map(commits.map((commit, index) => [commit.hash, index]));
+  const commitTimes = new Map(commits.map((commit) => [commit.hash, commit.date]));
+  const historyByDocument = new Map<string, string[]>();
+  for (const commit of commits) {
+    const keys = new Set(
+      commit.files.map((file) => (file.ref ? `id:${file.ref.id}` : `path:${file.path}`)),
+    );
+    for (const key of keys) {
+      const history = historyByDocument.get(key) ?? [];
+      history.push(commit.hash);
+      historyByDocument.set(key, history);
+    }
+  }
   const touching = (id: string, file: string) =>
-    commits
-      .filter((c) => c.files.some((f) => (f.ref ? f.ref.id === id : f.path === file)))
-      .map((c) => c.hash);
-  const from = (id: string) => relations.filter((r) => r.from.id === id);
+    [
+      ...new Set([
+        ...(historyByDocument.get(`id:${id}`) ?? []),
+        ...(historyByDocument.get(`path:${file}`) ?? []),
+      ]),
+    ].sort((a, b) => commitPositions.get(a)! - commitPositions.get(b)!);
+  const relationsByDocument = new Map<string, WorkspaceRelation[]>();
+  for (const relation of relations) {
+    const list = relationsByDocument.get(relation.from.id) ?? [];
+    list.push(relation);
+    relationsByDocument.set(relation.from.id, list);
+  }
+  const from = (id: string) => relationsByDocument.get(id) ?? [];
   const linksOf = (id: string): SnapshotLink[] =>
     from(id)
       .filter((r) => (r.via === "link" || r.via === "mention") && r.target.kind !== "uri")
@@ -189,7 +211,7 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
         typeof d.data.title === "string" && d.data.title
           ? d.data.title
           : plainLine(/^#\s+(.+)$/m.exec(d.body)?.[1] ?? d.body.trim().split(/\r?\n/)[0] ?? "");
-      const publishedAt = commits.find((c) => c.hash === history.at(-1))?.date ?? null;
+      const publishedAt = commitTimes.get(history.at(-1)!) ?? null;
       const order = d.data.order;
       return {
         id,
@@ -211,7 +233,7 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
               ...(order === undefined ? {} : { order }),
             }
           : {}),
-        updatedAt: commits.find((c) => c.hash === history[0])?.date ?? null,
+        updatedAt: commitTimes.get(history[0]!) ?? null,
       };
     });
   for (const n of nodes) n.incoming = incoming.get(n.id) ?? [];

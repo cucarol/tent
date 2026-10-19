@@ -53,6 +53,28 @@ test("outputs without valid declared time provide no completion timestamp", asyn
   }
 });
 
+test("declared output activity never waits for material observation", async (t) => {
+  const { adapter, write } = await fixture(t);
+  await write({
+    resource: "../../missing-result.txt",
+    generated: { by: "process:test", at: "2026-01-01T00:00:00Z" },
+  });
+  const observe = t.mock.method(adapter, "observeMaterial", async () => {
+    throw new Error("Material availability cannot change a frozen output's declared time");
+  });
+  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-01T00:00:00.000Z");
+  assert.equal(observe.mock.callCount(), 0);
+});
+
+test("explicit expiry still removes completion time without observing materials", async (t) => {
+  const { adapter, write } = await fixture(t);
+  const generated = { by: "process:test", at: "2026-01-01T00:00:00Z" };
+  await write({ generated, stale_after: "2000-01-01T00:00:00Z" });
+  assert.deepEqual(await readOutputActivity(adapter), new Map());
+  await write({ generated, stale_after: "3000-01-01T00:00:00Z" });
+  assert.equal((await readOutputActivity(adapter)).get("node-out"), "2026-01-01T00:00:00.000Z");
+});
+
 test("activity excludes deprecated outputs, invalid types and non-output Nodes", async (t) => {
   const { adapter, write } = await fixture(t);
   const generated = { by: "process:test", at: "2026-01-01T00:00:00Z" };

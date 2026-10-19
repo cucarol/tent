@@ -294,6 +294,7 @@ export async function observeNodeMaterials(
 ) {
   const directories = new Map<string, ReturnType<typeof observeSyncMaterial>>();
   const occurrences = materialOccurrences(data);
+  if (!occurrences.length) return [];
   const structureResources = occurrences
     .filter(({ track }) => track === "structure")
     .map(({ resource }) => resource);

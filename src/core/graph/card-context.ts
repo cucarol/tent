@@ -5,9 +5,8 @@ import { materialLocator, isDirectoryMaterial, type MaterialSource } from "../ba
 import { systemMaterialPath } from "./material-target.js";
 import { loadNodeCatalog } from "./node-catalog.js";
 import { isRequirementNode, isOutputNode } from "./node-sync-record.js";
-import { inspectNodesSync } from "./node-sync.js";
 import { documentLifecycle } from "../base/document-status.js";
-import { nodeVerifications, okfTimestampSchema } from "../base/node-provenance.js";
+import { nodeIsStale, nodeVerifications, okfTimestampSchema } from "../base/node-provenance.js";
 import { cardRecordPath } from "../base/paths.js";
 import { parseRoleDocument } from "../store/role-document.js";
 import { canonicalIdentityError } from "../store/tree.js";
@@ -89,21 +88,13 @@ function active(node: { archived: boolean; header: string }) {
 /** Activity is declared by the current output's own generated/verified timestamps. */
 export async function readOutputActivity(fs: FsAdapter): Promise<Map<string, string>> {
   const result = new Map<string, string>();
+  const now = new Date().toISOString();
   const catalog = await loadNodeCatalog(readOnlyFs(fs));
   const outputs = [...catalog.byId.values()].filter((node) => isOutputNode(node) && active(node));
   if (!outputs.length) return result;
-  const inspections = new Map(
-    (
-      await inspectNodesSync(
-        readOnlyFs(fs),
-        outputs.map((node) => node.nodeId),
-      )
-    ).map((node) => [node.nodeId, node]),
-  );
   for (const node of outputs) {
-    const inspection = inspections.get(node.nodeId);
-    if (!inspection || inspection.behind || inspection.uncertain) continue;
     const data = parseFrontmatter(node.header).data;
+    if (nodeIsStale(data, now)) continue;
     const times: string[] = [];
     const generated = data.generated as { at?: unknown } | undefined;
     const at = okfTimestampSchema.safeParse(generated?.at);
