@@ -369,7 +369,7 @@ const zh = {
     keysTitle: "操作",
     shortcuts: [
       ["拖空白处", "框选卡片，按住 Shift 加选"],
-      ["拖卡片", "移动选中的卡；拖到左上的机器人身上，写一张 Card"],
+      ["拖卡片", "移动选中的卡；拖到顶栏右边的机器人身上，写一张 Card"],
       ["拖到卡上停住", "松手后两张卡围成一个区域"],
       ["拖进 / 拖出区域", "加入或离开区域；拖区域的标题，整块一起移动"],
       ["Shift 点击", "加选或取消一张卡"],
@@ -1134,7 +1134,10 @@ const en: Messages = {
     keysTitle: "Controls",
     shortcuts: [
       ["Drag empty space", "Pick cards in a box; hold Shift to add"],
-      ["Drag a card", "Move the picked cards; drop on a robot at the top left to write a Card"],
+      [
+        "Drag a card",
+        "Move the picked cards; drop on a robot at the right of the top bar to write a Card",
+      ],
       ["Hold over a card", "Let go and the two cards form a region"],
       ["Drag into / out of a region", "Join or leave it; drag a region's title to move it whole"],
       ["Shift click", "Pick a card, or put it back"],
