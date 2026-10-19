@@ -4,7 +4,7 @@
 
 **A context graph for your project: what you decided, what got built, and what has gone stale.**
 
-A code graph shows how the code fits together. Tent keeps what the code cannot hold: the goals you confirmed, the rules later work must follow, the options you rejected, and the evidence of what was built. Your agents read it before they start and update it as they work. When the code or a document changes under a recorded fact, Tent marks the fact as stale so it gets fixed instead of misleading the next session.
+A code graph shows how the code fits together. Tent keeps what the code cannot hold: the goals you confirmed, the references and rules you hand to later work, and the evidence of what was built. Your agents read it before they start and update it as they work. When the code or a document changes under a recorded fact, Tent marks the fact as stale so it gets fixed instead of misleading the next session.
 
 You decide, agents do the work, and Tent keeps the record. It works with Claude Code and Codex, stays on your machine, and you browse it as a map in a local web page.
 
@@ -26,7 +26,7 @@ Everything lives in `.tent/` at the project root, as Markdown files with their o
 
 - **Node**: one durable fact. Its `type` is exactly `goal`, `prompt` or `output`, and says what the fact rests on:
   - `goal`: intent you confirmed, such as a feature or a part of the code.
-  - `prompt`: a rule or agreement later work follows, a decision with its reasons, or a way of working.
+  - `prompt`: anything you hand to later work: a reference image, a link to another project, an example, a rule, a decision with its reasons.
   - `output`: a result, check or problem seen at one time.
 
   `tags` such as `decision` or `issue` say what form the content takes. They change no behavior.

@@ -5,7 +5,7 @@ The `type` says how to treat a Node; `tags` name its form and topic.
 | Type | Holds | Treat it |
 | --- | --- | --- |
 | `goal` | What the user or the project intends, and why | Work toward it; change it only on the user's decision. |
-| `prompt` | Rules, decisions, specs, open questions | Follow it; propose an update when reality contradicts it. |
+| `prompt` | Anything handed to later work: references such as images, links to other projects or examples, and rules, decisions, specs, open questions | Use it as input and follow its rules; propose an update when reality contradicts it. |
 | `output` | A result, check or problem seen at one time, such as a review verdict or a delivery record | Check its material first; your conclusions stay `output` until the user agrees. |
 
 Any undeprecated `output` under a goal counts as its result, and a goal that owns code is carried out by that code; keep the goal's open questions in `prompt` Nodes. Leave commit ids, test counts and delivery status to Git and Cards.
