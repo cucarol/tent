@@ -4,7 +4,7 @@
 
 **A context graph for your project: what you decided, what got built, and what has gone stale.**
 
-A code graph shows how the code fits together. Tent keeps what the code cannot hold: the goals you confirmed, the references and rules you hand to later work, and the evidence of what was built. Your agents read it before they start and update it as they work. When the code or a document changes under a recorded fact, Tent marks the fact as stale so it gets fixed instead of misleading the next session.
+A code graph shows how the code fits together. Tent keeps what the code cannot hold: your goals, the prompts you give, and the outputs that come of them. Your agents read it before they start and update it as they work. When the code or a document changes under a recorded fact, Tent marks the fact as stale so it gets fixed instead of misleading the next session.
 
 You decide, agents do the work, and Tent keeps the record. It works with Claude Code and Codex, stays on your machine, and you browse it as a map in a local web page.
 
@@ -24,12 +24,7 @@ You decide, agents do the work, and Tent keeps the record. It works with Claude 
 
 Everything lives in `.tent/` at the project root, as Markdown files with their own Git history in `.tent/.git`. Tent changes no project file: it adds `.tent/` to Git's local exclude list (`.git/info/exclude`), not to your `.gitignore`.
 
-- **Node**: one durable fact. Its `type` is exactly `goal`, `prompt` or `output`, and says what the fact rests on:
-  - `goal`: intent you confirmed, such as a feature or a part of the code.
-  - `prompt`: anything you hand to later work: a reference image, a link to another project, an example, a rule, a decision with its reasons.
-  - `output`: a result, check or problem seen at one time.
-
-  `tags` such as `decision` or `issue` say what form the content takes. They change no behavior.
+- **Node**: one durable fact. Its `type` is exactly `goal`, `prompt` or `output`. `tags` such as `decision` or `issue` say what form the content takes. They change no behavior.
 - **Role**: a continuing direction of work, with its purpose and boundaries. Several sessions can work as the same Role.
 - **Card**: one handoff. It carries a short prompt and pins the Nodes it points to. When it names a Role to return to, the result comes back to that Role.
 
@@ -37,7 +32,7 @@ Most work needs no Role and no Card.
 
 ## What Tent tells you
 
-- **Behind**: a goal or rule whose material, the file or Node it points to, has changed or gone missing since it was recorded. The fact may be out of date.
+- **Behind**: a goal or prompt whose material, the file or Node it points to, has changed or gone missing since it was recorded. The fact may be out of date.
 - **Ahead**: a goal that nothing carries out yet, or that changed after its output. A goal that owns code counts as carried out by that code until you change the goal.
 - **At the start of a session**, the agent reads a short summary: what is behind or ahead, and the Cards waiting for it.
 - **At the end of a turn** that changed files, Tent names the Nodes covering them. The agent fixes any sentence the turn made wrong, records what is worth keeping, or says nothing needs recording.

@@ -102,7 +102,6 @@ test("type guidance names exactly three types and the preset tags", async () => 
     /\b(goal|prompt|output)-(direction|requirement|decision|spec|reference|procedure|asset|evidence|analysis|issue)\b|NODE_TYPE_PRESETS|implementing it/;
   const spec = flat(await read("docs/SPEC.md"));
   assert.match(spec, /a Node has one `type`, exactly `goal`, `prompt` or `output`/);
-  assert.match(spec, /`goal` holds user or project intent/);
   assert.match(spec, /retains its own semantic intent basis on creation or explicit confirmation/);
   assert.match(spec, /Ordinary saves and native capture preserve it/);
   assert.match(spec, /Matching that basis clears ahead independently of outputs/);
