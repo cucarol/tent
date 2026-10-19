@@ -2,145 +2,127 @@
 
 [English](README.md)
 
-**vibe 于帷幄之中**
+Tent 是项目的上下文图谱：记下你定了什么、做出了什么、哪些已经过时。
 
-Tent 是项目的上下文图谱，与代码图谱相对应。代码图谱画出代码怎样连在一起。Tent 记下发生了什么、为什么：用户确认过的目标、后续工作要遵守的约定、做出了什么的证据。它让领先看得见：还没有任何实现的目标。它让落后看得见：依据的材料在记录之后变了的事实。它不是笔记本，也不是任务看板。Agent 通过 Skill 和 CLI 读写它。你在本地网页里浏览它。
+代码图谱画出代码怎样连在一起。Tent 记的是代码装不下的东西：你确认过的目标、后续工作要遵守的规则、否决过的方案，以及做出了什么的证据。Agent 开工前读它，干活时更新它。一条记录依据的代码或文档变了，Tent 会把它标成过时，让它被改正，而不是误导下一个会话。
 
-## 什么时候有用
+你拍板，Agent 干活，Tent 记账。它支持 Claude Code 和 Codex，数据只在你的电脑上，你在本地网页里把它当一张图来看。
 
-Tent 面向一份交接笔记已经装不下的项目：同时有几个方向，需求会被修改，工作跨越很多会话或几个 Agent。小任务用一份普通笔记更简单，效果也一样。
+## 快速开始
 
-## 模型
+1. **安装插件**，Claude Code 或 Codex 都可以（见[安装](#安装)）。
+2. **在项目里对 Agent 说：**
 
-所有内容都在项目根目录的 `.tent/` 里。含有 `.tent/` 的文件夹就是工作区。`.tent/` 在 `.tent/.git` 里有自己的 Git 历史，和你的仓库分开。真实文件留在原处，Tent 只指向它们。`tent new` 在 `.tent/` 之外只改一处：把 `.tent/` 加进项目的 `.gitignore`。
+   ```text
+   给这个项目装上 Tent。
+   ```
 
-- **Node**：一条长期事实，是带 YAML frontmatter 的 Markdown。`type` 只能是 `goal`、`prompt` 或 `output`，说明内容依据的是什么：
-  - `goal`：用户确认过的意图。
-  - `prompt`：后续工作遵守的约定。
-  - `output`：某个时间点观察到的证据。
+   Agent 会把现有代码画成一组 Node，项目的每一块各一个。每个 Node 挂着那块代码，写明改动时必须守住的规则、要跟着一起改的地方，以及怎么验证。做到一半的项目也是这样接进来。
+3. **打开图谱。** Agent 最后会启动网页并给你地址。之后想再看，让它打开 Tent 的图谱就行。
 
-  `tags` 说明内容是什么形式、关于什么。它们自由填写，不改变任何行为。Tent 提供一组建议预设，比如 `decision` 和 `evidence`。
-- **Role**：一个持续的工作方向，写明目的、边界和入口。它不是正在运行的 Agent，也不是权限。
-- **Card**：一次固定的输入，包含一段提示、它的来源和可选的目标 Role。来源里的 Node 和 Role 钉在当时的 Git 版本。会话接收（take）一张 Card，Tent 记下这次接收。Card 发出后不再改变；输入要改，就发一张新 Card。
+## Tent 记什么
 
-把图谱和你的文件对照，会得到两种判断。Node 的材料，也就是它指向的文件或 Node，在 Tent 记录版本之后变了，它就处于**落后**。goal 下面任何位置都没有未作废的 output 时，它处于**领先**；tags 不影响这一点。goal 自己变了也会领先：它的正文或材料一变，下面的每个 output 都落后，goal 处于领先，直到这些 output 复核完。如果只是某个 output 自己的材料变了，这个 output 落后，但 goal 不会因此领先：实现已经有了，只是需要复核。这两种判断只关于 Node；Card 只记投递。它被接收就算完成；如果写了交回给哪个 Role，要等接收方交回一句结果才算完成。
+所有内容都在项目根目录的 `.tent/` 里，是一组 Markdown 文件，在 `.tent/.git` 里有自己的 Git 历史。Tent 不改项目里的任何文件：它把 `.tent/` 写进 Git 的本地排除列表（`.git/info/exclude`），不碰你的 `.gitignore`。
 
-作为材料传给 CLI 的文件路径，比如 `--resource` 或 Card 的 `--source`，从工作区根目录解析。替换内容的写入必须带上读到的 ETag，两个会话不会悄悄覆盖对方。精确规则见 [docs/SPEC.md](docs/SPEC.md)。
+- **Node**：一条长期事实。`type` 只能是 `goal`、`prompt` 或 `output`，说明它依据的是什么：
+  - `goal`：你确认过的意图，比如一个功能、一块代码。
+  - `prompt`：后续工作遵守的规则或约定、带理由的决定，或一套做事的流程。
+  - `output`：某个时间点看到的结果、检查或问题。
+
+  `tags` 说明内容是什么形式，比如 `decision`、`issue`，不改变任何行为。
+- **Role**：一个持续的工作方向，写明目的和边界。几个会话可以按同一个 Role 干活。
+- **Card**：一次交接。它带一段简短的提示，并钉住它指向的 Node。写了交回给哪个 Role，结果就回到那个 Role 手里。
+
+大部分工作用不到 Role 和 Card。
+
+## Tent 告诉你什么
+
+- **落后**：goal 或规则依据的材料，也就是它指向的文件或 Node，在记下之后改了或不见了。这条事实可能已经过时。
+- **领先**：还没有东西实现的 goal，或者在产出之后又改过的 goal。挂着代码的 goal，在你改动它之前，都算由那块代码实现着。
+- **会话开始时**，Agent 先读一份简短的摘要：哪些落后、哪些领先，有哪些 Card 在等它。
+- **一轮结束时**，如果这一轮改了文件，Tent 会点出覆盖这些文件的 Node。Agent 改掉这一轮弄错的句子，记下值得留的东西，或者说一句不用记。
+
+各块之间的依赖从 TypeScript、JavaScript、Python、Go、Rust、Java、C#、C、C++ 和 PHP 的 import 里分析出来。其他语言的代码照样按目录、按 Git 历史里哪些文件总一起改来画图。
+
+## 图谱
+
+网页把 Node 画成一张画布上的卡片，连着它的上级和它依赖的部分。落后和领先标在卡片上。
+
+- 把一张卡拖到另一张上，两张卡就围成一个区域。Tent 用它已经记下的事实说出能核对的部分，比如一份产出还对不对得上它的目标，一条规则的材料在写下之后有没有改过。做得对不对，交给 Agent 判断。
+- 各 Role 是左上角的机器人，旁边是它们手上的 Card。把卡片拖到机器人身上，就给它写一张 Card。
+- 可以直接编辑 Node，也能在打开过的工作区之间切换。
 
 ## 安装
 
-需要 Node.js 22.19+ 和 Git。
-
-### Codex
-
-从[最新 Release](https://github.com/cucarol/tent/releases/latest) 下载 `tent-plugin-<version>.zip`，解压到准备长期保留的目录，目录里有 `.agents/` 和 `plugins/`。把这个目录添加为本地 marketplace，再安装插件：
-
-```sh
-codex plugin marketplace add "<解压目录的绝对路径>"
-codex plugin add tent@tent-local
-```
-
-插件自带四个 Skill、两个 Hook、CLI 和网页界面。它不需要 npm install。Codex 会请你审查 SessionStart 和 Stop 两个 Hook；不启用它们，所有命令照样能用。详见 [docs/PLUGIN.md](docs/PLUGIN.md)。
-
-从源码构建：
+需要 Node.js 22.19+ 和 Git。从源码构建两个插件：
 
 ```sh
 git clone https://github.com/cucarol/tent.git
 cd tent
 npm ci --ignore-scripts
 npm run plugin:build
-codex plugin marketplace add "$PWD/release"
+```
+
+**Claude Code**，在克隆目录里运行：
+
+```sh
+claude plugin marketplace add "$PWD/release/claude-code"
+claude plugin install tent@tent-local
+```
+
+**Codex**，在克隆目录里运行：
+
+```sh
+codex plugin marketplace add "$PWD/release/codex"
 codex plugin add tent@tent-local
 ```
 
-`npm run plugin:build` 把插件写到 `release/plugins/tent`，旁边再写一个本地 marketplace。已有构建结果时，它拒绝覆盖。
+每个插件都自带四个 Skill、SessionStart 和 Stop 两个 Hook、CLI 和网页，不需要 npm install。Claude Code 装上插件 Hook 就启用；Codex 会请你审查它们。不启用 Hook，所有命令照样能用。详见 [docs/PLUGIN.md](docs/PLUGIN.md)。
 
 也可以把下面这段发给你的 Agent：
 
 ```text
-Install the Tent plugin for Codex from github.com/cucarol/tent:
-clone it, run `npm ci --ignore-scripts && npm run plugin:build`,
-then `codex plugin marketplace add "<clone>/release"` and `codex plugin add tent@tent-local`.
-Check that the four Skills appear, and let me review the new Hooks.
+Install the Tent plugin from github.com/cucarol/tent: clone it, run
+`npm ci --ignore-scripts && npm run plugin:build`, then add the marketplace
+under release/claude-code (Claude Code) or release/codex (Codex) and install tent@tent-local.
+Check that the four Tent Skills appear and that the Hooks are enabled.
 ```
 
-### 其他 Agent
+每个 [Release](https://github.com/cucarol/tent/releases/latest) 都附有构建好的包。只要 CLI 的话，`npm install -g vibe-tent` 会提供 `tent` 命令。
 
-目前只有 Codex 有插件包。能执行 shell 命令的 Agent 都可以直接用包里的 CLI：
+## 手动用 CLI
+
+这些命令平时由 Agent 通过 Skill 运行，你很少需要自己敲。下面的 `tent` 是 npm 装的命令；用插件时，Agent 运行包里的 `cli.mjs`。每条命令都会打印下一步要用的 id。
 
 ```sh
-node "<插件目录>/cli.mjs" --help
+tent new .
+echo "export function signIn(email) {}" > login.js
+
+# 一个 goal：还没有东西实现它，摘要把它列为领先。
+tent node create "Email sign-in" --type goal --body "Users sign in with an email address and a one-time code."
+tent workspace brief
+
+# 它下面的一条规则，依据 login.js；再记一个 output，表示工作已经做出来了。
+tent node create "One-time codes" --type prompt --parent <goal-id> --resource login.js --body "A code works once and expires after 10 minutes."
+tent node link-output <goal-id> --resource login.js
+
+# 改代码：这条规则现在落后了。
+echo "export const CODE_TTL_MINUTES = 30;" >> login.js
+tent workspace brief
 ```
 
-插件目录是下载包解压后的 `plugins/tent`，或源码构建后的 `release/plugins/tent`。只装 CLI 的话，运行 `npm install -g vibe-tent`。这会提供 `tent` 命令，不会注册 Codex 插件。每个 Release 也附有同一个包 `vibe-tent-<version>.tgz`。
-
-## 使用
-
-下面的 `tent` 是 npm 装的命令；用插件时换成 `node "<插件目录>/cli.mjs"`。每条命令都会打印下一步要用的 id。`<goal-id>`、`<card-id>`、`<output-id>` 和 `<etag>` 代表这些值。
-
-1. **建一个 Tent。** 在项目根目录运行，会建一个空的 `.tent/`，带自己的 Git 历史。
-
-   ```sh
-   tent new .
-   ```
-
-2. **记一个 goal。** 简报把它列为领先：还没有东西实现它。
-
-   ```sh
-   tent node create "Email sign-in" --type goal --body "Users sign in with an email address and a one-time code."
-   tent workspace brief
-   ```
-
-3. **发一张 Card。** Card 带着提示，并把这个 goal 钉在当前版本。
-
-   ```sh
-   tent card create --prompt "Implement email sign-in." --source <goal-id>
-   ```
-
-4. **接收它。** 干活的会话接收这张 Card，Tent 记下这次接收。
-
-   ```sh
-   tent card take <card-id>
-   ```
-
-5. **关联产出。** 工作落成文件后，output 把它记在 goal 下面，并回应这张 Card。
-
-   ```sh
-   echo "export function signIn(email) {}" > login.js
-   tent node link-output <goal-id> --resource login.js --card <card-id>
-   ```
-
-6. **改动材料。** 简报现在把这个 output 列为落后。
-
-   ```sh
-   echo "export const CODE_TTL_MINUTES = 10;" >> login.js
-   tent workspace brief
-   ```
-
-7. **确认。** 复核改动之后，用完整读取返回的 `etag` 确认这个 output。
-
-   ```sh
-   tent node get <output-id> --full --json
-   tent node confirm <output-id> --base-etag <etag>
-   ```
-
-现在 `tent workspace brief` 报告 `behind 0 · ahead 0`。
-
-日常工作里，你开口时 Agent 会通过 Skill 运行这些命令：「用 Tent」「把这条记成 goal」「给报表那个 Role 发一张 Card」。大部分工作用不到 Role 和 Card。提交、审查和合并照常走你的 Git 流程。
-
-## 网页界面
+规则和代码哪个错了就改哪个，然后用完整读取返回的 `etag` 确认这条规则，摘要就会报告 `behind 0 · ahead 0`：
 
 ```sh
-tent ui --workspace <项目文件夹>
+tent node get <prompt-id> --full --json
+tent node confirm <prompt-id> --base-etag <etag>
 ```
 
-服务在当前终端里运行，Ctrl+C 停止。页面打开就是图谱：画出 Node 和它们之间的链接，领先和落后标在卡片上。各 Role 是左上角的机器人，旁边写着手上的 Card；把 Node 拖到机器人身上，就给它写一张 Card。你可以编辑 Node、写 Card，也能在打开过的工作区之间切换。`--port` 指定端口。`--no-open` 只打印地址，不打开浏览器。
+替换内容的写入必须带上读到的 ETag，两个会话不会悄悄覆盖对方。网页用 `tent ui --workspace <项目文件夹>` 启动，Ctrl+C 停止。精确规则见 [docs/SPEC.md](docs/SPEC.md)。
 
 ## 现状
 
-- **一个维护者。** 文件格式和命令还可能变。[docs/SPEC.md](docs/SPEC.md) 是契约。
-- **还没有证据表明它比普通笔记好。** 最近一次对照在 2026 年 10 月进行，对象是一个需求会变化的项目。Markdown 组完成了集成。Tent 组的初始拆解超时，最终集成被共享 token 预算截断。一处过期的 Tent 摘要在下一阶段得到修正。拆解成本偏高的情况再次出现。这些局部发现不能证明质量或效率上的收益。
-- **Hook 需要宿主批准。** 第一轮测试里 Hook 没有获得信任，所以那次没有收到 Hook 不能说明宿主送不到。要启用，就在宿主里审查并信任它们。所有命令都不依赖 Hook。
+Tent 0.x 由一个人维护。文件格式和命令还可能变；[docs/SPEC.md](docs/SPEC.md) 是契约。
 
 ## 开发
 
