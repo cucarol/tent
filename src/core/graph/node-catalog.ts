@@ -59,6 +59,11 @@ export async function readCatalogDocument(
 
 /** Fresh metadata scan; uses the same hierarchy, duplicate-ID and archive rules as mutations. */
 export async function loadNodeCatalog(fs: FsAdapter) {
+  const run = () => loadCatalogInScope(fs);
+  return fs.observationScope ? fs.observationScope(run) : run();
+}
+
+async function loadCatalogInScope(fs: FsAdapter) {
   const headers = new Map<string, string>();
   const readonly = readOnlyFs(fs);
   const headerFs = new Proxy(readonly, {

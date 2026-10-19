@@ -19,6 +19,17 @@ export async function inspectCurrentContext(
     nodes?: Promise<{ invalidNodes: InvalidNativeNode[]; catalog?: NodeCatalog }>;
   } = {},
 ) {
+  const run = () => inspectCurrentContextInScope(fs, options);
+  return fs.observationScope ? fs.observationScope(run) : run();
+}
+
+async function inspectCurrentContextInScope(
+  fs: FsAdapter,
+  options: {
+    roleId?: string;
+    nodes?: Promise<{ invalidNodes: InvalidNativeNode[]; catalog?: NodeCatalog }>;
+  },
+) {
   const nativeNodes = Promise.resolve(options.nodes);
   const catalog = nativeNodes.then((nodes) => nodes?.catalog ?? loadNodeCatalog(fs));
   const syncPromise = Promise.all([nativeNodes, catalog]).then(([nodes, currentCatalog]) =>

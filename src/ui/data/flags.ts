@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { ApiError, api, changes } from "./api.js";
 import type { Snapshot, SyncFlags } from "./types.js";
+import { MAP_STALE } from "./reasons.js";
 
 const NONE: SyncFlags = {};
 /** How often a visible page compares materials again. */
@@ -17,20 +18,34 @@ export const useFlags = () => useContext(FlagsContext);
  * moves, and every `SYNC_EVERY` while visible: a material edited outside Tent leaves the revision as it
  * was. Each read compares every material (seconds on a large workspace), so the timer is slower than
  * the revision check and never queues behind a read in flight. A service without the endpoint leaves
- * the map unmarked.
+ * the map unmarked. Nothing is read before `start`: the first read waits until the map is drawn, so it
+ * does not hold the map back. `revision` is the snapshot's; null while only the map is shown, when any
+ * read applies, and undefined holds the first read back until the snapshot's revision is known.
  */
-export function useSyncFlags(revision: string | undefined): SyncFlags {
+export function useSyncFlags(revision: string | null | undefined, start = true): SyncFlags {
   const [flags, setFlags] = useState<SyncFlags>(UNREAD);
   const reader = useRef<ReturnType<typeof watchSyncFlags> | null>(null);
   useEffect(() => {
+    if (!start) return;
     const watching = watchSyncFlags(setFlags);
     reader.current = watching;
+    if (revision !== undefined) watching.atRevision(revision);
     return () => watching.stop();
-  }, []);
+  }, [start]);
   useEffect(() => {
-    if (revision) reader.current?.atRevision(revision);
+    if (revision !== undefined) reader.current?.atRevision(revision);
   }, [revision]);
   return flags;
+}
+
+/**
+ * Until materials are first compared, what the map already knows: Nodes whose `stale_after` has passed are
+ * behind. Every other Node stays unmarked, which claims nothing either way.
+ */
+export function mapFlags(snapshot: Snapshot): SyncFlags {
+  const out: SyncFlags = {};
+  for (const n of snapshot.nodes) if (n.stale) out[n.id] = { behind: { reasons: [MAP_STALE] } };
+  return out;
 }
 
 /** Keep one read in flight, including the read started before the first snapshot arrives. */
@@ -40,10 +55,11 @@ export function watchSyncFlags(publish: (flags: SyncFlags) => void) {
     again = false,
     first = true,
     ready = false;
-  let revision: string | undefined;
+  // null: only the map is shown, so a read at any revision applies.
+  let revision: string | null | undefined;
   let initial: Awaited<ReturnType<typeof api.sync>> | undefined;
   const publishInitial = () => {
-    if (!initial || initial.revision !== revision) return;
+    if (!initial || (revision !== null && initial.revision !== revision)) return;
     publish(initial.nodes);
     initial = undefined;
     ready = true;
@@ -86,7 +102,7 @@ export function watchSyncFlags(publish: (flags: SyncFlags) => void) {
   document.addEventListener("visibilitychange", read);
   changes.addEventListener("change", read);
   return {
-    atRevision(next: string) {
+    atRevision(next: string | null) {
       if (stopped || next === revision) return;
       const previous = revision;
       revision = next;

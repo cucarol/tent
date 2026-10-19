@@ -3,6 +3,7 @@
 // whole region dropped on a row start a Card for it; Cards drag between rows until received. A drag that
 // rests on the stack opens the list. Rules: Tent Node "UI-图谱画模块依赖与状态", "分工搬进图谱" (cuca
 // 2026-10-16) and "Role 列表放顶栏：头像叠加竖排列表" (cuca 2026-10-17).
+import { useWantDetails } from "../data/details.js";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Graph } from "../data/store.js";
 import type { SnapshotCard, SnapshotRef } from "../data/types.js";
@@ -78,6 +79,8 @@ export function Dock(props: Props) {
     writeStored("tent-roles-open", next);
   };
   const [filter, setFilter] = useState("");
+  // Roles and Cards come with the snapshot: an open list reads it, and so does opening one.
+  const want = useWantDetails(open && !graph.detailed);
   const toggleLane = (lane: string) =>
     setLanesOpen((l) => {
       const next = l.includes(lane) ? l.filter((x) => x !== lane) : [...l, lane];
@@ -102,7 +105,10 @@ export function Dock(props: Props) {
     if (!drag || open) return;
     const r = stack.current?.getBoundingClientRect();
     if (!r || drag.x < r.left || drag.x > r.right || drag.y < r.top || drag.y > r.bottom) return;
-    const wait = setTimeout(() => setOpen(true), 350);
+    const wait = setTimeout(() => {
+      setOpen(true);
+      want();
+    }, 350);
     return () => clearTimeout(wait);
   }, [drag, open]);
   useEffect(() => {
@@ -128,6 +134,23 @@ export function Dock(props: Props) {
     waiting = sum("waiting") + sum("returned");
   const q = filter.trim().toLowerCase();
   const listed = q ? lanes.filter((l) => work.laneName(l).toLowerCase().includes(q)) : lanes;
+
+  if (!graph.detailed)
+    return (
+      <div className="roles">
+        <button
+          ref={stack}
+          type="button"
+          className={`role-stack${open ? " is-reading" : ""}`}
+          aria-label={t.work.title}
+          data-tip={open ? undefined : t.work.loadTip}
+          data-tip-end=""
+          onClick={() => show(true)}
+        >
+          {open ? t.work.reading : t.work.load}
+        </button>
+      </div>
+    );
 
   return (
     <div className="roles">

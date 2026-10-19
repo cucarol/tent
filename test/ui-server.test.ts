@@ -27,6 +27,7 @@ import { contentEtag } from "../src/core/base/etag.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { readWorkspaceRevision } from "../src/core/workspace/workspace-revision.js";
 import type { ModuleDependencyResponse } from "../src/core/read/module-dependency-query.js";
+import type { WorkspaceMap } from "../src/core/read/workspace-map.js";
 import { git } from "./helpers.js";
 
 type Reply = { status: number; headers: http.IncomingHttpHeaders; body: string };
@@ -97,6 +98,126 @@ async function fixture(t: TestContext) {
 }
 
 const json = <T>(reply: Reply) => JSON.parse(reply.body) as T;
+
+test("invalid stale_after is isolated while map and sync keep serving the workspace", async (t) => {
+  const { tent, call } = await fixture(t);
+  await tent.writeFile(
+    "Bad/Bad.md",
+    "---\nid: node-bad\ntype: goal\nstale_after: someday\n---\nBad date\n",
+  );
+  const map = await call("GET", "/api/map");
+  assert.equal(map.status, 200, map.body);
+  const bad = json<WorkspaceMap>(map).nodes.find((node) => node.id === "node-bad")!;
+  assert.equal(bad.invalid, true);
+  assert.match(bad.invalidReason!, /stale_after/);
+  assert.equal(bad.stale, false);
+  assert.equal(
+    json<WorkspaceMap>(map).nodes.find((node) => node.id === "node-main")!.invalid,
+    false,
+  );
+  const sync = await call("GET", "/api/sync");
+  assert.equal(sync.status, 200, sync.body);
+  assert.equal(json<{ nodes: Record<string, unknown> }>(sync).nodes["node-bad"], undefined);
+  assert.equal((await call("GET", "/api/snapshot")).status, 200);
+  await tent.writeFile(
+    "Bad/Bad.md",
+    "---\nid: node-bad\ntype: goal\nstale_after: 2000-01-01T00:00:00Z\n---\nRepaired\n",
+  );
+  const repaired = json<WorkspaceMap>(await call("GET", "/api/map")).nodes.find(
+    (node) => node.id === "node-bad",
+  )!;
+  assert.equal(repaired.invalid, false);
+  assert.equal(repaired.stale, true);
+  const repairedSync = await call("GET", "/api/sync");
+  assert.equal(repairedSync.status, 200, repairedSync.body);
+  assert.ok(
+    json<{ nodes: Record<string, { behind?: unknown }> }>(repairedSync).nodes["node-bad"]?.behind,
+  );
+});
+
+test("map API exposes a header-only skeleton and leaves document details on demand", async (t) => {
+  const { tent, call } = await fixture(t);
+  await tent.writeFile(
+    "Main/Child/Child.md",
+    "---\nid: node-child\ntype: output\nstale_after: 2000-01-01T00:00:00Z\n---\nChild body\n",
+  );
+  await tent.writeFile("cards/card-broken.md", "---\ninvalid: [\n---\nPrivate Card");
+  assert.equal((await call("GET", "/api/map", { token: null })).status, 401);
+  const originalFile = NodeFs.prototype.readFile;
+  const originalBinary = NodeFs.prototype.readBinary;
+  NodeFs.prototype.readFile = function (file) {
+    assert.ok(!file.endsWith(".md"), `Map read a body: ${file}`);
+    return originalFile.call(this, file);
+  };
+  NodeFs.prototype.readBinary = function (file) {
+    assert.ok(!file.endsWith(".md"), `Map revision read a document: ${file}`);
+    return originalBinary.call(this, file);
+  };
+  let reply: Reply;
+  try {
+    reply = await call("GET", "/api/map");
+  } finally {
+    NodeFs.prototype.readFile = originalFile;
+    NodeFs.prototype.readBinary = originalBinary;
+  }
+  assert.equal(reply.status, 200, reply.body);
+  const map = json<WorkspaceMap>(reply);
+  const child = map.nodes.find((node) => node.id === "node-child")!;
+  assert.equal(child.parentId, "node-main");
+  assert.equal(child.stale, true);
+  assert.equal(child.depth, 1);
+  assert.deepEqual(map.nodes.find((node) => node.id === "node-main")!.childIds, ["node-child"]);
+  assert.deepEqual(Object.keys(map).sort(), ["modules", "nodes", "workspace"]);
+  assert.equal(Object.prototype.hasOwnProperty.call(child, "body"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(child, "history"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(child, "links"), false);
+  const detail = json<{ body: string }>(await call("GET", "/api/nodes/node-child"));
+  assert.equal(detail.body.trim(), "Child body");
+});
+
+test("concurrent map requests keep their own observed Node headers", async (t) => {
+  const { tent, call } = await fixture(t);
+  const original = NodeFs.prototype.readFrontmatter;
+  let unblock!: () => void;
+  const paused = new Promise<void>((resolve) => (unblock = resolve));
+  let sampled!: () => void;
+  const observed = new Promise<void>((resolve) => (sampled = resolve));
+  let first = true;
+  NodeFs.prototype.readFrontmatter = async function (file) {
+    const header = await original.call(this, file);
+    if (file === "Main/Main.md" && first) {
+      first = false;
+      sampled();
+      await paused;
+    }
+    return header;
+  };
+  try {
+    const older = call("GET", "/api/map");
+    await observed;
+    await tent.writeFile("Main/Main.md", "---\nid: node-main\ntype: goal\n---\nNew body\n");
+    const newer = await call("GET", "/api/map");
+    assert.equal(newer.status, 200, newer.body);
+    assert.equal(
+      json<WorkspaceMap>(newer).nodes.find((node) => node.id === "node-main")!.type,
+      "goal",
+    );
+    unblock();
+    const previous = await older;
+    assert.equal(previous.status, 200, previous.body);
+    assert.equal(
+      json<WorkspaceMap>(previous).nodes.find((node) => node.id === "node-main")!.type,
+      "prompt",
+    );
+    assert.notEqual(
+      json<WorkspaceMap>(previous).workspace.revision,
+      json<WorkspaceMap>(newer).workspace.revision,
+    );
+  } finally {
+    unblock();
+    NodeFs.prototype.readFrontmatter = original;
+  }
+});
 
 test("canvas API queues CAS writes and exposes current state, history and security errors", async (t) => {
   const { tent, call } = await fixture(t);
@@ -246,7 +367,7 @@ test("module dependency endpoint is protected, read-only and refreshes while the
       const reply = await call("GET", endpoint);
       assert.equal(reply.status, 200, reply.body);
       const value = json<ModuleDependencyResponse>(reply);
-      assert.equal(value.mode, "watch");
+      assert.equal(value.mode, "verify");
       if (value.fresh && matches(value)) return value;
       assert.ok(Date.now() < deadline, "dependency change was not observed");
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -261,10 +382,11 @@ test("module dependency endpoint is protected, read-only and refreshes while the
   const first = await call("GET", endpoint);
   assert.equal(first.status, 200, first.body);
   const result = json<ModuleDependencyResponse>(first);
-  assert.equal(result.mode, "watch");
+  assert.equal(result.mode, "verify");
   assert.equal(result.fresh, true);
   assert.ok(!Number.isNaN(Date.parse(result.computedAt)));
-  assert.deepEqual(json(await call("GET", endpoint)), result);
+  const again = json<ModuleDependencyResponse>(await call("GET", endpoint));
+  assert.deepEqual({ ...again, computedAt: result.computedAt }, result);
   assert.deepEqual(result.basis, { head, dirty: false });
   assert.deepEqual(result.modules, [
     { nodeId: "node-a", files: 1 },
@@ -303,13 +425,15 @@ test("module dependency endpoint is protected, read-only and refreshes while the
   }
 });
 
-test("module dependency HTTP requests verify current inputs when notifications cannot start", async (t) => {
+test("module dependency HTTP requests verify current inputs without starting notifications", async (t) => {
   const { call, workspace } = await fixture(t);
   await git(workspace, "init", "-b", "main");
   await fs.writeFile(path.join(workspace, ".gitignore"), ".tent/\n");
   const original = nodeFs.watch;
+  let watches = 0;
   let first: Reply;
   nodeFs.watch = (() => {
+    watches++;
     throw new Error("watch unavailable for test");
   }) as typeof nodeFs.watch;
   syncBuiltinESMExports();
@@ -322,7 +446,8 @@ test("module dependency HTTP requests verify current inputs when notifications c
   assert.equal(first.status, 200, first.body);
   const result = json<ModuleDependencyResponse>(first);
   assert.equal(result.mode, "verify");
-  assert.match(result.reason!, /watch unavailable for test/);
+  assert.equal(watches, 0);
+  assert.match(result.reason!, /validated on each request/);
   assert.equal(result.fresh, true);
   await fs.writeFile(path.join(workspace, "entry.ts"), 'import "./missing.js";');
   const updated = json<ModuleDependencyResponse>(await call("GET", "/api/modules/deps"));

@@ -33,8 +33,13 @@ export async function workspaceDocumentPaths(fs: FsAdapter): Promise<string[]> {
   return files.sort();
 }
 
-/** No document parsing, Git diff, capture or watcher; hash the bytes used by the UI. */
+/** No document parsing, Git diff, capture or watcher; hash validated content identities. */
 export async function readWorkspaceRevision(fs: FsAdapter): Promise<string> {
+  const run = () => readRevisionInScope(fs);
+  return fs.observationScope ? fs.observationScope(run) : run();
+}
+
+async function readRevisionInScope(fs: FsAdapter): Promise<string> {
   const files = new Set(await workspaceDocumentPaths(fs));
   for (const file of [ORDER_PATH, WORKSPACE_SETTINGS_PATH])
     if (await fs.exists(file)) files.add(file);
@@ -42,10 +47,16 @@ export async function readWorkspaceRevision(fs: FsAdapter): Promise<string> {
   const sorted = [...files].sort();
   for (let start = 0; start < sorted.length; start += 8) {
     const batch = sorted.slice(start, start + 8);
-    const contents = await Promise.all(batch.map((file) => fs.readBinary(file)));
+    const contents = await Promise.all(
+      batch.map(async (file) => {
+        if (fs.readContentDigest) return fs.readContentDigest(file);
+        const bytes = await fs.readBinary(file);
+        return { size: bytes.length, digest: createHash("sha256").update(bytes).digest("hex") };
+      }),
+    );
     for (const [index, file] of batch.entries()) {
-      const bytes = contents[index]!;
-      digest.update(JSON.stringify([file, bytes.length]) + "\n").update(bytes);
+      const content = contents[index]!;
+      digest.update(JSON.stringify([file, content.size, content.digest]) + "\n");
     }
   }
   const head = fs.history && (await fs.exists(".git")) ? await fs.history.currentCommit() : null;

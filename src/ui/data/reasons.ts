@@ -1,3 +1,9 @@
+/**
+ * The map says a Node has expired but not when; this stands for it until materials are compared, when
+ * Core's own reason with the date replaces it.
+ */
+export const MAP_STALE = "Content is stale";
+
 /** Behind reasons grouped by what they say, read from the stable prefixes Core writes. */
 export type BehindSummary = {
   /** File names of materials that changed. */
@@ -8,7 +14,7 @@ export type BehindSummary = {
   baseline: number;
   /** Materials Tent cannot compare, such as remote addresses. */
   uncertain: number;
-  /** The date the content expired, when it did. */
+  /** The date the content expired, when it did; empty when only the expiry is known. */
   stale: string | null;
   /** Reasons of no known kind, shown as written. */
   other: string[];
@@ -47,8 +53,8 @@ export function summarizeBehind(reasons: readonly string[]): BehindSummary {
     else if (reason.startsWith("ENOENT:") && reason.lastIndexOf(": ") > 6)
       summary.deleted.push(fileName(reason.slice(reason.lastIndexOf(": ") + 2)));
     else if (/no retained baseline|cannot be reconstructed/.test(reason)) summary.baseline++;
-    else if ((match = /^Content is stale on or after (.+)$/.exec(reason)))
-      summary.stale = match[1]!;
+    else if ((match = /^Content is stale(?: on or after (.+))?$/.exec(reason)))
+      summary.stale = match[1] ?? "";
     else if (
       /^(Remote material version is unknown|Material observer is unavailable|Source is not an explicit local address)/.test(
         reason,
@@ -83,5 +89,5 @@ export const aheadKind = (reasons: readonly string[] = []): AheadKind =>
 export function onlyGaps(reasons: readonly string[]) {
   if (!reasons.length) return false;
   const s = summarizeBehind(reasons);
-  return !s.changed.length && !s.deleted.length && !s.stale && !s.other.length;
+  return !s.changed.length && !s.deleted.length && s.stale === null && !s.other.length;
 }

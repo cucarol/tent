@@ -10,6 +10,7 @@ import {
   type RefObject,
   type UIEvent,
 } from "react";
+import { useWantDetails } from "../data/details.js";
 import { api, ApiError, describe, type NodeDocument } from "../data/api.js";
 import { cardTitle, primaryOf, type Graph } from "../data/store.js";
 import type {
@@ -96,6 +97,8 @@ function useWidth(box: RefObject<HTMLElement | null>) {
  */
 export function Reader(props: Props) {
   const { graph, target } = props;
+  // A page shows links, versions and Cards: opening one is what reads them.
+  useWantDetails(!graph.detailed);
   const box = useRef<HTMLElement>(null);
   const narrow = useWidth(box) < NARROW;
   const node = target.kind === "node" ? graph.nodes.get(target.id) : undefined;
@@ -713,14 +716,21 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
     };
   }, [editing, base, node.id]);
 
-  // Say so when a change made elsewhere replaces what you are reading.
-  const shownBody = useRef(node.body);
+  // Say so when a change made elsewhere replaces what you are reading. The map alone has no text, so
+  // the snapshot's arrival is not a change.
+  const shownBody = useRef(graph.detailed ? node.body : null);
   useEffect(() => {
-    if (shownBody.current !== node.body && draft === null && savedBody === null)
+    if (!graph.detailed) return;
+    if (
+      shownBody.current !== null &&
+      shownBody.current !== node.body &&
+      draft === null &&
+      savedBody === null
+    )
       onToast(t.reader.updated);
     shownBody.current = node.body;
     if (savedBody !== null && node.body === savedBody) setSavedBody(null);
-  }, [node.body]);
+  }, [node.body, graph.detailed]);
   const staleBase = editing && !!base && !conflict && node.body !== base.body;
   const follow = (ref: SnapshotRef) => {
     if (draft !== null && draft !== node.body) onToast(t.reader.keptEdits);
@@ -838,12 +848,17 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
         <Icon name={at >= 0 ? "check" : "addToCard"} size={15} />
         {at < 0 ? t.side.attach : narrow ? t.page.inDraftShort(at + 1) : t.page.inDraft(at + 1)}
       </button>
-      <NodeMenu graph={graph} node={node} onGone={props.onClose} onToast={onToast} />
+      {/* Deleting counts the links and Cards it breaks, which come with the snapshot. */}
+      {graph.detailed && (
+        <NodeMenu graph={graph} node={node} onGone={props.onClose} onToast={onToast} />
+      )}
     </>
   );
   const carriedSection = (
-    <RailSection title={t.page.carried(carried.length)}>
-      {carried.length ? (
+    <RailSection title={graph.detailed ? t.page.carried(carried.length) : t.page.carriedHead}>
+      {!graph.detailed ? (
+        <p className="empty">{t.page.reading}</p>
+      ) : carried.length ? (
         <More count={carried.length} shown={narrow ? 3 : 6}>
           {(n) =>
             carried
@@ -972,6 +987,8 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
                 <FileView node={node} onToast={onToast} />
                 {body.trim() ? (
                   <Markdown body={body} fromPath={node.notePath} graph={graph} onOpen={onOpen} />
+                ) : !graph.detailed && !doc ? (
+                  <p className="empty">{t.page.reading}</p>
                 ) : (
                   !fileOf(node) && <p className="empty">{t.node.noBody}</p>
                 )}
@@ -983,7 +1000,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
           <>
             <RailSection title={t.page.props}>
               <NodeProps graph={graph} node={node} onOpen={onOpen}>
-                <ReviewRow doc={doc} flag={flags[node.id]} />
+                <ReviewRow doc={doc} flag={flags[node.id]} node={node} />
                 <PropRow label="id">
                   <CopyId id={node.id} onToast={onToast} />
                 </PropRow>
@@ -994,9 +1011,15 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
           </>
         }
         tail={
-          <Section title={t.page.versions} count={node.history.length} note={t.page.versionsNote}>
-            <History graph={graph} id={node.id} path={node.notePath} hashes={node.history} />
-          </Section>
+          graph.detailed ? (
+            <Section title={t.page.versions} count={node.history.length} note={t.page.versionsNote}>
+              <History graph={graph} id={node.id} path={node.notePath} hashes={node.history} />
+            </Section>
+          ) : (
+            <Section title={t.page.versions}>
+              <p className="empty">{t.page.reading}</p>
+            </Section>
+          )
         }
       />
     </>

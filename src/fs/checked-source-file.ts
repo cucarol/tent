@@ -1,23 +1,11 @@
 import { lstat, realpath } from "node:fs/promises";
 import * as path from "node:path";
+import type { Stats, BigIntStats } from "node:fs";
+import { scopedPendingRead } from "./file-state-cache.js";
 
-const pendingStats = new Map<string, ReturnType<typeof lstat>>();
-const pendingPaths = new Map<string, Promise<string>>();
-
-/** Overlapping checks can share a syscall; a settled observation is never reused. */
-function inFlight<T>(pending: Map<string, Promise<T>>, name: string, read: () => Promise<T>) {
-  let value = pending.get(name);
-  if (!value) {
-    value = read().finally(() => {
-      if (pending.get(name) === value) pending.delete(name);
-    });
-    pending.set(name, value);
-  }
-  return value;
-}
-
-const currentStat = (name: string) => inFlight(pendingStats, name, () => lstat(name));
-const currentPath = (name: string) => inFlight(pendingPaths, name, () => realpath(name));
+// Only overlapping work in this request shares ancestry probes. Final identity is independent.
+const currentStat = (name: string) => scopedPendingRead(`lstat:${name}`, () => lstat(name));
+const currentPath = (name: string) => scopedPendingRead(`realpath:${name}`, () => realpath(name));
 
 function inside(root: string, candidate: string) {
   const relative = path.relative(root, candidate);
@@ -25,7 +13,23 @@ function inside(root: string, candidate: string) {
 }
 
 /** 逐段拒绝 symlink/junction，并核对实际路径与普通文件类型。 */
-export async function checkedSourceFile(root: string, candidate: string, directory = false) {
+export function checkedSourceFile(
+  root: string,
+  candidate: string,
+  directory?: boolean,
+): Promise<Stats>;
+export function checkedSourceFile(
+  root: string,
+  candidate: string,
+  directory: boolean,
+  bigint: true,
+): Promise<BigIntStats>;
+export async function checkedSourceFile(
+  root: string,
+  candidate: string,
+  directory = false,
+  bigint = false,
+) {
   if (!inside(root, candidate)) throw new Error("Source target escapes root");
   let current = root;
   const segmentChecks = path
@@ -55,7 +59,7 @@ export async function checkedSourceFile(root: string, candidate: string, directo
     throw new Error("Source target escapes Workspace");
   // This identity is compared with an already-open handle. A concurrent ancestry
   // query may have sampled the path before replacement, even while still pending.
-  const stat = await lstat(candidate);
+  const stat = await lstat(candidate, { bigint });
   if (!(directory ? stat.isDirectory() : stat.isFile()))
     throw new Error(
       directory ? "Source target is not a directory" : "Source target is not a regular file",

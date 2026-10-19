@@ -468,7 +468,7 @@ test("Stop excludes unknown lifecycle from modules and ordinary materials across
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 3);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 6);
   assert.deepEqual(modulesForIndexedTurn(expected, event(["unknown/a.ts"])), []);
   assert.deepEqual(questionsForIndexedTurn(expected, event(["only-unknown.txt"])), []);
   const transcript = path.join(root, "unknown-lifecycle.jsonl");
@@ -568,10 +568,16 @@ test("material index header scan preserves chunk boundaries, malformed ancestry 
   const cached = await fs.readFile(cacheFile, "utf8");
   await fs.appendFile(path.join(systemRoot, "Long/Long.md"), "body-only addition");
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(await fs.readFile(cacheFile, "utf8"), cached);
+  const refreshed = JSON.parse(await fs.readFile(cacheFile, "utf8"));
+  assert.deepEqual(refreshed.index, JSON.parse(cached).index);
+  assert.notEqual(
+    refreshed.headers.find(([filename]: [string]) => filename === "Long/Long.md")[1].state.size,
+    JSON.parse(cached).headers.find(([filename]: [string]) => filename === "Long/Long.md")[1].state
+      .size,
+  );
 });
 
-test("material index cache validates live bytes and topology; missing, corrupt and unwritable caches preserve results", async (t) => {
+test("material index cache validates file state and topology; missing, corrupt and unwritable caches preserve results", async (t) => {
   const { root, adapter, node } = await fixture(t);
   const systemRoot = path.join(root, ".tent");
   await fs.mkdir(path.join(systemRoot, ".git"));

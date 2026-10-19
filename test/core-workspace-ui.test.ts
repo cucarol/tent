@@ -65,11 +65,11 @@ test("workspace revision keeps deterministic bytes while bounded reads complete 
   for (let index = 0; index < 17; index++)
     await adapter.writeFile(`roles/role-${String(index).padStart(2, "0")}.md`, `role ${index}\n`);
   const expected = await readWorkspaceRevision(adapter);
-  const original = adapter.readBinary.bind(adapter);
+  const original = adapter.readContentDigest.bind(adapter);
   let active = 0,
     maximum = 0;
   const finished: string[] = [];
-  adapter.readBinary = async (file) => {
+  adapter.readContentDigest = async (file) => {
     active++;
     maximum = Math.max(maximum, active);
     try {

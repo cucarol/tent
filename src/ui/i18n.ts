@@ -13,6 +13,8 @@ const phrase = (...parts: ReactNode[]) => createElement(Fragment, null, ...parts
 /** The first two names, then how many there are in all. */
 const list = (names: string[], sep: string, more: (n: number) => string) =>
   names.slice(0, 2).join(sep) + (names.length > 2 ? more(names.length) : "");
+/** A service message up to its first line break, for a one-line mark. */
+const firstLine = (text: string) => text.split(/\r?\n/, 1)[0]!.trim();
 /** "1 source", "2 sources". */
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -145,12 +147,16 @@ const zh = {
         s.deleted.length && `${list(s.deleted, "、", more)} 已删除`,
         s.baseline && `${s.baseline} 份材料还没有基线`,
         s.uncertain && `${s.uncertain} 份材料无法核对`,
-        s.stale && `内容已在 ${s.stale} 到期`,
+        s.stale !== null && (s.stale ? `内容已在 ${s.stale} 到期` : "内容已到期"),
         s.other[0],
       ].filter(Boolean);
       return `落后：${parts.join("；") || "原因未知"}`;
     },
     behindNext: "Agent 复核这些材料并确认后，标记会消失",
+    /** A Node whose header could not be read, with the first line of the service's reason when given. */
+    invalidWhy: (reason?: string) =>
+      reason ? `头部无法读取：${firstLine(reason)}` : "头部无法读取",
+    invalidNext: "Agent 修好头部后，标记会消失",
     /** Why a goal is ahead; `since` is when it last became ahead. */
     aheadWhy: (since: string | null, kind: AheadKind) =>
       `领先${since ? `（${since}起）` : ""}：${
@@ -218,6 +224,7 @@ const zh = {
       rename: "点一下改名",
       dissolve: "解散区域，卡片回到树上",
       none: "这些卡之间没有直接关系",
+      reading: "正在读取它们之间的关系…",
       join: "松手加入这个区域",
       group: "松手围成一个区域",
       ghost: (name: string) => `搬进了「${name}」，点一下过去`,
@@ -546,6 +553,9 @@ const zh = {
     unfoldAll: "展开工位",
     roles: (n: number) => `${n} 个 Role`,
     stackTip: "点开看每个 Role；拖卡片到这里停一下，会自动展开",
+    reading: "正在读取 Role 和 Card…",
+    load: "Role 和 Card",
+    loadTip: "点开读取各个 Role 和它们手上的 Card",
     filter: "筛选 Role",
     doingN: (n: number) => `在做 ${n}`,
     waitingN: (n: number) => `待接 ${n}`,
@@ -608,6 +618,7 @@ const zh = {
     toTop: "回到顶部",
     dragNode: "拖到顶栏右边的机器人身上，写一张 Card",
     carried: (n: number) => `带过它的 Card · ${n}`,
+    carriedHead: "带过它的 Card",
     testedBy: (n: number) => `覆盖它的测试 · ${n}`,
     testedByTip:
       "Tent 看哪些测试文件 import 了它下面的代码；打开时现算，半分钟内来回切换会沿用上次的结果",
@@ -617,6 +628,7 @@ const zh = {
     changedTogether: (shared: number, all: number) => `${all} 次里 ${shared} 次`,
     showAllOf: (n: number) => `全部 ${n} 个`,
     noCards: "还没有",
+    reading: "正在读取…",
     writeFor: (title: string) => `在 ${title} 栏写 Card`,
     dropOnRole: (title: string) => `拖一张 Card 到这里，交给 ${title}`,
     turnFace: "点一下换一张头像，Shift+点换回上一张",
@@ -908,12 +920,15 @@ const en: Messages = {
         s.deleted.length && `${list(s.deleted, ", ", more)} deleted`,
         s.baseline && `${count(s.baseline, "material")} without a baseline yet`,
         s.uncertain && `${count(s.uncertain, "material")} Tent cannot check`,
-        s.stale && `content expired on ${s.stale}`,
+        s.stale !== null && (s.stale ? `content expired on ${s.stale}` : "content expired"),
         s.other[0],
       ].filter(Boolean);
       return `Behind: ${parts.join("; ") || "unknown reason"}`;
     },
     behindNext: "The mark clears once an Agent reviews those materials and confirms",
+    invalidWhy: (reason) =>
+      reason ? `Header unreadable: ${firstLine(reason)}` : "Header unreadable",
+    invalidNext: "The mark clears once an Agent fixes the header",
     aheadWhy: (since, kind) =>
       `Ahead${since ? ` since ${since}` : ""}: ${
         kind === "intent"
@@ -978,6 +993,7 @@ const en: Messages = {
       rename: "Click to rename",
       dissolve: "Dissolve the region; its cards go back to the tree",
       none: "These cards have no direct relation",
+      reading: "Reading how they relate…",
       join: "Let go to join this region",
       group: "Let go to form a region",
       ghost: (name) => `Moved into "${name}"; click to go there`,
@@ -1318,6 +1334,9 @@ const en: Messages = {
     unfoldAll: "Unfold the desks",
     roles: (n) => count(n, "Role"),
     stackTip: "Open to see every Role; rest a dragged card here to open it",
+    reading: "Reading Roles and Cards…",
+    load: "Roles and Cards",
+    loadTip: "Open to read the Roles and the Cards they hold",
     filter: "Filter Roles",
     doingN: (n) => `${n} doing`,
     waitingN: (n) => `${n} waiting`,
@@ -1380,6 +1399,7 @@ const en: Messages = {
     toTop: "Back to top",
     dragNode: "Drag onto a robot at the right of the top bar to write a Card",
     carried: (n) => `Cards that carried it · ${n}`,
+    carriedHead: "Cards that carried it",
     testedBy: (n) => `Tests covering it · ${n}`,
     testedByTip:
       "Test files that import the code under it, worked out by Tent when the page opens and reused for half a minute",
@@ -1389,6 +1409,7 @@ const en: Messages = {
     changedTogether: (shared, all) => `${shared} of ${all}`,
     showAllOf: (n) => `All ${n}`,
     noCards: "None yet",
+    reading: "Reading…",
     writeFor: (title) => `Write a Card for ${title}`,
     dropOnRole: (title) => `Drop a Card here to hand it to ${title}`,
     turnFace: "Click for another avatar; Shift+click for the previous one",

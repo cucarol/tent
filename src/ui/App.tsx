@@ -9,7 +9,17 @@ import {
   useSyncExternalStore,
   type CSSProperties,
 } from "react";
-import { buildGraph, loadSnapshot, primaryOf, type Visits } from "./data/store.js";
+import {
+  buildGraph,
+  loadMap,
+  loadSnapshot,
+  mapSnapshot,
+  primaryOf,
+  withMap,
+  type Visits,
+} from "./data/store.js";
+import { DetailsContext, detailLoader } from "./data/details.js";
+import type { WorkspaceMap } from "../core/read/workspace-map.js";
 import { api, ApiError, changes, describe } from "./data/api.js";
 import type { Snapshot, SnapshotRef } from "./data/types.js";
 import { Icon, TypeGlyph } from "./components/Glyph.js";
@@ -22,7 +32,7 @@ import { Dock } from "./shell/Dock.js";
 import { Reader } from "./panel/Reader.js";
 import { Palette } from "./panel/Overlays.js";
 import { isDraft, loadLocalDrafts, useDraftCards } from "./data/drafts.js";
-import { FlagsContext, snapshotRebuilder, useSyncFlags } from "./data/flags.js";
+import { FlagsContext, mapFlags, snapshotRebuilder, UNREAD, useSyncFlags } from "./data/flags.js";
 import { FilesContext, useFileInfo } from "./data/files.js";
 import { useDragState } from "./shell/drag.js";
 import { carried, sourceIds, useWork, type Work } from "./shell/work.js";
@@ -68,7 +78,14 @@ function loadVisits(snapshot: Snapshot): Visits {
 const startsExpanded = () => new URLSearchParams(location.search).get("mode") === "doc";
 
 export function App() {
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  // The map read draws the first screen; the full snapshot is read only when a view asks for details.
+  const [map, setMap] = useState<WorkspaceMap | null>(null);
+  const [full, setFull] = useState<Snapshot | null>(null);
+  const snapshot = useMemo(
+    () => (map ? (full ? withMap(full, map) : mapSnapshot(map)) : null),
+    [map, full],
+  );
+  const detailed = !!full;
   const [visits, setVisits] = useState<Visits | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [initiallyExpanded] = useState(startsExpanded);
@@ -100,9 +117,9 @@ export function App() {
   const graph = useMemo(
     () =>
       snapshot
-        ? buildGraph({ ...snapshot, cards: [...snapshot.cards, ...localCards] }, visits)
+        ? buildGraph({ ...snapshot, cards: [...snapshot.cards, ...localCards] }, visits, detailed)
         : null,
-    [snapshot, visits, localCards],
+    [snapshot, visits, localCards, detailed],
   );
   const showToast = useCallback((text: string) => setToast(text), []);
   const work = useWork(graph, showToast);
@@ -121,25 +138,67 @@ export function App() {
       graph && work.openDraft ? sourceIds(graph, graph.cards.get(work.openDraft), work.draft) : [],
     [graph, work.openDraft, work.draft],
   );
+  // The first screen: the map read alone.
   useEffect(() => {
-    loadSnapshot()
-      .then((s) => {
-        loadLocalDrafts(s.workspace.id);
-        setSnapshot(s);
-        setVisits(loadVisits(s));
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    let live = true;
+    loadMap().then(
+      (m) => {
+        if (!live) return;
+        loadLocalDrafts(m.workspace.id);
+        setMap(m);
+      },
+      (e) => live && setError(e instanceof Error ? e.message : String(e)),
+    );
+    return () => {
+      live = false;
+    };
   }, []);
+  // The rest once a view needs it (see detailLoader). A failed read leaves the map as it is; the next ask,
+  // or focusing the page, tries again.
+  const loader = useMemo(
+    () =>
+      detailLoader(
+        loadSnapshot,
+        (s: Snapshot) => {
+          loadLocalDrafts(s.workspace.id);
+          setFull(s);
+          setVisits(loadVisits(s));
+        },
+        (e) => setToast(e instanceof Error ? e.message : String(e)),
+      ),
+    [],
+  );
+  const wantDetails = useCallback(() => loader.want(), [loader]);
+  useEffect(() => {
+    const retry = () => loader.retry();
+    window.addEventListener("focus", retry);
+    return () => {
+      window.removeEventListener("focus", retry);
+      loader.stop();
+    };
+  }, [loader]);
 
-  // Follow changes made elsewhere: compare revisions on focus and every few seconds while visible.
-  const revision = snapshot?.workspace.revision;
-  const flags = useSyncFlags(revision);
+  // Follow changes made elsewhere: compare revisions on focus and every few seconds while visible. With
+  // the snapshot in, a new revision brings a new snapshot and map; before it, only the map is read again.
+  // The map's own revision is never compared with the full one.
+  const revision = full?.workspace.revision;
+  // Material comparison starts once the map is drawn; before the snapshot, any read applies.
+  const flags = useSyncFlags(revision ?? null, !!map);
+  const shownFlags = useMemo(
+    () => (flags === UNREAD && snapshot ? mapFlags(snapshot) : flags),
+    [flags, snapshot],
+  );
+  const mapRevision = useRef<string | undefined>(undefined);
+  mapRevision.current = map?.workspace.revision;
+  const hasMap = !!map;
   const [lost, setLost] = useState<string | null>(null);
   useEffect(() => {
-    if (!revision) return;
+    if (!hasMap) return;
     let stopped = false,
       busy = false,
       again = false;
+    // Map only: the revision the last map read was checked against.
+    let seen: string | undefined;
     const check = async () => {
       if (stopped || document.hidden) return;
       // A write that lands during a check is looked at right after it, not at the next tick.
@@ -149,9 +208,21 @@ export function App() {
       }
       busy = true;
       try {
-        if ((await api.revision()).revision !== revision) {
-          const fresh = await api.snapshot(revision);
-          if (fresh && !stopped) setSnapshot(fresh);
+        const now = (await api.revision()).revision;
+        if (revision) {
+          if (now !== revision) {
+            const [fresh, m] = await Promise.all([api.snapshot(revision), api.map()]);
+            if (!stopped) {
+              if (fresh) setFull(fresh);
+              setMap(m);
+            }
+          }
+        } else if (now !== seen) {
+          // The first check reads the map once more: a write between the first map read and this check
+          // would otherwise go unseen.
+          seen = now;
+          const m = await api.map();
+          if (!stopped && m.workspace.revision !== mapRevision.current) setMap(m);
         }
         setLost(null);
       } catch (error) {
@@ -165,8 +236,9 @@ export function App() {
         }
       }
     };
-    // Writes made while the previous snapshot was on its way are caught here.
-    void check();
+    // Writes made while the snapshot was on its way are caught here. The map alone waits for the timer, so
+    // the first screen is not followed by a second read at once.
+    if (revision) void check();
     const timer = window.setInterval(check, 5000);
     window.addEventListener("focus", check);
     document.addEventListener("visibilitychange", check);
@@ -178,11 +250,11 @@ export function App() {
       document.removeEventListener("visibilitychange", check);
       changes.removeEventListener("change", check);
     };
-  }, [revision]);
+  }, [hasMap, revision]);
   // Output completion times depend on materials, which change without a new revision.
-  const rebuild = useMemo(() => snapshotRebuilder(setSnapshot), []);
-  const files = useFileInfo(snapshot, flags);
-  useEffect(() => rebuild(snapshot, flags), [rebuild, snapshot, flags]);
+  const rebuild = useMemo(() => snapshotRebuilder(setFull), []);
+  const files = useFileInfo(full ? snapshot : null, flags);
+  useEffect(() => rebuild(full, flags), [rebuild, full, flags]);
   useEffect(() => {
     if (lost) setToast(lost);
   }, [lost]);
@@ -257,13 +329,18 @@ export function App() {
   useEffect(() => {
     if (!graph || selected) return;
     const id = decodeURIComponent(location.hash.slice(1));
-    const ref: SnapshotRef | null = graph.nodes.has(id)
-      ? { kind: "node", id }
-      : graph.roles.has(id)
-        ? { kind: "role", id }
-        : graph.cards.has(id)
-          ? { kind: "card", id }
-          : null;
+    // A Role or Card named in the link is known once the snapshot is in.
+    if (!graph.detailed && id && !graph.nodes.has(id)) return wantDetails();
+    // An empty link names nothing, though a Node whose header has no readable id is listed under "".
+    const ref: SnapshotRef | null = !id
+      ? null
+      : graph.nodes.has(id)
+        ? { kind: "node", id }
+        : graph.roles.has(id)
+          ? { kind: "role", id }
+          : graph.cards.has(id)
+            ? { kind: "card", id }
+            : null;
     const fallback = initiallyExpanded
       ? (graph.snapshot.nodes.find((n) => primaryOf(n.type) === "goal") ?? graph.snapshot.nodes[0])
       : undefined;
@@ -486,136 +563,143 @@ export function App() {
 
   return (
     // Views read the messages while rendering; remounting them on a language change redraws every string.
-    <FlagsContext.Provider value={flags}>
-      <FilesContext.Provider value={files}>
-        <div
-          key={lang}
-          className={`app${sideOpen ? "" : " side-collapsed"}${reading ? " is-reading" : ""}`}
-          style={{ "--side-w": `${sideWidth}px` } as CSSProperties}
-        >
-          <Sidebar
-            graph={graph}
-            selected={selected}
-            open={sideOpen}
-            collapsed={collapsed}
-            work={work}
-            draftOnPage={selected?.kind === "card" && selected.id === work.openDraft}
-            themePref={themePref}
-            lang={lang}
-            onTheme={setThemePref}
-            onLang={switchLang}
-            onFold={fold}
-            onOpen={open}
-            onPage={openPage}
-            onLocate={locate}
-            onSearch={() => setOverlay({ kind: "palette" })}
-            onToggle={() => setSideOpen((o) => !o)}
-            onResize={resizeSide}
-            onResetWidth={() => setSideWidth(SIDE.initial)}
-            onMarkAllSeen={() => markSeen(graph.snapshot.nodes.map((n) => n.id))}
-            hotLane={hotLane}
-          />
-
+    <DetailsContext.Provider value={wantDetails}>
+      <FlagsContext.Provider value={shownFlags}>
+        <FilesContext.Provider value={files}>
           <div
-            className={`surface${selected && !reading ? " has-detail" : ""}`}
-            style={{ "--detail-w": `${detailWidth}px` } as CSSProperties}
+            key={lang}
+            className={`app${sideOpen ? "" : " side-collapsed"}${reading ? " is-reading" : ""}`}
+            style={{ "--side-w": `${sideWidth}px` } as CSSProperties}
           >
-            <main className="stage" aria-hidden={reading || undefined}>
-              <StageBar graph={graph} selected={selected} roles={!reading && dock} onOpen={open} />
-              <div className="stage-body">
-                <Boundary label={t.app.map}>
-                  <Suspense fallback={<Loader label={t.app.loading} />}>
-                    <MapView
-                      graph={graph}
-                      flags={flags}
-                      selected={selected}
-                      collapsed={collapsed}
-                      draft={draftIds}
-                      hotLane={hotLane}
-                      carriedBy={carriedBy}
-                      keys={!reading && !overlay}
-                      onNotice={setToast}
-                      onSelect={open}
-                      onFold={fold}
-                      onExpand={() => {
-                        setEditOnExpand(false);
-                        setExpanded(true);
-                      }}
-                    />
-                  </Suspense>
-                </Boundary>
-              </div>
-            </main>
+            <Sidebar
+              graph={graph}
+              selected={selected}
+              open={sideOpen}
+              collapsed={collapsed}
+              work={work}
+              draftOnPage={selected?.kind === "card" && selected.id === work.openDraft}
+              themePref={themePref}
+              lang={lang}
+              onTheme={setThemePref}
+              onLang={switchLang}
+              onFold={fold}
+              onOpen={open}
+              onPage={openPage}
+              onLocate={locate}
+              onSearch={() => setOverlay({ kind: "palette" })}
+              onToggle={() => setSideOpen((o) => !o)}
+              onResize={resizeSide}
+              onResetWidth={() => setSideWidth(SIDE.initial)}
+              onMarkAllSeen={() => markSeen(graph.snapshot.nodes.map((n) => n.id))}
+              hotLane={hotLane}
+            />
 
-            {selected && !reading && (
-              <aside className="detail">
-                <div
-                  className="detail-resize"
-                  onPointerDown={resizeDetail}
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label={t.app.resizeDetail}
-                />
-                <Reader
-                  mode="panel"
+            <div
+              className={`surface${selected && !reading ? " has-detail" : ""}`}
+              style={{ "--detail-w": `${detailWidth}px` } as CSSProperties}
+            >
+              <main className="stage" aria-hidden={reading || undefined}>
+                <StageBar
                   graph={graph}
-                  target={selected}
-                  startEditing={false}
+                  selected={selected}
+                  roles={!reading && dock}
+                  onOpen={open}
+                />
+                <div className="stage-body">
+                  <Boundary label={t.app.map}>
+                    <Suspense fallback={<Loader label={t.app.loading} />}>
+                      <MapView
+                        graph={graph}
+                        flags={shownFlags}
+                        selected={selected}
+                        collapsed={collapsed}
+                        draft={draftIds}
+                        hotLane={hotLane}
+                        carriedBy={carriedBy}
+                        keys={!reading && !overlay}
+                        onNotice={setToast}
+                        onSelect={open}
+                        onFold={fold}
+                        onExpand={() => {
+                          setEditOnExpand(false);
+                          setExpanded(true);
+                        }}
+                      />
+                    </Suspense>
+                  </Boundary>
+                </div>
+              </main>
+
+              {selected && !reading && (
+                <aside className="detail">
+                  <div
+                    className="detail-resize"
+                    onPointerDown={resizeDetail}
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label={t.app.resizeDetail}
+                  />
+                  <Reader
+                    mode="panel"
+                    graph={graph}
+                    target={selected}
+                    startEditing={false}
+                    onOpen={open}
+                    onClose={() => open(null)}
+                    onExpand={(edit) => {
+                      setEditOnExpand(!!edit);
+                      setExpanded(true);
+                    }}
+                    work={work}
+                    onLocate={locate}
+                    onToast={showToast}
+                  />
+                </aside>
+              )}
+
+              {reading && (
+                <Reader
+                  roles={dock}
+                  graph={graph}
+                  target={selected!}
+                  startEditing={editOnExpand}
                   onOpen={open}
                   onClose={() => open(null)}
-                  onExpand={(edit) => {
-                    setEditOnExpand(!!edit);
-                    setExpanded(true);
-                  }}
+                  onCollapse={() => setExpanded(false)}
                   work={work}
                   onLocate={locate}
                   onToast={showToast}
                 />
-              </aside>
-            )}
+              )}
+            </div>
 
-            {reading && (
-              <Reader
-                roles={dock}
+            {overlay?.kind === "palette" && (
+              <Palette
                 graph={graph}
-                target={selected!}
-                startEditing={editOnExpand}
-                onOpen={open}
-                onClose={() => open(null)}
-                onCollapse={() => setExpanded(false)}
-                work={work}
-                onLocate={locate}
-                onToast={showToast}
+                onOpen={(ref) => (ref.kind === "node" ? open(ref) : openPage(ref))}
+                onClose={() => setOverlay(null)}
               />
             )}
+            <DragGhost graph={graph} work={work} />
+            {edge && (
+              <div
+                className={`edge-line${edge.label ? " is-armed" : ""}${edge.x > window.innerWidth - 240 ? " flip" : ""}`}
+                style={{ left: edge.x }}
+                aria-hidden="true"
+              >
+                {edge.label && <span>{edge.label}</span>}
+              </div>
+            )}
+            {toast && (
+              <div className={`toast${toast === t.app.offline ? " has-face" : ""}`} role="status">
+                {toast === t.app.offline && <Pet id="tent" size={28} mood="off" />}
+                {toast}
+              </div>
+            )}
           </div>
-
-          {overlay?.kind === "palette" && (
-            <Palette
-              graph={graph}
-              onOpen={(ref) => (ref.kind === "node" ? open(ref) : openPage(ref))}
-              onClose={() => setOverlay(null)}
-            />
-          )}
-          <DragGhost graph={graph} work={work} />
-          {edge && (
-            <div
-              className={`edge-line${edge.label ? " is-armed" : ""}${edge.x > window.innerWidth - 240 ? " flip" : ""}`}
-              style={{ left: edge.x }}
-              aria-hidden="true"
-            >
-              {edge.label && <span>{edge.label}</span>}
-            </div>
-          )}
-          {toast && (
-            <div className={`toast${toast === t.app.offline ? " has-face" : ""}`} role="status">
-              {toast === t.app.offline && <Pet id="tent" size={28} mood="off" />}
-              {toast}
-            </div>
-          )}
-        </div>
-      </FilesContext.Provider>
-    </FlagsContext.Provider>
+        </FilesContext.Provider>
+      </FlagsContext.Provider>
+    </DetailsContext.Provider>
   );
 }
 

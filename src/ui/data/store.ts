@@ -6,6 +6,7 @@ import type {
   SnapshotRef,
   SnapshotRole,
 } from "./types.js";
+import type { WorkspaceMap, WorkspaceMapNode } from "../../core/read/workspace-map.js";
 import { t } from "../i18n.js";
 import { api, describe } from "./api.js";
 import { isDraft } from "./drafts.js";
@@ -31,8 +32,12 @@ export type Visits = { baseline: number; seen: Record<string, string> };
 
 export type Graph = ReturnType<typeof buildGraph>;
 
-/** Indices and derived states over one snapshot; recomputed when the snapshot or visits change. */
-export function buildGraph(snapshot: Snapshot, visits: Visits | null = null) {
+/**
+ * Indices and derived states over one snapshot; recomputed when the snapshot or visits change. Until
+ * `detailed`, the snapshot is the map alone (see `mapSnapshot`): what it leaves out is not yet known, so
+ * views say they are reading rather than that there is none.
+ */
+export function buildGraph(snapshot: Snapshot, visits: Visits | null = null, detailed = true) {
   const nodes = new Map(snapshot.nodes.map((n) => [n.id, n]));
   const roles = new Map(snapshot.roles.map((r) => [r.id, r]));
   const cards = new Map(snapshot.cards.map((c) => [c.id, c]));
@@ -186,6 +191,7 @@ export function buildGraph(snapshot: Snapshot, visits: Visits | null = null) {
 
   return {
     snapshot,
+    detailed,
     nodes,
     roles,
     cards,
@@ -222,6 +228,74 @@ export const cardTitle = (c: SnapshotCard) => c.title || t.card.contextOnly(c.so
 
 export function refKey(ref: SnapshotRef) {
   return `${ref.kind}:${ref.id}`;
+}
+
+/** What the map says about a Node that the snapshot does not: explicit expiry and an unreadable header. */
+function diagnostics(
+  n: WorkspaceMapNode,
+): Pick<SnapshotNode, "stale" | "invalid" | "invalidReason"> {
+  return {
+    ...(n.stale ? { stale: true } : {}),
+    ...(n.invalid ? { invalid: true, invalidReason: n.invalidReason } : {}),
+  };
+}
+
+/**
+ * The map as a snapshot to draw the first screen with: every Node in tree order with its name, type, tags,
+ * place, explicit expiry and header diagnosis, and the module lines. Bodies, links, materials, history,
+ * Cards and Roles come with the full snapshot, read only when something asks for them; the map's own
+ * revision stands in until then and is never compared with the full one.
+ */
+export function mapSnapshot(map: WorkspaceMap): Snapshot {
+  return {
+    workspace: map.workspace,
+    nodes: map.nodes.map((n) => ({
+      id: n.id,
+      name: n.name,
+      path: n.path,
+      notePath: n.notePath,
+      depth: n.depth,
+      type: n.type,
+      tags: n.tags,
+      status: n.status,
+      archived: n.archived,
+      description: "",
+      body: "",
+      parentId: n.parentId,
+      childIds: n.childIds,
+      links: [],
+      materials: [],
+      incoming: [],
+      history: [],
+      ...diagnostics(n),
+    })),
+    roles: [],
+    cards: [],
+    commits: [],
+    paths: Object.fromEntries(map.nodes.map((n) => [n.notePath, { kind: "node", id: n.id }])),
+    modules: map.modules,
+  };
+}
+
+/** The full snapshot with what only the map carries: each Node's expiry and header diagnosis, and the module lines. */
+export function withMap(full: Snapshot, map: WorkspaceMap): Snapshot {
+  const byId = new Map(map.nodes.map((n) => [n.id, n]));
+  return {
+    ...full,
+    nodes: full.nodes.map((n) => {
+      const m = byId.get(n.id);
+      return m ? { ...n, ...diagnostics(m) } : n;
+    }),
+    modules: map.modules,
+  };
+}
+
+export async function loadMap(): Promise<WorkspaceMap> {
+  try {
+    return await api.map();
+  } catch (error) {
+    throw new Error(describe(error));
+  }
 }
 
 export async function loadSnapshot(): Promise<Snapshot> {

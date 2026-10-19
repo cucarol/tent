@@ -9,6 +9,7 @@ import {
 } from "../core/base/repository-imports.js";
 import { sourceDirectoryPaths } from "./directory-observation.js";
 import { directoryRepository } from "./repository-material.js";
+import { fileState, sameFileState, stateCacheHit, type FileState } from "./file-state-cache.js";
 
 async function git(root: string, args: string[], config: string[] = []) {
   const env = Object.fromEntries(
@@ -100,20 +101,16 @@ async function signature(filename: string) {
   const info = await lstat(filename, { bigint: true });
   return {
     info,
-    token: JSON.stringify([
-      info.dev.toString(),
-      info.ino.toString(),
-      info.size.toString(),
-      info.mtimeNs.toString(),
-      info.ctimeNs.toString(),
-    ]),
+    state: fileState(info),
   };
 }
+
+type CachedSource = { state: FileState; writtenAtNs: string; source: RepositorySource };
 
 /** Current nonignored Workspace files and project Git basis; only process-local content caching. */
 export function createModuleDependencyRepositoryReader(workspaceRoot: string) {
   let previous: RepositorySource[] | undefined;
-  let cached = new Map<string, { token: string; source: RepositorySource }>();
+  let cached = new Map<string, CachedSource>();
   return async () => {
     const root = await realpath(workspaceRoot);
     const repository = await directoryRepository(root);
@@ -145,7 +142,7 @@ export function createModuleDependencyRepositoryReader(workspaceRoot: string) {
       }
       return checked;
     }
-    const current = new Map<string, { token: string; source: RepositorySource }>();
+    const current = new Map<string, CachedSource>();
     const changed: string[] = [];
     const filenames = [...new Set(candidates)].filter((filename) => {
       const relative = path.relative(root, filename);
@@ -164,12 +161,13 @@ export function createModuleDependencyRepositoryReader(workspaceRoot: string) {
           if (!observed || !observed.info.isFile() || observed.info.isSymbolicLink()) return;
           const file = path.relative(root, filename).split(path.sep).join("/");
           const known = cached.get(file);
-          const source = known?.token === observed.token ? known.source : { path: file };
-          current.set(file, { token: observed.token, source });
-          if (
-            known?.token !== observed.token &&
-            (isImportConfig(file) || (isImportSource(file) && !isTestSource(file)))
-          )
+          const hit = known && stateCacheHit(observed.state, known.state, known.writtenAtNs);
+          current.set(file, {
+            state: observed.state,
+            writtenAtNs: hit ? known.writtenAtNs : String(BigInt(Date.now()) * 1_000_000n),
+            source: hit ? known.source : { path: file },
+          });
+          if (!hit && (isImportConfig(file) || (isImportSource(file) && !isTestSource(file))))
             changed.push(file);
         }),
       );
@@ -186,9 +184,10 @@ export function createModuleDependencyRepositoryReader(workspaceRoot: string) {
             } catch (error) {
               throw new Error(`${file}: ${error instanceof Error ? error.message : String(error)}`);
             }
-            if ((await signature(path.join(root, file))).token !== entry.token)
+            if (!sameFileState((await signature(path.join(root, file))).state, entry.state))
               throw new Error(`Repository source changed while reading: ${file}`);
             entry.source = { path: file, content };
+            entry.writtenAtNs = String(BigInt(Date.now()) * 1_000_000n);
           }),
         );
     }

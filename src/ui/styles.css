@@ -298,6 +298,7 @@ body.is-dragging .row .acts { display: none !important; }
    into a list with a row per Role and the public area. Cards move between rows until a Role receives them. */
 .roles { position: relative; display: flex; align-items: center; gap: 6px; flex: none; margin-left: auto; user-select: none; }
 .role-stack { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px 0 6px; border-radius: 9px; color: var(--text-2); font-size: 12.5px; white-space: nowrap; transition: background .12s; }
+.role-stack.is-reading { color: var(--text-3); }
 .role-stack:hover, .role-stack.is-open { background: var(--hover); color: var(--text); }
 .role-stack > .icon { color: var(--text-3); transition: transform .15s; }
 .role-stack.is-open > .icon { transform: rotate(180deg); }
@@ -511,6 +512,8 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .mcard-detail b { margin-right: 6px; font-weight: 550; }
 .mcard-detail b.is-behind { color: var(--warn); }
 .mcard-detail b.is-ahead { color: var(--new); }
+.mcard-detail b.is-invalid { color: var(--danger); }
+.mcard.is-invalid { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
 .mcard.is-deprecated .mcard-name { text-decoration: line-through; color: var(--text-3); }
 .mcard.is-deprecated > .tile { filter: grayscale(1); opacity: .55; }
 /* Only Nodes that need attention are marked. Ahead: intent with no output yet, a dashed blue outline. Behind: its materials moved on, amber with a bar. */
@@ -630,9 +633,11 @@ button.mcard-face:hover > .pet { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px va
 .map-peek-meta { margin-top: 6px; font-size: 11.5px; color: var(--text-3); }
 .map-peek-flag { display: grid; gap: 1px; margin: -2px -4px 8px; padding: 6px 8px; border-radius: 7px; font-size: 12px; line-height: 1.5; }
 .map-peek-flag b { font-weight: 600; }
+.map-peek-flag:last-child { margin-bottom: -2px; }
 .map-peek-flag span { color: var(--text-2); }
 .map-peek-flag.is-behind { background: var(--warn-soft); } .map-peek-flag.is-behind b { color: var(--warn); }
 .map-peek-flag.is-ahead { background: var(--new-soft); } .map-peek-flag.is-ahead b { color: var(--new); }
+.map-peek-flag.is-invalid { background: color-mix(in srgb, var(--danger) 10%, transparent); } .map-peek-flag.is-invalid b { color: var(--danger); }
 .map-flags { top: 12px; left: 12px; display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 4px; white-space: nowrap; }
 .map-flag { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: 7px; font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .map-flag:hover { background: var(--hover); color: var(--text); }
@@ -873,6 +878,7 @@ textarea.ink-words::placeholder { color: var(--text-3); opacity: 1; }
 /* Review: who checked this Node against its materials, and the way to say it still holds. */
 .review { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 5px 8px; font-size: 12.5px; line-height: 1.5; }
 .review-why { color: var(--warn); }
+.review-why.is-invalid { color: var(--danger); }
 .review-tier { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px; color: var(--text); }
 .review-tier.is-unverified { color: var(--text-3); }
 .review-by { color: var(--text-3); font-size: 12px; }

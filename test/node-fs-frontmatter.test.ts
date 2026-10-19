@@ -5,7 +5,10 @@ import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import { test } from "node:test";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { fileState, type FileState } from "../src/fs/file-state-cache.js";
 import { NodeFs } from "../src/fs/node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 
 test("NodeFs reads the exact frontmatter prefix across UTF-8 and fence boundaries", async () => {
   const scratch = path.resolve(".scratch");
@@ -81,4 +84,73 @@ test("NodeFs stops reading after the closing fence or a missing opening", async 
     syncBuiltinESMExports();
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("a swapped directory cannot persist another handle's header under the restored file identity", async (t) => {
+  const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-header-identity-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  const systemRoot = path.join(root, ".tent");
+  await fs.mkdir(path.join(systemRoot, ".git"), { recursive: true });
+  const original = path.join(systemRoot, "A"),
+    replacement = path.join(root, "replacement"),
+    saved = path.join(root, "saved");
+  await fs.mkdir(original);
+  await fs.mkdir(replacement);
+  const filename = path.join(original, "A.md");
+  const header = "---\nid: node-original\ntype: prompt\n---\n";
+  const other = "---\nid: node-replaced\ntype: output\n---\n";
+  await fs.writeFile(filename, header + "Original body\n");
+  await fs.writeFile(path.join(replacement, "A.md"), other + "Another body\n");
+  const old = new Date(Date.now() - 5_000);
+  await fs.utimes(filename, old, old);
+  const before = fileState(await fs.stat(filename, { bigint: true }));
+  const open = fsPromises.open;
+  let openedState: FileState | undefined;
+  const mocked = t.mock.method(fsPromises, "open", async (...args: Parameters<typeof open>) => {
+    if (String(args[0]) !== filename || openedState) return open(...args);
+    await fs.rename(original, saved);
+    await fs.rename(replacement, original);
+    const handle = await open(...args);
+    openedState = fileState(await handle.stat({ bigint: true }));
+    return new Proxy(handle, {
+      get(target, key) {
+        if (key === "close")
+          return async () => {
+            // Windows permits restoring the parent directory after its handle closes.
+            await target.close();
+            await fs.rename(original, replacement);
+            await fs.rename(saved, original);
+          };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  });
+  syncBuiltinESMExports();
+  let failure: unknown;
+  try {
+    await new NodeFs(systemRoot).readFrontmatter("A/A.md").catch((error) => {
+      failure = error;
+    });
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.ok(openedState);
+  assert.notEqual(openedState.ino, before.ino, "the bytes came from a distinct real inode");
+  assert.deepEqual(
+    fileState(await fs.stat(filename, { bigint: true })),
+    before,
+    "the original leaf state genuinely remains unchanged",
+  );
+  assert.equal(
+    await new NodeFs(systemRoot).readFrontmatter("A/A.md"),
+    header,
+    "an independent request must never reuse the other file's header",
+  );
+  const current = (await loadNodeCatalog(new NodeFs(systemRoot))).byPath.get("A");
+  assert.equal(current?.nodeId, "node-original");
+  assert.equal(current?.type, "prompt");
+  assert.ok(failure instanceof Error);
+  assert.match(failure.message, /Source changed while reading header/);
 });

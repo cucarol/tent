@@ -50,12 +50,15 @@ type StructureSnapshot = {
 };
 const structureSnapshot = new AsyncLocalStorage<StructureSnapshot>();
 
-export function withStructureSnapshot<T>(action: () => Promise<T>): Promise<T> {
-  if (structureSnapshot.getStore()) return action();
+export function withStructureSnapshot<T>(action: () => Promise<T>, fresh = false): Promise<T> {
+  if (structureSnapshot.getStore() && !fresh) return action();
   return structureSnapshot.run(
     { listings: new Map(), sources: new Map(), types: new Map() },
     action,
   );
+}
+export function withoutStructureSnapshot<T>(action: () => Promise<T>): Promise<T> {
+  return structureSnapshot.exit(action);
 }
 
 function shared<T>(map: Map<string, Promise<T>> | undefined, key: string, read: () => Promise<T>) {

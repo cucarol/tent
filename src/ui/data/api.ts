@@ -1,7 +1,7 @@
 // Client for the `tent ui` service (contract: Tent Node "Web界面服务接口").
 // The token arrives once in the URL fragment and is kept for this tab only.
 import { t } from "../i18n.js";
-import type { ModuleDependencyResponse } from "../../core/read/module-dependency-query.js";
+import type { WorkspaceMap } from "../../core/read/workspace-map.js";
 import type {
   CardState,
   CodeFacts,
@@ -163,6 +163,11 @@ export type CardDocument = {
 export type SavedCard = { cardId: string; path: string; etag: string };
 
 export const api = {
+  /**
+   * The first screen: each Node's name, type, place in the tree and explicit expiry, and the module lines.
+   * Its revision covers only these and is never compared with the snapshot's.
+   */
+  map: () => call<WorkspaceMap>("/api/map"),
   /** Resolves to null when the snapshot still matches `revision`. */
   snapshot: (revision?: string) =>
     call<Snapshot | null>(
@@ -178,7 +183,6 @@ export const api = {
   saveCanvas: (baseEtag: string | null, canvas: unknown) =>
     call<{ etag: string }>("/api/canvas", send("PUT", { baseEtag, canvas })),
   /** Which Nodes with code directories import which, from the repository's current files. */
-  moduleDeps: () => call<ModuleDependencyResponse>("/api/modules/deps"),
   /**
    * When each Node's body or material addresses last changed, and when each output was last recorded or
    * confirmed; null where history cannot show it. Confirmations and other metadata do not count.

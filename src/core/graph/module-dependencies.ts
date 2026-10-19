@@ -2,7 +2,7 @@ import { dependencyCycles } from "../base/dependency-cycles.js";
 import path from "node:path";
 import type { FsAdapter } from "../store/adapter.js";
 import { ReaderError } from "./context-reader.js";
-import { loadNodeCatalog } from "./node-catalog.js";
+import { loadNodeCatalog, type NodeCatalog } from "./node-catalog.js";
 import { nodeNotePath } from "../base/paths.js";
 import { isUsableNode } from "../store/tree.js";
 import { materialCoverageContains, structureMaterialCoverage } from "../base/material-coverage.js";
@@ -37,8 +37,9 @@ export async function readModuleDependencies(
   fs: FsAdapter,
   workspaceRoot: string,
   input: ModuleDependencyRepository | Promise<ModuleDependencyRepository>,
+  currentCatalog?: NodeCatalog,
 ): Promise<ModuleDependencies> {
-  const [catalog, repository] = await Promise.all([loadNodeCatalog(fs), input]);
+  const [catalog, repository] = await Promise.all([currentCatalog ?? loadNodeCatalog(fs), input]);
   const modules = [...catalog.tree.byId.values()]
     .filter(isUsableNode)
     .filter((node) => node.fm.sources?.some((source) => source.track === "structure"))

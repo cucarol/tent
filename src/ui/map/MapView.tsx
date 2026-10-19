@@ -1,4 +1,5 @@
 import { aheadKind, onlyGaps } from "../data/reasons.js";
+import { DetailsContext, useWantDetails } from "../data/details.js";
 import {
   createContext,
   memo,
@@ -131,6 +132,7 @@ import { api } from "../data/api.js";
 import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
 // At 100% a card shows all it has; there is nothing more to see closer in.
+const NO_CODE: readonly CodeEdge[] = [];
 const ZOOM = { min: 0.4, max: 1 };
 // Below this, card names get too small to read at a glance; views the map picks by itself stay above it.
 const READABLE = 0.9;
@@ -273,7 +275,7 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
   );
   const card = (
     <div
-      className={`mcard t-${p}${local ? " is-file" : ""}${missing ? " is-missing" : ""}${data.top ? " is-top" : ""}${data.folded ? " is-stack" : ""}${data.rel ? " is-rel" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.picked ? " is-picked" : ""}${data.detail ? " has-detail" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? ` is-behind${onlyGaps(flag.behind.reasons) ? " is-gap" : ""}` : ""}`}
+      className={`mcard t-${p}${local ? " is-file" : ""}${missing ? " is-missing" : ""}${data.top ? " is-top" : ""}${data.folded ? " is-stack" : ""}${data.rel ? " is-rel" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.picked ? " is-picked" : ""}${data.detail ? " has-detail" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${n.invalid ? " is-invalid" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? ` is-behind${onlyGaps(flag.behind.reasons) ? " is-gap" : ""}` : ""}`}
       style={
         {
           width: data.w,
@@ -540,6 +542,7 @@ function RegionLayer({
   members,
   related,
   reactions,
+  reading,
   outside,
   outward,
   onOutward,
@@ -554,6 +557,8 @@ function RegionLayer({
   related: ReadonlySet<string>;
   /** What each region's cards give together, by region; a region with one shows it instead of the no-relation line. */
   reactions: Map<string, Reaction[]>;
+  /** Relations are still being read: say so instead of that there are none. */
+  reading: boolean;
   /** How many cards outside each region its members are directly related to. */
   outside: Map<string, number>;
   /** The region looking one layer out, if any. */
@@ -631,9 +636,15 @@ function RegionLayer({
                 <Icon name="ungroup" size={14} />
               </button>
             </div>
-            {ids.length > 1 && !related.has(r.id) && !reactions.get(r.id)?.some(listed) && (
-              <div className="map-region-none">{t.map.region.none}</div>
+            {ids.length > 1 && reading && !related.has(r.id) && (
+              <div className="map-region-none">{t.map.region.reading}</div>
             )}
+            {ids.length > 1 &&
+              !reading &&
+              !related.has(r.id) &&
+              !reactions.get(r.id)?.some(listed) && (
+                <div className="map-region-none">{t.map.region.none}</div>
+              )}
           </div>
         );
       })}
@@ -672,6 +683,7 @@ function Detail({
   ].filter(Boolean);
   return (
     <span className="mcard-detail">
+      {n.invalid && <b className="is-invalid">{t.map.invalidWhy()}</b>}
       {flag?.behind && <b className="is-behind">{t.map.behindWhy(flag.behind.reasons)}</b>}
       {flag?.ahead && (
         <b className="is-ahead">{t.map.aheadWhy(null, aheadKind(flag.ahead.reasons))}</b>
@@ -695,12 +707,21 @@ function PeekCard({ graph, peek, flag }: { graph: Graph; peek: Peek; flag?: Sync
     cites > 0 && t.map.cites(cites),
     citedBy > 0 && t.map.citedBy(citedBy),
   ].filter(Boolean);
+  // Until the snapshot is in, the map knows no summary; a peek with nothing else to say stays closed.
+  if (!graph.detailed && !n.invalid && !flag?.behind && !flag?.ahead && facts.length === 0)
+    return null;
   return (
     <div
       className={`panel map-peek${peek.above ? " is-above" : ""}`}
       style={{ left: peek.left, top: peek.top }}
       role="tooltip"
     >
+      {n.invalid && (
+        <div className="map-peek-flag is-invalid">
+          <b>{t.map.invalidWhy(n.invalidReason)}</b>
+          <span>{t.map.invalidNext}</span>
+        </div>
+      )}
       {flag?.behind && (
         <div className="map-peek-flag is-behind">
           <b>{t.map.behindWhy(flag.behind.reasons)}</b>
@@ -718,7 +739,7 @@ function PeekCard({ graph, peek, flag }: { graph: Graph; peek: Peek; flag?: Sync
           <span>{t.map.aheadNext(aheadKind(flag.ahead.reasons))}</span>
         </div>
       )}
-      <p>{n.description || t.node.noSummary}</p>
+      {graph.detailed && <p>{n.description || t.node.noSummary}</p>}
       {facts.length > 0 && <div className="map-peek-meta">{facts.join(" · ")}</div>}
     </div>
   );
@@ -971,11 +992,24 @@ function MapContent({
     const t = setTimeout(() => setTime((i) => (i ?? 0) + 1), 900);
     return () => clearTimeout(t);
   }, [playing, time, last]);
+  // The timeline steps through the history the snapshot brings: asked for first, opened once it is in.
+  const want = useContext(DetailsContext);
+  const [timeAsked, setTimeAsked] = useState(false);
   const openTime = () => {
     setLens(false);
     setInkTool(null);
+    if (!graph.detailed) {
+      want();
+      setTimeAsked(true);
+      return;
+    }
     setTime(last);
   };
+  useEffect(() => {
+    if (!timeAsked || !graph.detailed) return;
+    setTimeAsked(false);
+    setTime(last);
+  }, [timeAsked, graph.detailed, last]);
   const closeTime = () => {
     setPlaying(false);
     setTime(null);
@@ -1019,6 +1053,8 @@ function MapContent({
   }, [hotLane, carriedBy, sources, selected?.kind, selected?.id, graph]);
   const pins = useMemo(() => new Map(draft.map((id, i) => [id, i + 1] as const)), [draft]);
   const lensId = lens && selected?.kind === "node" && visible(selected.id) ? selected.id : null;
+  // The lens lays out what a Node links to and what cites it.
+  useWantDetails(!!lensId && !graph.detailed);
 
   // ---------- drawing ----------
   // Drawings keep their own map coordinates, so they show only on the tree, not in the lens or a
@@ -1288,20 +1324,10 @@ function MapContent({
     }
     return out;
   }, [regionOfCard, tree, base]);
-  // Code imports, read only while some region holds two cards that could have them.
-  const [code, setCode] = useState<CodeEdge[]>([]);
-  const wantsCode = [...members.values()].some((ids) => ids.length > 1);
-  useEffect(() => {
-    if (!wantsCode) return;
-    let current = true;
-    api
-      .moduleDeps()
-      .then((r) => current && setCode(r.edges))
-      .catch(() => {});
-    return () => {
-      current = false;
-    };
-  }, [wantsCode, graph.snapshot.workspace.revision]);
+  // Code imports come with the map read. Links, materials and Cards between a region's cards come with the
+  // snapshot, which a region of two or more asks for; until then a region shows its tree and code lines.
+  const code: readonly CodeEdge[] = graph.snapshot.modules?.edges ?? NO_CODE;
+  useWantDetails(!graph.detailed && [...members.values()].some((ids) => ids.length > 1));
   const lines = useMemo(() => {
     const out = new Map<string, RegionLine[]>();
     for (const [rid, ids] of members)
@@ -1318,6 +1344,7 @@ function MapContent({
   const [picturing, setPicturing] = useState(false);
   const [pictureFailed, setPictureFailed] = useState(false);
   const reach = useMemo(() => {
+    if (!graph.detailed) return new Map<string, ReturnType<typeof reachOut>>();
     const free = [...base.placed.keys()].filter(
       (id) => graph.nodes.has(id) && visible(id) && !regionOfCard.has(id),
     );
@@ -1371,7 +1398,8 @@ function MapContent({
     [members, graph, visible],
   );
   const workspaceId = graph.snapshot.workspace.id;
-  const compareKey = toCompare.length ? `${workspaceId}:${toCompare.join(" ")}` : "";
+  const compareKey =
+    graph.detailed && toCompare.length ? `${workspaceId}:${toCompare.join(" ")}` : "";
   const asks = useRef(0);
   useEffect(() => {
     if (!compareKey) return;
@@ -1414,7 +1442,8 @@ function MapContent({
     [members, graph, visible],
   );
   const revision = graph.snapshot.workspace.revision;
-  const timeKey = toTime.length ? `${workspaceId}@${revision}:${toTime.join(" ")}` : "";
+  const timeKey =
+    graph.detailed && toTime.length ? `${workspaceId}@${revision}:${toTime.join(" ")}` : "";
   const [heldTimes, setHeldTimes] = useState<TimesAnswer | null>(null);
   const [askedTimes, setAskedTimes] = useState({ key: "", ask: 0 });
   const timeAsks = useRef(0);
@@ -1447,6 +1476,7 @@ function MapContent({
   );
   const reactions = useMemo(() => {
     const out = new Map<string, Reaction[]>();
+    if (!graph.detailed) return out;
     for (const [rid, ids] of members)
       if (ids.length > 1)
         out.set(rid, reactionsIn(graph, flags, compared, ids.filter(visible), timed));
@@ -2665,6 +2695,7 @@ function MapContent({
                 members={members}
                 related={linked}
                 reactions={reactions}
+                reading={!graph.detailed}
                 outside={outCount}
                 outward={outwardRegion ? outward : null}
                 onOutward={setOutward}

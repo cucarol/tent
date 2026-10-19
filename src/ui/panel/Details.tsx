@@ -331,12 +331,24 @@ function latestVerification(value: unknown): Verification | null {
  * Whether someone checked this Node against its materials, and why it is behind. Agents confirm Nodes; the
  * page only says what Tent sees.
  */
-export function ReviewRow({ doc, flag }: { doc: NodeDocument | null; flag?: SyncFlag }) {
+/** Review state, after why the Node is marked: an unreadable header, then what makes it behind. */
+export function ReviewRow({
+  doc,
+  flag,
+  node,
+}: {
+  doc: NodeDocument | null;
+  flag?: SyncFlag;
+  node?: SnapshotNode;
+}) {
   const last = latestVerification(doc?.frontmatter.verified);
   const tier = doc?.trustTier ?? "unverified";
   return (
     <PropRow label={t.review.label}>
       <div className="review">
+        {node?.invalid && (
+          <span className="review-why is-invalid">{t.map.invalidWhy(node.invalidReason)}</span>
+        )}
         {flag?.behind && <span className="review-why">{t.map.behindWhy(flag.behind.reasons)}</span>}
         <span className={`review-tier is-${tier}`}>
           {t.review.tier[tier]}
@@ -403,7 +415,7 @@ export function NodeProps({
             <span>{t.props.versionsValue(node.history.length, ago(latest.date))}</span>
           </button>
         ) : (
-          <span className="prop-none">{t.history.none}</span>
+          <span className="prop-none">{graph.detailed ? t.history.none : t.page.reading}</span>
         )}
       </PropRow>
       {roles.length > 0 && (
@@ -425,6 +437,12 @@ export function NodeProps({
           {graph.childrenOf(node.id).map((c) => (
             <RefLink key={c.id} graph={graph} target={{ kind: "node", id: c.id }} onOpen={onOpen} />
           ))}
+        </PropRow>
+      )}
+      {/* Links, citations and materials come with the snapshot, after the map. */}
+      {!graph.detailed && (
+        <PropRow label={t.rel.linksTo}>
+          <span className="prop-none">{t.page.reading}</span>
         </PropRow>
       )}
       {outgoing.length > 0 && (

@@ -1,4 +1,5 @@
 // Read model the Web UI renders; `tent ui` serves it (src/ui-server/snapshot.ts builds it from Core).
+import type { ModuleDependencies } from "../../core/graph/module-dependencies.js";
 
 export type RefKind = "node" | "role" | "card";
 export type SnapshotRef = { kind: RefKind; id: string };
@@ -83,6 +84,11 @@ export type SnapshotNode = {
   history: string[];
   /** Earliest valid generation or verification time in the current output, normalized to UTC ISO. */
   outputAt?: string;
+  /** From the map read: its `stale_after` has passed. Says nothing about materials. */
+  stale?: boolean;
+  /** From the map read: its header cannot be read as a Node, and why. */
+  invalid?: boolean;
+  invalidReason?: string;
 };
 
 export type SnapshotRole = {
@@ -151,4 +157,6 @@ export type Snapshot = {
   cards: SnapshotCard[];
   commits: SnapshotCommit[];
   paths: Record<string, SnapshotRef>;
+  /** From the map read: which Nodes with code import which. */
+  modules?: ModuleDependencies;
 };

@@ -18,6 +18,7 @@ import {
 import { isNodeId } from "../base/id.js";
 import { contentEtag } from "../base/etag.js";
 import { assertCurrentLayout } from "./retired-layout.js";
+import { okfTimestampSchema } from "../base/node-provenance.js";
 
 export { nodeNotePath } from "../base/paths.js";
 
@@ -196,6 +197,8 @@ export function canonicalIdentityError(data: Record<string, unknown>): string | 
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
+  if (data.stale_after !== undefined && !okfTimestampSchema.safeParse(data.stale_after).success)
+    return "Invalid stale_after: expected an ISO 8601 timestamp with an explicit timezone.";
   return undefined;
 }
 

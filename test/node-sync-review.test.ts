@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, utimes } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { observeMaterialResource } from "../src/fs/source-observation.js";
@@ -34,6 +34,8 @@ test("review fix: an external Node URI keeps its semantic version when its consu
       "## Scope\n[ref](./ref.md)\n",
     ),
   );
+  const oldTime = new Date(Date.now() - 5_000);
+  await utimes(filename, oldTime, oldTime);
   for (const suffix of ["", "#Scope"]) {
     const uri = pathToFileURL(filename).href + suffix;
     const before = await observeMaterialResource(root, "G/G.md", uri, path.join(root, "cache"));

@@ -151,7 +151,7 @@ SessionStart 先收录待处理的原生 Node 编辑，仅在有待收录改动�
 
 点名采用 SPEC 的固定英文文案，合并可能的新决定。Stop 不查询文件存在性或 ignore，模块点名只按声明地址，不因文件被忽略、已跟踪或不可用而过滤。意图信号只认“决定、确认、改成、新增需求”等明确表述，普通“请、需要、fix”不触发；本轮有明确 Node 或 Card 写入证据时不再提示意图。包含宿主信封的完整 JSON 不超过 2 KiB，溢出先删文件名、再删模块，保留固定文案和问题类别。Codex 用 `decision: block` 与 `reason`；Claude Code 用 `hookSpecificOutput` 的 `hookEventName: Stop` 与 `additionalContext`。`stop_hook_active: true` 立即静默，包括续作执行工具后的 Stop；取消、没有覆盖写入的轮次也静默，不自动执行 check 或 confirm。有效提问投递前，在 `.tent/temp/stop-reviews/` 以宿主、会话和轮次的 SHA-256 建独占空 claim，重复事件最多投递一次，无全局锁或重试；claim 写失败不续作，claim 后崩溃可能丢失该次投递。claim 不存转录或文件内容，也不压制不同轮次的相同文件。
 
-材料索引的派生缓存只放现有 `.tent/.git/tent-material-cache/stop-material-index.json`。每次重扫 Node 目录并读取完整当前头部字节，按路径和字节的 SHA-256 验证；同长度、mtime 不变的元数据编辑也会失效，新增、删除或损坏缓存均从当前权威重建。缓存写失败直接计算，不修改项目文件、Node/Card/Role、Git 提交或引用；缓存不代替权威字节或忽略规则。278 个 Node 的热 Stop 要满足 p50 ≤ 300 ms、最大 ≤ 1 s，启动与导入不计；持有工作区锁时也不得等待。完整续作成本另计。
+材料索引使用现有 `.tent/.git/tent-material-cache/stop-material-index.json` 持久增量缓存。每次校验目录与头部的大小、纳秒 mtime、ctime 和文件身份；匹配且不处于时间粒度竞争窗口的条目复用已有观察，目录变化才重新枚举，头部变化或处于竞争窗口才实读。同长度、恢复 mtime 的编辑仍由 ctime 或身份变化触发失效；全部状态字段都未变化的极少见修改可能漏看，单个 `node check` 提供内容实读兜底。缓存缺失、损坏或版本不符从当前文件重建，缓存写失败直接计算；不加常驻进程或 watcher，不修改项目文件、Node/Card/Role、Git 提交或引用。300 ms 保持规模目标，按相同夹具和既定口径报告实际时间；持有工作区锁时不得等待，完整续作成本另计。
 
 Codex 以原生 `turn_id` 定位轮次；Claude Code CLI 用 `--host claude-code`，以原生 `prompt_id` 对应转录的 `promptId`，没有身份的版本静默。Claude Read、Write、Edit 需匹配成功的结构化工具结果，侧链不计入。未观察到的 shell 或外部编辑器改动、取消轮次和未投递的提问都无法兜底内容保鲜；必须跟随内容变化的规则另挂具体文件或 SPEC 小节。两个实际宿主都须验证消息抵达且只续作一次；Hook 自身热耗时与完整续作成本分别记录。官方契约：[Codex Hooks](https://learn.chatgpt.com/docs/hooks)。
 

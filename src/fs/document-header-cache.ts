@@ -8,11 +8,16 @@ import {
   type FrontmatterCache,
 } from "../core/base/frontmatter.js";
 import { renameWithRetry } from "./rename-with-retry.js";
+import { withFileReadScope } from "./file-state-cache.js";
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest();
 
-/** A brief may reuse parsed headers, never file observations or a complete result. */
+/** A brief shares validated file observations and parsed headers, never a complete result. */
 export async function withDocumentHeaderCache<T>(systemRoot: string, action: () => Promise<T>) {
+  return withFileReadScope(() => withParsedHeaders(systemRoot, action));
+}
+
+async function withParsedHeaders<T>(systemRoot: string, action: () => Promise<T>) {
   if (
     !(await fs
       .stat(path.join(systemRoot, ".git"))

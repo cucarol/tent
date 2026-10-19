@@ -23,7 +23,7 @@ export interface FsAdapter {
     systemPath?: string;
   }>;
   /** Share one Workspace observation among the materials of a single inspection. */
-  observationScope?<T>(action: () => Promise<T>): Promise<T>;
+  observationScope?<T>(action: () => Promise<T>, options?: { forceContent?: boolean }): Promise<T>;
   /** Git index membership of an explicit local file; undefined when it cannot be established. */
   materialIsTracked?(resource: string, documentPath: string): Promise<boolean | undefined>;
   readonly history?: GitDocumentHistory;
@@ -42,6 +42,8 @@ export interface FsAdapter {
    * Path traversal defenses must match readFile.
    */
   readBinary(path: string): Promise<Uint8Array>;
+  /** Content digest validated against current file state; implementations may reuse an unracy observation. */
+  readContentDigest?(path: string): Promise<{ size: number; digest: string }>;
   /**
    * Write raw bytes. Prefer atomic temp+rename where the backend allows.
    * Path traversal defenses must match writeFile.

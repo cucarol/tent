@@ -52,6 +52,79 @@ const paths = (
   input: Awaited<ReturnType<ReturnType<typeof createModuleDependencyRepositoryReader>>>,
 ) => input.sources.map((file) => file.path);
 
+test("repository source cache reuses old unchanged bytes after independent state validation", async (t) => {
+  const { root, reader } = await fixture(t);
+  const file = path.join(root, "src/main.ts");
+  const old = new Date(Date.now() - 5000);
+  await fs.utimes(file, old, old);
+  const originalRead = fs.readFile;
+  const originalStat = fs.lstat;
+  let reads = 0;
+  let stats = 0;
+  const mockedRead = t.mock.method(fs, "readFile", (...args: Parameters<typeof originalRead>) => {
+    if (String(args[0]) === file) reads++;
+    return originalRead(...args);
+  });
+  const mockedStat = t.mock.method(fs, "lstat", (...args: Parameters<typeof originalStat>) => {
+    if (String(args[0]) === file) stats++;
+    return originalStat(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    const first = await reader();
+    assert.equal(reads, 1);
+    const firstStats = stats;
+    assert.strictEqual((await reader()).sources, first.sources);
+    assert.equal(reads, 1);
+    assert.ok(stats > firstStats, "a later request validates the file again");
+  } finally {
+    mockedRead.mock.restore();
+    mockedStat.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+test("repository source cache rereads racy equal-state files and observes changed imports", async (t) => {
+  const { root, write, reader } = await fixture(t);
+  const file = path.join(root, "src/main.ts");
+  const future = new Date(Date.now() + 60_000);
+  await fs.utimes(file, future, future);
+  const unchangedState = await fs.lstat(file, { bigint: true });
+  const originalRead = fs.readFile;
+  const originalStat = fs.lstat;
+  let reads = 0;
+  const mockedRead = t.mock.method(fs, "readFile", (...args: Parameters<typeof originalRead>) => {
+    if (String(args[0]) === file) reads++;
+    return originalRead(...args);
+  });
+  // Simulate a coarse filesystem reporting the same identity, size and timestamps after an edit.
+  const mockedStat = t.mock.method(fs, "lstat", (...args: Parameters<typeof originalStat>) => {
+    if (String(args[0]) === file)
+      return Promise.resolve(unchangedState) as ReturnType<typeof originalStat>;
+    return originalStat(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    const first = await reader();
+    await write("src/main.ts", "import './b.js';\n");
+    const second = await reader();
+    assert.equal(reads, 2);
+    assert.equal(
+      first.sources.find((source) => source.path === "src/main.ts")!.content,
+      "import './a.js';\n",
+    );
+    assert.equal(
+      second.sources.find((source) => source.path === "src/main.ts")!.content,
+      "import './b.js';\n",
+    );
+    assert.notStrictEqual(second.sources, first.sources);
+  } finally {
+    mockedRead.mock.restore();
+    mockedStat.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 test("repository reader uses live nonignored members, source/config reading rules, and stable input references", async (t) => {
   const { root, write, git, reader } = await fixture(t);
   await write("ignored/hidden.ts", "import '../src/a.js';\n");

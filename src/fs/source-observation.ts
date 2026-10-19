@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { open, realpath, readFile, writeFile, mkdir, rename, rm } from "node:fs/promises";
+import { open, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { checkedSourceFile } from "./checked-source-file.js";
@@ -15,115 +15,115 @@ import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { isNodeId } from "../core/base/id.js";
 import { nodeSemanticContent } from "../core/graph/node-sync-record.js";
 import { systemMaterialPath } from "../core/graph/material-target.js";
+import {
+  cachedFileValue,
+  fileState,
+  sameFileState,
+  withFileReadScope,
+  scopedRead,
+  peekScopedRead,
+  rememberFileValue,
+  type FileState,
+} from "./file-state-cache.js";
+
+type Selection = { key: string; content: (bytes: Buffer) => string | Buffer };
+type Fingerprint = { version: string; blobs: { sha1: string; sha256: string } };
+function isFingerprint(value: unknown): value is Fingerprint {
+  const record = value as Fingerprint | undefined;
+  return (
+    !!record &&
+    typeof record.version === "string" &&
+    /^[a-f0-9]{64}$/.test(record.version) &&
+    typeof record.blobs?.sha1 === "string" &&
+    /^[a-f0-9]{40}$/.test(record.blobs.sha1) &&
+    typeof record.blobs?.sha256 === "string" &&
+    /^[a-f0-9]{64}$/.test(record.blobs.sha256)
+  );
+}
 
 /** Safely read and hash bytes; the Core caller supplies any content selection. */
 export async function observeSourceFile(
   root: string,
   filename: string,
   cacheDir?: string,
-  selection?: {
-    key: string;
-    content: (bytes: Buffer) => string | Buffer;
-  },
+  selection?: Selection,
 ) {
-  await checkedSourceFile(root, filename);
+  return withFileReadScope(() => observeSourceFileInScope(root, filename, cacheDir, selection));
+}
+
+async function observeSourceFileInScope(
+  root: string,
+  filename: string,
+  cacheDir?: string,
+  selection?: Selection,
+) {
+  const initial = fileState(await checkedSourceFile(root, filename, false, true));
   const canonicalPath = await realpath(filename);
+  const cachePath = cacheDir ? path.join(cacheDir, "file-state.json") : undefined;
+  const cacheKey = `material:${JSON.stringify([canonicalPath, selection?.key])}`;
+  const cached = await cachedFileValue(cachePath, cacheKey, initial, isFingerprint);
+  if (cached) {
+    const final = await checkedSourceFile(root, filename, false, true);
+    if (!sameFileState(fileState(final), initial))
+      throw new Error("Material changed during cache lookup");
+    return { canonicalPath, observedVersion: cached.version, cacheHit: true, blobs: cached.blobs };
+  }
   const handle = await open(
     filename,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
   );
   try {
-    const before = await handle.stat(),
-      current = await checkedSourceFile(root, filename);
+    const before = await handle.stat({ bigint: true }),
+      current = await checkedSourceFile(root, filename, false, true);
     if (!before.isFile() || before.dev !== current.dev || before.ino !== current.ino)
       throw new Error("Material changed while opening");
-    const signature = {
-      size: before.size,
-      mtime: before.mtimeMs,
-      ctime: before.ctimeMs,
-      dev: before.dev,
-      ino: before.ino,
-    };
-    const cachePath = cacheDir
-      ? path.join(
-          cacheDir,
-          createHash("sha256")
-            .update(selection ? JSON.stringify([canonicalPath, selection.key]) : canonicalPath)
-            .digest("hex") + ".json",
-        )
-      : undefined;
-    if (cachePath) {
-      const cached = await readFile(cachePath, "utf8")
-        .then(JSON.parse)
-        .catch(() => undefined);
-      const after = await handle.stat();
-      if (
-        cached &&
-        JSON.stringify(cached.signature) === JSON.stringify(signature) &&
-        /^[a-f0-9]{64}$/.test(cached.version) &&
-        /^[a-f0-9]{40}$/.test(cached.blobs?.sha1) &&
-        /^[a-f0-9]{64}$/.test(cached.blobs?.sha256) &&
-        after.size === before.size &&
-        after.mtimeMs === before.mtimeMs &&
-        after.ctimeMs === before.ctimeMs
-      ) {
-        const final = await checkedSourceFile(root, filename);
-        if (final.dev !== before.dev || final.ino !== before.ino)
-          throw new Error("Material changed during cache lookup");
-        return {
-          canonicalPath,
-          observedVersion: cached.version as string,
-          cacheHit: true,
-          blobs: cached.blobs as { sha1: string; sha256: string },
-        };
-      }
-    }
-    const hash = createHash("sha256"),
-      sha1 = createHash("sha1").update(`blob ${before.size}\0`),
-      sha256 = createHash("sha256").update(`blob ${before.size}\0`),
-      buffer = Buffer.alloc(64 * 1024);
-    const chunks: Buffer[] = [];
-    let position = 0;
-    while (position < before.size) {
-      const { bytesRead } = await handle.read(
-        buffer,
-        0,
-        Math.min(buffer.length, before.size - position),
-        position,
+    const signature = fileState(before);
+    let acquired = false;
+    const observed = await scopedRead(`bytes:${filename}`, async () => {
+      acquired = true;
+      const buffer = Buffer.alloc(64 * 1024);
+      const chunks: Buffer[] = [];
+      let position = 0;
+      const prefix = await peekScopedRead<{ bytes?: Buffer; state: FileState }>(
+        `prefix-bytes:${filename}`,
       );
-      if (!bytesRead) throw new Error("Material truncated while observing");
-      sha1.update(buffer.subarray(0, bytesRead));
-      sha256.update(buffer.subarray(0, bytesRead));
-      if (selection) chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
-      else hash.update(buffer.subarray(0, bytesRead));
-      position += bytesRead;
-    }
-    const after = await handle.stat(),
-      final = await checkedSourceFile(root, filename);
-    if (
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      after.ctimeMs !== before.ctimeMs ||
-      final.dev !== before.dev ||
-      final.ino !== before.ino
-    ) {
+      if (prefix?.bytes && sameFileState(prefix.state, signature)) {
+        chunks.push(prefix.bytes);
+        position = prefix.bytes.length;
+      }
+      while (position < Number(before.size)) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          0,
+          Math.min(buffer.length, Number(before.size) - position),
+          position,
+        );
+        if (!bytesRead) throw new Error("Material truncated while observing");
+        chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+        position += bytesRead;
+      }
+      const after = await handle.stat({ bigint: true });
+      const final = await checkedSourceFile(root, filename, false, true);
+      if (
+        !sameFileState(fileState(after), signature) ||
+        !sameFileState(fileState(final), signature)
+      )
+        throw new Error("Material changed while observing");
+      return { bytes: Buffer.concat(chunks), state: signature };
+    });
+    const final = acquired ? before : await checkedSourceFile(root, filename, false, true);
+    if (!sameFileState(fileState(final), signature) || !sameFileState(observed.state, signature)) {
       throw new Error("Material changed while observing");
     }
-    if (selection) {
-      hash.update(selection.content(Buffer.concat(chunks)));
-    }
-    const observedVersion = hash.digest("hex");
-    const blobs = { sha1: sha1.digest("hex"), sha256: sha256.digest("hex") };
-    if (cachePath) {
-      const temp = `${cachePath}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`;
-      try {
-        await mkdir(cacheDir!, { recursive: true });
-        await writeFile(temp, JSON.stringify({ signature, version: observedVersion, blobs }));
-        await rename(temp, cachePath);
-      } catch {
-        await rm(temp, { force: true }).catch(() => undefined);
-      }
-    }
+    const bytes = observed.bytes;
+    const observedVersion = createHash("sha256")
+      .update(selection ? selection.content(bytes) : bytes)
+      .digest("hex");
+    const blobs = {
+      sha1: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
+      sha256: createHash("sha256").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
+    };
+    await rememberFileValue(cachePath, cacheKey, signature, { version: observedVersion, blobs });
     return {
       canonicalPath,
       observedVersion,

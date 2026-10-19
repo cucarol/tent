@@ -141,6 +141,8 @@ test("material cache isolates full files and headings while other-section edits 
   const a = "## A\n\nA 内容。\n\n";
   const b = "## B\n\nB 内容。\n";
   await fs.writeFile(filename, a + b);
+  const oldTime = new Date(Date.now() - 5_000);
+  await fs.utimes(filename, oldTime, oldTime);
   const uri = pathToFileURL(filename).href;
   const observe = (suffix: string) =>
     observeMaterialResource(root, "Node/Node.md", uri + suffix, cacheDir);
@@ -151,8 +153,9 @@ test("material cache isolates full files and headings while other-section edits 
   assert.notEqual(first.observedVersion, full.observedVersion);
   for (const suffix of ["#A", "#B", "", "#", "#%20"])
     assert.equal((await observe(suffix)).cacheHit, true);
-  assert.equal((await fs.readdir(cacheDir)).length, 3);
+  assert.deepEqual(await fs.readdir(cacheDir), ["file-state.json"]);
   await fs.writeFile(filename, a + "## B\n\nB 增加了新内容。\n");
+  await fs.utimes(filename, oldTime, oldTime);
   assert.equal((await observe("#A")).observedVersion, first.observedVersion);
   assert.equal((await observe("#A")).cacheHit, true);
   assert.notEqual((await observe("#B")).observedVersion, second.observedVersion);

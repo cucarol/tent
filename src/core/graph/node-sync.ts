@@ -79,6 +79,16 @@ export async function inspectWorkspaceSync(
   invalidNativeNodes: readonly InvalidNativeNode[] = [],
   currentCatalog?: NodeCatalog,
 ) {
+  const run = () => inspectWorkspaceSyncInScope(fs, now, invalidNativeNodes, currentCatalog);
+  return fs.observationScope ? fs.observationScope(run) : run();
+}
+
+async function inspectWorkspaceSyncInScope(
+  fs: FsAdapter,
+  now: string,
+  invalidNativeNodes: readonly InvalidNativeNode[],
+  currentCatalog?: NodeCatalog,
+) {
   const catalog = currentCatalog ?? (await loadNodeCatalog(fs));
   return {
     ...(await inspectCatalogNodes(
@@ -145,7 +155,10 @@ async function inspectCatalogNodesInScope(
   const materialObservations: NonNullable<Parameters<typeof observeNodeMaterials>[5]> = new Map();
   const documents = new Map<string, ReturnType<typeof readCatalogDocument>>();
   const readDocument = (node: CatalogNode, retry: boolean) => {
-    if (retry) return readCatalogDocument(fs, node);
+    if (retry) {
+      const reread = () => readCatalogDocument(fs, node);
+      return fs.observationScope ? fs.observationScope(reread, { forceContent: true }) : reread();
+    }
     let pending = documents.get(node.path);
     if (!pending) {
       const observed = catalog.observedDocuments?.get(node.nodeId);
@@ -188,7 +201,8 @@ async function inspectCatalogNodesInScope(
         nodeCatalog.byId,
         retry || nodeCatalog !== catalog ? undefined : materialObservations,
       );
-    if (retry || nodeCatalog !== catalog) return read();
+    if (retry || nodeCatalog !== catalog)
+      return fs.observationScope ? fs.observationScope(read, { forceContent: true }) : read();
     const key = JSON.stringify([documentPath, materialOccurrences(data)]);
     let pending = materialReads.get(key);
     if (!pending) {
@@ -404,7 +418,10 @@ async function inspectCatalogNodesInScope(
         )
           throw error;
         if (attempt === 0) {
-          nodeCatalog = await loadNodeCatalog(fs);
+          const reload = () => loadNodeCatalog(fs);
+          nodeCatalog = await (fs.observationScope
+            ? fs.observationScope(reload, { forceContent: true })
+            : reload());
           const refreshed = nodeCatalog.byId.get(current.nodeId);
           if (
             refreshed &&
@@ -529,6 +546,11 @@ export async function inspectNodeSync(
   nodeId: string,
   now = new Date().toISOString(),
 ) {
+  const run = () => inspectSingleNodeSync(fs, nodeId, now);
+  return fs.observationScope ? fs.observationScope(run, { forceContent: true }) : run();
+}
+
+async function inspectSingleNodeSync(fs: FsAdapter, nodeId: string, now: string) {
   const catalog = await loadNodeCatalog(fs),
     active = currentNodes(catalog);
   const target = catalog.byId.get(nodeId);

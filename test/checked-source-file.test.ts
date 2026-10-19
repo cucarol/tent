@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { checkedSourceFile } from "../src/fs/checked-source-file.js";
 import { observeSourceFile } from "../src/fs/source-observation.js";
 import { testScratchRoot } from "./scratch.js";
+import { withFileReadScope } from "../src/fs/file-state-cache.js";
 
 test("overlapping path checks share pending ancestry reads but later checks see replacement links", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "checked-source-"));
@@ -30,8 +31,10 @@ test("overlapping path checks share pending ancestry reads but later checks see 
   syncBuiltinESMExports();
   try {
     const check = () =>
-      Promise.all(
-        ["a.ts", "b.ts"].map((name) => checkedSourceFile(root, path.join(directory, name))),
+      withFileReadScope(() =>
+        Promise.all(
+          ["a.ts", "b.ts"].map((name) => checkedSourceFile(root, path.join(directory, name))),
+        ),
       );
     assert.ok((await check()).every((entry) => entry.isFile()));
     assert.equal(roots, 1);

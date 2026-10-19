@@ -12,7 +12,7 @@ import { GitDocumentHistory, type CaptureMetadata } from "../core/store/git-hist
 import { isHistoryDocument, isHistoryFile } from "../core/store/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 import { observeMaterialResource } from "./source-observation.js";
-import { withStructureSnapshot } from "./structure-observation.js";
+import { withStructureSnapshot, withoutStructureSnapshot } from "./structure-observation.js";
 import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import {
   prepareNodeSyncSave,
@@ -24,6 +24,26 @@ import { loadNodeCatalog } from "../core/graph/node-catalog.js";
 import { materialLocator } from "../core/base/material.js";
 import { assertSystemMaterial } from "../core/graph/material-target.js";
 import { materialIsTracked } from "./material-tracking.js";
+import { createHash } from "node:crypto";
+import { documentHeader } from "../core/graph/node-catalog.js";
+import {
+  cachedFileValue,
+  fileState,
+  sameFileState,
+  withFileReadScope,
+  withoutFileReadScope,
+  scopedRead,
+  peekScopedRead,
+  rememberFileValue,
+  forgetScopedReads,
+  forgetScopedRead,
+  hasFileReadScope,
+  type FileState,
+} from "./file-state-cache.js";
+import { withDocumentHeaderCache } from "./document-header-cache.js";
+
+type ObservedBytes = { bytes: Buffer; state: FileState };
+type ObservedPrefix = { header: string; state: FileState; bytes?: Buffer };
 
 export class NodeFs implements FsAdapter {
   private root: string;
@@ -42,8 +62,23 @@ export class NodeFs implements FsAdapter {
     this.history = new GitDocumentHistory(this.root, entry);
   }
 
-  observationScope<T>(action: () => Promise<T>): Promise<T> {
-    return withStructureSnapshot(action);
+  observationScope<T>(action: () => Promise<T>, options?: { forceContent?: boolean }): Promise<T> {
+    if (hasFileReadScope() && !options?.forceContent) return withStructureSnapshot(action);
+    return withFileReadScope(
+      () =>
+        withDocumentHeaderCache(this.root, () =>
+          withStructureSnapshot(action, options?.forceContent),
+        ),
+      options?.forceContent,
+    );
+  }
+
+  private readCacheFile(): Promise<string | undefined> {
+    return scopedRead(`cache-location:${this.root}`, async () =>
+      (await this.exists(".git"))
+        ? this.abs(".git/tent-material-cache/file-state.json")
+        : undefined,
+    );
   }
 
   async materialIsTracked(resource: string, documentPath: string) {
@@ -95,17 +130,65 @@ export class NodeFs implements FsAdapter {
   }
 
   async listDir(dir: string): Promise<{ name: string; isDir: boolean }[]> {
-    const entries = await fs.readdir(this.abs(dir), { withFileTypes: true });
-    return entries
-      .filter((e) => !e.name.startsWith(".git"))
-      .map((e) => ({ name: e.name, isDir: e.isDirectory() }));
+    return scopedRead(`directory:${this.abs(dir)}`, async () => {
+      const entries = await fs.readdir(this.abs(dir), { withFileTypes: true });
+      return entries
+        .filter((e) => !e.name.startsWith(".git"))
+        .map((e) => ({ name: e.name, isDir: e.isDirectory() }));
+    });
   }
 
   async readFile(path: string): Promise<string> {
-    return fs.readFile(this.abs(path), "utf8");
+    return (await this.readBytes(path, false)).bytes.toString("utf8");
   }
 
   async readFrontmatter(path: string): Promise<string> {
+    return (await this.readFrontmatterObservation(path)).content;
+  }
+
+  /** A derived cache must retain the identity of the observation that supplied its content. */
+  async readFrontmatterObservation(path: string): Promise<{ content: string; state: FileState }> {
+    return withFileReadScope(() =>
+      scopedRead(`header:${this.abs(path)}`, async () => {
+        const full = peekScopedRead<ObservedBytes>(`bytes:${this.abs(path)}`);
+        if (full) {
+          const { bytes, state } = await full;
+          try {
+            return { content: documentHeader(bytes.toString("utf8")), state };
+          } catch {
+            return { content: bytes.toString("utf8"), state };
+          }
+        }
+        const prefix = await scopedRead(`prefix-bytes:${this.abs(path)}`, () =>
+          this.readPrefix(path),
+        );
+        return { content: prefix.header, state: prefix.state };
+      }),
+    );
+  }
+
+  private async readPrefix(path: string): Promise<ObservedPrefix> {
+    const state = fileState(await fs.stat(this.abs(path), { bigint: true }));
+    const cache = await this.readCacheFile();
+    const key = `header:${this.abs(path)}`;
+    const cached = await cachedFileValue(
+      cache,
+      key,
+      state,
+      (value): value is string => typeof value === "string",
+    );
+    if (cached !== undefined) return { header: cached, state };
+    const { header, bytes } = await this.readFrontmatterUncached(path, state);
+    const after = fileState(await fs.stat(this.abs(path), { bigint: true }));
+    if (!sameFileState(state, after)) throw new Error("Source changed while reading header");
+    await rememberFileValue(cache, key, state, header);
+    return { header, bytes, state };
+  }
+
+  private async readFrontmatterUncached(
+    path: string,
+    expected: FileState,
+  ): Promise<{ header: string; bytes: Buffer; complete: boolean }> {
     const handle = await fs.open(this.abs(path), "r");
     const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
     const chunk = Buffer.alloc(4096);
@@ -114,10 +197,21 @@ export class NodeFs implements FsAdapter {
     let raw = "";
     let openingEnd = -1;
     let searchFrom = 0;
+    const chunks: Buffer[] = [];
     try {
+      // Path stats can both see the original file after a directory is swapped
+      // out and restored. Bind the bytes to the handle actually opened as well.
+      const opened = fileState(await handle.stat({ bigint: true }));
+      if (!sameFileState(opened, expected)) throw new Error("Source changed while reading header");
+      const finish = async (header: string, complete: boolean) => {
+        if (!sameFileState(fileState(await handle.stat({ bigint: true })), opened))
+          throw new Error("Source changed while reading header");
+        return { header, bytes: Buffer.concat(chunks), complete };
+      };
       while (true) {
         const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
         const eof = bytesRead === 0;
+        if (bytesRead) chunks.push(Buffer.from(chunk.subarray(0, bytesRead)));
         raw += decoder.decode(chunk.subarray(0, bytesRead), { stream: !eof });
 
         if (openingEnd < 0) {
@@ -126,7 +220,7 @@ export class NodeFs implements FsAdapter {
             openingEnd = match[0].length;
             searchFrom = openingEnd;
           } else if (eof || !/^(?:\uFEFF)?(?:-{0,2}|---[\t ]*\r?)$/.test(raw)) {
-            return "";
+            return await finish("", eof);
           } else {
             continue;
           }
@@ -142,7 +236,7 @@ export class NodeFs implements FsAdapter {
             closing[0].endsWith("\n") ||
             (end < raw.length && !(raw[end] === "\r" && end === raw.length - 1))
           ) {
-            return raw.slice(0, end);
+            return await finish(raw.slice(0, end), eof);
           }
           searchFrom = closing.index;
         } else {
@@ -156,7 +250,7 @@ export class NodeFs implements FsAdapter {
               openingEnd - 1,
             ) + 1;
         }
-        if (eof) return raw;
+        if (eof) return await finish(raw, true);
       }
     } finally {
       await handle.close();
@@ -164,6 +258,7 @@ export class NodeFs implements FsAdapter {
   }
 
   async writeFile(path: string, content: string): Promise<void> {
+    forgetScopedReads();
     const abs = this.abs(path);
     const tracked = await this.beforeHistoryChange([path]);
     await fs.mkdir(nodePath.dirname(abs), { recursive: true });
@@ -174,34 +269,105 @@ export class NodeFs implements FsAdapter {
   async readBinary(path: string): Promise<Uint8Array> {
     const candidate = this.abs(path);
     await checkedSourceFile(this.root, candidate);
+    return (await this.readBytes(path, true)).bytes;
+  }
+
+  private async readBytes(path: string, checked: boolean): Promise<ObservedBytes> {
+    const key = `bytes:${this.abs(path)}`;
+    const previous = peekScopedRead<ObservedBytes>(key);
+    if (previous) {
+      const observed = await previous;
+      const current = fileState(await fs.stat(this.abs(path), { bigint: true }));
+      if (sameFileState(observed.state, current)) return observed;
+      // Core rereads documents to detect conflicts. A request-local snapshot must
+      // not turn that recheck into a comparison with its own earlier bytes.
+      forgetScopedRead(key);
+    }
+    return scopedRead(key, () =>
+      this.readBytesUncached(
+        path,
+        checked,
+        peekScopedRead<ObservedPrefix>(`prefix-bytes:${this.abs(path)}`),
+      ),
+    );
+  }
+
+  private async readBytesUncached(
+    path: string,
+    checked: boolean,
+    pendingPrefix?: Promise<ObservedPrefix>,
+  ): Promise<ObservedBytes> {
+    const candidate = this.abs(path);
+    if (checked) await checkedSourceFile(this.root, candidate);
     const handle = await fs.open(
       candidate,
-      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+      checked
+        ? constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
+        : "r",
     );
     try {
-      const before = await handle.stat(),
-        current = await checkedSourceFile(this.root, candidate);
-      if (before.dev !== current.dev || before.ino !== current.ino)
+      const before = await handle.stat({ bigint: true }),
+        current = checked ? await checkedSourceFile(this.root, candidate, false, true) : undefined;
+      if (current && (before.dev !== current.dev || before.ino !== current.ino))
         throw new Error("Source changed while opening");
-      const buf = await handle.readFile();
-      const after = await handle.stat(),
-        final = await checkedSourceFile(this.root, candidate);
+      const prefix = await pendingPrefix;
+      let buf: Buffer;
+      if (prefix?.bytes && sameFileState(prefix.state, fileState(before))) {
+        const rest = Buffer.alloc(Number(before.size) - prefix.bytes.length);
+        let offset = 0;
+        while (offset < rest.length) {
+          const { bytesRead } = await handle.read(
+            rest,
+            offset,
+            rest.length - offset,
+            prefix.bytes.length + offset,
+          );
+          if (!bytesRead) throw new Error("Source truncated while reading");
+          offset += bytesRead;
+        }
+        buf = Buffer.concat([prefix.bytes, rest]);
+      } else buf = await handle.readFile();
+      const after = await handle.stat({ bigint: true }),
+        final = checked
+          ? await checkedSourceFile(this.root, candidate, false, true)
+          : await fs.stat(candidate, { bigint: true });
       if (
-        buf.length !== before.size ||
-        after.size !== before.size ||
-        after.mtimeMs !== before.mtimeMs ||
-        after.ctimeMs !== before.ctimeMs ||
+        BigInt(buf.length) !== before.size ||
+        !sameFileState(fileState(after), fileState(before)) ||
         final.dev !== before.dev ||
         final.ino !== before.ino
       )
         throw new Error("Source changed while reading");
-      return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+      return { bytes: buf, state: fileState(before) };
     } finally {
       await handle.close();
     }
   }
 
+  async readContentDigest(path: string): Promise<{ size: number; digest: string }> {
+    return withFileReadScope(() =>
+      scopedRead(`digest:${this.abs(path)}`, async () => {
+        await checkedSourceFile(this.root, this.abs(path));
+        const state = fileState(await fs.stat(this.abs(path), { bigint: true }));
+        const cache = await this.readCacheFile();
+        const key = `digest:${this.abs(path)}`;
+        const cached = await cachedFileValue(
+          cache,
+          key,
+          state,
+          (value): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
+        );
+        if (cached !== undefined) return { size: Number(state.size), digest: cached };
+        const { bytes, state: observed } = await this.readBytes(path, true);
+        const digest = createHash("sha256").update(bytes).digest("hex");
+        await rememberFileValue(cache, key, observed, digest);
+        return { size: bytes.length, digest };
+      }),
+    );
+  }
+
   async writeBinary(path: string, data: Uint8Array): Promise<void> {
+    forgetScopedReads();
     const abs = this.abs(path);
     const tracked = await this.beforeHistoryChange([path]);
     await fs.mkdir(nodePath.dirname(abs), { recursive: true });
@@ -240,6 +406,7 @@ export class NodeFs implements FsAdapter {
   }
 
   async move(from: string, to: string): Promise<void> {
+    forgetScopedReads();
     const files = this.historyWrites.getStore() ? await this.filesUnder(from) : [];
     const targets = files.map((file) => to + file.slice(from.length));
     const tracked = await this.beforeHistoryChange([...files, ...targets]);
@@ -253,6 +420,7 @@ export class NodeFs implements FsAdapter {
   }
 
   async remove(path: string): Promise<void> {
+    forgetScopedReads();
     const files = this.historyWrites.getStore() ? await this.filesUnder(path) : [];
     const tracked = await this.beforeHistoryChange(files);
     await fs.rm(this.abs(path), { recursive: true, force: true });
@@ -430,16 +598,27 @@ export class NodeFs implements FsAdapter {
   }
 
   async withLock<T>(path: string, action: () => Promise<T>): Promise<T> {
-    return withFileMutationLock(
-      this.abs(path),
-      async () => ((await this.exists(".git")) ? this.history.withCaptureScope(action) : action()),
-      {
-        waitMs: 8_000,
-        busyMessage:
-          "Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying.",
-        acquireFailedMessage: "Cannot acquire the Tent mutation lock.",
-      },
-    );
+    try {
+      return await withFileMutationLock(
+        this.abs(path),
+        async () =>
+          withoutStructureSnapshot(() =>
+            withoutFileReadScope(() =>
+              this.exists(".git").then((hasGit) =>
+                hasGit ? this.history.withCaptureScope(action) : action(),
+              ),
+            ),
+          ),
+        {
+          waitMs: 8_000,
+          busyMessage:
+            "Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying.",
+          acquireFailedMessage: "Cannot acquire the Tent mutation lock.",
+        },
+      );
+    } finally {
+      forgetScopedReads();
+    }
   }
 }
 

@@ -40,15 +40,12 @@ import { readWorkspaceRevision } from "../core/workspace/workspace-revision.js";
 import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
 import { readModuleDependencies } from "../core/graph/module-dependencies.js";
 import { checkWorkspaceModules } from "../core/check/workspace-module-map.js";
-import { createModuleDependencyQuery } from "../core/read/module-dependency-query.js";
+import { readWorkspaceMap } from "../core/read/workspace-map.js";
 import { validationIssueText } from "../core/base/validation-message.js";
 import { NodeFs, SystemClock } from "../fs/node-fs.js";
 import { createModuleDependencyRepositoryReader } from "../fs/module-dependencies.js";
 import { readModuleMapRepository } from "../fs/workspace-scan.js";
-import { createModuleDependencyWatch } from "../fs/module-dependency-watch.js";
-import type { Snapshot } from "../ui/data/types.js";
 import { buildSnapshot } from "./snapshot.js";
-import { shareInFlightReads } from "./shared-reads.js";
 import { readWorkspaces, rememberWorkspace, workspaceKey } from "./workspaces.js";
 
 export type UiServerOptions = {
@@ -180,17 +177,9 @@ async function startWorkspaceServer(
   const tentRoot = path.join(workspaceRoot, TENT_SYSTEM_DIR);
   const staticDir = path.resolve(options.staticDir);
   const fs = new NodeFs(tentRoot, "ui");
-  const queryFs = shareInFlightReads(fs);
-  let codeFacts: Promise<unknown> | undefined;
+  const queryFs = fs;
   const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot };
   const dependencyRepository = createModuleDependencyRepositoryReader(workspaceRoot);
-  const dependencyQuery = createModuleDependencyQuery({
-    compute: () => readModuleDependencies(queryFs, workspaceRoot, dependencyRepository()),
-    watch: (changed, unavailable) =>
-      createModuleDependencyWatch(workspaceRoot, changed, unavailable),
-    reportMode: (mode, reason) =>
-      console.error(`Tent module dependencies: ${mode}${reason ? ` (${reason})` : ""}`),
-  });
   const { workspaceId } = await readWorkspaceSettings(fs);
   if (!workspaceId) throw new Error(`Workspace has no workspaceId: ${tentRoot}`);
   const workspace = { id: workspaceId, name: path.basename(workspaceRoot) };
@@ -200,37 +189,12 @@ async function startWorkspaceServer(
   const token = randomBytes(32).toString("base64url");
   const tokenDigest = createHash("sha256").update(token).digest();
   let port = 0;
-  let cached: Snapshot | undefined;
-  let building: { revision: string; fresh: boolean; snapshot: Promise<Snapshot> } | undefined;
   // Queue writes from this service before entering Tent's bounded cross-process lock wait.
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T>(write: () => Promise<T>): Promise<T> => {
     const run = queue.then(write, write);
     queue = run.catch(() => undefined);
     return run;
-  };
-
-  /**
-   * One build per revision, shared by every request that arrives while it runs. A fresh build reruns
-   * the same revision: material changes outside Tent move Card progress without a new revision.
-   */
-  const snapshot = async (fresh = false) => {
-    const revision = await readWorkspaceRevision(queryFs);
-    if (!fresh && cached?.workspace.revision === revision) return cached;
-    if (building?.revision !== revision || (fresh && !building.fresh)) {
-      const pending = buildSnapshot({ fs: queryFs, workspace, revision });
-      building = { revision, fresh, snapshot: pending };
-      pending.then(
-        (built) => {
-          cached = built;
-          if (building?.snapshot === pending) building = undefined;
-        },
-        () => {
-          if (building?.snapshot === pending) building = undefined;
-        },
-      );
-    }
-    return building!.snapshot;
   };
 
   const origins = () => [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -275,23 +239,37 @@ async function startWorkspaceServer(
         ),
       );
     }
-    if (route === "GET /api/modules/deps") return json(res, 200, await dependencyQuery.read());
+    if (route === "GET /api/map")
+      return json(
+        res,
+        200,
+        await readWorkspaceMap(queryFs, workspace, workspaceRoot, dependencyRepository()),
+      );
+    if (route === "GET /api/modules/deps")
+      return json(res, 200, {
+        ...(await readModuleDependencies(queryFs, workspaceRoot, dependencyRepository())),
+        computedAt: new Date().toISOString(),
+        fresh: true,
+        mode: "verify",
+        reason: "Inputs are validated on each request",
+      });
     // Which tests cover each part that holds code, and what it often changes with: worked out from the
-    // current files and history on each read, never written anywhere. Reads in flight are shared.
+    // current files and history on each read, never written anywhere.
     if (route === "GET /api/modules/facts") {
-      codeFacts ??= readModuleMapRepository(workspaceRoot)
-        .then((repository) => checkWorkspaceModules(queryFs, workspaceRoot, repository))
-        .then((check) => ({
-          head: check.head,
-          commitLimit: check.commitLimit,
-          modules: check.modules.map(({ id, testedBy, coChanges }) => ({
-            id,
-            testedBy,
-            coChanges,
-          })),
-        }))
-        .finally(() => (codeFacts = undefined));
-      return json(res, 200, await codeFacts);
+      const check = await checkWorkspaceModules(
+        queryFs,
+        workspaceRoot,
+        await readModuleMapRepository(workspaceRoot),
+      );
+      return json(res, 200, {
+        head: check.head,
+        commitLimit: check.commitLimit,
+        modules: check.modules.map(({ id, testedBy, coChanges }) => ({
+          id,
+          testedBy,
+          coChanges,
+        })),
+      });
     }
     if (route === "GET /api/nodes/material-overlaps")
       return json(
@@ -325,9 +303,10 @@ async function startWorkspaceServer(
     }
     if (route === "GET /api/snapshot") {
       const fresh = url.searchParams.get("fresh") === "1";
-      const current = await snapshot(fresh);
-      const etag = `"${current.workspace.revision}"`;
+      const revision = await readWorkspaceRevision(queryFs);
+      const etag = `"${revision}"`;
       if (!fresh && req.headers["if-none-match"] === etag) return end(res, 304, { ETag: etag });
+      const current = await buildSnapshot({ fs: queryFs, workspace, revision });
       return json(res, 200, current, { ETag: etag });
     }
     if (nodeId && method === "GET") {
@@ -705,7 +684,10 @@ async function startWorkspaceServer(
       const origin = req.headers.origin;
       if (origin && !origins().some((o) => origin === `http://${o}`))
         throw new HttpError(403, "FORBIDDEN_ORIGIN", "Unexpected Origin");
-      return isApi ? api(req, res, url) : page(req, res, url);
+      if (!isApi) return page(req, res, url);
+      return req.method === "GET" || req.method === "HEAD"
+        ? fs.observationScope(() => api(req, res, url))
+        : api(req, res, url);
     };
     handle().catch((error: unknown) => {
       const failure = httpError(error);
@@ -748,7 +730,6 @@ async function startWorkspaceServer(
         });
         await Promise.all([
           stopped,
-          dependencyQuery.close(),
           ...[...opened].map(async (starting) => {
             const other = await starting.catch(() => undefined);
             await other?.close();

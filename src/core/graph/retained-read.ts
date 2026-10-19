@@ -59,6 +59,7 @@ export async function retainedDocumentFs(fs: FsAdapter): Promise<FsAdapter> {
     get(target, key) {
       if (key === "invalidNodeEdits") return undefined;
       if (key === "readFile") return read;
+      if (key === "readContentDigest") return undefined;
       if (key === "readBinary")
         return async (path: string) =>
           isHistoryDocument(path) ? Buffer.from(await read(path), "utf8") : target.readBinary(path);

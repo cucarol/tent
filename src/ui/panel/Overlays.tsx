@@ -6,6 +6,7 @@ import { Pet } from "../components/Pet.js";
 import { isDraft } from "../data/drafts.js";
 import { cardStateLabel } from "../data/card-state.js";
 import { t } from "../i18n.js";
+import { useWantDetails } from "../data/details.js";
 
 type Item = { ref: SnapshotRef; name: string; sub: string; hay: string; kindLabel: string };
 
@@ -70,6 +71,8 @@ export function Palette({
   onOpen: (ref: SnapshotRef) => void;
   onClose: () => void;
 }) {
+  // Search covers Roles, Cards and bodies, which come with the snapshot.
+  useWantDetails(!graph.detailed);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const results = useMemo(() => search(graph, query), [graph, query]);
