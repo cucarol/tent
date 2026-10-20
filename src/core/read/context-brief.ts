@@ -38,7 +38,10 @@ async function inspectCurrentContextInScope(
   // Card queries can finish without consuming these shared results. The main
   // syncPromise below remains responsible for reporting capture/sync failures.
   void catalog.catch(() => undefined);
-  const cardOptions = options.roleId ? { roleId: options.roleId, includeOpen: true } : {};
+  const cardOptions = {
+    unfinishedOnly: true,
+    ...(options.roleId ? { roleId: options.roleId, includeOpen: true } : {}),
+  };
   const headersPromise = listCardDocumentHeaders(fs, cardOptions);
   const cardsPromise = headersPromise.then((headers) =>
     listCardDocuments(fs, cardOptions, headers),

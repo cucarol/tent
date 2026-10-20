@@ -45,8 +45,13 @@ async function bytes(directory: string, prefix = ""): Promise<Record<string, str
   )) {
     const file = path.join(directory, entry.name);
     const key = `${prefix}${entry.name}`;
-    // Disposable history indexes may be populated by an otherwise read-only query.
-    if (/\/\.git\/tent-(?:history-index|derived-[a-z0-9-]+)\.json$/.test(key)) continue;
+    // Disposable history and completion indexes may be populated by a read-only query.
+    if (
+      /\/\.git\/tent-(?:history-index|derived-[a-z0-9-]+|material-cache\/completed-cards)\.json$/.test(
+        key,
+      )
+    )
+      continue;
     if (entry.isDirectory()) Object.assign(result, await bytes(file, `${key}/`));
     else result[key] = (await fs.readFile(file)).toString("base64");
   }

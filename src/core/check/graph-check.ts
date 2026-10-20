@@ -7,7 +7,11 @@ import { resolveOutLink, rewriteMarkdownDestinations } from "../base/links.js";
 import { resolveTargetPath } from "../base/link-target.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { parseRoleDocument } from "../store/role-document.js";
-import { parseCardDocument, verifyCardSourceVersions } from "../graph/card-document.js";
+import {
+  completedCardPaths,
+  parseCardDocument,
+  verifyCardSourceVersions,
+} from "../graph/card-document.js";
 import {
   materialLocator,
   localMaterialPath,
@@ -170,6 +174,9 @@ export async function checkGraph(
     }
     await readDocument(file, () => {}, !node.invalid);
   }
+  const completed = await completedCardPaths(readonlyFs);
+  const completedDocuments: Array<{ path: string; raw: string }> = [];
+  const foundCards = new Set<string>();
   for (const [directory, kind] of [
     [ROLES_DIR, "role"],
     [CARDS_DIR, "card"],
@@ -178,12 +185,23 @@ export async function checkGraph(
     for (const entry of await observationFs.listDir(directory)) {
       if (entry.isDir || !entry.name.endsWith(".md")) continue;
       const id = entry.name.slice(0, -3);
+      const file = `${directory}/${entry.name}`;
+      if (kind === "card") foundCards.add(file);
       await readDocument(`${directory}/${entry.name}`, (raw) => {
         if (kind === "role") parseRoleDocument(id, raw);
-        else parseCardDocument(id, raw);
+        else {
+          parseCardDocument(id, raw);
+          if (completed.has(file)) completedDocuments.push({ path: file, raw });
+        }
       });
     }
   }
+  for (const file of completed)
+    if (!foundCards.has(file))
+      error(file, "Completed Card retained in Tent Git is missing on disk");
+  if (completedDocuments.length && readonlyFs.history)
+    for (const changed of await readonlyFs.history.changedRetainedDocuments(completedDocuments))
+      error(changed.path, "Completed Card differs from its retained Tent Git version");
   const byPath = new Map(documents.map((document) => [document.path, document]));
   const byId = new Map(
     documents.filter((document) => document.valid && document.id).map((d) => [d.id!, d]),

@@ -129,6 +129,8 @@ Role 在 `.tent/roles/<role-id>.md` 中保存持续方向的目的、边界、�
 
 Card 保存一次固定输入：短指令、可选接收 Role、可选返回地址 returnTo，以及按顺序排列的来源。Node 和 Role 来源钉住所选版本，其他来源保留地址。CLI 将从 Workspace 根目录传入的路径转换为相对 Card 文档的地址。发布后的 prompt、title、sources 和 returnTo 不可修改，手工修改会报告为 `INPUT_CHANGED`。接收者开始时没有发送方的对话；prompt 写明目标，来源承载其余内容。需求变化写回来源 Node，接收者在 brief 中获知变化后读取当前 Node；尚未决定的要求留在 draft Node。
 
+brief 和界面常规刷新跳过 Tent Git 中已 closed、没有 returnTo 的 consumed、以及 deprecated 的 Card。完成名单保存在 `.tent/.git/tent-material-cache/`，随 Tent Git HEAD 增量更新；未完成和新发现的 Card 仍读取当前文件头。手改已完成 Card 由 `workspace check` 报告，brief 不再检查它们。显式 show、take、按状态列出及 `--include-deprecated` 仍读真实文件；界面的 Node 详情和历史按需加载已完成 Card。
+
 Card 只记录四种投递状态：`pending`、`consumed`、`returned`、`closed`。`show` 只预览，`take` 记录接收；相同 Role 重试返回 `replayed: true`，应继续已有工作。没有 returnTo 的 Card 收下即完成；有 returnTo 的 Card 已接未交回时才算在做。target 与 returnTo 都是投递地址，不记录发送者，不能指向同一 Role。有 target 的 Card 必须带对应 Role 接收；带 returnTo 的公开 Card 也必须由一个不同的 Role 接收，只有不带 returnTo 的公开 Card 可以匿名接收。仅 pending Card 可以改派，不能改派给 returnTo；取消使用 `deprecate`，保留原输入与接收记录，默认列表隐藏它。旧 Card 没有 returnTo，按相同规则解释，无需转换。
 
 `card return <id> --role <role-id> --result TEXT` 由接收 Role 交回，必须先 take；结果非空、单行、不超过 200 个 Unicode 字符（code points），细节写进 Node，结果可带 Node id，界面显示为链接。交回记录 returned 和 result，returnTo Role 再次 take 收下结果后变成 closed，原 receivedBy 不变。相同结果交回是重放，收回后也一样；换结果会拒绝，修正写进 Node，有新的工作再发 Card。不另存发送者、交回人或结果 Node 列表。Card 完成不由 goal 或 output 推导；goal 的领先、产出与确认语义独立保留，后续变化不会撤回 Card 的交回结果。

@@ -987,6 +987,33 @@ export async function watchCardDocuments(
   }
 }
 
+function completedCard(data: Record<string, unknown>): boolean {
+  return (
+    documentLifecycle(data).status === "deprecated" ||
+    data.state === "closed" ||
+    (data.state === "consumed" && data.returnTo === undefined)
+  );
+}
+
+/** Routine reads skip Cards completed in Tent Git, regardless of subsequent native edits. */
+export async function completedCardPaths(fs: FsAdapter): Promise<ReadonlySet<string>> {
+  if (!fs.history || !(await fs.exists(".git"))) return new Set();
+  try {
+    return await fs.history.completedCardPaths((file, raw) => {
+      try {
+        const data = parseFrontmatter(raw).data;
+        validateCardHeader(file.slice(CARDS_DIR.length + 1, -3), data);
+        return completedCard(data);
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    // Unreadable history must leave ordinary header and publication diagnostics visible.
+    return new Set();
+  }
+}
+
 export async function listCardDocumentHeaders(
   fs: FsAdapter,
   options: {
@@ -996,6 +1023,7 @@ export async function listCardDocumentHeaders(
     state?: CardDocumentState;
     includeDeprecated?: boolean;
     uncaptured?: boolean;
+    unfinishedOnly?: boolean;
   } = {},
 ) {
   if (options.roleId) await roleAvailable(fs, options.roleId);
@@ -1004,8 +1032,11 @@ export async function listCardDocumentHeaders(
   const selected: Array<Record<string, unknown> & { path: string }> = [];
   const sourceSets = new Map<string, MaterialSource[]>();
   const isUncaptured = options.uncaptured ? await uncapturedChecker(fs) : undefined;
+  const completed = options.unfinishedOnly ? await completedCardPaths(fs) : undefined;
   const entries = (await fs.exists(CARDS_DIR))
-    ? (await fs.listDir(CARDS_DIR)).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    ? (await fs.listDir(CARDS_DIR))
+        .filter((entry) => !completed?.has(`${CARDS_DIR}/${entry.name}`))
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     : [];
   let nextHeader = 0;
   await Promise.all(
@@ -1026,6 +1057,7 @@ export async function listCardDocumentHeaders(
           uncaptured = isUncaptured?.(path, raw) ?? false;
           const data = parseFrontmatter(raw).data;
           validateCardHeader(id, data);
+          if (options.unfinishedOnly && completedCard(data)) continue;
           const state = data.state;
           if (!options.includeDeprecated && documentLifecycle(data).status === "deprecated")
             continue;

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { FsAdapter } from "../store/adapter.js";
 import { isHistoryFile } from "../store/document-history.js";
+import { completedCardPaths } from "../graph/card-document.js";
 import {
   CARDS_DIR,
   ROLES_DIR,
@@ -10,12 +11,14 @@ import {
   WORKSPACE_SETTINGS_PATH,
 } from "../base/paths.js";
 
-/** Scan filenames only, including malformed identity documents so edits remain observable. */
+/** Discover current documents; completed Cards change routine views only through Tent Git. */
 export async function workspaceDocumentPaths(fs: FsAdapter): Promise<string[]> {
   const files: string[] = [];
+  const completed = await completedCardPaths(fs);
   async function visit(dir: string) {
     for (const entry of await fs.listDir(dir)) {
       const file = path.posix.join(dir, entry.name);
+      if (dir === CARDS_DIR && completed.has(file)) continue;
       if (entry.isDir) {
         if (
           !dir &&
@@ -33,7 +36,7 @@ export async function workspaceDocumentPaths(fs: FsAdapter): Promise<string[]> {
   return files.sort();
 }
 
-/** No document parsing, Git diff, capture or watcher; hash validated content identities. */
+/** Hash validated current identities and Tent HEAD without capture or a watcher. */
 export async function readWorkspaceRevision(fs: FsAdapter): Promise<string> {
   const run = () => readRevisionInScope(fs);
   return fs.observationScope ? fs.observationScope(run) : run();

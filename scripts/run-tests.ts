@@ -7,6 +7,7 @@ import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const INTEGRATION_TEST_FILES = Object.freeze([
+  "test/card-completion.test.ts",
   "test/card-document.test.ts",
   "test/card-return.test.ts",
   "test/cli-agent-hooks-help.test.ts",

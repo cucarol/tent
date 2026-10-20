@@ -565,6 +565,100 @@ export class GitDocumentHistory {
     }
   }
 
+  /** Retained completion membership; the graph layer supplies the Card semantics. */
+  async completedCardPaths(
+    completed: (file: string, raw: string) => boolean,
+  ): Promise<Set<string>> {
+    const head = await this.retainedHead();
+    if (!head) return new Set();
+    const directory = path.join(this.root, ".git", "tent-material-cache");
+    const file = path.join(directory, "completed-cards.json");
+    const cardPath = (value: unknown): value is string =>
+      typeof value === "string" &&
+      /^cards\/[^/]+\.md$/.test(value) &&
+      isCardId(value.slice("cards/".length, -3));
+    let previous: { head: string; paths: Set<string> } | undefined;
+    try {
+      const saved = JSON.parse(await fs.readFile(file, "utf8"));
+      if (
+        saved.version === 1 &&
+        typeof saved.head === "string" &&
+        oidPattern.test(saved.head) &&
+        Array.isArray(saved.value) &&
+        saved.value.every(cardPath) &&
+        saved.digest === createHash("sha256").update(JSON.stringify(saved.value)).digest("hex")
+      )
+        previous = { head: saved.head, paths: new Set(saved.value) };
+    } catch {
+      // A missing or invalid cache is rebuilt from the retained Card documents.
+    }
+    if (previous?.head === head) return previous.paths;
+    let paths: Set<string> | undefined;
+    if (previous) {
+      try {
+        // Compare trees, so reset/rebase, deletion and renaming work as well as new commits.
+        const rows = (
+          await runGit(this.root, [
+            "diff-tree",
+            "-r",
+            "--raw",
+            "-z",
+            "--no-abbrev",
+            "--no-renames",
+            previous.head,
+            head,
+            "--",
+            "cards/",
+          ])
+        )
+          .toString("utf8")
+          .split("\0");
+        const changes: Array<{ file: string; blob?: string }> = [];
+        for (let i = 0; i < rows.length - 1; i += 2) {
+          const match = /^:[0-7]{6} [0-7]{6} [a-f0-9]+ ([a-f0-9]+) [A-Z]$/.exec(rows[i]!);
+          if (!match) throw new Error("Invalid Git Card change");
+          const changed = rows[i + 1]!;
+          if (cardPath(changed))
+            changes.push({
+              file: changed,
+              ...(!/^0+$/.test(match[1]!) ? { blob: oid(match[1]!) } : {}),
+            });
+        }
+        const blobs = await readBlobs(
+          this.root,
+          new Set(changes.flatMap((change) => (change.blob ? [change.blob] : []))),
+          (raw) => raw,
+        );
+        paths = previous.paths;
+        for (const change of changes) {
+          paths.delete(change.file);
+          if (change.blob) {
+            const raw = blobs.get(change.blob)!;
+            if (raw instanceof Error) throw raw;
+            if (completed(change.file, raw)) paths.add(change.file);
+          }
+        }
+      } catch {
+        // An unavailable previous commit needs a full rebuild at the current HEAD.
+        paths = undefined;
+      }
+    }
+    if (!paths) {
+      paths = new Set();
+      for (const [file, raw] of await this.readDirectory(head, "cards"))
+        if (cardPath(file) && completed(file, raw)) paths.add(file);
+    }
+    const value = [...paths].sort();
+    await fs.mkdir(directory, { recursive: true }).catch(() => {});
+    await this.saveCache(file, {
+      version: 1,
+      head,
+      value,
+      digest: createHash("sha256").update(JSON.stringify(value)).digest("hex"),
+    });
+    return paths;
+  }
+
   /** One complete reachable graph and blob batch serve every consumer at this HEAD. */
   private async snapshot(head: string): Promise<HistorySnapshot> {
     if (this.snapshotHead !== head || !this.snapshotPromise) {
