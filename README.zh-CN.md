@@ -49,7 +49,37 @@ Tent 是项目的上下文图谱：记下你定了什么、做出了什么、哪
 
 ## 安装
 
-需要 Node.js 22.19+ 和 Git。从源码构建两个插件：
+需要 Node.js 22.19+ 和 Git。
+
+**Claude Code：**
+
+```sh
+claude plugin install tent --marketplace "https://github.com/cucarol/tent.git#plugin-dist"
+```
+
+如果你的 Claude Code 没有 `--marketplace` 选项，先运行 `claude plugin marketplace add "https://github.com/cucarol/tent.git#plugin-dist"`，再运行 `claude plugin install tent@tent`。
+
+**Codex：**
+
+```sh
+codex plugin marketplace add cucarol/tent --ref plugin-dist && codex plugin add tent@tent
+```
+
+每个插件都自带四个 Skill、SessionStart 和 Stop 两个 Hook、CLI 和网页，不需要 npm install。Claude Code 装上插件 Hook 就启用；Codex 会请你审查它们。不启用 Hook，所有命令照样能用。详见 [docs/PLUGIN.md](docs/PLUGIN.md)。
+
+也可以把下面这段发给你的 Agent：
+
+```text
+Install the Tent plugin. In Claude Code run
+claude plugin install tent --marketplace "https://github.com/cucarol/tent.git#plugin-dist"
+In Codex run
+codex plugin marketplace add cucarol/tent --ref plugin-dist && codex plugin add tent@tent
+Check that the four Tent Skills appear and that the Hooks are enabled.
+```
+
+每个 [Release](https://github.com/cucarol/tent/releases/latest) 都附有构建好的包。只要 CLI 的话，`npm install -g vibe-tent` 会提供 `tent` 命令。
+
+### 从源码安装
 
 ```sh
 git clone https://github.com/cucarol/tent.git
@@ -58,32 +88,7 @@ npm ci --ignore-scripts
 npm run plugin:build
 ```
 
-**Claude Code**，在克隆目录里运行：
-
-```sh
-claude plugin marketplace add "$PWD/release/claude-code"
-claude plugin install tent@tent-local
-```
-
-**Codex**，在克隆目录里运行：
-
-```sh
-codex plugin marketplace add "$PWD/release/codex"
-codex plugin add tent@tent-local
-```
-
-每个插件都自带四个 Skill、SessionStart 和 Stop 两个 Hook、CLI 和网页，不需要 npm install。Claude Code 装上插件 Hook 就启用；Codex 会请你审查它们。不启用 Hook，所有命令照样能用。详见 [docs/PLUGIN.md](docs/PLUGIN.md)。
-
-也可以把下面这段发给你的 Agent：
-
-```text
-Install the Tent plugin from github.com/cucarol/tent: clone it, run
-`npm ci --ignore-scripts && npm run plugin:build`, then add the marketplace
-under release/claude-code (Claude Code) or release/codex (Codex) and install tent@tent-local.
-Check that the four Tent Skills appear and that the Hooks are enabled.
-```
-
-每个 [Release](https://github.com/cucarol/tent/releases/latest) 都附有构建好的包。只要 CLI 的话，`npm install -g vibe-tent` 会提供 `tent` 命令。
+然后在克隆目录里：Claude Code 运行 `claude plugin marketplace add "$PWD/release/claude-code"` 和 `claude plugin install tent@tent-local`；Codex 运行 `codex plugin marketplace add "$PWD/release/codex"` 和 `codex plugin add tent@tent-local`。
 
 ## 手动用 CLI
 

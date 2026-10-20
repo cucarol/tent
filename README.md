@@ -49,7 +49,37 @@ The web page shows Nodes as cards on one canvas, linked to their parents and to 
 
 ## Install
 
-You need Node.js 22.19+ and Git. Build both plugins from source:
+You need Node.js 22.19+ and Git.
+
+**Claude Code:**
+
+```sh
+claude plugin install tent --marketplace "https://github.com/cucarol/tent.git#plugin-dist"
+```
+
+If your Claude Code has no `--marketplace` option, run `claude plugin marketplace add "https://github.com/cucarol/tent.git#plugin-dist"`, then `claude plugin install tent@tent`.
+
+**Codex:**
+
+```sh
+codex plugin marketplace add cucarol/tent --ref plugin-dist && codex plugin add tent@tent
+```
+
+Each plugin bundles four Skills, a SessionStart and a Stop Hook, the CLI and the web page; it needs no npm install. Claude Code turns the Hooks on with the plugin. Codex asks you to review them. Every command works without them. Details: [docs/PLUGIN.md](docs/PLUGIN.md).
+
+Or give your agent this:
+
+```text
+Install the Tent plugin. In Claude Code run
+claude plugin install tent --marketplace "https://github.com/cucarol/tent.git#plugin-dist"
+In Codex run
+codex plugin marketplace add cucarol/tent --ref plugin-dist && codex plugin add tent@tent
+Check that the four Tent Skills appear and that the Hooks are enabled.
+```
+
+Prebuilt packages are attached to each [release](https://github.com/cucarol/tent/releases/latest). For the CLI alone, `npm install -g vibe-tent` gives you the `tent` command.
+
+### From source
 
 ```sh
 git clone https://github.com/cucarol/tent.git
@@ -58,32 +88,7 @@ npm ci --ignore-scripts
 npm run plugin:build
 ```
 
-**Claude Code**, from the clone:
-
-```sh
-claude plugin marketplace add "$PWD/release/claude-code"
-claude plugin install tent@tent-local
-```
-
-**Codex**, from the clone:
-
-```sh
-codex plugin marketplace add "$PWD/release/codex"
-codex plugin add tent@tent-local
-```
-
-Each plugin bundles four Skills, a SessionStart and a Stop Hook, the CLI and the web page; it needs no npm install. Claude Code turns the Hooks on with the plugin. Codex asks you to review them. Every command works without them. Details: [docs/PLUGIN.md](docs/PLUGIN.md).
-
-Or give your agent this:
-
-```text
-Install the Tent plugin from github.com/cucarol/tent: clone it, run
-`npm ci --ignore-scripts && npm run plugin:build`, then add the marketplace
-under release/claude-code (Claude Code) or release/codex (Codex) and install tent@tent-local.
-Check that the four Tent Skills appear and that the Hooks are enabled.
-```
-
-Prebuilt packages are attached to each [release](https://github.com/cucarol/tent/releases/latest). For the CLI alone, `npm install -g vibe-tent` gives you the `tent` command.
+Then, from the clone, run `claude plugin marketplace add "$PWD/release/claude-code"` and `claude plugin install tent@tent-local` for Claude Code, or `codex plugin marketplace add "$PWD/release/codex"` and `codex plugin add tent@tent-local` for Codex.
 
 ## The CLI by hand
 
