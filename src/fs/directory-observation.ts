@@ -1,35 +1,22 @@
 import { execFile } from "node:child_process";
-import type { BigIntStats } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { checkedSourceFile } from "./checked-source-file.js";
+import { checkedSourceDirectory, initialSourceState } from "./checked-source-file.js";
+import { withFileReadScope } from "./file-state-cache.js";
 import { directoryRepository } from "./repository-material.js";
 import { isTentWorkspacePath } from "../core/base/material-coverage.js";
 
 type SourcePathType = "file" | "directory" | "link" | "other";
-export type SourcePathStates = Map<string, Promise<BigIntStats | undefined>>;
-
 /** Listing metadata only; reading source bytes still performs its own safety checks. */
-export function sourcePathState(filename: string, observations?: SourcePathStates) {
-  const read = () =>
-    lstat(filename, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
-  if (!observations) return read();
-  let pending = observations.get(filename);
-  if (!pending) {
-    pending = read();
-    observations.set(filename, pending);
-  }
-  return pending;
+export function sourcePathState(filename: string) {
+  return initialSourceState(filename).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
 }
 
-export async function sourcePathType(
-  filename: string,
-  observations?: SourcePathStates,
-): Promise<SourcePathType | undefined> {
-  const info = await sourcePathState(filename, observations);
+export async function sourcePathType(filename: string): Promise<SourcePathType | undefined> {
+  const info = await sourcePathState(filename);
   return !info
     ? undefined
     : info.isSymbolicLink()
@@ -167,7 +154,7 @@ async function plainFiles(
     await requireNoIgnoreRules(current);
   }
   async function walk(folder: string, load = true) {
-    await checkedSourceFile(root, folder, true);
+    await checkedSourceDirectory(root, folder);
     if (load) await requireNoIgnoreRules(folder);
     for (const entry of await readdir(folder, { withFileTypes: true })) {
       if (entry.name === ".git") continue;
@@ -193,10 +180,20 @@ export async function sourceDirectoryPaths(
   directory: string,
   cacheDir?: string,
   trackedOnly = false,
-  types?: SourcePathStates,
+): Promise<string[]> {
+  return withFileReadScope(() =>
+    sourceDirectoryPathsInScope(root, directory, cacheDir, trackedOnly),
+  );
+}
+
+async function sourceDirectoryPathsInScope(
+  root: string,
+  directory: string,
+  cacheDir: string | undefined,
+  trackedOnly: boolean,
 ): Promise<string[]> {
   if (isTentWorkspacePath(path.relative(root, directory).split(path.sep).join("/"))) return [];
-  await checkedSourceFile(root, directory, true);
+  await checkedSourceDirectory(root, directory);
   const repo = await directoryRepository(directory);
   if (!repo) {
     if (trackedOnly)
@@ -205,7 +202,7 @@ export async function sourceDirectoryPaths(
     const files: string[] = [];
     for (const entry of entries) {
       if (entry.directory)
-        files.push(...(await sourceDirectoryPaths(root, entry.filename, cacheDir, false, types)));
+        files.push(...(await sourceDirectoryPaths(root, entry.filename, cacheDir)));
       else files.push(entry.filename);
     }
     return files;
@@ -262,7 +259,7 @@ export async function sourceDirectoryPaths(
         const filename = path.join(repo.root, name);
         if (isTentWorkspacePath(path.relative(root, filename).split(path.sep).join("/")))
           return undefined;
-        const type = await sourcePathType(filename, types);
+        const type = await sourcePathType(filename);
         return type ? { filename, type } : undefined;
       }),
     );
@@ -297,18 +294,17 @@ export async function sourceDirectoryPaths(
             const child = path.join(repo.root, member);
             if (isTentWorkspacePath(path.relative(root, child).split(path.sep).join("/"))) continue;
             if (member.endsWith("/"))
-              for (const nested of await sourceDirectoryPaths(root, child, cacheDir, false, types))
+              for (const nested of await sourceDirectoryPaths(root, child, cacheDir))
                 files.add(nested);
             else files.add(child);
           }
         } else {
-          for (const member of await sourceDirectoryPaths(root, filename, cacheDir, false, types))
+          for (const member of await sourceDirectoryPaths(root, filename, cacheDir))
             files.add(member);
         }
       } else if (type === "file") files.add(filename);
       else throw new Error("Directory member is not a readable source file");
     }
   }
-  await checkedSourceFile(root, directory, true);
   return [...files].sort();
 }

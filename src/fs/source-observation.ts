@@ -1,8 +1,12 @@
 import { constants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { checkedSourceFile } from "./checked-source-file.js";
+import {
+  checkedSourceFile,
+  checkedSourceDirectory,
+  initialSourceFile,
+} from "./checked-source-file.js";
 import {
   materialLocator,
   localMaterialPath,
@@ -75,8 +79,8 @@ async function observeSourceFileInScope(
   cacheDir?: string,
   selection?: Selection,
 ) {
-  const initial = fileState(await checkedSourceFile(root, filename, false, true));
-  const canonicalPath = await realpath(filename);
+  const { stat, canonicalPath } = await initialSourceFile(root, filename);
+  const initial = fileState(stat);
   const cachePath = cacheDir ? path.join(cacheDir, "file-state.json") : undefined;
   const cacheKey = `material:${JSON.stringify([canonicalPath, selection?.key])}`;
   const cached = await cachedFileValue(
@@ -87,9 +91,6 @@ async function observeSourceFileInScope(
       isFingerprint(value) && (!selection?.retainText || typeof value.text === "string"),
   );
   if (cached) {
-    const final = await checkedSourceFile(root, filename, false, true);
-    if (!sameFileState(fileState(final), initial))
-      throw new Error("Material changed during cache lookup");
     return {
       canonicalPath,
       observedVersion: cached.version,
@@ -204,8 +205,7 @@ export async function observeMaterialResource(
   const root = locator.kind === "uri" ? path.parse(filename).root : workspaceRoot;
   if (isDirectoryMaterial(locator) || isPrefixMaterial(locator)) {
     const directory = isPrefixMaterial(locator) ? path.dirname(filename) : filename;
-    await checkedSourceFile(root, directory, true);
-    const canonicalDirectory = await realpath(directory);
+    const canonicalDirectory = await checkedSourceDirectory(root, directory);
     return {
       canonicalPath: isPrefixMaterial(locator)
         ? path.join(canonicalDirectory, path.basename(filename))

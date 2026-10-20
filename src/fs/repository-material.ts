@@ -1,5 +1,6 @@
-import { realpath, lstat } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import path from "node:path";
+import { sourceDirectoryRealpath } from "./checked-source-file.js";
 
 async function gitBoundary(root: string): Promise<string | undefined> {
   for (let current = path.resolve(root); ;) {
@@ -18,5 +19,5 @@ async function gitBoundary(root: string): Promise<string | undefined> {
 /** Directory listing only needs the owning checkout, not blob relocation metadata. */
 export async function directoryRepository(root: string) {
   const boundary = await gitBoundary(root);
-  return boundary ? { root: await realpath(boundary) } : undefined;
+  return boundary ? { root: await sourceDirectoryRealpath(boundary) } : undefined;
 }

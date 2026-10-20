@@ -115,18 +115,47 @@ test("cached structure sources preserve dependencies and notice a changed import
     );
   const cold = await observe();
   const original = fs.open;
+  const originalStat = fs.lstat,
+    originalPath = fs.realpath;
+  const states = new Map<string, number>(),
+    paths = new Map<string, number>();
   let sourceOpens = 0;
   const mocked = t.mock.method(fs, "open", (...args: Parameters<typeof original>) => {
     if (String(args[0]).startsWith(path.join(root, "src"))) sourceOpens++;
     return original(...args);
   });
+  const statMock = t.mock.method(fs, "lstat", (...args: Parameters<typeof originalStat>) => {
+    const name = String(args[0]);
+    states.set(name, (states.get(name) ?? 0) + 1);
+    return originalStat(...args);
+  });
+  const pathMock = t.mock.method(fs, "realpath", (...args: Parameters<typeof originalPath>) => {
+    const name = String(args[0]);
+    paths.set(name, (paths.get(name) ?? 0) + 1);
+    return originalPath(...args);
+  });
   syncBuiltinESMExports();
   t.after(() => {
     mocked.mock.restore();
+    statMock.mock.restore();
+    pathMock.mock.restore();
     syncBuiltinESMExports();
   });
   assert.deepEqual(await observe(), cold);
   assert.equal(sourceOpens, 0);
+  for (const name of [
+    "src/core/card-main.ts",
+    "src/core/card-helper.ts",
+    "src/core/sibling.ts",
+    "src/out/a.ts",
+    "src/other/b.ts",
+  ]) {
+    const filename = path.join(root, name);
+    assert.equal(states.get(filename), 1, "listing and cache validation share one file lstat");
+    assert.equal(paths.has(filename), false, "warm reads resolve parents, not every leaf");
+  }
+  assert.equal(paths.get(root), 1);
+  assert.equal(paths.get(path.join(root, "src/core")), 1);
   await write("src/core/card-main.ts", 'import "../other/b.js";\nexport const value = 1;\n');
   await fs.utimes(source, old, old);
   assert.deepEqual((await observe()).structureDependencies, ["src/other/"]);

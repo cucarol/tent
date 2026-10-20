@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import {
@@ -28,13 +27,10 @@ import {
   isCFamilySource,
   isCFamilyConfig,
 } from "../core/base/cfamily-imports.js";
-import {
-  sourceDirectoryPaths,
-  sourcePathType,
-  type SourcePathStates,
-} from "./directory-observation.js";
+import { sourceDirectoryPaths, sourcePathType } from "./directory-observation.js";
 import { readStructureSource } from "./source-observation.js";
-import { checkedSourceFile } from "./checked-source-file.js";
+import { checkedSourceDirectory } from "./checked-source-file.js";
+import { withFileReadScope } from "./file-state-cache.js";
 import { directoryRepository } from "./repository-material.js";
 
 /**
@@ -46,16 +42,12 @@ type StructureSnapshot = {
   repository?: ReturnType<typeof directoryRepository>;
   listings: Map<string, Promise<string[]>>;
   sources: Map<string, Promise<string>>;
-  types: SourcePathStates;
 };
 const structureSnapshot = new AsyncLocalStorage<StructureSnapshot>();
 
 export function withStructureSnapshot<T>(action: () => Promise<T>, fresh = false): Promise<T> {
   if (structureSnapshot.getStore() && !fresh) return action();
-  return structureSnapshot.run(
-    { listings: new Map(), sources: new Map(), types: new Map() },
-    action,
-  );
+  return structureSnapshot.run({ listings: new Map(), sources: new Map() }, action);
 }
 export function withoutStructureSnapshot<T>(action: () => Promise<T>): Promise<T> {
   return structureSnapshot.exit(action);
@@ -87,6 +79,24 @@ export async function observeStructureMaterial(
   cacheDir?: string,
   structureResources: readonly string[] = [resource],
 ) {
+  return withFileReadScope(() =>
+    observeStructureMaterialInScope(
+      workspaceRoot,
+      documentPath,
+      resource,
+      cacheDir,
+      structureResources,
+    ),
+  );
+}
+
+async function observeStructureMaterialInScope(
+  workspaceRoot: string,
+  documentPath: string,
+  resource: string,
+  cacheDir: string | undefined,
+  structureResources: readonly string[],
+) {
   const coverage = structureMaterialCoverage(resource, documentPath, workspaceRoot);
   if (!coverage)
     throw new Error("Structure observation requires a Workspace directory or prefix material");
@@ -98,8 +108,7 @@ export async function observeStructureMaterial(
     coverage.prefix + (coverage.kind === "prefix" ? "*" : ""),
   );
   const directory = coverage.kind === "directory" ? physical : path.dirname(physical);
-  await checkedSourceFile(workspaceRoot, directory, true);
-  const canonicalDirectory = await realpath(directory);
+  const canonicalDirectory = await checkedSourceDirectory(workspaceRoot, directory);
   const canonicalPath =
     coverage.kind === "directory"
       ? canonicalDirectory
@@ -112,7 +121,7 @@ export async function observeStructureMaterial(
     : await directoryRepository(workspaceRoot);
   const listing = (trackedOnly: boolean) =>
     shared(snapshot?.listings, JSON.stringify([workspaceRoot, cacheDir ?? null, trackedOnly]), () =>
-      sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir, trackedOnly, snapshot?.types),
+      sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir, trackedOnly),
     );
   const livePaths = await listing(false);
   const trackedPaths = repository ? await listing(true) : undefined;
@@ -154,7 +163,7 @@ export async function observeStructureMaterial(
     if (members.has(workspacePath) || neededConfig(workspacePath)) {
       file.content = await readSource(filename);
     } else {
-      const type = await sourcePathType(filename, snapshot?.types);
+      const type = await sourcePathType(filename);
       if (!type) throw new Error(`ENOENT: Structure source disappeared: ${workspacePath}`);
       if (type === "directory") continue;
     }
@@ -269,7 +278,6 @@ export async function observeStructureMaterial(
         .filter((file) => nodeCoverage.some((item) => materialCoverageContains(item, file))),
     ),
   );
-  await checkedSourceFile(workspaceRoot, directory, true);
   return {
     canonicalPath,
     observedVersion: structureFingerprint(structureDependencies),
