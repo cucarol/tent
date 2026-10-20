@@ -26,6 +26,7 @@ import { assertSystemMaterial } from "../core/graph/material-target.js";
 import { materialIsTracked } from "./material-tracking.js";
 import { createHash } from "node:crypto";
 import { documentHeader } from "../core/graph/node-catalog.js";
+import { ReaderError } from "../core/graph/context-reader.js";
 import {
   cachedFileValue,
   fileState,
@@ -180,7 +181,8 @@ export class NodeFs implements FsAdapter {
     if (cached !== undefined) return { header: cached, state };
     const { header, bytes } = await this.readFrontmatterUncached(path, state);
     const after = fileState(await fs.stat(this.abs(path), { bigint: true }));
-    if (!sameFileState(state, after)) throw new Error("Source changed while reading header");
+    if (!sameFileState(state, after))
+      throw new ReaderError("SOURCE_CHANGED", "Source changed while reading header");
     await rememberFileValue(cache, key, state, header);
     return { header, bytes, state };
   }
@@ -202,10 +204,11 @@ export class NodeFs implements FsAdapter {
       // Path stats can both see the original file after a directory is swapped
       // out and restored. Bind the bytes to the handle actually opened as well.
       const opened = fileState(await handle.stat({ bigint: true }));
-      if (!sameFileState(opened, expected)) throw new Error("Source changed while reading header");
+      if (!sameFileState(opened, expected))
+        throw new ReaderError("SOURCE_CHANGED", "Source changed while reading header");
       const finish = async (header: string, complete: boolean) => {
         if (!sameFileState(fileState(await handle.stat({ bigint: true })), opened))
-          throw new Error("Source changed while reading header");
+          throw new ReaderError("SOURCE_CHANGED", "Source changed while reading header");
         return { header, bytes: Buffer.concat(chunks), complete };
       };
       while (true) {

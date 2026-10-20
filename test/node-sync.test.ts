@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { NodeFs } from "../src/fs/node-fs.js";
@@ -20,6 +22,7 @@ import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontma
 import { materialLocator } from "../src/core/base/material.js";
 import { nodeNotePath } from "../src/core/base/paths.js";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { ReaderError } from "../src/core/graph/context-reader.js";
 import { incompleteNodeReadEtag } from "../src/core/base/node-read-basis.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
@@ -636,6 +639,120 @@ test("workspace inspection keeps catalog order and isolates each Node's conflict
   assert.equal(counts.get("A/A.md"), 4);
   assert.equal(counts.get("B/B.md"), 4);
 });
+
+test("a catalog retry survives another Node's atomic replacement between stat and open", async (t) => {
+  const { fs, root, create } = await fixture(t, false);
+  const changed = await create("A"),
+    racing = await create("B"),
+    steady = await create("C");
+  let allowWrite!: () => void, finishWrite!: () => void, readyToWrite!: () => void;
+  const opening = new Promise<void>((resolve) => {
+    allowWrite = resolve;
+  });
+  const written = new Promise<void>((resolve) => {
+    finishWrite = resolve;
+  });
+  const ready = new Promise<void>((resolve) => {
+    readyToWrite = resolve;
+  });
+  let intercept = false,
+    replacements = 0;
+  const open = fsPromises.open;
+  const mocked = t.mock.method(fsPromises, "open", async (...args: Parameters<typeof open>) => {
+    if (intercept && String(args[0]) === path.join(root, "A/A.md")) {
+      intercept = false;
+      replacements++;
+      allowWrite();
+      await written;
+    }
+    return open(...args);
+  });
+  syncBuiltinESMExports();
+  const read = fs.readFile.bind(fs);
+  const counts = new Map<string, number>();
+  fs.readFile = async (file) => {
+    const raw = await read(file);
+    if (file !== "A/A.md" && file !== "B/B.md") return raw;
+    const count = (counts.get(file) ?? 0) + 1;
+    counts.set(file, count);
+    if (file === "A/A.md" && count === 2) {
+      readyToWrite();
+      await opening;
+      await fs.writeFile(file, raw + "updated\n");
+      finishWrite();
+      return raw + "updated\n";
+    }
+    if (file === "B/B.md" && count === 2) {
+      await ready;
+      intercept = true;
+    }
+    return file === "B/B.md" && count % 2 === 0 ? raw + "racing\n" : raw;
+  };
+  try {
+    const result = await inspectWorkspaceSync(fs);
+    assert.equal(replacements, 1);
+    assert.deepEqual(
+      result.nodes.map((node) => node.nodeId),
+      [changed, racing, steady],
+    );
+    assert.equal(result.nodes[0]!.uncertain, undefined);
+    assert.equal(result.nodes[1]!.uncertain, true);
+    assert.equal(result.nodes[2]!.uncertain, undefined);
+    assert.equal(counts.get("A/A.md"), 4);
+    assert.equal(counts.get("B/B.md"), 4);
+  } finally {
+    allowWrite();
+    finishWrite();
+    readyToWrite();
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+for (const code of ["SOURCE_CHANGED", "ENOENT", "EACCES", "UNCLASSIFIED"] as const) {
+  test(`catalog reload ${code} is bounded and does not hide unrelated errors`, async (t) => {
+    const { fs, create } = await fixture(t, false);
+    const stable = await create("A"),
+      racing = await create("B"),
+      other = await create("C");
+    const failure =
+      code === "SOURCE_CHANGED"
+        ? new ReaderError(code, "Header keeps changing")
+        : code === "UNCLASSIFIED"
+          ? new Error("Source changed while reading header")
+          : Object.assign(new Error(code), { code });
+    let bodyReads = 0,
+      failedHeaders = 0;
+    const read = fs.readFile.bind(fs),
+      header = fs.readFrontmatter.bind(fs);
+    fs.readFile = async (file) => {
+      const raw = await read(file);
+      return file === "B/B.md" && ++bodyReads === 2 ? raw + "racing\n" : raw;
+    };
+    fs.readFrontmatter = async (file) => {
+      if (file === "A/A.md" && bodyReads >= 2) {
+        failedHeaders++;
+        throw failure;
+      }
+      return header(file);
+    };
+    if (code === "EACCES" || code === "UNCLASSIFIED") {
+      await assert.rejects(inspectWorkspaceSync(fs), (error) => error === failure);
+    } else {
+      const result = await inspectWorkspaceSync(fs);
+      assert.deepEqual(
+        result.nodes.map((node) => node.nodeId),
+        [stable, racing, other],
+      );
+      assert.equal(result.nodes[0]!.uncertain, undefined);
+      assert.equal(result.nodes[1]!.uncertain, true);
+      assert.match(result.nodes[1]!.reasons[0]!, new RegExp(failure.message));
+      assert.equal(result.nodes[2]!.uncertain, undefined);
+    }
+    assert.equal(failedHeaders, code === "SOURCE_CHANGED" ? 2 : 1);
+    assert.equal(bodyReads, 2);
+  });
+}
 
 test("goal and hierarchical output follow the two-stage production and confirmation cycle", async (t) => {
   const { fs, workspace, create, edit } = await fixture(t);

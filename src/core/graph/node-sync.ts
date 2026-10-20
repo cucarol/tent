@@ -45,6 +45,14 @@ import { changedStructureDependencies } from "../base/structure-material.js";
 import { isCoverageGoal } from "../base/material-coverage.js";
 
 export type NodeSyncState = "synced" | "ahead" | "behind" | "unanchored";
+function isInspectionConflict(error: unknown): boolean {
+  return (
+    (error instanceof ReaderError && error.code === "SOURCE_CHANGED") ||
+    (error instanceof NodeWriteError && error.code === "ETAG_CONFLICT") ||
+    (error as NodeJS.ErrnoException)?.code === "ENOENT"
+  );
+}
+
 export type NodeSyncInspection = {
   nodeId: string;
   path: string;
@@ -411,27 +419,40 @@ async function inspectCatalogNodesInScope(
           );
         break;
       } catch (error) {
-        if (
-          !(error instanceof ReaderError && error.code === "SOURCE_CHANGED") &&
-          !(error instanceof NodeWriteError && error.code === "ETAG_CONFLICT") &&
-          (error as NodeJS.ErrnoException).code !== "ENOENT"
-        )
-          throw error;
+        if (!isInspectionConflict(error)) throw error;
         if (attempt === 0) {
-          const reload = () => loadNodeCatalog(fs);
-          nodeCatalog = await (fs.observationScope
-            ? fs.observationScope(reload, { forceContent: true })
-            : reload());
-          const refreshed = nodeCatalog.byId.get(current.nodeId);
-          if (
-            refreshed &&
-            !refreshed.invalid &&
-            (refreshed.nodeId === explicitNodeId ||
-              (!refreshed.archived &&
-                parseFrontmatter(refreshed.header).data.status !== "deprecated"))
-          ) {
-            current = refreshed;
-            continue;
+          try {
+            const reload = () => loadNodeCatalog(fs);
+            // A concurrent Node may be replaced while this retry reads its header.
+            // Retry that observation in a fresh scope, once, without reusing rejected reads.
+            for (let scan = 0; ; scan++) {
+              try {
+                nodeCatalog = await (fs.observationScope
+                  ? fs.observationScope(reload, { forceContent: true })
+                  : reload());
+                break;
+              } catch (scanError) {
+                if (
+                  scan !== 0 ||
+                  !(scanError instanceof ReaderError && scanError.code === "SOURCE_CHANGED")
+                )
+                  throw scanError;
+              }
+            }
+            const refreshed = nodeCatalog.byId.get(current.nodeId);
+            if (
+              refreshed &&
+              !refreshed.invalid &&
+              (refreshed.nodeId === explicitNodeId ||
+                (!refreshed.archived &&
+                  parseFrontmatter(refreshed.header).data.status !== "deprecated"))
+            ) {
+              current = refreshed;
+              continue;
+            }
+          } catch (reloadError) {
+            if (!isInspectionConflict(reloadError)) throw reloadError;
+            error = reloadError;
           }
         }
         result = {
@@ -447,6 +468,7 @@ async function inspectCatalogNodesInScope(
             `Synchronization state is uncertain: ${error instanceof Error ? error.message : String(error)}`,
           ],
         };
+        break;
       }
     }
     return result!;

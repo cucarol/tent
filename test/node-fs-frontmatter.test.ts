@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { ReaderError } from "../src/core/graph/context-reader.js";
 import { fileState, type FileState } from "../src/fs/file-state-cache.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";
@@ -151,6 +152,7 @@ test("a swapped directory cannot persist another handle's header under the resto
   const current = (await loadNodeCatalog(new NodeFs(systemRoot))).byPath.get("A");
   assert.equal(current?.nodeId, "node-original");
   assert.equal(current?.type, "prompt");
-  assert.ok(failure instanceof Error);
+  assert.ok(failure instanceof ReaderError);
+  assert.equal(failure.code, "SOURCE_CHANGED");
   assert.match(failure.message, /Source changed while reading header/);
 });
