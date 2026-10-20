@@ -5,7 +5,10 @@ import fs from "node:fs/promises";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import type { FsAdapter } from "../src/core/store/adapter.js";
-import { observeNodeMaterials } from "../src/core/graph/node-sync-record.js";
+import {
+  observeNodeMaterials,
+  nodeMaterialObservationScope,
+} from "../src/core/graph/node-sync-record.js";
 import { inspectWorkspaceSync } from "../src/core/graph/node-sync.js";
 import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { structureFingerprint } from "../src/core/base/structure-material.js";
@@ -25,7 +28,7 @@ test("one inspection shares current material across equivalent declarations and 
     calls.push(track);
     return { observedVersion: current };
   };
-  const observations = new Map();
+  const observations = nodeMaterialObservationScope(new Map());
   const first = await observeNodeMaterials(
     fs,
     { resource: "../../shared.txt" },
@@ -52,7 +55,7 @@ test("one inspection shares current material across equivalent declarations and 
     "A/A.md",
     undefined,
     undefined,
-    new Map(),
+    nodeMaterialObservationScope(new Map()),
   );
   assert.equal(next[0]!.version, current);
   assert.equal(calls.length, 2);
@@ -66,7 +69,7 @@ for (const resource of ["../../shared.txt", "../../shared/"]) {
       calls.push(track);
       throw Object.assign(new Error("ENOENT: current material is missing"), { code: "ENOENT" });
     };
-    const observations = new Map();
+    const observations = nodeMaterialObservationScope(new Map());
     const a = await observeNodeMaterials(
       fs,
       { resource },
@@ -108,7 +111,7 @@ test("shared observations keep different sections and unavailable sources distin
     if (resource.endsWith("#Missing")) throw new Error("Markdown material heading not found");
     return { observedVersion: (resource.endsWith("#A") ? "a" : "b").repeat(64) };
   };
-  const observations = new Map();
+  const observations = nodeMaterialObservationScope(new Map());
   const result = await observeNodeMaterials(
     fs,
     {
@@ -133,7 +136,7 @@ test("shared structure observations distinguish the owning Node's structure-sour
     scopes.push(resources);
     return { observedVersion: (resources?.length === 2 ? "a" : "b").repeat(64) };
   };
-  const observations = new Map();
+  const observations = nodeMaterialObservationScope(new Map());
   const source = { resource: "../../src/card-*", track: "structure" };
   const union = { sources: [source, { resource: "../../src/role-*", track: "structure" }] };
   const a = await observeNodeMaterials(fs, union, "A/A.md", undefined, undefined, observations);

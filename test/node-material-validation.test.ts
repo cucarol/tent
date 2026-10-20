@@ -20,6 +20,7 @@ import type { FsAdapter } from "../src/core/store/adapter.js";
 import {
   observeNodeMaterials,
   nodeSemanticFingerprint,
+  nodeMaterialObservationScope,
 } from "../src/core/graph/node-sync-record.js";
 import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
 import {
@@ -51,7 +52,7 @@ test("query observations distinguish descriptive sources from file resources", a
     "A/A.md",
     undefined,
     undefined,
-    new Map(),
+    nodeMaterialObservationScope(new Map()),
   );
   assert.deepEqual(actual, expected);
   assert.equal(actual[1]!.version, undefined);

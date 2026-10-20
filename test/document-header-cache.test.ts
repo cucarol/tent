@@ -10,6 +10,7 @@ import {
 } from "../src/core/base/frontmatter.js";
 import { withDocumentHeaderCache } from "../src/fs/document-header-cache.js";
 import { contentEtag } from "../src/core/base/etag.js";
+import { deserialize } from "node:v8";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
@@ -98,7 +99,7 @@ test("parallel cache scopes keep their own observed headers", async () => {
   assert.deepEqual(b.result.data, { b: true });
 });
 
-test("disk cache is disposable, preserves values, prunes unused headers and tolerates blocked writes", async (t) => {
+test("disk cache is disposable, preserves other headers during narrow reads and tolerates blocked writes", async (t) => {
   const root = await fixture(t);
   const directory = path.join(root, ".git", "tent-material-cache");
   const file = path.join(directory, "document-headers.bin");
@@ -114,12 +115,17 @@ test("disk cache is disposable, preserves values, prunes unused headers and tole
   assert.equal(serializeFrontmatter(warm.data, warm.body, warm.keyOrder), prefix + "body");
   assert.deepEqual(await fs.readFile(file), bytes);
   assert.equal((await fs.stat(file)).mtimeMs, before.mtimeMs);
+  await withDocumentHeaderCache(root, async () => "no parsed documents");
+  assert.deepEqual(await fs.readFile(file), bytes);
+  assert.equal((await fs.stat(file)).mtimeMs, before.mtimeMs);
   await fs.writeFile(file, "corrupt");
   assert.deepEqual(await read(), cold);
   await fs.rm(file);
   assert.deepEqual(await read(), cold);
   await withDocumentHeaderCache(root, async () => parseFrontmatter("---\nonly: true\n---\n"));
-  assert.ok((await fs.stat(file)).size < bytes.length);
+  const saved = deserialize((await fs.readFile(file)).subarray(32));
+  assert.equal(saved.entries.size, 2);
+  assert.ok(saved.entries.has(contentEtag(prefix)));
   // A directory at the cache filename blocks replacement on every supported OS.
   await fs.rm(file);
   await fs.mkdir(file);

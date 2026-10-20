@@ -9,12 +9,15 @@ import {
 } from "../core/base/frontmatter.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 import { withFileReadScope } from "./file-state-cache.js";
+import { withPersistedMarkdownSyntax } from "./markdown-syntax-cache.js";
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest();
 
 /** A brief shares validated file observations and parsed headers, never a complete result. */
 export async function withDocumentHeaderCache<T>(systemRoot: string, action: () => Promise<T>) {
-  return withFileReadScope(() => withParsedHeaders(systemRoot, action));
+  return withFileReadScope(() =>
+    withPersistedMarkdownSyntax(systemRoot, () => withParsedHeaders(systemRoot, action)),
+  );
 }
 
 async function withParsedHeaders<T>(systemRoot: string, action: () => Promise<T>) {
@@ -40,14 +43,18 @@ async function withParsedHeaders<T>(systemRoot: string, action: () => Promise<T>
     /* Missing, corrupt or unreadable cache: the normal parser remains authoritative. */
   }
   const { result, used } = await withFrontmatterCache(previous, action);
-  if (
-    used.size !== previous.size ||
-    [...used].some(([key, value]) => previous.get(key) !== value)
-  ) {
+  if ([...used].some(([key, value]) => previous.get(key) !== value)) {
+    // Metadata-only and narrow UI requests must not erase every other Node's parse.
+    const entries = new Map(previous);
+    for (const [key, value] of used) {
+      entries.delete(key);
+      entries.set(key, value);
+    }
+    while (entries.size > 10_000) entries.delete(entries.keys().next().value!);
     const temp = `${file}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`;
     try {
       // V8 preserves YAML alias sharing and -0; JSON would silently change those values.
-      const payload = serialize({ version: 2, entries: used });
+      const payload = serialize({ version: 2, entries });
       await fs.mkdir(directory, { recursive: true });
       await fs.writeFile(temp, Buffer.concat([digest(payload), payload]));
       await renameWithRetry(temp, file);

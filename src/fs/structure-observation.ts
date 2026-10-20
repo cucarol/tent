@@ -32,6 +32,11 @@ import { readStructureSource } from "./source-observation.js";
 import { checkedSourceDirectory } from "./checked-source-file.js";
 import { withFileReadScope } from "./file-state-cache.js";
 import { directoryRepository } from "./repository-material.js";
+import {
+  loadStructureDerivedStore,
+  saveStructureDerivedStore,
+  type StructureDerivedStore,
+} from "./structure-derived-cache.js";
 
 /**
  * One inspection observes the Workspace listing and each structure source once.
@@ -42,12 +47,33 @@ type StructureSnapshot = {
   repository?: ReturnType<typeof directoryRepository>;
   listings: Map<string, Promise<string[]>>;
   sources: Map<string, Promise<string>>;
+  paths: Map<
+    string,
+    Promise<{ live: string[]; all: Array<{ filename: string; workspacePath: string }> }>
+  >;
+  types: Map<string, ReturnType<typeof sourcePathType>>;
+  derived: Map<string, Promise<StructureDerivedStore>>;
 };
 const structureSnapshot = new AsyncLocalStorage<StructureSnapshot>();
 
 export function withStructureSnapshot<T>(action: () => Promise<T>, fresh = false): Promise<T> {
   if (structureSnapshot.getStore() && !fresh) return action();
-  return structureSnapshot.run({ listings: new Map(), sources: new Map() }, action);
+  const snapshot: StructureSnapshot = {
+    listings: new Map(),
+    sources: new Map(),
+    paths: new Map(),
+    types: new Map(),
+    derived: new Map(),
+  };
+  return structureSnapshot.run(snapshot, async () => {
+    const result = await action();
+    await Promise.all(
+      [...snapshot.derived].map(async ([directory, pending]) =>
+        saveStructureDerivedStore(directory, await pending),
+      ),
+    );
+    return result;
+  });
 }
 export function withoutStructureSnapshot<T>(action: () => Promise<T>): Promise<T> {
   return structureSnapshot.exit(action);
@@ -80,12 +106,14 @@ export async function observeStructureMaterial(
   structureResources: readonly string[] = [resource],
 ) {
   return withFileReadScope(() =>
-    observeStructureMaterialInScope(
-      workspaceRoot,
-      documentPath,
-      resource,
-      cacheDir,
-      structureResources,
+    withStructureSnapshot(() =>
+      observeStructureMaterialInScope(
+        workspaceRoot,
+        documentPath,
+        resource,
+        cacheDir,
+        structureResources,
+      ),
     ),
   );
 }
@@ -123,16 +151,26 @@ async function observeStructureMaterialInScope(
     shared(snapshot?.listings, JSON.stringify([workspaceRoot, cacheDir ?? null, trackedOnly]), () =>
       sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir, trackedOnly),
     );
-  const livePaths = await listing(false);
-  const trackedPaths = repository ? await listing(true) : undefined;
-  const memberPaths = livePaths;
-  const paths = [...new Set([...livePaths, ...(trackedPaths ?? [])])].sort();
-  const memberSources = memberPaths
-    .map((filename) => path.relative(workspaceRoot, filename).split(path.sep).join("/"))
-    .filter(
-      (file) =>
-        materialCoverageContains(coverage, file) && isImportSource(file) && !isTestSource(file),
-    );
+  const paths = await shared(
+    snapshot?.paths,
+    JSON.stringify([workspaceRoot, cacheDir ?? null]),
+    async () => {
+      const livePaths = await listing(false);
+      const trackedPaths = repository ? await listing(true) : [];
+      const relative = (filename: string) =>
+        path.relative(workspaceRoot, filename).split(path.sep).join("/");
+      return {
+        live: livePaths.map(relative),
+        all: [...new Set([...livePaths, ...trackedPaths])]
+          .sort()
+          .map((filename) => ({ filename, workspacePath: relative(filename) })),
+      };
+    },
+  );
+  const memberSources = paths.live.filter(
+    (file) =>
+      materialCoverageContains(coverage, file) && isImportSource(file) && !isTestSource(file),
+  );
   const members = new Set(memberSources);
   const rustMembers = memberSources.filter((member) => member.endsWith(".rs"));
   const neededConfig = (file: string) => {
@@ -157,13 +195,12 @@ async function observeStructureMaterialInScope(
       readStructureSource(workspaceRoot, filename, cacheDir),
     );
   const files: RepositorySource[] = [];
-  for (const filename of paths) {
-    const workspacePath = path.relative(workspaceRoot, filename).split(path.sep).join("/");
+  for (const { filename, workspacePath } of paths.all) {
     const file: RepositorySource = { path: workspacePath };
     if (members.has(workspacePath) || neededConfig(workspacePath)) {
       file.content = await readSource(filename);
     } else {
-      const type = await sourcePathType(filename);
+      const type = await shared(snapshot?.types, filename, () => sourcePathType(filename));
       if (!type) throw new Error(`ENOENT: Structure source disappeared: ${workspacePath}`);
       if (type === "directory") continue;
     }
@@ -172,6 +209,58 @@ async function observeStructureMaterialInScope(
   // Core requests only Cargo ancestry/path-dependency facts and source bytes
   // needed to establish these members' module contexts and resolve their uses.
   const byPath = new Map(files.map((file) => [file.path, file]));
+  const nodeMembers = new Set(
+    paths.live.filter((file) => nodeCoverage.some((item) => materialCoverageContains(item, file))),
+  );
+  const fingerprint = (value: unknown) =>
+    createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const sourceVersion = (content: string) => createHash("sha256").update(content).digest("hex");
+  const derived = cacheDir
+    ? await shared(snapshot?.derived, cacheDir, () => loadStructureDerivedStore(cacheDir))
+    : undefined;
+  const key = fingerprint([workspaceRoot, process.platform, coverage, nodeCoverage]);
+  const base = derived
+    ? fingerprint([
+        files.map((file) => [
+          file.path,
+          file.content === undefined ? null : sourceVersion(file.content),
+        ]),
+        [...nodeMembers],
+      ])
+    : undefined;
+  const retained = derived?.entries.get(key);
+  const result = (dependencies: string[]) => ({
+    canonicalPath,
+    observedVersion: structureFingerprint(dependencies),
+    structureDependencies: dependencies,
+    cacheHit: false,
+    blobs: aggregateBlobs(dependencies),
+  });
+  if (retained && retained.base === base) {
+    let matches = true;
+    for (const [file, version] of retained.additional) {
+      // Cached inputs must still belong to the current validated listing.
+      // A supporting config can remove earlier requirements; failures therefore
+      // fall back to resolution instead of making an obsolete input authoritative.
+      if (!byPath.has(file)) {
+        matches = false;
+        break;
+      }
+      try {
+        if (sourceVersion(await readSource(path.join(workspaceRoot, file))) !== version) {
+          matches = false;
+          break;
+        }
+      } catch {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return result(retained.dependencies.slice());
+  }
+  const initiallyRead = new Set(
+    files.filter((file) => file.content !== undefined).map((file) => file.path),
+  );
   const rustSources = files.filter((file) => !isTestSource(file.path));
   let rust = extractRustImports(rustSources, rustMembers);
   while (true) {
@@ -272,17 +361,18 @@ async function observeStructureMaterialInScope(
     coverage,
     imports.edges,
     files.map((file) => file.path),
-    new Set(
-      memberPaths
-        .map((filename) => path.relative(workspaceRoot, filename).split(path.sep).join("/"))
-        .filter((file) => nodeCoverage.some((item) => materialCoverageContains(item, file))),
-    ),
+    nodeMembers,
   );
-  return {
-    canonicalPath,
-    observedVersion: structureFingerprint(structureDependencies),
-    structureDependencies,
-    cacheHit: false,
-    blobs: aggregateBlobs(structureDependencies),
-  };
+  if (derived) {
+    derived.entries.delete(key);
+    derived.entries.set(key, {
+      base: base!,
+      additional: files
+        .filter((file) => file.content !== undefined && !initiallyRead.has(file.path))
+        .map((file) => [file.path, sourceVersion(file.content!)]),
+      dependencies: structureDependencies.slice(),
+    });
+    derived.dirty = true;
+  }
+  return result(structureDependencies);
 }

@@ -284,13 +284,27 @@ export async function observeSyncMaterial(
   }
 }
 
+/** A read-only catalog inspection shares its path index and material observations. */
+export function nodeMaterialObservationScope(nodes: Map<string, CatalogNode>) {
+  const nativeNodes = new Map(
+    [...nodes.values()]
+      .filter((node) => !node.invalid)
+      .map((node) => [nodeNotePath(node.path), node]),
+  );
+  return {
+    nativeNodes,
+    nodePaths: new Set(nativeNodes.keys()),
+    observations: new Map<string, ReturnType<typeof observeSyncMaterial>>(),
+  };
+}
+
 export async function observeNodeMaterials(
   fs: FsAdapter,
   data: Record<string, unknown>,
   documentPath: string,
   finalDocuments?: Map<string, string>,
   nodes?: Map<string, CatalogNode>,
-  observations?: Map<string, ReturnType<typeof observeSyncMaterial>>,
+  scope?: ReturnType<typeof nodeMaterialObservationScope>,
 ) {
   const directories = new Map<string, ReturnType<typeof observeSyncMaterial>>();
   const occurrences = materialOccurrences(data);
@@ -305,14 +319,8 @@ export async function observeNodeMaterials(
       ),
     ),
   ].sort();
-  const nativeNodes =
-    nodes &&
-    new Map(
-      [...nodes.values()]
-        .filter((node) => !node.invalid)
-        .map((node) => [nodeNotePath(node.path), node]),
-    );
-  const nodePaths = nativeNodes && new Set(nativeNodes.keys());
+  const { nativeNodes, nodePaths } = scope ?? (nodes ? nodeMaterialObservationScope(nodes) : {});
+  const observations = scope?.observations;
   return Promise.all(
     occurrences
       .filter(

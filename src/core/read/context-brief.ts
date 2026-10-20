@@ -260,8 +260,12 @@ export function makeContextBrief(
     }
     return true;
   };
-  for (const key of keys) append(key);
-  for (const key of keys) while (indices[key] < candidates[key].length) append(key);
+  // Mandatory Cards and invalid Nodes can already exceed the budget. Adding
+  // optional detail cannot reduce the JSON size, so none can fit in that case.
+  if (Buffer.byteLength(JSON.stringify(brief) + "\n", "utf8") <= 4096) {
+    for (const key of keys) append(key);
+    for (const key of keys) while (indices[key] < candidates[key].length) append(key);
+  }
   // Root navigation is appended after actionable detail has received its budget.
   brief.roots = context.roots.slice(0, 12);
   brief.omitted.roots = Math.max(0, context.roots.length - brief.roots.length);

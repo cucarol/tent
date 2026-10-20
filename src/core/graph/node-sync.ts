@@ -26,6 +26,7 @@ import {
   goalAncestors,
   nodeSemanticFingerprint,
   observeNodeMaterials,
+  nodeMaterialObservationScope,
   retainedNodeRecords,
   coverageGoalAncestors,
 } from "./node-sync-record.js";
@@ -160,7 +161,7 @@ async function inspectCatalogNodesInScope(
   // One inspection observes each declaration once. Shared ancestor materials use
   // that same observation; later inspections always start with an empty map.
   const materialReads = new Map<string, ReturnType<typeof observeNodeMaterials>>();
-  const materialObservations: NonNullable<Parameters<typeof observeNodeMaterials>[5]> = new Map();
+  const materialObservations = nodeMaterialObservationScope(catalog.byId);
   const documents = new Map<string, ReturnType<typeof readCatalogDocument>>();
   const readDocument = (node: CatalogNode, retry: boolean) => {
     if (retry) {

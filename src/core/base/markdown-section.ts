@@ -1,5 +1,4 @@
-import { fromMarkdown } from "mdast-util-from-markdown";
-import type { Nodes } from "mdast";
+import { markdownSyntax } from "./markdown-syntax.js";
 
 export class NodeSectionError extends Error {
   constructor(
@@ -25,8 +24,8 @@ export function selectSection(body: string, heading: string): MarkdownSection {
 }
 
 export function findSection(body: string, heading: string): MarkdownSection | undefined {
-  const headings = fromMarkdown(body).children.filter((node) => node.type === "heading");
-  const matches = headings.filter((node) => inlineText(node).trim() === heading);
+  const headings = markdownSyntax(body).headings;
+  const matches = headings.filter((node) => node.text === heading);
   if (!matches.length) return undefined;
   if (matches.length !== 1)
     throw new NodeSectionError(
@@ -35,16 +34,8 @@ export function findSection(body: string, heading: string): MarkdownSection | un
       { heading, count: matches.length },
     );
   const selected = matches[0]!;
-  const start = selected.position!.start.offset!;
-  const next = headings.find(
-    (node) => node.position!.start.offset! > start && node.depth <= selected.depth,
-  );
-  const end = next?.position!.start.offset ?? body.length;
+  const start = selected.start;
+  const next = headings.find((node) => node.start > start && node.depth <= selected.depth);
+  const end = next?.start ?? body.length;
   return { start, end, depth: selected.depth, text: body.slice(start, end) };
-}
-
-function inlineText(node: Nodes): string {
-  if ("value" in node) return node.value;
-  if ("alt" in node) return node.alt ?? "";
-  return "children" in node ? node.children.map(inlineText).join("") : "";
 }

@@ -40,15 +40,12 @@ const stateSchema = z.strictObject({
   dev: integer,
   ino: integer,
 });
-const segment = z
-  .string()
-  .min(1)
-  .refine((value) => !/[\\/]/.test(value) && value !== "." && value !== "..");
+const validSegment = (value: string) =>
+  value.length > 0 && !/[\\/]/.test(value) && value !== "." && value !== "..";
+const segment = z.string().refine(validSegment);
 const relativePath = z
   .string()
-  .refine(
-    (value) => value === "" || value.split("/").every((part) => segment.safeParse(part).success),
-  );
+  .refine((value) => value === "" || value.split("/").every(validSegment));
 const directorySchema = z.strictObject({
   state: stateSchema,
   entries: z.array(z.strictObject({ name: segment, isDir: z.boolean() })),
