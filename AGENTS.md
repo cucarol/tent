@@ -11,6 +11,7 @@
 - 功能分支压成一个提交合入 main，完成集成后及时推送。
 - 主 checkout 用于集成；并行写入需隔离，worktree 按需创建。
 - 项目相关目录必须位于本项目根目录内：临时 worktree 放 `.worktrees/`，测试副本和临时数据放 `.scratch/`；不得在父目录或其他全局目录创建项目副本。完成后核验成果并清理临时目录。
+- 合入 main 前，先把压好的提交推到分支，用 `gh run watch` 等三平台 CI 通过，再快进 main 并推送。tag 只打在 CI 已通过的 main 提交上。
 - 发布 tag 与 `manifest.json.version` 完全一致，不加 `v` 前缀。
 - 规则与权威语义放在 `src/core/` 和 `docs/SPEC.md`；CLI、插件层保持薄。
 - `.tent/` 是本地协作状态，不提交到产品仓库。
