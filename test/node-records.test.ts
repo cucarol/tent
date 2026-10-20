@@ -166,6 +166,9 @@ test("batch capture failure retains exact preimages and all baseline records", a
 
 test("material cache survives short-lived processes and invalidates on byte changes", async (t) => {
   const { root, system, adapter, material, resource } = await fixture(t);
+  // Cache reuse requires an mtime outside SPEC's conservative timestamp window.
+  const old = new Date(Date.now() - 10_000);
+  await fs.utimes(material, old, old);
   const first = await adapter.observeMaterial(resource, "Fact/Fact.md");
   assert.equal(first.cacheHit, false);
   assert.equal((await new NodeFs(system).observeMaterial(resource, "Fact/Fact.md")).cacheHit, true);
@@ -188,22 +191,18 @@ test("material cache survives short-lived processes and invalidates on byte chan
   });
   assert.equal(JSON.parse(await child).cacheHit, true);
   await fs.writeFile(material, "v2");
+  await fs.utimes(material, old, old);
   const changed = await new NodeFs(system).observeMaterial(resource, "Fact/Fact.md");
   assert.equal(changed.cacheHit, false);
   assert.notEqual(changed.observedVersion, first.observedVersion);
+  assert.equal((await new NodeFs(system).observeMaterial(resource, "Fact/Fact.md")).cacheHit, true);
   await fs.writeFile(
-    path.join(
-      system,
-      ".git",
-      "tent-material-cache",
-      createHash("sha256").update(changed.canonicalPath).digest("hex") + ".json",
-    ),
+    path.join(system, ".git", "tent-material-cache", "file-state.json"),
     "corrupt",
   );
-  assert.equal(
-    (await new NodeFs(system).observeMaterial(resource, "Fact/Fact.md")).observedVersion,
-    changed.observedVersion,
-  );
+  const recovered = await new NodeFs(system).observeMaterial(resource, "Fact/Fact.md");
+  assert.equal(recovered.cacheHit, false);
+  assert.equal(recovered.observedVersion, changed.observedVersion);
 });
 
 test("workspace export excludes the disposable material cache", async (t) => {
