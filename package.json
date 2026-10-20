@@ -1,6 +1,6 @@
 {
   "name": "vibe-tent",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "A local Workspace context graph for durable Nodes, immutable Cards, optional Roles, and Agent plugin workflows.",
   "type": "module",
   "bin": {
