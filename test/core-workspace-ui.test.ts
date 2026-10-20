@@ -5,7 +5,10 @@ import path from "node:path";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { createNode, renameNode } from "../src/core/graph/ops.js";
-import { readWorkspaceRevision } from "../src/core/workspace/workspace-revision.js";
+import {
+  readWorkspaceRevision,
+  workspaceDocumentPaths,
+} from "../src/core/workspace/workspace-revision.js";
 import { listWorkspaceRelations } from "../src/core/graph/workspace-relations.js";
 import { readDocumentVersion } from "../src/core/read/document-diff.js";
 import { createCardDocument } from "../src/core/graph/card-document.js";
@@ -84,6 +87,31 @@ test("workspace revision keeps deterministic bytes while bounded reads complete 
   assert.equal(await readWorkspaceRevision(adapter), expected);
   assert.ok(maximum > 1 && maximum <= 8);
   assert.ok(finished.indexOf("roles/role-01.md") < finished.indexOf("roles/role-00.md"));
+});
+
+test("workspace discovery overlaps directory reads without losing nested or last-batch documents", async (t) => {
+  const { adapter } = await fixture(t);
+  for (let index = 0; index < 35; index++)
+    await adapter.writeFile(`Group${index}/Nested/Nested.md`, `document ${index}`);
+  await adapter.writeFile("temp/Hidden/Hidden.md", "ignored");
+  await adapter.writeFile("roles/Hidden/Hidden.md", "ignored");
+  const expected = await workspaceDocumentPaths(adapter);
+  assert.equal(expected.filter((file) => file.startsWith("Group")).length, 35);
+  assert.ok(!expected.some((file) => file.endsWith("Hidden.md")));
+  const original = adapter.listDir.bind(adapter);
+  let active = 0,
+    maximum = 0;
+  adapter.listDir = async (dir) => {
+    maximum = Math.max(maximum, ++active);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, dir === "Group0" ? 20 : 1));
+      return await original(dir);
+    } finally {
+      active--;
+    }
+  };
+  assert.deepEqual(await workspaceDocumentPaths(adapter), expected);
+  assert.ok(maximum > 1 && maximum <= 16);
 });
 
 test("workspace relations use Markdown occurrences across identities and retained Card targets after moves", async (t) => {

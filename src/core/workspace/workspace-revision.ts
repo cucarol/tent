@@ -15,24 +15,30 @@ import {
 export async function workspaceDocumentPaths(fs: FsAdapter): Promise<string[]> {
   const files: string[] = [];
   const completed = await completedCardPaths(fs);
-  async function visit(dir: string) {
-    for (const entry of await fs.listDir(dir)) {
-      const file = path.posix.join(dir, entry.name);
-      if (dir === CARDS_DIR && completed.has(file)) continue;
-      if (entry.isDir) {
-        if (
-          !dir &&
-          isOperationalPath(entry.name) &&
-          entry.name !== ROLES_DIR &&
-          entry.name !== CARDS_DIR
-        )
-          continue;
-        if (dir === ROLES_DIR || dir === CARDS_DIR) continue;
-        await visit(file);
-      } else if (isHistoryFile(file)) files.push(file);
+  const directories = [""];
+  let next = 0;
+  while (next < directories.length) {
+    const batch = directories.slice(next, next + 16);
+    next += batch.length;
+    const listings = await Promise.all(batch.map((dir) => fs.listDir(dir)));
+    for (const [index, dir] of batch.entries()) {
+      for (const entry of listings[index]!) {
+        const file = path.posix.join(dir, entry.name);
+        if (dir === CARDS_DIR && completed.has(file)) continue;
+        if (entry.isDir) {
+          if (
+            !dir &&
+            isOperationalPath(entry.name) &&
+            entry.name !== ROLES_DIR &&
+            entry.name !== CARDS_DIR
+          )
+            continue;
+          if (dir === ROLES_DIR || dir === CARDS_DIR) continue;
+          directories.push(file);
+        } else if (isHistoryFile(file)) files.push(file);
+      }
     }
   }
-  await visit("");
   return files.sort();
 }
 

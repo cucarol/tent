@@ -46,6 +46,7 @@ import { NodeFs, SystemClock } from "../fs/node-fs.js";
 import { createModuleDependencyRepositoryReader } from "../fs/module-dependencies.js";
 import { readModuleMapRepository } from "../fs/workspace-scan.js";
 import { buildSnapshot } from "./snapshot.js";
+import { batchRead } from "./read-batch.js";
 import { readWorkspaces, rememberWorkspace, workspaceKey } from "./workspaces.js";
 
 export type UiServerOptions = {
@@ -196,6 +197,45 @@ async function startWorkspaceServer(
     queue = run.catch(() => undefined);
     return run;
   };
+  const revisionReads = batchRead<undefined, string>((readers) =>
+    fs.observationScope(async () => {
+      const revision = await readWorkspaceRevision(queryFs);
+      return readers().length ? JSON.stringify({ revision }) : undefined;
+    }),
+  );
+  const syncReads = batchRead<undefined, string>((readers) =>
+    fs.observationScope(async () => {
+      const revision = await readWorkspaceRevision(queryFs);
+      if (!readers().length) return;
+      const sync = await inspectWorkspaceSync(queryFs);
+      if (!readers().length) return;
+      return JSON.stringify({
+        revision,
+        nodes: Object.fromEntries(
+          sync.nodes
+            .filter((n) => n.ahead || n.behind)
+            .map((n) => [
+              n.nodeId,
+              { ...(n.ahead ? { ahead: n.ahead } : {}), ...(n.behind ? { behind: n.behind } : {}) },
+            ]),
+        ),
+      });
+    }),
+  );
+  const snapshotReads = batchRead<
+    { fresh: boolean; etag: string | undefined },
+    { etag: string; body?: string }
+  >((readers) =>
+    fs.observationScope(async () => {
+      const revision = await readWorkspaceRevision(queryFs);
+      const waiting = readers();
+      if (!waiting.length) return;
+      const etag = `"${revision}"`;
+      if (!waiting.some((reader) => reader.fresh || reader.etag !== etag)) return { etag };
+      const current = await buildSnapshot({ fs: queryFs, workspace, revision });
+      return readers().length ? { etag, body: JSON.stringify(current) } : undefined;
+    }),
+  );
 
   const origins = () => [`127.0.0.1:${port}`, `localhost:${port}`];
   const authorized = (req: IncomingMessage) => {
@@ -222,8 +262,11 @@ async function startWorkspaceServer(
     const nodeAction = /^\/api\/nodes\/([^/]+)\/(archive|restore|rename)$/.exec(url.pathname);
     const roleRoute = /^\/api\/roles\/([^/]+)(?:\/(status))?$/.exec(url.pathname);
 
-    if (route === "GET /api/revision")
-      return json(res, 200, { revision: await readWorkspaceRevision(queryFs) });
+    if (route === "GET /api/revision") {
+      const body = await revisionReads(undefined, res);
+      if (body !== undefined && !res.destroyed) return jsonBody(res, 200, body);
+      return;
+    }
     if (route === "GET /api/canvas") return json(res, 200, await readCanvasDocument(fs));
     if (route === "PUT /api/canvas") {
       // Allow the CAS envelope as well as a canvas at the file-size limit.
@@ -287,27 +330,17 @@ async function startWorkspaceServer(
       return json(res, 200, await readNodeTimes(queryFs, url.searchParams.getAll("nodeId")));
     if (route === "GET /api/sync") {
       // The initial UI read runs beside the snapshot; keep its starting document revision.
-      const revision = await readWorkspaceRevision(queryFs);
-      const sync = await inspectWorkspaceSync(queryFs);
-      return json(res, 200, {
-        revision,
-        nodes: Object.fromEntries(
-          sync.nodes
-            .filter((n) => n.ahead || n.behind)
-            .map((n) => [
-              n.nodeId,
-              { ...(n.ahead ? { ahead: n.ahead } : {}), ...(n.behind ? { behind: n.behind } : {}) },
-            ]),
-        ),
-      });
+      const body = await syncReads(undefined, res);
+      if (body !== undefined && !res.destroyed) return jsonBody(res, 200, body);
+      return;
     }
     if (route === "GET /api/snapshot") {
       const fresh = url.searchParams.get("fresh") === "1";
-      const revision = await readWorkspaceRevision(queryFs);
-      const etag = `"${revision}"`;
-      if (!fresh && req.headers["if-none-match"] === etag) return end(res, 304, { ETag: etag });
-      const current = await buildSnapshot({ fs: queryFs, workspace, revision });
-      return json(res, 200, current, { ETag: etag });
+      const result = await snapshotReads({ fresh, etag: req.headers["if-none-match"] }, res);
+      if (!result || res.destroyed) return;
+      if (!fresh && req.headers["if-none-match"] === result.etag)
+        return end(res, 304, { ETag: result.etag });
+      return jsonBody(res, 200, result.body!, { ETag: result.etag });
     }
     if (nodeId && method === "GET") {
       const read = async () => {
@@ -685,6 +718,13 @@ async function startWorkspaceServer(
       if (origin && !origins().some((o) => origin === `http://${o}`))
         throw new HttpError(403, "FORBIDDEN_ORIGIN", "Unexpected Origin");
       if (!isApi) return page(req, res, url);
+      // These reads create their scope only when their batch starts, after all
+      // its callers arrived. Waiting HTTP requests retain no document caches.
+      if (
+        req.method === "GET" &&
+        ["/api/revision", "/api/sync", "/api/snapshot"].includes(url.pathname)
+      )
+        return api(req, res, url);
       return req.method === "GET" || req.method === "HEAD"
         ? fs.observationScope(() => api(req, res, url))
         : api(req, res, url);
@@ -885,7 +925,15 @@ function json(
   value: unknown,
   headers: Record<string, string> = {},
 ) {
-  const body = JSON.stringify(value);
+  return jsonBody(res, status, JSON.stringify(value), headers);
+}
+
+function jsonBody(
+  res: ServerResponse,
+  status: number,
+  body: string,
+  headers: Record<string, string> = {},
+) {
   res.writeHead(status, {
     ...headers,
     "Content-Type": "application/json; charset=utf-8",

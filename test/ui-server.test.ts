@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import nodeFs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import { userInfo } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
@@ -684,6 +685,176 @@ test("the snapshot is built from Core and revalidates by revision", async (t) =>
     json<Snapshot>(next).nodes.find((n) => n.id === "node-other")!.body,
     "A changed goal.\n",
   );
+});
+
+test("queued snapshot readers observe intervening edits and keep individual conditional responses", async (t) => {
+  const { call, server, tent, workspace } = await fixture(t);
+  const baseline = await call("GET", "/api/snapshot");
+  const token = new URL(server.url).hash.replace("#token=", "");
+  const pipeline = (etag: string) =>
+    new Promise<Reply[]>((resolve, reject) => {
+      const socket = net.createConnection({ host: "127.0.0.1", port: server.port });
+      const chunks: Buffer[] = [];
+      socket.on("error", reject);
+      socket.on("data", (chunk) => chunks.push(chunk));
+      socket.on("connect", () =>
+        socket.write(
+          ["/api/snapshot", "/api/snapshot?fresh=1", "/api/snapshot"]
+            .map(
+              (target, index) =>
+                `GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\nAuthorization: Bearer ${token}\r\nIf-None-Match: ${etag}\r\nConnection: ${index === 2 ? "close" : "keep-alive"}\r\n\r\n`,
+            )
+            .join(""),
+        ),
+      );
+      socket.on("end", () => {
+        try {
+          const bytes = Buffer.concat(chunks),
+            replies: Reply[] = [];
+          let offset = 0;
+          while (offset < bytes.length) {
+            const end = bytes.indexOf("\r\n\r\n", offset);
+            assert.ok(end >= 0);
+            const lines = bytes.subarray(offset, end).toString("utf8").split("\r\n");
+            const headers = Object.fromEntries(
+              lines.slice(1).map((line) => {
+                const split = line.indexOf(":");
+                return [line.slice(0, split).toLowerCase(), line.slice(split + 1).trim()];
+              }),
+            );
+            const length = Number(headers["content-length"] ?? 0);
+            offset = end + 4;
+            replies.push({
+              status: Number(lines[0]!.split(" ")[1]),
+              headers,
+              body: bytes.subarray(offset, offset + length).toString("utf8"),
+            });
+            offset += length;
+          }
+          resolve(replies);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  const original = NodeFs.prototype.readContentDigest;
+  let observations = 0;
+  NodeFs.prototype.readContentDigest = async function (file) {
+    const value = await original.call(this, file);
+    if (this.workspaceRoot === workspace && file === "Main/Main.md" && ++observations === 1)
+      await tent.writeFile(
+        "Main/Main.md",
+        "---\nid: node-main\ntype: prompt\n---\nChanged between batches.\n",
+      );
+    return value;
+  };
+  try {
+    const changed = await pipeline(String(baseline.headers.etag));
+    assert.deepEqual(
+      changed.map((reply) => reply.status),
+      [304, 200, 200],
+    );
+    for (const reply of changed.slice(1))
+      assert.equal(
+        json<Snapshot>(reply).nodes.find((node) => node.id === "node-main")!.body,
+        "Changed between batches.\n",
+      );
+    assert.equal(observations, 2);
+    const unchanged = await pipeline(String(changed[1]!.headers.etag));
+    assert.deepEqual(
+      unchanged.map((reply) => reply.status),
+      [304, 200, 304],
+    );
+    assert.equal(unchanged[1]!.headers.etag, changed[1]!.headers.etag);
+    assert.equal(observations, 4);
+  } finally {
+    NodeFs.prototype.readContentDigest = original;
+  }
+});
+
+test("disconnected sync requests drop queued work and skip inspection after the active revision", async (t) => {
+  const { call, server, workspace } = await fixture(t);
+  const token = new URL(server.url).hash.replace("#token=", "");
+  let arrived!: () => void, disconnected!: () => void, observed!: () => void;
+  let release!: () => void, completed!: () => void;
+  const arrivals = new Promise<void>((resolve) => (arrived = resolve));
+  const closures = new Promise<void>((resolve) => (disconnected = resolve));
+  const firstDigest = new Promise<void>((resolve) => (observed = resolve));
+  const hold = new Promise<void>((resolve) => (release = resolve));
+  const firstScope = new Promise<void>((resolve) => (completed = resolve));
+  const emit = http.Server.prototype.emit;
+  const digest = NodeFs.prototype.readContentDigest;
+  const header = NodeFs.prototype.readFrontmatter;
+  const scope = NodeFs.prototype.observationScope;
+  let requests = 0,
+    closed = 0,
+    digests = 0,
+    inspections = 0,
+    scopeStarted = false;
+  http.Server.prototype.emit = function (event: string | symbol, ...args: unknown[]) {
+    if (event === "request") {
+      const [req] = args as [http.IncomingMessage, http.ServerResponse];
+      if (req.url === "/api/sync" && req.headers.authorization === `Bearer ${token}`) {
+        if (++requests === 3) arrived();
+        req.socket.once("close", () => {
+          if (++closed === 3) disconnected();
+        });
+      }
+    }
+    return Reflect.apply(emit, this, [event, ...args]) as boolean;
+  };
+  NodeFs.prototype.readContentDigest = async function (file) {
+    const value = await digest.call(this, file);
+    if (this.workspaceRoot === workspace && file === "Main/Main.md" && ++digests === 1) {
+      observed();
+      await hold;
+    }
+    return value;
+  };
+  NodeFs.prototype.readFrontmatter = function (file) {
+    if (this.workspaceRoot === workspace && file === "Main/Main.md") inspections++;
+    return header.call(this, file);
+  };
+  NodeFs.prototype.observationScope = function <T>(
+    action: () => Promise<T>,
+    options?: { forceContent?: boolean },
+  ) {
+    const first = this.workspaceRoot === workspace && !scopeStarted;
+    if (first) scopeStarted = true;
+    const result = scope.call(this, action, options) as Promise<T>;
+    return first ? result.finally(completed) : result;
+  };
+  const socket = net.createConnection({ host: "127.0.0.1", port: server.port });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.on("error", reject);
+    });
+    socket.write(
+      Array.from(
+        { length: 3 },
+        () =>
+          `GET /api/sync HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\nAuthorization: Bearer ${token}\r\nConnection: keep-alive\r\n\r\n`,
+      ).join(""),
+    );
+    await Promise.all([arrivals, firstDigest]);
+    socket.destroy();
+    await closures;
+    release();
+    await firstScope;
+    assert.equal(inspections, 0, "disconnected callers must not start the expensive sync phase");
+    const next = await call("GET", "/api/sync");
+    assert.equal(next.status, 200, next.body);
+    assert.equal(digests, 2, "only the first read and the new live request should run");
+    assert.ok(inspections > 0, "a later live request must still inspect current Nodes");
+  } finally {
+    socket.destroy();
+    release();
+    http.Server.prototype.emit = emit;
+    NodeFs.prototype.readContentDigest = digest;
+    NodeFs.prototype.readFrontmatter = header;
+    NodeFs.prototype.observationScope = scope;
+  }
 });
 
 test("saving checks the version the edit started from", async (t) => {
