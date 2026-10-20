@@ -1,0 +1,20 @@
+{
+  "name": "tent-local",
+  "interface": {
+    "displayName": "Tent local distribution"
+  },
+  "plugins": [
+    {
+      "name": "tent",
+      "source": {
+        "source": "local",
+        "path": "./plugins/tent"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

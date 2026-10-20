@@ -1,0 +1,12 @@
+{
+  "name": "tent-local",
+  "owner": {
+    "name": "cucarol"
+  },
+  "plugins": [
+    {
+      "name": "tent",
+      "source": "./plugins/tent"
+    }
+  ]
+}
