@@ -7,11 +7,15 @@ import {
   isTestSource,
   type RepositorySource,
 } from "../core/base/repository-imports.js";
-import { sourceDirectoryPaths } from "./directory-observation.js";
+import {
+  sourceDirectoryPaths,
+  sourcePathState,
+  type SourcePathStates,
+} from "./directory-observation.js";
 import { directoryRepository } from "./repository-material.js";
 import { fileState, sameFileState, stateCacheHit, type FileState } from "./file-state-cache.js";
 
-async function git(root: string, args: string[], config: string[] = []) {
+async function git(root: string, args: string[]) {
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
   );
@@ -25,7 +29,6 @@ async function git(root: string, args: string[], config: string[] = []) {
         "core.fsmonitor=false",
         "-c",
         "core.untrackedCache=false",
-        ...config,
         "-C",
         root,
         ...args,
@@ -39,62 +42,18 @@ async function git(root: string, args: string[], config: string[] = []) {
   );
 }
 
-async function repositoryBasis(root: string, workspaceRoot: string) {
-  // Read every effective filter name, including includes/global/worktree config.
-  // Empty commands and required=false make status use only Git's built-in conversions.
-  const configured = await git(root, [
-    "config",
-    "--null",
-    "--get-regexp",
-    "^filter\\..*\\.(clean|process|required)$",
-  ]).catch((error: Error & { code?: number }) => {
-    if (error.code !== 1) throw error;
-    return "";
-  });
-  const filters = new Set(
-    configured
-      .split("\0")
-      .filter(Boolean)
-      .map((entry) => {
-        const key = entry.slice(0, entry.indexOf("\n"));
-        const filter = /^filter\.([\s\S]+)\.(?:clean|process|required)$/.exec(key);
-        if (!filter) throw new Error("Invalid Git filter configuration listing");
-        return filter[1]!;
-      }),
-  );
-  const config = [...filters].flatMap((filter) => [
-    "-c",
-    `filter.${filter}.clean=`,
-    "-c",
-    `filter.${filter}.process=`,
-    "-c",
-    `filter.${filter}.required=false`,
-  ]);
-  const fields = (
-    await git(
-      root,
-      [
-        "status",
-        "--porcelain=v2",
-        "--branch",
-        "--untracked-files=all",
-        "--ignore-submodules=all",
-        "-z",
-        "--",
-        `:(literal)${path.relative(root, workspaceRoot).split(path.sep).join("/") || "."}`,
-      ],
-      config,
+async function repositoryHead(root: string): Promise<string | null> {
+  const oid = (
+    await git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(
+      (error: Error & { code?: number }) => {
+        if (error.code !== 1) throw error;
+        return "";
+      },
     )
-  )
-    .split("\0")
-    .filter(Boolean);
-  const oid = fields.find((field) => field.startsWith("# branch.oid "))?.slice(13);
-  if (!oid || (oid !== "(initial)" && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid)))
-    throw new Error("Invalid Git branch basis");
-  return {
-    head: oid === "(initial)" ? null : oid,
-    dirty: fields.some((field) => !field.startsWith("# ")),
-  };
+  ).trim();
+  if (!oid) return null;
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid)) throw new Error("Invalid Git branch basis");
+  return oid;
 }
 
 async function signature(filename: string) {
@@ -114,11 +73,16 @@ export function createModuleDependencyRepositoryReader(workspaceRoot: string) {
   return async () => {
     const root = await realpath(workspaceRoot);
     const repository = await directoryRepository(root);
-    const [basis, candidates] = await Promise.all([
-      repository
-        ? repositoryBasis(repository.root, root)
-        : Promise.resolve({ head: null, dirty: true }),
-      sourceDirectoryPaths(root, root, path.join(root, ".tent", ".git", "tent-material-cache")),
+    const states: SourcePathStates = new Map();
+    const [head, candidates] = await Promise.all([
+      repository ? repositoryHead(repository.root) : Promise.resolve(null),
+      sourceDirectoryPaths(
+        root,
+        root,
+        path.join(root, ".tent", ".git", "tent-material-cache"),
+        false,
+        states,
+      ),
     ]);
     const directories = new Map<string, Promise<boolean>>();
     async function plainDirectory(directory: string): Promise<boolean> {
@@ -154,16 +118,14 @@ export function createModuleDependencyRepositoryReader(workspaceRoot: string) {
       await Promise.all(
         filenames.slice(start, start + 32).map(async (filename) => {
           if (!(await plainDirectory(path.dirname(filename)))) return;
-          const observed = await signature(filename).catch((error: NodeJS.ErrnoException) => {
-            if (error.code === "ENOENT") return undefined;
-            throw error;
-          });
-          if (!observed || !observed.info.isFile() || observed.info.isSymbolicLink()) return;
+          const info = await sourcePathState(filename, states);
+          if (!info || !info.isFile() || info.isSymbolicLink()) return;
+          const state = fileState(info);
           const file = path.relative(root, filename).split(path.sep).join("/");
           const known = cached.get(file);
-          const hit = known && stateCacheHit(observed.state, known.state, known.writtenAtNs);
+          const hit = known && stateCacheHit(state, known.state, known.writtenAtNs);
           current.set(file, {
-            state: observed.state,
+            state,
             writtenAtNs: hit ? known.writtenAtNs : String(BigInt(Date.now()) * 1_000_000n),
             source: hit ? known.source : { path: file },
           });
@@ -221,6 +183,6 @@ export function createModuleDependencyRepositoryReader(workspaceRoot: string) {
       );
     cached = current;
     previous = same ? previous : sources;
-    return { basis, sources: previous! };
+    return { basis: { head }, sources: previous! };
   };
 }

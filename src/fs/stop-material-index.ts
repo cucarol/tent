@@ -7,6 +7,7 @@ import { fileState, stateCacheHit, withFileReadScope } from "./file-state-cache.
 import { loadNodeCatalog } from "../core/graph/node-catalog.js";
 import {
   buildStopMaterialIndex,
+  sameStopMaterialHeader,
   type StopMaterialIndex,
 } from "../core/return/stop-material-index.js";
 import {
@@ -204,7 +205,8 @@ export async function loadStopMaterialIndex(
             : await adapter.readFrontmatterObservation(filename);
           if (!hit) {
             refreshed = true;
-            if (!previous || observed.content !== previous.content) changed = true;
+            if (!previous || !sameStopMaterialHeader(previous.content, observed.content))
+              changed = true;
           }
           headers.set(filename, { state: observed.state, content: observed.content });
         }),

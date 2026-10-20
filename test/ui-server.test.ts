@@ -387,7 +387,7 @@ test("module dependency endpoint is protected, read-only and refreshes while the
   assert.ok(!Number.isNaN(Date.parse(result.computedAt)));
   const again = json<ModuleDependencyResponse>(await call("GET", endpoint));
   assert.deepEqual({ ...again, computedAt: result.computedAt }, result);
-  assert.deepEqual(result.basis, { head, dirty: false });
+  assert.deepEqual(result.basis, { head });
   assert.deepEqual(result.modules, [
     { nodeId: "node-a", files: 1 },
     { nodeId: "node-b", files: 1 },
@@ -399,7 +399,7 @@ test("module dependency endpoint is protected, read-only and refreshes while the
 
   await fs.writeFile(path.join(workspace, "a/main.ts"), 'import "../missing.js";');
   const missing = await current((value) => value.unresolved === 1);
-  assert.deepEqual(missing.basis, { head, dirty: true });
+  assert.deepEqual(missing.basis, { head });
   assert.deepEqual(missing.edges, []);
   assert.equal(missing.unresolved, 1);
   await fs.writeFile(path.join(workspace, "a/main.ts"), 'import "../b/lib.js"; // still dirty');

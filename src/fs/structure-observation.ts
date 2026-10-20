@@ -31,9 +31,9 @@ import {
 import {
   sourceDirectoryPaths,
   sourcePathType,
-  type SourcePathTypes,
+  type SourcePathStates,
 } from "./directory-observation.js";
-import { observeSourceFile } from "./source-observation.js";
+import { readStructureSource } from "./source-observation.js";
 import { checkedSourceFile } from "./checked-source-file.js";
 import { directoryRepository } from "./repository-material.js";
 
@@ -46,7 +46,7 @@ type StructureSnapshot = {
   repository?: ReturnType<typeof directoryRepository>;
   listings: Map<string, Promise<string[]>>;
   sources: Map<string, Promise<string>>;
-  types: SourcePathTypes;
+  types: SourcePathStates;
 };
 const structureSnapshot = new AsyncLocalStorage<StructureSnapshot>();
 
@@ -143,26 +143,16 @@ export async function observeStructureMaterial(
         (configDirectory === "." || member.startsWith(configDirectory + "/")),
     );
   };
-  const readSource = (workspacePath: string, filename: string) =>
-    shared(snapshot?.sources, filename, async () => {
-      let content: string | undefined;
-      await observeSourceFile(workspaceRoot, filename, undefined, {
-        key: "structure-source-v1",
-        content: (bytes) => {
-          content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-          if (content.includes("\0"))
-            throw new Error(`Structure source is not valid text: ${workspacePath}`);
-          return bytes;
-        },
-      });
-      return content!;
-    });
+  const readSource = (filename: string) =>
+    shared(snapshot?.sources, filename, () =>
+      readStructureSource(workspaceRoot, filename, cacheDir),
+    );
   const files: RepositorySource[] = [];
   for (const filename of paths) {
     const workspacePath = path.relative(workspaceRoot, filename).split(path.sep).join("/");
     const file: RepositorySource = { path: workspacePath };
     if (members.has(workspacePath) || neededConfig(workspacePath)) {
-      file.content = await readSource(workspacePath, filename);
+      file.content = await readSource(filename);
     } else {
       const type = await sourcePathType(filename, snapshot?.types);
       if (!type) throw new Error(`ENOENT: Structure source disappeared: ${workspacePath}`);
@@ -181,7 +171,7 @@ export async function observeStructureMaterial(
     for (const file of required) {
       const source = byPath.get(file);
       if (!source) throw new Error(`Required Rust source is absent: ${file}`);
-      source.content = await readSource(file, path.join(workspaceRoot, file));
+      source.content = await readSource(path.join(workspaceRoot, file));
     }
     rust = extractRustImports(rustSources, rustMembers);
   }
@@ -194,7 +184,7 @@ export async function observeStructureMaterial(
     for (const file of required) {
       const source = byPath.get(file);
       if (!source) throw new Error(`Required Java source is absent: ${file}`);
-      source.content = await readSource(file, path.join(workspaceRoot, file));
+      source.content = await readSource(path.join(workspaceRoot, file));
     }
     java = extractJavaImports(javaSources, javaMembers);
   }
@@ -207,7 +197,7 @@ export async function observeStructureMaterial(
     for (const file of required) {
       const source = byPath.get(file);
       if (!source) throw new Error(`Required C# source is absent: ${file}`);
-      source.content = await readSource(file, path.join(workspaceRoot, file));
+      source.content = await readSource(path.join(workspaceRoot, file));
     }
     csharp = extractCSharpImports(csharpSources, csharpMembers);
   }
@@ -222,7 +212,7 @@ export async function observeStructureMaterial(
     for (const file of required) {
       const source = byPath.get(file);
       if (!source) throw new Error(`Required C/C++ source is absent: ${file}`);
-      source.content = await readSource(file, path.join(workspaceRoot, file));
+      source.content = await readSource(path.join(workspaceRoot, file));
     }
     cfamily = extractCFamilyImports(cfamilySources, cfamilyMembers);
   }
@@ -235,7 +225,7 @@ export async function observeStructureMaterial(
     for (const file of required) {
       const source = byPath.get(file);
       if (!source) throw new Error(`Required PHP source is absent: ${file}`);
-      source.content = await readSource(file, path.join(workspaceRoot, file));
+      source.content = await readSource(path.join(workspaceRoot, file));
     }
     php = extractPhpImports(phpSources, phpMembers);
   }

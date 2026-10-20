@@ -28,7 +28,7 @@ async function fixture(t: TestContext) {
     );
   const read = (sources: RepositorySource[]) =>
     readModuleDependencies(adapter, root, {
-      basis: { head: "a".repeat(40), dirty: true },
+      basis: { head: "a".repeat(40) },
       sources,
     });
   return { node, read };
@@ -47,7 +47,7 @@ test("module dependencies aggregate imports in both directions without self edge
   ];
   const result = await read(sources);
   assert.deepEqual(result, {
-    basis: { head: "a".repeat(40), dirty: true },
+    basis: { head: "a".repeat(40) },
     modules: [
       { nodeId: "node-a", files: 3 },
       { nodeId: "node-b", files: 2 },

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { withFileReadScope } from "../src/fs/file-state-cache.js";
-import { observeSourceFile } from "../src/fs/source-observation.js";
+import { observeSourceFile, readStructureSource } from "../src/fs/source-observation.js";
 import { inspectNodeSync } from "../src/core/graph/node-sync.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
@@ -169,6 +169,54 @@ test("racy files are read again even when their recorded file state still matche
   assert.equal(observed.digest.digest, digest(raw()));
   assert.equal(observed.material.cacheHit, false);
   assert.equal(io.bytes, Buffer.byteLength(raw()));
+});
+
+test("structure text survives a fresh read scope, invalidates on native edits and bypasses cache for checks", async (t) => {
+  const f = await fixture(t);
+  const io = sourceIo(t, [f.filename]);
+  const read = () => readStructureSource(f.root, f.filename, f.cacheDir);
+  assert.equal(await read(), raw());
+  assert.equal(io.bytes, Buffer.byteLength(raw()));
+  io.reset();
+  assert.equal(await read(), raw());
+  assert.equal(io.opens, 0, "a warm structure parser must receive text without reopening sources");
+  assert.equal(await withFileReadScope(read, true), raw());
+  assert.equal(io.bytes, Buffer.byteLength(raw()), "explicit checks must still acquire bytes");
+  const oldTimes = await fs.stat(f.filename);
+  const changed = raw("node-other");
+  await fs.writeFile(f.filename, changed);
+  await fs.utimes(f.filename, oldTimes.atime, oldTimes.mtime);
+  io.reset();
+  assert.equal(await read(), changed);
+  assert.equal(io.bytes, Buffer.byteLength(changed));
+  await fs.utimes(f.filename, new Date(), new Date());
+  await read();
+  io.reset();
+  assert.equal(await read(), changed);
+  assert.equal(io.bytes, Buffer.byteLength(changed), "racy text must not become a cache hit");
+});
+
+test("invalid or missing cached structure text falls back to validated source bytes", async (t) => {
+  const f = await fixture(t);
+  const read = () => readStructureSource(f.root, f.filename, f.cacheDir);
+  await read();
+  const valid = await fs.readFile(f.cacheFile, "utf8");
+  const io = sourceIo(t, [f.filename]);
+  for (const mode of ["missing", "damaged", "json", "deleted"]) {
+    const parsed = JSON.parse(valid);
+    const entry = Object.values(parsed.entries)[0] as { value: { text?: string } };
+    if (mode === "missing") delete entry.value.text;
+    if (mode === "damaged") entry.value.text = "incorrect source";
+    if (mode === "deleted") await fs.rm(f.cacheFile);
+    else await fs.writeFile(f.cacheFile, mode === "json" ? "broken" : JSON.stringify(parsed));
+    io.reset();
+    assert.equal(await read(), raw());
+    assert.equal(io.bytes, Buffer.byteLength(raw()));
+  }
+  for (const invalid of [Buffer.from([0xff]), Buffer.from("source\0text")]) {
+    await fs.writeFile(f.filename, invalid);
+    await assert.rejects(read(), /encoded data was not valid|encoding|UTF-8|not valid text/i);
+  }
 });
 
 test("deleted, corrupt, obsolete and tampered persisted entries fall back to source bytes", async (t) => {

@@ -54,7 +54,7 @@ test("workspace map reads headers once and omits bodies, Cards, Roles and histor
     },
   });
   const repository = {
-    basis: { head: null, dirty: true },
+    basis: { head: null },
     sources: [
       { path: "src/a/index.ts", content: 'import "../b/index.js";' },
       { path: "src/b/index.ts", content: "export const n = 1;" },

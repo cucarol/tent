@@ -14,7 +14,7 @@ import {
 } from "../base/repository-imports.js";
 
 export type ModuleDependencyRepository = {
-  basis: { head: string | null; dirty: boolean };
+  basis: { head: string | null };
   /** Current nonignored files; an unchanged reader result may reuse this immutable array. */
   sources: readonly RepositorySource[];
 };

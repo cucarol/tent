@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { fileState } from "../src/fs/file-state-cache.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
+import { sameStopMaterialHeader } from "../src/core/return/stop-material-index.js";
 import { testScratchRoot } from "./scratch.js";
 
 async function fixture(t: TestContext) {
@@ -41,6 +42,46 @@ function stableClock(t: TestContext) {
 }
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+
+test("Stop header equivalence ignores provenance but preserves identity, validity and coverage changes", () => {
+  const original = "---\nid: node-a\ntype: goal\ngenerated: {at: old}\n---\n";
+  assert.equal(sameStopMaterialHeader(original, original.replace("old", "new")), true);
+  for (const replacement of [
+    original.replace("node-a", "node-b"),
+    original.replace("goal", "output"),
+    original.replace("goal", "null"),
+    original.replace("type: goal", "type: goal\nstatus: deprecated"),
+    original.replace("type: goal", "type: goal\nstale_after: invalid"),
+    original.replace("type: goal", "type: goal\nsources: [{resource: ../src/, track: structure}]"),
+    original.replace("generated: {at: old}", "generated: {at:"),
+  ])
+    assert.equal(sameStopMaterialHeader(original, replacement), false);
+});
+
+test("Stop updates a generated-only header record while retaining the same projection", async (t) => {
+  const { root, systemRoot, cacheFile } = await fixture(t);
+  stableClock(t);
+  const expected = await loadStopMaterialIndex(systemRoot, root);
+  const filename = path.join(systemRoot, "A", "A.md");
+  const changed = (await fs.readFile(filename, "utf8")).replace(
+    "type: goal",
+    "type: goal\ngenerated: {at: new}",
+  );
+  await fs.writeFile(filename, changed);
+  assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
+  const cached = JSON.parse(await fs.readFile(cacheFile, "utf8"));
+  assert.match(
+    cached.headers.find(([name]: [string]) => name === "A/A.md")[1].content,
+    /generated/,
+  );
+  assert.equal(cached.indexDigest, digest(expected));
+  await fs.writeFile(filename, changed.replace("type: goal", "type: output"));
+  assert.equal(
+    (await loadStopMaterialIndex(systemRoot, root)).nodes.find((node) => node.nodeId === "node-a")
+      ?.type,
+    "output",
+  );
+});
 
 test("Stop binds cached headers to their own observation across requests and processes", async (t) => {
   const { root, systemRoot, cacheFile } = await fixture(t);

@@ -612,7 +612,7 @@ test("hierarchical draft writes once after renaming a parent and preserves child
   assert.ok(actual.modules.every((module) => module.productionFiles <= 10));
   assert.ok(actual.modules.some((module) => module.path.startsWith("Library product/library/")));
   const deps = await readModuleDependencies(adapter, root, {
-    basis: { head: repository.head, dirty: false },
+    basis: { head: repository.head },
     sources: repository.sources.files,
   });
   assert.equal(deps.unresolved, 0);

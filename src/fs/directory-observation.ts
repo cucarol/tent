@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import type { BigIntStats } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { checkedSourceFile } from "./checked-source-file.js";
@@ -6,25 +7,15 @@ import { directoryRepository } from "./repository-material.js";
 import { isTentWorkspacePath } from "../core/base/material-coverage.js";
 
 type SourcePathType = "file" | "directory" | "link" | "other";
-export type SourcePathTypes = Map<string, Promise<SourcePathType | undefined>>;
+export type SourcePathStates = Map<string, Promise<BigIntStats | undefined>>;
 
 /** Listing metadata only; reading source bytes still performs its own safety checks. */
-export function sourcePathType(filename: string, observations?: SourcePathTypes) {
+export function sourcePathState(filename: string, observations?: SourcePathStates) {
   const read = () =>
-    lstat(filename).then(
-      (info): SourcePathType =>
-        info.isSymbolicLink()
-          ? "link"
-          : info.isDirectory()
-            ? "directory"
-            : info.isFile()
-              ? "file"
-              : "other",
-      (error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
-      },
-    );
+    lstat(filename, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
   if (!observations) return read();
   let pending = observations.get(filename);
   if (!pending) {
@@ -32,6 +23,22 @@ export function sourcePathType(filename: string, observations?: SourcePathTypes)
     observations.set(filename, pending);
   }
   return pending;
+}
+
+export async function sourcePathType(
+  filename: string,
+  observations?: SourcePathStates,
+): Promise<SourcePathType | undefined> {
+  const info = await sourcePathState(filename, observations);
+  return !info
+    ? undefined
+    : info.isSymbolicLink()
+      ? "link"
+      : info.isDirectory()
+        ? "directory"
+        : info.isFile()
+          ? "file"
+          : "other";
 }
 
 /** No caller Git environment or external filters affect the observed bytes. */
@@ -186,7 +193,7 @@ export async function sourceDirectoryPaths(
   directory: string,
   cacheDir?: string,
   trackedOnly = false,
-  types?: SourcePathTypes,
+  types?: SourcePathStates,
 ): Promise<string[]> {
   if (isTentWorkspacePath(path.relative(root, directory).split(path.sep).join("/"))) return [];
   await checkedSourceFile(root, directory, true);

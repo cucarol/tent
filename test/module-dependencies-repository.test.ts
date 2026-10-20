@@ -76,10 +76,32 @@ test("repository source cache reuses old unchanged bytes after independent state
     const firstStats = stats;
     assert.strictEqual((await reader()).sources, first.sources);
     assert.equal(reads, 1);
-    assert.ok(stats > firstStats, "a later request validates the file again");
+    assert.equal(
+      stats - firstStats,
+      1,
+      "a warm request shares the listing's initial file state with dependency acquisition",
+    );
   } finally {
     mockedRead.mock.restore();
     mockedStat.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+test("repository source reads independently validate the final state after reusing listing metadata", async (t) => {
+  const { root, reader } = await fixture(t);
+  const file = path.join(root, "src/main.ts");
+  const originalRead = fs.readFile;
+  const mocked = t.mock.method(fs, "readFile", async (...args: Parameters<typeof originalRead>) => {
+    const content = await originalRead(...args);
+    if (String(args[0]) === file) await fs.writeFile(file, "import './changed.js';\n");
+    return content;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(reader(), /Repository source changed while reading: src\/main.ts/);
+  } finally {
+    mocked.mock.restore();
     syncBuiltinESMExports();
   }
 });
@@ -137,7 +159,6 @@ test("repository reader uses live nonignored members, source/config reading rule
   await write("tsconfig.json", '{"compilerOptions":{"baseUrl":"."}}');
   const first = await reader();
   assert.equal(first.basis.head, git("rev-parse", "HEAD"));
-  assert.equal(first.basis.dirty, true);
   assert.deepEqual(paths(first), [
     ".gitignore",
     "src/a.ts",
@@ -166,15 +187,12 @@ test("repository reader uses live nonignored members, source/config reading rule
 test("continuous dirty edits, config edits, add/delete/rename and ignore changes invalidate the input", async (t) => {
   const { root, git, write, commit, reader } = await fixture(t);
   const clean = await reader();
-  assert.equal(clean.basis.dirty, false);
   await write("src/main.ts", "import './b.js';\n");
   await write("src/b.ts", "export const b = 1;\n");
   const edited = await reader();
-  assert.equal(edited.basis.dirty, true);
   assert.notStrictEqual(edited.sources, clean.sources);
   await write("src/main.ts", "import './a.js';\n");
   const editedAgain = await reader();
-  assert.equal(editedAgain.basis.dirty, true);
   assert.equal(
     editedAgain.sources.find((file) => file.path === "src/main.ts")!.content,
     "import './a.js';\n",
@@ -198,10 +216,8 @@ test("continuous dirty edits, config edits, add/delete/rename and ignore changes
   commit();
   const committed = await reader();
   assert.notEqual(committed.basis.head, clean.basis.head);
-  assert.equal(committed.basis.dirty, false);
   git("mv", "src/c.ts", "src/d.ts");
   const staged = await reader();
-  assert.equal(staged.basis.dirty, true);
   assert.ok(paths(staged).includes("src/d.ts") && !paths(staged).includes("src/c.ts"));
 });
 
@@ -235,19 +251,22 @@ test("Git config ignore updates and checkout identity changes are read anew", as
   assert.notEqual((await reader()).basis.head, old);
 });
 
-test("nested Workspace basis ignores sibling edits while preserving project HEAD", async (t) => {
+test("nested Workspace sources ignore sibling edits while preserving project HEAD", async (t) => {
   const { root, git, write } = await fixture(t);
   const read = createModuleDependencyRepositoryReader(path.join(root, "src"));
   const clean = await read();
-  assert.deepEqual(clean.basis, { head: git("rev-parse", "HEAD"), dirty: false });
+  assert.deepEqual(clean.basis, { head: git("rev-parse", "HEAD") });
   assert.deepEqual(paths(clean), ["a.ts", "main.ts"]);
   await write("sibling.ts", "export const outside = 1;\n");
-  assert.equal((await read()).basis.dirty, false);
+  assert.deepEqual(paths(await read()), ["a.ts", "main.ts"]);
   await write("src/main.ts", "import './a.js'; // workspace edit\n");
-  assert.equal((await read()).basis.dirty, true);
+  assert.match(
+    (await read()).sources.find((source) => source.path === "main.ts")!.content!,
+    /workspace edit/,
+  );
 });
 
-test("reader disables every configured clean/process filter, fsmonitor and inherited Git overrides without rewriting index", async (t) => {
+test("reader resolves HEAD without status, configured filters, inherited Git overrides or index writes", async (t) => {
   const { base, root, git, write, reader } = await fixture(t);
   const marker = path.join(base, "executed");
   const command = `node -e "require('node:fs').writeFileSync('${marker.replace(/\\/g, "/")}', 'unsafe'); process.exit(1)"`;
@@ -287,7 +306,6 @@ test("reader disables every configured clean/process filter, fsmonitor and inher
   syncBuiltinESMExports();
   try {
     const input = await reader();
-    assert.equal(input.basis.dirty, true);
     assert.equal(input.basis.head, git("rev-parse", "HEAD"));
     assert.ok(paths(input).includes("src/main.ts"));
     assert.ok(calls.length > 0);
@@ -298,10 +316,9 @@ test("reader disables every configured clean/process filter, fsmonitor and inher
       assert.ok(!Object.keys(call.env ?? {}).some((key) => key.toUpperCase().startsWith("GIT_")));
       assert.ok(!call.args.some((arg) => ["log", "checkout", "add", "hash-object"].includes(arg)));
     }
-    const status = calls.find((call) => call.args.includes("status"))!.args;
-    for (const filter of ["one", "two", "Three.Dot"])
-      for (const option of ["clean=", "process=", "required=false"])
-        assert.ok(status.includes(`filter.${filter}.${option}`));
+    assert.ok(calls.some((call) => call.args.includes("rev-parse") && call.args.includes("HEAD")));
+    assert.ok(!calls.some((call) => call.args.includes("status") || call.args.includes("config")));
+    assert.deepEqual(input.basis, { head: git("rev-parse", "HEAD") });
   } finally {
     if (previous === undefined) delete process.env.GIT_DIR;
     else process.env.GIT_DIR = previous;
@@ -354,7 +371,7 @@ test("non-Git rule-free workspaces have an absent baseline and unsupported ignor
   try {
     const reader = createModuleDependencyRepositoryReader(root);
     const input = await reader();
-    assert.deepEqual(input.basis, { head: null, dirty: true });
+    assert.deepEqual(input.basis, { head: null });
     assert.deepEqual(paths(input), ["src/a.ts", "src/main.ts"]);
     await write(".gitignore", "src/a.ts\n");
     await assert.rejects(reader(), /缺少可信的忽略规则解释/);
@@ -384,7 +401,7 @@ test("non-Git Workspace borrows existing Tent Git ignore interpretation without 
     const config = await fs.readFile(path.join(tentGit, "config"));
     const read = createModuleDependencyRepositoryReader(root);
     const input = await read();
-    assert.deepEqual(input.basis, { head: null, dirty: true });
+    assert.deepEqual(input.basis, { head: null });
     assert.deepEqual(paths(input), [".gitignore", "src/.gitignore", "src/main.ts"]);
     assert.strictEqual((await read()).sources, input.sources);
     assert.deepEqual(await fs.readdir(tentGit), before);
@@ -396,7 +413,7 @@ test("non-Git Workspace borrows existing Tent Git ignore interpretation without 
   }
 });
 
-test("nested repositories and submodules contribute no internal source files or dirty state", async (t) => {
+test("nested repositories and submodules contribute no internal source files", async (t) => {
   const { root, git, write, commit, reader } = await fixture(t);
   const nested = path.join(root, "nested");
   await write("nested/private.ts", "export const privateFile = 1;\n");
@@ -416,10 +433,8 @@ test("nested repositories and submodules contribute no internal source files or 
   );
   commit("test: index gitlink");
   const clean = await reader();
-  assert.equal(clean.basis.dirty, false);
   assert.ok(!paths(clean).some((file) => file.startsWith("nested/")));
   await write("nested/private.ts", "export const privateFile = 2;\n");
   const again = await reader();
-  assert.equal(again.basis.dirty, false);
   assert.strictEqual(again.sources, clean.sources);
 });

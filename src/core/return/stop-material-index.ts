@@ -2,6 +2,8 @@ import type { NodeCatalog } from "../graph/node-catalog.js";
 import { nodeNotePath } from "../base/paths.js";
 import { structureMaterialCoverage, type MaterialCoverage } from "../base/material-coverage.js";
 import { isUsableNode } from "../store/tree.js";
+import { parseFrontmatter } from "../base/frontmatter.js";
+import { canonicalSha256 } from "../base/canonical-digest.js";
 
 export type StopIndexedNode = {
   nodeId: string;
@@ -11,6 +13,19 @@ export type StopIndexedNode = {
   moduleCoverage: MaterialCoverage[];
 };
 export type StopMaterialIndex = { nodes: StopIndexedNode[] };
+
+/** Provenance stamps do not change Stop membership, names, types or material coverage. */
+export function sameStopMaterialHeader(before: string, after: string): boolean {
+  if (before === after) return true;
+  try {
+    const { generated: _before, ...left } = parseFrontmatter(before).data;
+    const { generated: _after, ...right } = parseFrontmatter(after).data;
+    return canonicalSha256(left) === canonicalSha256(right);
+  } catch {
+    // A changed malformed header still goes through the tree's quarantine rules.
+    return false;
+  }
+}
 
 /** Metadata only; no content comparison, retained history, capture or material observation. */
 export function buildStopMaterialIndex(

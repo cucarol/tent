@@ -26,8 +26,12 @@ import {
   type FileState,
 } from "./file-state-cache.js";
 
-type Selection = { key: string; content: (bytes: Buffer) => string | Buffer };
-type Fingerprint = { version: string; blobs: { sha1: string; sha256: string } };
+type Selection = {
+  key: string;
+  content: (bytes: Buffer) => string | Buffer;
+  retainText?: true;
+};
+type Fingerprint = { version: string; blobs: { sha1: string; sha256: string }; text?: string };
 function isFingerprint(value: unknown): value is Fingerprint {
   const record = value as Fingerprint | undefined;
   return (
@@ -51,6 +55,20 @@ export async function observeSourceFile(
   return withFileReadScope(() => observeSourceFileInScope(root, filename, cacheDir, selection));
 }
 
+/** Structure parsers need the validated text as well as its state-bound fingerprint. */
+export async function readStructureSource(root: string, filename: string, cacheDir?: string) {
+  const observed = await observeSourceFile(root, filename, cacheDir, {
+    key: "structure-source-text-v1",
+    retainText: true,
+    content: (bytes) => {
+      const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+      if (text.includes("\0")) throw new Error(`Structure source is not valid text: ${filename}`);
+      return text;
+    },
+  });
+  return observed.text!;
+}
+
 async function observeSourceFileInScope(
   root: string,
   filename: string,
@@ -61,12 +79,24 @@ async function observeSourceFileInScope(
   const canonicalPath = await realpath(filename);
   const cachePath = cacheDir ? path.join(cacheDir, "file-state.json") : undefined;
   const cacheKey = `material:${JSON.stringify([canonicalPath, selection?.key])}`;
-  const cached = await cachedFileValue(cachePath, cacheKey, initial, isFingerprint);
+  const cached = await cachedFileValue(
+    cachePath,
+    cacheKey,
+    initial,
+    (value): value is Fingerprint =>
+      isFingerprint(value) && (!selection?.retainText || typeof value.text === "string"),
+  );
   if (cached) {
     const final = await checkedSourceFile(root, filename, false, true);
     if (!sameFileState(fileState(final), initial))
       throw new Error("Material changed during cache lookup");
-    return { canonicalPath, observedVersion: cached.version, cacheHit: true, blobs: cached.blobs };
+    return {
+      canonicalPath,
+      observedVersion: cached.version,
+      cacheHit: true,
+      blobs: cached.blobs,
+      ...(cached.text === undefined ? {} : { text: cached.text }),
+    };
   }
   const handle = await open(
     filename,
@@ -116,19 +146,24 @@ async function observeSourceFileInScope(
       throw new Error("Material changed while observing");
     }
     const bytes = observed.bytes;
-    const observedVersion = createHash("sha256")
-      .update(selection ? selection.content(bytes) : bytes)
-      .digest("hex");
+    const selected = selection ? selection.content(bytes) : bytes;
+    const text = selection?.retainText && typeof selected === "string" ? selected : undefined;
+    const observedVersion = createHash("sha256").update(selected).digest("hex");
     const blobs = {
       sha1: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
       sha256: createHash("sha256").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
     };
-    await rememberFileValue(cachePath, cacheKey, signature, { version: observedVersion, blobs });
+    await rememberFileValue(cachePath, cacheKey, signature, {
+      version: observedVersion,
+      blobs,
+      ...(text === undefined ? {} : { text }),
+    });
     return {
       canonicalPath,
       observedVersion,
       cacheHit: false,
       blobs,
+      ...(text === undefined ? {} : { text }),
     };
   } finally {
     await handle.close();

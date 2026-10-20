@@ -7,6 +7,7 @@ import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
 import { observeMaterialResource } from "../src/fs/source-observation.js";
 import { NodeFs } from "../src/fs/node-fs.js";
+import { withFileReadScope } from "../src/fs/file-state-cache.js";
 import {
   changedStructureDependencies,
   structureDependenciesSchema,
@@ -99,6 +100,37 @@ test("structure fingerprints contain only the outgoing external dependency set",
       .coverage,
     undefined,
   );
+});
+
+test("cached structure sources preserve dependencies and notice a changed import", async (t) => {
+  const { root, write } = await fixture(t);
+  const source = path.join(root, "src/core/card-main.ts");
+  const old = new Date(Date.now() - 5_000);
+  for (const name of ["card-main.ts", "card-helper.ts", "sibling.ts"])
+    await fs.utimes(path.join(root, "src/core", name), old, old);
+  const cacheDir = path.join(root, ".tent", ".git", "tent-material-cache");
+  const observe = () =>
+    withFileReadScope(() =>
+      observeMaterialResource(root, owner, "../src/core/", cacheDir, "structure"),
+    );
+  const cold = await observe();
+  const original = fs.open;
+  let sourceOpens = 0;
+  const mocked = t.mock.method(fs, "open", (...args: Parameters<typeof original>) => {
+    if (String(args[0]).startsWith(path.join(root, "src"))) sourceOpens++;
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  assert.deepEqual(await observe(), cold);
+  assert.equal(sourceOpens, 0);
+  await write("src/core/card-main.ts", 'import "../other/b.js";\nexport const value = 1;\n');
+  await fs.utimes(source, old, old);
+  assert.deepEqual((await observe()).structureDependencies, ["src/other/"]);
+  assert.equal(sourceOpens, 1);
 });
 
 test("prefix structure excludes members and retains exact same-directory external files", async (t) => {
