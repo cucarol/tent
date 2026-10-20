@@ -207,13 +207,13 @@ async function historyOf(fs: FsAdapter) {
     );
   return fs.history;
 }
-async function roleAvailable(fs: FsAdapter, roleId: string) {
+async function roleAvailable(fs: FsAdapter, roleId: string, headerOnly = true) {
   try {
     if (!isRoleId(roleId)) throw new Error("Invalid Role id");
     const path = roleDocumentPath(roleId);
     const role = parseRoleDocument(
       roleId,
-      fs.readFrontmatter ? await fs.readFrontmatter(path) : await fs.readFile(path),
+      headerOnly && fs.readFrontmatter ? await fs.readFrontmatter(path) : await fs.readFile(path),
     );
     const status = documentLifecycle(parseFrontmatter(role.raw).data).status;
     if (status !== "stable" && status !== "draft") throw new Error("Role is not current");
@@ -921,7 +921,8 @@ export async function watchCardDocuments(
 ): Promise<WatchedCard[]> {
   if (timeoutSeconds !== undefined && (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0))
     throw new Error("--timeout must be a nonnegative number of seconds");
-  await roleAvailable(fs, roleId);
+  // Watch must not populate the adapter's persistent frontmatter cache.
+  await roleAvailable(fs, roleId, false);
   const history = await historyOf(fs);
   const deadline =
     performance.now() + (timeoutSeconds === undefined ? Infinity : timeoutSeconds * 1000);
@@ -930,7 +931,7 @@ export async function watchCardDocuments(
     const head = await history.currentCommit();
     if (head !== observed) {
       observed = head;
-      await roleAvailable(fs, roleId);
+      await roleAvailable(fs, roleId, false);
       const selected: CardDocument[] = [];
       for (const [path, raw] of head ? await history.readDirectory(head, CARDS_DIR) : []) {
         const name = path.slice(CARDS_DIR.length + 1);

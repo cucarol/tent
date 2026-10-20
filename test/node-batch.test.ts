@@ -31,6 +31,13 @@ async function fixture(t: TestContext) {
 
 async function tentFiles(workspace: string) {
   const root = path.join(workspace, ".tent");
+  // SPEC permits these disposable caches on ordinary reads, including errors.
+  // They are not document captures; all other bytes and mtimes stay fixed.
+  const derivedCaches = new Set([
+    path.join(".git", "tent-history-index.json"),
+    path.join(".git", "tent-material-cache", "document-headers.bin"),
+    path.join(".git", "tent-material-cache", "file-state.json"),
+  ]);
   const files: Array<{ path: string; sha256: string; mtimeMs: number }> = [];
   const visit = async (directory: string) => {
     const entries = await fs.readdir(directory, { withFileTypes: true });
@@ -39,9 +46,7 @@ async function tentFiles(workspace: string) {
       const file = path.join(directory, entry.name);
       if (entry.isDirectory()) await visit(file);
       else {
-        // SPEC permits a disposable exact-HEAD history index, including on error reads.
-        // Its creation is not a document capture; all other bytes and mtimes stay fixed.
-        if (path.relative(root, file) === path.join(".git", "tent-history-index.json")) continue;
+        if (derivedCaches.has(path.relative(root, file))) continue;
         const stat = await fs.stat(file);
         files.push({
           path: path.relative(root, file),
@@ -78,7 +83,7 @@ test("prepared batch returns each selected body without capturing", async (t) =>
 });
 
 for (const view of ["body", "raw"] as const) {
-  test(`CLI read-many ${view} pages continue live without writing and reject changed files`, async (t) => {
+  test(`CLI read-many ${view} pages continue live without capture and reject changed files`, async (t) => {
     const { workspace, adapter, git } = await fixture(t);
     await adapter.writeFile("A/A.md", raw("node-alpha", "Retained body"));
     await adapter.writeFile("B/B.md", raw("node-bravo", "B"));
