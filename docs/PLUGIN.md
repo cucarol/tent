@@ -77,7 +77,7 @@ Codex 的 Git ref 与 catalogue 路径遵循[官方打包文档](https://develop
 
 新安装或修改后的 Hook 按宿主流程启用和审查；Codex 已发布的 Hook 定义逐字节保留。安装后在实际宿主中检查发现、启用和事件投递，配置文件存在不代表已经生效。
 
-npm 包 `vibe-tent` 是单独的 CLI 包，用 `npm install -g vibe-tent` 安装后使用 `tent` 命令。它不包含完整的宿主插件安装结构。
+npm 包 `vibe-tent` 是单独的 CLI 包，用 `npm install -g vibe-tent` 安装后使用 `tent` 命令。它不包含完整的宿主插件安装结构。发布工作流用 npm 可信发布把 Release 上的同一个 tgz 发到 npm，不使用 token；npm 上已有该版本时跳过。
 
 ## 按需入口
 
