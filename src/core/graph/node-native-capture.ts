@@ -6,6 +6,7 @@ import { contentEtag } from "../base/etag.js";
 import { prepareNodeDocumentWrite } from "./node-document-write.js";
 import { prepareNodeSyncSave } from "./node-sync-record.js";
 import type { NodeBasisRecord } from "../base/node-basis-record.js";
+import { ReaderError } from "./context-reader.js";
 
 export type InvalidNativeNode = { path: string; nodeId?: string; reason: string };
 
@@ -35,7 +36,16 @@ export async function captureNativeNodeEdits(
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const catalog = await loadNodeCatalog(source);
+    let catalog: NodeCatalog;
+    try {
+      catalog = await loadNodeCatalog(source);
+    } catch (error) {
+      // The unlocked scan is only a probe. If a writer invalidates it, queue
+      // one fresh observation before any validation, capture or caller action.
+      if (!locked && fs.withLock && error instanceof ReaderError && error.code === "SOURCE_CHANGED")
+        return fs.withLock(MUTATION_LOCK_PATH, () => capture(true));
+      throw error;
+    }
     const documents = [...catalog.tree.byPath.values()].map((node) => ({
       path: nodeNotePath(node.path),
       raw: observed.get(nodeNotePath(node.path))!,

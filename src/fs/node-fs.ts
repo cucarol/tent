@@ -312,7 +312,7 @@ export class NodeFs implements FsAdapter {
       const before = await handle.stat({ bigint: true }),
         current = checked ? await checkedSourceFile(this.root, candidate, false, true) : undefined;
       if (current && (before.dev !== current.dev || before.ino !== current.ino))
-        throw new Error("Source changed while opening");
+        throw new ReaderError("SOURCE_CHANGED", "Source changed while opening");
       const prefix = await pendingPrefix;
       let buf: Buffer;
       if (prefix?.bytes && sameFileState(prefix.state, fileState(before))) {
@@ -325,7 +325,7 @@ export class NodeFs implements FsAdapter {
             rest.length - offset,
             prefix.bytes.length + offset,
           );
-          if (!bytesRead) throw new Error("Source truncated while reading");
+          if (!bytesRead) throw new ReaderError("SOURCE_CHANGED", "Source truncated while reading");
           offset += bytesRead;
         }
         buf = Buffer.concat([prefix.bytes, rest]);
@@ -340,7 +340,7 @@ export class NodeFs implements FsAdapter {
         final.dev !== before.dev ||
         final.ino !== before.ino
       )
-        throw new Error("Source changed while reading");
+        throw new ReaderError("SOURCE_CHANGED", "Source changed while reading");
       return { bytes: buf, state: fileState(before) };
     } finally {
       await handle.close();

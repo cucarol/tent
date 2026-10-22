@@ -4,6 +4,7 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { syncBuiltinESMExports } from "node:module";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { createNode } from "../src/core/graph/ops.js";
@@ -15,6 +16,73 @@ import { runHookCommand } from "../src/cli/hook.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
 import { inspectWorkspaceSync } from "../src/core/graph/node-sync.js";
+import { ReaderError } from "../src/core/graph/context-reader.js";
+import { appendNodeBody } from "../src/core/write/node-lightwrite.js";
+
+for (const writer of ["native save", "locked append"] as const) {
+  test(
+    `CLI append observes a concurrent ${writer} during collection before queuing its own write`,
+    {
+      // Windows disallows atomic replacement while the old handle is held open.
+      skip: writer === "locked append" && process.platform === "win32",
+    },
+    async (t) => {
+      const { workspace, adapter, output, options } = await fixture(t);
+      const file = "需求/结果/结果.md";
+      const filename = path.join(workspace, ".tent", file);
+      const head = await adapter.history.currentCommit();
+      const original = await adapter.readFile(file);
+      const open = fs.open.bind(fs);
+      let competed = false;
+      const mocked = t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+        const handle = await open(...args);
+        if (
+          path.resolve(String(args[0])).toLowerCase() !== filename.toLowerCase() ||
+          args[1] !== "r" ||
+          competed
+        )
+          return handle;
+        return new Proxy(handle, {
+          get(target, key) {
+            if (key === "readFile")
+              return async (...readArgs: Parameters<typeof handle.readFile>) => {
+                if (!competed) {
+                  competed = true;
+                  if (writer === "locked append")
+                    await appendNodeBody(adapter, output, { body: "competing save" });
+                  else await fs.writeFile(filename, original + "\ncompeting save\n");
+                }
+                return target.readFile(...readArgs);
+              };
+            const value = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+      syncBuiltinESMExports();
+      let result;
+      try {
+        result = await runNodeCommand("append", [output, "--body", "queued append"], options);
+      } finally {
+        mocked.mock.restore();
+        syncBuiltinESMExports();
+      }
+      assert.equal(competed, true, `a real ${writer} changed the opened file during the scan`);
+      assert.equal(result.exitCode, 0, result.stderr);
+      const receipt = JSON.parse(result.stdout);
+      const raw = await adapter.readFile(file);
+      assert.equal(raw.split("competing save").length, 2);
+      assert.equal(raw.split("queued append").length, 2);
+      assert.equal(await adapter.history.read(receipt.version), raw);
+      const commits = await promisify(execFile)(
+        "git",
+        ["-C", path.join(workspace, ".tent"), "rev-list", "--count", `${head}..HEAD`],
+        { windowsHide: true },
+      );
+      assert.equal(commits.stdout.trim(), "2");
+    },
+  );
+}
 
 async function fixture(t: TestContext) {
   await fs.mkdir(path.resolve(".scratch"), { recursive: true });
@@ -43,6 +111,39 @@ async function fixture(t: TestContext) {
     return JSON.parse(result.stdout);
   };
   return { workspace, adapter, goal, output, options, parse };
+}
+
+for (const failure of ["changed-twice", "storage"] as const) {
+  test(`native collection propagates ${failure} without retrying a locked observation`, async (t) => {
+    const { adapter } = await fixture(t);
+    const file = "需求/结果/结果.md";
+    const head = await adapter.history.currentCommit();
+    const raw = await adapter.readFile(file);
+    const read = adapter.readFile.bind(adapter);
+    const lock = adapter.withLock.bind(adapter);
+    let reads = 0,
+      locks = 0;
+    const error =
+      failure === "changed-twice"
+        ? new ReaderError("SOURCE_CHANGED", "controlled concurrent change")
+        : Object.assign(new Error("controlled storage failure"), { code: "EACCES" });
+    adapter.readFile = async (path) => {
+      if (path === file) {
+        reads++;
+        throw error;
+      }
+      return read(path);
+    };
+    adapter.withLock = (path, action) => {
+      locks++;
+      return lock(path, action);
+    };
+    await assert.rejects(captureNativeNodeEdits(adapter), (caught) => caught === error);
+    assert.equal(reads, failure === "changed-twice" ? 2 : 1);
+    assert.equal(locks, failure === "changed-twice" ? 1 : 0);
+    assert.equal(await read(file), raw);
+    assert.equal(await adapter.history.currentCommit(), head);
+  });
 }
 
 test("native capture skips an unchanged lock and rereads bytes and HEAD after acquiring a needed lock", async (t) => {
