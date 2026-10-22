@@ -23,6 +23,8 @@ export type Layout = {
   labels: Label[];
   /** In the tree, the result outputs folded into each card's count. */
   folds?: Map<string, string[]>;
+  /** In the tree, each card placed by hand with what it carries: the cards laid out under it, which go with it. */
+  islands?: Map<string, string[]>;
 };
 export type Rect = { x: number; y: number; w: number; h: number; head?: number };
 
@@ -91,7 +93,9 @@ type TreeDatum = { id: string; children: TreeDatum[] };
  * The folder hierarchy read left to right. Top-level branches get extra room so each reads as one group.
  * A card's result outputs fold into a count on it unless its id is in `open`. A card showing a preview of
  * its file is `grown` that much taller below its title row, and the card under it makes room. `kidsOf`
- * gives the tree to lay out, by default all of it.
+ * gives the tree to lay out, by default all of it. A card placed by hand, `away`, leaves no gap: the tree
+ * closes over its place. Alone it is sized but not placed, for its kept corner; with cards under it, they
+ * are laid out as a tree of their own beside it at the origin, an island that goes where the card is kept.
  */
 export function treeLayout(
   graph: Graph,
@@ -99,9 +103,12 @@ export function treeLayout(
   open: ReadonlySet<string> = new Set(),
   grown: (id: string) => number = () => 0,
   kidsOf: (id: string | null) => SnapshotNode[] = graph.childrenOf,
+  away: ReadonlySet<string> = new Set(),
 ): Layout {
   const folds = new Map<string, string[]>();
-  const build = (parentId: string | null): TreeDatum[] => {
+  const loose = new Map<string, number>();
+  const islands: { id: string; depth: number; children: TreeDatum[] }[] = [];
+  const build = (parentId: string | null, depth = 1): TreeDatum[] => {
     const kids = kidsOf(parentId);
     const results =
       parentId && !open.has(parentId) ? kids.filter((c) => isResult(graph, c.id)) : [];
@@ -112,7 +119,15 @@ export function treeLayout(
       );
     return kids
       .filter((c) => !results.includes(c))
-      .map((n) => ({ id: n.id, children: collapsed.has(n.id) ? [] : build(n.id) }));
+      .flatMap((n) => {
+        const children = collapsed.has(n.id) ? [] : build(n.id, depth + 1);
+        if (away.has(n.id)) {
+          if (children.length) islands.push({ id: n.id, depth, children });
+          else loose.set(n.id, depth);
+          return [];
+        }
+        return [{ id: n.id, children }];
+      });
   };
   const root = hierarchy<TreeDatum>({ id: "__root", children: build(null) }, (d) => d.children);
   const branch = (d: HierarchyNode<TreeDatum>) => d.ancestors().at(-2)?.data.id;
@@ -122,30 +137,51 @@ export function treeLayout(
   root.eachBefore((d) => order.set(d, order.size));
   const upper = (a: HierarchyNode<TreeDatum>, b: HierarchyNode<TreeDatum>) =>
     order.get(a)! < order.get(b)! ? a : b;
-  tree<TreeDatum>()
-    .nodeSize([ROW, COLUMN])
-    .separation(
-      (a, b) =>
-        (a.parent === b.parent ? 1 : branch(a) === branch(b) ? 1.25 : 1.6) +
-        grown(upper(a, b).data.id) / ROW,
-    )(root);
+  const lay = (r: HierarchyNode<TreeDatum>) =>
+    tree<TreeDatum>()
+      .nodeSize([ROW, COLUMN])
+      .separation(
+        (a, b) =>
+          (a.parent === b.parent ? 1 : branch(a) === branch(b) ? 1.25 : 1.6) +
+          grown(upper(a, b).data.id) / ROW,
+      )(r);
+  lay(root);
 
   const placed = new Map<string, Placed>();
+  const place = (id: string, depth: number, x: number, y: number) => {
+    const head = depth === 1 ? CARD.top : CARD.h;
+    const more = grown(id);
+    placed.set(id, { id, x, y, h: head + more, w: CARD.w, ...(more > 0 ? { head } : {}) });
+  };
+  // The tree hangs from its topmost card, so a card leaving it moves only the cards below it.
+  const rows = root
+    .descendants()
+    .slice(1)
+    .map((d) => d.x ?? 0);
+  const top = rows.length ? Math.min(...rows) : 0;
   root.each((d) => {
-    if (d.data.id === "__root") return;
-    const head = d.depth === 1 ? CARD.top : CARD.h;
-    const more = grown(d.data.id);
-    placed.set(d.data.id, {
-      id: d.data.id,
-      x: (d.y ?? 0) - COLUMN,
-      y: d.x ?? 0,
-      h: head + more,
-      w: CARD.w,
-      ...(more > 0 ? { head } : {}),
-    });
+    if (d.data.id !== "__root") place(d.data.id, d.depth, (d.y ?? 0) - COLUMN, (d.x ?? 0) - top);
   });
+  for (const [id, depth] of loose) place(id, depth, 0, 0);
+  const carried = new Map<string, string[]>();
+  for (const { id, depth, children } of islands) {
+    const top = hierarchy<TreeDatum>({ id, children }, (d) => d.children);
+    top.eachBefore((d) => order.set(d, order.size));
+    lay(top);
+    // The island stands with its card at the origin, its rows read from there.
+    const dx = top.y ?? 0,
+      dy = top.x ?? 0;
+    top.each((d) => place(d.data.id, depth + d.depth, (d.y ?? 0) - dx, (d.x ?? 0) - dy));
+    carried.set(
+      id,
+      top
+        .descendants()
+        .slice(1)
+        .map((d) => d.data.id),
+    );
+  }
   for (const id of [...folds.keys()]) if (!placed.has(id) || collapsed.has(id)) folds.delete(id);
-  return { placed, labels: [], folds };
+  return { placed, labels: [], folds, ...(carried.size ? { islands: carried } : {}) };
 }
 
 /**

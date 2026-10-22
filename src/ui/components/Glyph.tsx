@@ -136,8 +136,11 @@ export function FileGlyph({
   );
 }
 
-/** A Node's icon in lists: its file or remote address when its resource names one, otherwise its type. */
-export function NodeGlyph({ node, size = 14 }: { node: SnapshotNode; size?: number }) {
+/**
+ * A Node's file or remote address as a mark beside its name. Never in place of its type icon: icons stand
+ * for the three types only (cuca 2026-10-21).
+ */
+export function FileMark({ node, size = 14 }: { node: SnapshotNode; size?: number }) {
   const files = useFiles();
   const file = fileOf(node);
   if (file?.kind === "uri")
@@ -146,7 +149,7 @@ export function NodeGlyph({ node, size = 14 }: { node: SnapshotNode; size?: numb
         <Icon name="globe" size={size} />
       </span>
     );
-  if (file?.kind !== "file") return <TypeGlyph type={node.type} size={size} />;
+  if (file?.kind !== "file") return null;
   return (
     <FileGlyph
       show={file.show}

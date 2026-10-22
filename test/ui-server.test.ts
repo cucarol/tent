@@ -10,7 +10,7 @@ import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
-import { renameNode } from "../src/core/graph/ops.js";
+import { createNode, deleteNode, renameNode } from "../src/core/graph/ops.js";
 import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
 import { linkNodeOutput } from "../src/core/graph/node-sync.js";
@@ -974,6 +974,52 @@ test("workspace files are served by suffix; paths leaving the workspace are refu
   assert.equal((await call("GET", "/api/files?path=docs/missing.png")).status, 404);
 });
 
+test("a Node's text files are read through the Node, only the ones it names and up to a cap", async (t) => {
+  const { call, tent, workspace } = await fixture(t);
+  await fs.writeFile(path.join(workspace, "docs/conf.json"), '{ "a": 1 }\n');
+  await fs.writeFile(path.join(workspace, "docs/big.log"), "line of text\n".repeat(30_000));
+  await fs.writeFile(path.join(workspace, "docs/blob.txt"), Buffer.from([0x61, 0x00, 0x62]));
+  await tent.writeFile(
+    "Code/Code.md",
+    [
+      "---",
+      "id: node-code",
+      "type: prompt",
+      "resource: ../../docs/notes.txt",
+      "sources:",
+      "  - resource: ../../docs/conf.json",
+      "  - resource: ../../docs/big.log",
+      "  - resource: ../../docs/blob.txt",
+      "---",
+      "Code.",
+      "",
+    ].join("\n"),
+  );
+  const text = (p: string, id = "node-code") =>
+    call("GET", `/api/nodes/${id}/text?path=${encodeURIComponent(p)}`);
+  type Read = { text: string; size: number; truncated: boolean };
+
+  const own = await text("docs/notes.txt");
+  assert.equal(own.status, 200, own.body);
+  assert.deepEqual((({ text, size, truncated }) => ({ text, size, truncated }))(json<Read>(own)), {
+    text: "not an image",
+    size: 12,
+    truncated: false,
+  });
+  assert.equal(json<Read>(await text("docs/conf.json")).text, '{ "a": 1 }\n');
+  // A long file comes as its head, cut at a line end.
+  const big = json<Read>(await text("docs/big.log"));
+  assert.equal(big.truncated, true);
+  assert.equal(big.size, 13 * 30_000);
+  assert.ok(big.text.length <= 256 * 1024 && big.text.endsWith("text\n"), String(big.text.length));
+  assert.equal((await text("docs/blob.txt")).status, 415);
+  // Files the Node does not name, even inside the workspace, are not read here.
+  for (const p of ["docs/page.html", "Main/Main.md", ".tent/Main/Main.md", "docs/shot.png"])
+    assert.equal((await text(p)).status, 403, p);
+  assert.equal((await text("docs/notes.txt", "node-main")).status, 403);
+  assert.equal((await text("docs/notes.txt", "node-nope")).status, 404);
+});
+
 test("file info reports sizes, and null for missing or refused paths", async (t) => {
   const { call, workspace } = await fixture(t);
   const info = await call("POST", "/api/files/info", {
@@ -1706,4 +1752,98 @@ test("code facts endpoint is protected, read-only and names the tests importing 
   assert.ok(Array.isArray(a?.coChanges));
   assert.deepEqual(await fs.readFile(path.join(workspace, ".git/index")), index);
   assert.equal((await git(workspace, "rev-parse", "HEAD")).trim(), head);
+});
+
+for (const change of ["rename", "delete"] as const) {
+  test(`creating a child preserves parent identity across ${change} and path reuse`, async (t) => {
+    const { call, tent, workspace } = await fixture(t);
+    const env = {
+      fs: tent,
+      clock: { now: () => new Date().toISOString() },
+      tentName: "Parent race",
+    };
+    const withLock = NodeFs.prototype.withLock;
+    let injected = false;
+    let replacement = "";
+    t.mock.method(NodeFs.prototype, "withLock", async function <
+      T,
+    >(this: NodeFs, file: string, action: () => Promise<T>): Promise<T> {
+      if (this.workspaceRoot === workspace && !injected) {
+        injected = true;
+        if (change === "rename") await renameNode(env, "node-other", "Renamed");
+        else await deleteNode(env, "node-other");
+        replacement = await createNode(env, { parentPath: "", name: "Other", type: "goal" });
+      }
+      return withLock.call(this, file, action) as Promise<T>;
+    });
+    const made = await call("POST", "/api/nodes", {
+      json: { name: "Child", type: "prompt", parent: "node-other" },
+    });
+    assert.equal(injected, true);
+    const map = json<WorkspaceMap>(await call("GET", "/api/map"));
+    assert.ok(map.nodes.some((node) => node.id === replacement && node.path === "Other"));
+    if (change === "rename") {
+      assert.equal(made.status, 200, made.body);
+      const child = map.nodes.find((node) => node.id === json<{ nodeId: string }>(made).nodeId);
+      assert.equal(child?.parentId, "node-other");
+      assert.equal(child?.path, "Renamed/Child");
+    } else {
+      assert.ok(made.status >= 400 && made.status < 500, made.body);
+      assert.equal(
+        map.nodes.some((node) => node.name === "Child"),
+        false,
+      );
+    }
+    assert.equal(await tent.exists("Other/Child"), false);
+  });
+}
+
+test("the sidebar makes a Node under another and moves Nodes, keeping links that point at them", async (t) => {
+  const { tent, call } = await fixture(t);
+  const snapshot = async () => json<Snapshot>(await call("GET", "/api/snapshot?fresh=1"));
+  const node = async (id: string) => (await snapshot()).nodes.find((n) => n.id === id);
+
+  const made = await call("POST", "/api/nodes", {
+    json: { name: "Plan", type: "prompt", parent: "node-other" },
+  });
+  assert.equal(made.status, 200, made.body);
+  const planId = json<{ nodeId: string }>(made).nodeId;
+  assert.equal((await node(planId))?.parentId, "node-other");
+  const top = await call("POST", "/api/nodes", {
+    json: { name: "Notes", type: "goal", parent: null },
+  });
+  assert.equal(top.status, 200, top.body);
+  assert.equal((await node(json<{ nodeId: string }>(top).nodeId))?.parentId, null);
+  assert.equal(
+    (
+      await call("POST", "/api/nodes", {
+        json: { name: "Plan", type: "prompt", parent: "node-other" },
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    (await call("POST", "/api/nodes", { json: { name: "X", type: "prompt", parent: "../etc" } }))
+      .status,
+    422,
+  );
+
+  // Into another Node: the folder goes with it and links to it still resolve.
+  const moved = await call("POST", "/api/nodes/node-other/move", { json: { parent: "node-main" } });
+  assert.equal(moved.status, 200, moved.body);
+  assert.equal((await node("node-other"))?.parentId, "node-main");
+  assert.equal((await node(planId))?.parentId, "node-other");
+  assert.match(await tent.readFile("Main/Main.md"), /Other\/Other\.md/);
+  // Back to the top, before Main.
+  const back = await call("POST", "/api/nodes/node-other/move", {
+    json: { parent: null, before: "node-main" },
+  });
+  assert.equal(back.status, 200, back.body);
+  const roots = (await snapshot()).nodes.filter((n) => n.parentId === null).map((n) => n.id);
+  assert.ok(roots.indexOf("node-other") < roots.indexOf("node-main"), roots.join(" "));
+  // Not into itself.
+  assert.equal(
+    (await call("POST", "/api/nodes/node-other/move", { json: { parent: planId } })).status,
+    409,
+  );
 });

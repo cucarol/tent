@@ -139,14 +139,15 @@ export function Reader(props: Props) {
 }
 
 /**
- * Below the bar: the head (title block and what leads into the text), then the text. On a wide page the
- * rail sits beside them; when narrow, `lead` goes between the head and the text, and `rail` after it but
- * before the `tail`.
+ * Below the bar, one column at every width, so nothing moves when the page widens (cuca 2026-10-21): the
+ * head (title block and what leads into the text), its properties in a strip under it, `lead`, the text,
+ * then `rail` and the `tail`.
  */
 function PageBody({
   narrow,
   className,
   head,
+  props,
   lead,
   main,
   rail,
@@ -155,6 +156,7 @@ function PageBody({
   narrow: boolean;
   className?: string;
   head: ReactNode;
+  props?: ReactNode;
   lead?: ReactNode;
   main: ReactNode;
   rail?: ReactNode;
@@ -165,17 +167,16 @@ function PageBody({
       <div className={`pg-grid${narrow ? " is-narrow" : ""}`}>
         <article className={`pg-main${className ? ` ${className}` : ""}`}>
           {head}
-          {narrow && lead && <div className="rail is-inline">{lead}</div>}
+          {props && (
+            <div className="pg-props" role="group" aria-label={t.page.props}>
+              {props}
+            </div>
+          )}
+          {lead && <div className="rail">{lead}</div>}
           {main}
-          {narrow && rail && <div className="rail is-inline">{rail}</div>}
+          {rail && <div className="rail">{rail}</div>}
           {tail}
         </article>
-        {!narrow && (
-          <aside className="rail" aria-label={t.reader.rail}>
-            {lead}
-            {rail}
-          </aside>
-        )}
       </div>
     </div>
   );
@@ -292,7 +293,7 @@ const Crumb = ({ onClick, children }: { onClick?: () => void; children: ReactNod
   );
 
 /** Title block: the object's large icon (a Role's pet), what kind it is, and its name. */
-function Hero({ icon, eyebrow, title }: { icon: ReactNode; eyebrow: ReactNode; title: string }) {
+function Hero({ icon, eyebrow, title }: { icon?: ReactNode; eyebrow: ReactNode; title: string }) {
   return (
     <div className="hero">
       {icon}
@@ -307,12 +308,10 @@ function Hero({ icon, eyebrow, title }: { icon: ReactNode; eyebrow: ReactNode; t
 function Section({
   title,
   count,
-  note,
   children,
 }: {
   title: string;
   count?: number;
-  note?: string;
   children: ReactNode;
 }) {
   return (
@@ -320,7 +319,6 @@ function Section({
       <h3>
         {title}
         {count !== undefined && <span className="count">{count}</span>}
-        {note && <span className="note">{note}</span>}
       </h3>
       {children}
     </section>
@@ -355,15 +353,6 @@ function More({
         </button>
       )}
     </>
-  );
-}
-
-function RailSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="rail-sec">
-      <h4>{title}</h4>
-      {children}
-    </div>
   );
 }
 
@@ -407,7 +396,7 @@ function CodeFactsSections({
   return (
     <>
       {mine.testedBy.length > 0 && (
-        <RailSection title={t.page.testedBy(mine.testedBy.length)}>
+        <Section title={t.page.testedBy(mine.testedBy.length)}>
           <div className="fact-list" title={t.page.testedByTip}>
             <More count={mine.testedBy.length} shown={narrow ? 3 : 6} all={t.page.showAllOf}>
               {(n) =>
@@ -426,10 +415,10 @@ function CodeFactsSections({
               }
             </More>
           </div>
-        </RailSection>
+        </Section>
       )}
       {withNodes.length > 0 && (
-        <RailSection title={t.page.changesWith(withNodes.length)}>
+        <Section title={t.page.changesWith(withNodes.length)}>
           <div className="fact-list" title={t.page.changesWithTip(facts!.commitLimit)}>
             <More count={withNodes.length} shown={narrow ? 3 : 6} all={t.page.showAllOf}>
               {(n) =>
@@ -456,7 +445,7 @@ function CodeFactsSections({
               }
             </More>
           </div>
-        </RailSection>
+        </Section>
       )}
     </>
   );
@@ -854,27 +843,25 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
       )}
     </>
   );
-  const carriedSection = (
-    <RailSection title={graph.detailed ? t.page.carried(carried.length) : t.page.carriedHead}>
-      {!graph.detailed ? (
-        <p className="empty">{t.page.reading}</p>
-      ) : carried.length ? (
-        <More count={carried.length} shown={narrow ? 3 : 6}>
-          {(n) =>
-            carried
-              .slice(0, n)
-              .map((c) => (
-                <CardLine key={c.id} graph={graph} work={work} card={c} onOpen={onOpen} />
-              ))
-          }
-        </More>
-      ) : (
-        <p className="empty">{t.page.noCards}</p>
-      )}
-    </RailSection>
-  );
-  // Next to the map, which Cards carried this Node comes before its text.
-  const carriedFirst = narrow && carried.length > 0;
+  // Under the text at every width; with nothing carried yet, nothing to show.
+  const carriedSection =
+    graph.detailed && !carried.length ? null : (
+      <Section title={graph.detailed ? t.page.carried(carried.length) : t.page.carriedHead}>
+        {!graph.detailed ? (
+          <p className="empty">{t.page.reading}</p>
+        ) : (
+          <More count={carried.length} shown={narrow ? 3 : 6}>
+            {(n) =>
+              carried
+                .slice(0, n)
+                .map((c) => (
+                  <CardLine key={c.id} graph={graph} work={work} card={c} onOpen={onOpen} />
+                ))
+            }
+          </More>
+        )}
+      </Section>
+    );
   return (
     <>
       <PageTop
@@ -896,16 +883,8 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
         className={`t-${p}`}
         head={
           <>
+            {/* An opened Node needs no type icon: the eyebrow names its type (cuca 2026-10-21). */}
             <Hero
-              icon={
-                <span
-                  className="hero-grab"
-                  onPointerDown={(e) => beginDrag(e, { kind: "node", id: node.id })}
-                  data-tip={t.page.dragNode}
-                >
-                  <TypeTile kind={node.type} size={narrow ? 40 : 52} />
-                </span>
-              }
               eyebrow={
                 <>
                   <b className={`p-${p}`}>{p}</b>
@@ -964,7 +943,6 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
             )}
           </>
         }
-        lead={carriedFirst ? carriedSection : undefined}
         main={
           <div className="pg-doc">
             {editing ? (
@@ -996,23 +974,23 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
             )}
           </div>
         }
+        props={
+          <NodeProps graph={graph} node={node} onOpen={onOpen}>
+            <ReviewRow doc={doc} flag={flags[node.id]} node={node} />
+            <PropRow label="id">
+              <CopyId id={node.id} onToast={onToast} />
+            </PropRow>
+          </NodeProps>
+        }
         rail={
           <>
-            <RailSection title={t.page.props}>
-              <NodeProps graph={graph} node={node} onOpen={onOpen}>
-                <ReviewRow doc={doc} flag={flags[node.id]} node={node} />
-                <PropRow label="id">
-                  <CopyId id={node.id} onToast={onToast} />
-                </PropRow>
-              </NodeProps>
-            </RailSection>
-            {!carriedFirst && carriedSection}
+            {carriedSection}
             <CodeFactsSections graph={graph} node={node} narrow={narrow} onOpen={onOpen} />
           </>
         }
         tail={
           graph.detailed ? (
-            <Section title={t.page.versions} count={node.history.length} note={t.page.versionsNote}>
+            <Section title={t.page.versions} count={node.history.length}>
               <History graph={graph} id={node.id} path={node.notePath} hashes={node.history} />
             </Section>
           ) : (
@@ -1129,7 +1107,7 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
             <div className="pg-doc">
               <Markdown body={rest} fromPath={role.path} graph={graph} onOpen={onOpen} />
             </div>
-            <Section title={t.page.here} count={here.length} note={t.page.hereNote}>
+            <Section title={t.page.here} count={here.length}>
               <div className="letters" data-drop={`lane:${role.id}`}>
                 {here.map((c) => (
                   <Letter
@@ -1142,60 +1120,50 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
                 {!here.length && (
                   <div className="lane-empty">
                     <Pet id={role.id} size={26} className="faint" />
-                    {t.page.nothingHere}
                   </div>
                 )}
               </div>
             </Section>
-            <Section title={t.page.received} count={received.length}>
-              <div className="letters">
-                <More count={received.length} shown={8}>
-                  {(n) =>
-                    received
-                      .slice(0, n)
-                      .map((c) => (
-                        <CardLine
-                          key={c.id}
-                          graph={graph}
-                          work={work}
-                          card={c}
-                          onOpen={onOpen}
-                          withRole={false}
-                        />
-                      ))
-                  }
-                </More>
-                {!received.length && <p className="empty">{t.page.noneReceived}</p>}
-              </div>
-            </Section>
+            {received.length > 0 && (
+              <Section title={t.page.received} count={received.length}>
+                <div className="letters">
+                  <More count={received.length} shown={8}>
+                    {(n) =>
+                      received
+                        .slice(0, n)
+                        .map((c) => (
+                          <CardLine
+                            key={c.id}
+                            graph={graph}
+                            work={work}
+                            card={c}
+                            onOpen={onOpen}
+                            withRole={false}
+                          />
+                        ))
+                    }
+                  </More>
+                </div>
+              </Section>
+            )}
           </>
         }
-        rail={
-          <>
-            <RailSection title={t.page.props}>
-              <dl className="props">
-                <PropRow label="Card">
-                  <span className="prop-text">
-                    {t.page.roleCards(here.length, received.length)}
-                  </span>
-                </PropRow>
-                {watches.length > 0 && (
-                  <PropRow label={t.page.watches}>
-                    {watches.map((r) => (
-                      <RefLink key={r.id} graph={graph} target={r} onOpen={onOpen} />
-                    ))}
-                  </PropRow>
-                )}
-                <PropRow label="id">
-                  <CopyId id={role.id} onToast={onToast} />
-                </PropRow>
-              </dl>
-            </RailSection>
-            <div className="rail-note">
-              <b>{t.page.roleNoteLead}</b>
-              {t.page.roleNote}
-            </div>
-          </>
+        props={
+          <dl className="props">
+            <PropRow label="Card">
+              <span className="prop-text">{t.page.roleCards(here.length, received.length)}</span>
+            </PropRow>
+            {watches.length > 0 && (
+              <PropRow label={t.page.watches}>
+                {watches.map((r) => (
+                  <RefLink key={r.id} graph={graph} target={r} onOpen={onOpen} />
+                ))}
+              </PropRow>
+            )}
+            <PropRow label="id">
+              <CopyId id={role.id} onToast={onToast} />
+            </PropRow>
+          </dl>
         }
         tail={
           <Section title={t.page.versions} count={role.history.length}>
@@ -1326,7 +1294,7 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
               )}
             </div>
             {pending && (
-              <Section title={t.page.where} note={t.page.whereNote}>
+              <Section title={t.page.where}>
                 <LanePick work={work} card={card} />
               </Section>
             )}
@@ -1381,7 +1349,7 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
           </>
         }
         lead={
-          <RailSection title={t.page.sourcesPinned}>
+          <Section title={t.page.sourcesPinned}>
             <ol className="rail-srcs">
               {card.sources.map((s, i) => {
                 const node = s.id ? graph.nodes.get(s.id) : undefined;
@@ -1433,29 +1401,27 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
               })}
               {!card.sources.length && <p className="empty">{t.page.noSources}</p>}
             </ol>
-          </RailSection>
+          </Section>
         }
-        rail={
-          <RailSection title={t.page.props}>
-            <dl className="props">
-              <PropRow label={t.page.lane}>
-                {pending ? (
-                  <span className="prop-text">{laneName}</span>
-                ) : (
-                  <span className="prop-text fixed-note">
-                    <Icon name="lock" size={13} />
-                    {t.page.fixedAt(laneName)}
-                  </span>
-                )}
-              </PropRow>
-              <PropRow label={t.props.published}>
-                <span className="prop-text">{when(card.publishedAt)}</span>
-              </PropRow>
-              <PropRow label="id">
-                <CopyId id={card.id} onToast={onToast} />
-              </PropRow>
-            </dl>
-          </RailSection>
+        props={
+          <dl className="props">
+            <PropRow label={t.page.lane}>
+              {pending ? (
+                <span className="prop-text">{laneName}</span>
+              ) : (
+                <span className="prop-text fixed-note">
+                  <Icon name="lock" size={13} />
+                  {t.page.fixedAt(laneName)}
+                </span>
+              )}
+            </PropRow>
+            <PropRow label={t.props.published}>
+              <span className="prop-text">{when(card.publishedAt)}</span>
+            </PropRow>
+            <PropRow label="id">
+              <CopyId id={card.id} onToast={onToast} />
+            </PropRow>
+          </dl>
         }
       />
     </>
@@ -1586,13 +1552,13 @@ function DraftPage(props: PageProps & { card: SnapshotCard }) {
                 </>
               )}
             </div>
-            <Section title={t.page.where} note={t.page.whereNote}>
+            <Section title={t.page.where}>
               <LanePick work={work} card={card} />
             </Section>
-            <Section title={t.page.returnWho} note={t.page.returnNote}>
+            <Section title={t.page.returnWho}>
               <ReturnPick work={work} card={card} draft={draft} />
             </Section>
-            <Section title={t.card.sources} count={sources.length} note={t.page.sourcesNote}>
+            <Section title={t.card.sources} count={sources.length}>
               <ol className={`srcs2${over ? " is-over" : ""}`} data-drop={`card:${card.id}`}>
                 {sources.map((s, i) => {
                   const id = ids[i];
@@ -1689,23 +1655,15 @@ function DraftPage(props: PageProps & { card: SnapshotCard }) {
             </Section>
           </>
         }
-        rail={
-          <>
-            <div className="rail-note">
-              <b>{t.page.draftNoteLead}</b>
-              {t.page.draftNote}
-            </div>
-            <RailSection title={t.page.props}>
-              <dl className="props">
-                <PropRow label={t.page.lane}>
-                  <span className="prop-text">{laneName}</span>
-                </PropRow>
-                <PropRow label="id">
-                  <CopyId id={card.id} onToast={onToast} />
-                </PropRow>
-              </dl>
-            </RailSection>
-          </>
+        props={
+          <dl className="props">
+            <PropRow label={t.page.lane}>
+              <span className="prop-text">{laneName}</span>
+            </PropRow>
+            <PropRow label="id">
+              <CopyId id={card.id} onToast={onToast} />
+            </PropRow>
+          </dl>
         }
       />
     </>

@@ -252,5 +252,6 @@ test("the page reads the map first and the snapshot only where a view needs it",
   assert.match(view, /graph\.snapshot\.modules\?\.edges/);
   assert.doesNotMatch(view, /moduleDeps/);
   assert.equal(view.match(/if \(!graph\.detailed\) return out;/g)?.length, 1);
-  assert.match(view, /reading=\{!graph\.detailed\}/);
+  // A region says only what Tent holds: nothing while its relations are on their way, nothing for none.
+  assert.doesNotMatch(view, /map-region-none/);
 });

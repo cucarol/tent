@@ -214,6 +214,12 @@ export const api = {
     ),
   restoreNode: (id: string, archiveCommit: string) =>
     wrote(call(`/api/nodes/${encodeURIComponent(id)}/restore`, send("POST", { archiveCommit }))),
+  /** A new Node under `parent`, or at the top for null. */
+  createNode: (parent: string | null, name: string, type: string) =>
+    wrote(call<{ nodeId: string }>("/api/nodes", send("POST", { parent, name, type }))),
+  /** Into `parent` (null: the top), last, or before or after one of its children. */
+  moveNode: (id: string, to: { parent: string | null; before?: string; after?: string }) =>
+    wrote(call(`/api/nodes/${encodeURIComponent(id)}/move`, send("POST", to))),
   renameNode: (id: string, name: string) =>
     wrote(call(`/api/nodes/${encodeURIComponent(id)}/rename`, send("POST", { name }))),
   role: (id: string) => call<{ etag: string }>(`/api/roles/${encodeURIComponent(id)}`),
@@ -261,6 +267,20 @@ export type CardMove = { target?: string | null; before?: string; after?: string
 export type FileInfo = { size: number; modifiedAt: string } | null;
 export const fileInfo = (paths: string[]) =>
   call<{ files: Record<string, FileInfo | null> }>("/api/files/info", send("POST", { paths }));
+
+/** The head of a text file a Node names; the service reads only those, and says when one goes on. */
+export type NodeText = {
+  path: string;
+  size: number;
+  modifiedAt: string;
+  text: string;
+  truncated: boolean;
+};
+export const nodeText = (id: string, workspacePath: string, signal?: AbortSignal) =>
+  call<NodeText>(
+    `/api/nodes/${encodeURIComponent(id)}/text?path=${encodeURIComponent(workspacePath)}`,
+    { signal },
+  );
 
 /** A workspace file's bytes; <iframe>, <video> and <audio> cannot send the token themselves. */
 export async function workspaceBlob(workspacePath: string, signal?: AbortSignal): Promise<Blob> {

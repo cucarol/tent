@@ -15,7 +15,7 @@ import {
   useDraft,
   type Draft,
 } from "../data/drafts.js";
-import { ApiError, describe } from "../data/api.js";
+import { api, ApiError, describe } from "../data/api.js";
 import { setDropHandler, type Dragged } from "./drag.js";
 import { readStored, writeStored } from "../util.js";
 import { t } from "../i18n.js";
@@ -265,6 +265,29 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
     return nth ? { lane, nth } : null;
   };
 
+  /**
+   * Nodes dragged in the sidebar tree onto a row: into it, last among its children, or just before or after
+   * it among its siblings. Several go in their order, each after the one before.
+   */
+  const moveNodes = async (ids: string[], ref: string, zone: "before" | "inside" | "after") => {
+    const parent = zone === "inside" ? ref : (graph?.nodes.get(ref)?.parentId ?? null);
+    let after: string | undefined = zone === "after" ? ref : undefined;
+    try {
+      for (const [i, id] of ids.entries()) {
+        await api.moveNode(id, {
+          parent,
+          ...(zone === "before" && i === 0 ? { before: ref } : after ? { after } : {}),
+        });
+        after = id;
+      }
+      const name = graph?.nodes.get(ids[0]!)?.name ?? ids[0]!;
+      const into = parent ? (graph?.nodes.get(parent)?.name ?? parent) : null;
+      toast(t.work.movedNode(name, ids.length, into));
+    } catch (error) {
+      toast(describe(error));
+    }
+  };
+
   const move = async (cardId: string, lane: string, at?: Place) => {
     if (publishing === cardId) return;
     const card = graph?.cards.get(cardId);
@@ -394,6 +417,18 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
           (laneOf(card) === spot.lane || card.returnTo !== spot.lane)
         );
       }
+      // Onto a row of the tree: the Node moves there, unless that is inside itself or where it already is.
+      if (kind === "tree") {
+        if (item.kind !== "node" || item.from === "map") return false;
+        const [ref = "", zone] = id.split(":");
+        const parent = zone === "inside" ? ref : (graph.nodes.get(ref)?.parentId ?? null);
+        return (item.ids ?? [item.id]).every(
+          (moving) =>
+            moving !== ref &&
+            !(parent && [parent, ...graph.ancestors(parent).map((a) => a.id)].includes(moving)) &&
+            !(zone === "inside" && graph.nodes.get(moving)?.parentId === ref),
+        );
+      }
       if (kind === "card" && item.kind === "node") {
         if (publishing === id) return false;
         const card = graph.cards.get(id);
@@ -413,6 +448,9 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
       } else if (kind === "card") {
         if (id !== openDraft) setOpenDraft(id);
         for (const nodeId of item.ids ?? [item.id]) toggleSource(id, nodeId, true);
+      } else if (kind === "tree") {
+        const [ref = "", zone] = id.split(":");
+        void moveNodes(item.ids ?? [item.id], ref, zone as "before" | "inside" | "after");
       }
     },
   });

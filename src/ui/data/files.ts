@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { fileInfo, type FileInfo } from "./api.js";
-import type { Snapshot, SnapshotNode, SyncFlags } from "./types.js";
+import type { Snapshot, SnapshotMaterial, SnapshotNode, SyncFlags } from "./types.js";
 
 /**
  * How the page shows a Node's own file: by the suffix of its `resource`, never by its type or tags. A
@@ -31,10 +31,14 @@ export type NodeFile =
 export function fileOf(node: SnapshotNode): NodeFile | null {
   const own = node.materials.find((m) => m.field === "resource");
   if (own?.kind === "uri" && own.uri) return { kind: "uri", uri: own.uri };
-  if (own?.kind !== "file" || !own.workspacePath) return null;
+  return own ? localFile(own) : null;
+}
+
+function localFile(m: SnapshotMaterial): Extract<NodeFile, { kind: "file" }> | null {
+  if (m.kind !== "file" || !m.workspacePath) return null;
   // A folder (written with a closing slash) is where the Node's code lives, not a file it can show.
-  if (own.resource.split(/[?#]/)[0]!.endsWith("/")) return null;
-  const path = own.workspacePath;
+  if (m.resource.split(/[?#]/)[0]!.endsWith("/")) return null;
+  const path = m.workspacePath;
   const name = path.split("/").pop() ?? path;
   const dot = name.lastIndexOf(".");
   return {
@@ -44,6 +48,22 @@ export function fileOf(node: SnapshotNode): NodeFile | null {
     ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : "",
     show: fileKind(name),
   };
+}
+
+/** The local files a Node names, its resource first and then its sources in order, each once. */
+export function filesOf(
+  node: SnapshotNode,
+): { file: Extract<NodeFile, { kind: "file" }>; source?: number }[] {
+  const seen = new Set<string>();
+  return node.materials
+    .filter((m) => m.field === "resource" || m.field === "sources")
+    .sort((a, b) => (a.field === "resource" ? -1 : b.field === "resource" ? 1 : 0))
+    .flatMap((m) => {
+      const file = localFile(m);
+      if (!file || seen.has(file.path)) return [];
+      seen.add(file.path);
+      return [m.field === "sources" ? { file, source: (m.index ?? 0) + 1 } : { file }];
+    });
 }
 
 /** Workspace paths of every Node's own file, in the order the snapshot lists them. */

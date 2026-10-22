@@ -33,16 +33,15 @@ export { moveNode, type MoveNodeResult, type MovePosition } from "./move-ops.js"
 // ---- 结构编辑(建框/移动/改属性)----
 // Node 文档与结构编辑。
 
-export interface NewNodeInput extends MaterialFields {
+export type NewNodeInput = MaterialFields & {
   id?: string;
-  parentPath: string; // "" = 顶层
   name: string;
   /** Validated as goal, prompt or output. */
   type: string;
   body?: string;
   tags?: string[];
   by?: string;
-}
+} & ({ parentPath: string; parentId?: never } | { parentId: string | null; parentPath?: never });
 
 export async function createNode(env: OpsEnv, input: NewNodeInput): Promise<string> {
   return withMutation(env.fs, async () => createNodeUnlocked(env, input), {
@@ -52,12 +51,19 @@ export async function createNode(env: OpsEnv, input: NewNodeInput): Promise<stri
 
 export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Promise<string> {
   const materials = materialFields(input as unknown as Record<string, unknown>);
-  assertNotTempPath(input.parentPath);
-  const name = validateNodeName(input.name, input.parentPath);
   const tent = await loadTent(env.fs);
+  // Resolve an identity under the same mutation lock as the creation, after any earlier writer.
+  const parentPath =
+    input.parentId === undefined
+      ? input.parentPath
+      : input.parentId === null
+        ? ""
+        : requireNodeById(tent, input.parentId).path;
+  assertNotTempPath(parentPath);
+  const name = validateNodeName(input.name, parentPath);
   const type = normalizeOptionalNodeType(input.type);
-  if (input.parentPath) {
-    const parent = tent.byPath.get(input.parentPath);
+  if (parentPath) {
+    const parent = tent.byPath.get(parentPath);
     if (!parent || !isContentMutable(parent)) throw new Error("Target parent node is invalid.");
     assertContentMutable(parent, "used as create parent");
   }
@@ -65,7 +71,7 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
   const id = input.id ?? makeUniqueNodeId(existing, env.rand);
   if (!isNodeId(id)) throw new Error("Invalid Node id.");
   if (tent.duplicateIds.has(id)) throw new Error(`Duplicate Node id: ${id}.`);
-  const path = join(input.parentPath, name);
+  const path = join(parentPath, name);
   assertNotTempPath(path);
   // V0.1: every user Node writes an exact canonical type marker.
   const tags = input.tags === undefined ? [] : normalizeTagList(input.tags);
@@ -110,7 +116,7 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
   try {
     await ensureDir(env.fs, path);
     await env.fs.writeFile(notePath, content);
-    const parent = input.parentPath ? tent.byPath.get(input.parentPath) : undefined;
+    const parent = parentPath ? tent.byPath.get(parentPath) : undefined;
     const parentKey = parent ? parent.id : ROOT_KEY;
     const order = await loadOrder(env.fs);
     const siblings = order[parentKey] ?? [];

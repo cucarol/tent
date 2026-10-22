@@ -371,6 +371,44 @@ test("a card placed by hand stands at its corner alone: its children stay where 
   assert.deepEqual(at(moved, "b"), at(laid, "b"));
 });
 
+test("the tree closes over a card placed by hand; the cards under it go with it", () => {
+  const graph = graphOf([
+    node("a", null),
+    node("a1", "a"),
+    node("a2", "a"),
+    node("a3", "a"),
+    node("a2x", "a2"),
+  ]);
+  const laid = treeLayout(graph, new Set());
+  const gap = (l: Layout) => at(l, "a3").y - at(l, "a1").y;
+  // a1 leaves: a2 and a3 close up, and a1 is still sized for its kept corner.
+  const leaf = treeLayout(graph, new Set(), new Set(), () => 0, graph.childrenOf, new Set(["a1"]));
+  assert.ok(at(leaf, "a2").y < at(leaf, "a3").y);
+  assert.equal(rectOfPlaced(leaf, "a1").h, rectOfPlaced(laid, "a1").h);
+  assert.ok(Math.abs(at(leaf, "a3").y - at(leaf, "a2").y) < gap(laid));
+  // a2 leaves with a2x: the tree closes over both, and a2x is laid out beside a2 as it hung in the tree.
+  const held = treeLayout(graph, new Set(), new Set(), () => 0, graph.childrenOf, new Set(["a2"]));
+  assert.ok(gap(held) < gap(laid));
+  assert.deepEqual(held.islands?.get("a2"), ["a2x"]);
+  const step = (l: Layout) => [at(l, "a2x").x - at(l, "a2").x, at(l, "a2x").y - at(l, "a2").y];
+  assert.deepEqual(step(held), step(laid));
+  // Kept somewhere else, a2 takes a2x along; a card under it placed by hand keeps its own place.
+  const moved = placeCards(held, { a2: [900, 900] });
+  assert.equal(rectOfPlaced(moved, "a2").x, 900);
+  assert.deepEqual(step(moved), step(laid));
+  const both = treeLayout(
+    graph,
+    new Set(),
+    new Set(),
+    () => 0,
+    graph.childrenOf,
+    new Set(["a2", "a2x"]),
+  );
+  assert.equal(both.islands?.has("a2") ?? false, false);
+  const own = placeCards(both, { a2: [900, 900], a2x: [100, -500] });
+  assert.equal(rectOfPlaced(own, "a2x").y, -500);
+});
+
 test("a preview hangs below its card: the title keeps its row and only the cards under it make room", () => {
   const graph = graphOf([
     node("a", null),
@@ -545,6 +583,19 @@ test("many references on one side stay attached inside the card and keep right a
       assert.ok(a.x === b.x || a.y === b.y, "right angles only");
     }
   }
+});
+
+test("a way keeps off another line it would run down", () => {
+  const a = box(0, 0),
+    b = box(0, 100);
+  const plain = routeLinks([a, b], [{ id: "r", from: a, to: b }]).get("r")!.points;
+  const x = plain.find((p, i) => i > 0 && p.x === plain[i - 1]!.x && p.x > 248)!.x;
+  // A trunk on that very line: the way runs down elsewhere, well apart from it.
+  const runs = [{ x, y1: -100, y2: 300 }];
+  const apart = routeLinks([a, b], [{ id: "r", from: a, to: b }], runs).get("r")!.points;
+  for (let i = 1; i < apart.length; i++)
+    if (apart[i]!.x === apart[i - 1]!.x && Math.abs(apart[i]!.y - apart[i - 1]!.y) > 20)
+      assert.ok(Math.abs(apart[i]!.x - x) >= 10, `vertical at ${apart[i]!.x} beside ${x}`);
 });
 
 test("a reference within one column goes round on the side it asks for", () => {

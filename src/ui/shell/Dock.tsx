@@ -126,8 +126,9 @@ export function Dock(props: Props) {
     .flatMap((lane) => work.laneCards(lane))
     .find((c) => c.id === work.openDraft);
   const writingSources = writing ? (work.draft?.input.sources.length ?? writing.sources.length) : 0;
-  // Robots with something in hand first, each group in its own order.
-  const lanes = [...work.lanes].sort((a, b) => +busy(work.desk(b)) - +busy(work.desk(a)));
+  // The public area always on top, then robots with something in hand, each group in its own order.
+  const rank = (lane: string) => (lane === PUBLIC ? 2 : +busy(work.desk(lane)));
+  const lanes = [...work.lanes].sort((a, b) => rank(b) - rank(a));
   const roles = work.lanes.filter((l) => l !== PUBLIC).length;
   const sum = (k: keyof Desk) => work.lanes.reduce((n, l) => n + work.desk(l)[k], 0);
   const doing = sum("doing"),
@@ -369,13 +370,16 @@ function Lane({
             />
           ))}
           {!cards.length && !returned.length && (
-            <div className="lane-empty">
+            // An empty lane says nothing; hovering it says what it takes.
+            <div
+              className="lane-empty"
+              data-tip={lane === PUBLIC ? t.work.emptyPublic : t.work.emptyRole(name)}
+            >
               {lane === PUBLIC ? (
                 <Tray size={26} empty />
               ) : (
                 <Pet id={lane} size={26} className="faint" />
               )}
-              {lane === PUBLIC ? t.work.emptyPublic : t.work.emptyRole(name)}
             </div>
           )}
         </div>

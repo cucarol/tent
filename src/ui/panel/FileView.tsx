@@ -1,6 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { workspaceBlob, type FileInfo } from "../data/api.js";
-import { fileLimit, fileOf, fileSize, infoOf, useFiles, type NodeFile } from "../data/files.js";
+import { ApiError, nodeText, workspaceBlob, type FileInfo, type NodeText } from "../data/api.js";
+import {
+  fileLimit,
+  fileOf,
+  filesOf,
+  fileSize,
+  infoOf,
+  useFiles,
+  type NodeFile,
+} from "../data/files.js";
 import type { SnapshotNode } from "../data/types.js";
 import { FileGlyph, Icon } from "../components/Glyph.js";
 import { t } from "../i18n.js";
@@ -10,9 +18,10 @@ export type LocalFile = Extract<NodeFile, { kind: "file" }>;
 const limitOf = (file: LocalFile) => fileLimit(file.show);
 
 /**
- * A Node's own file, shown by its suffix above the Node's text: HTML in a sandboxed frame, images,
- * PDF in the browser's own viewer, audio and video in place, other files as a file card. Markdown and code keep the page as it was.
- * A remote address is shown and linked, never fetched.
+ * The files a Node names, above its text. Its own file opens with the page; with sources, a row of them
+ * lets one be opened in its place. Each is shown by its suffix: HTML in a sandboxed frame, images, PDF in
+ * the browser's own viewer, audio and video in place, text and code as written, other files as a file
+ * card. A remote address is shown and linked, never fetched.
  */
 export function FileView({
   node,
@@ -21,16 +30,116 @@ export function FileView({
   node: SnapshotNode;
   onToast: (text: string) => void;
 }) {
-  const file = fileOf(node);
+  const own = fileOf(node);
+  const list = filesOf(node);
   const files = useFiles();
-  if (!file) return null;
-  if (file.kind === "uri") return <RemoteFile uri={file.uri} />;
-  const info = infoOf(files, file.path);
+  const [picked, setPicked] = useState<{ node: string; path: string | null } | null>(null);
+  const shown = picked?.node === node.id ? picked.path : own?.kind === "file" ? own.path : null;
+  const file = list.find((f) => f.file.path === shown)?.file;
+  return (
+    <>
+      {own?.kind === "uri" && <RemoteFile uri={own.uri} />}
+      {list.some((f) => f.source) && (
+        <div className="file-tabs" role="group" aria-label={t.file.label}>
+          {list.map(({ file: f, source }) => (
+            <button
+              key={f.path}
+              type="button"
+              className={`file-tab${f.path === shown ? " is-on" : ""}`}
+              aria-pressed={f.path === shown}
+              data-tip={f.path}
+              onClick={() => setPicked({ node: node.id, path: f.path === shown ? null : f.path })}
+            >
+              <FileGlyph show={f.show} size={13} />
+              <span className="file-tab-name">{f.name}</span>
+              <small>{source ? t.rel.sourceN(source) : t.rel.mainMaterial}</small>
+            </button>
+          ))}
+        </div>
+      )}
+      {file && (
+        <OneFile
+          key={file.path}
+          nodeId={node.id}
+          file={file}
+          // Sizes are read ahead only for Nodes' own files; a source's comes with its text.
+          info={
+            own?.kind === "file" && own.path === file.path ? infoOf(files, file.path) : undefined
+          }
+          onToast={onToast}
+        />
+      )}
+    </>
+  );
+}
+
+function OneFile({
+  nodeId,
+  file,
+  info,
+  onToast,
+}: {
+  nodeId: string;
+  file: LocalFile;
+  info: FileInfo | null | undefined;
+  onToast: (text: string) => void;
+}) {
   if (info === null) return <FileCard file={file} info={null} onToast={onToast} />;
-  if (file.show === "text") return null;
+  if (file.show === "text")
+    return <TextFile nodeId={nodeId} file={file} info={info} onToast={onToast} />;
   if (file.show === "other" || (info && info.size > limitOf(file)))
     return <FileCard file={file} info={info} onToast={onToast} />;
   return <Preview file={file} info={info} onToast={onToast} />;
+}
+
+/** Text and code as written, read through the Node so only the files it names are read. */
+function TextFile({
+  nodeId,
+  file,
+  info,
+  onToast,
+}: {
+  nodeId: string;
+  file: LocalFile;
+  info: FileInfo | undefined;
+  onToast: (text: string) => void;
+}) {
+  const [read, setRead] = useState<NodeText | "missing" | "binary" | "failed" | undefined>();
+  useEffect(() => {
+    const abort = new AbortController();
+    setRead(undefined);
+    nodeText(nodeId, file.path, abort.signal).then(setRead, (error: unknown) => {
+      if (abort.signal.aborted) return;
+      const status = error instanceof ApiError ? error.status : 0;
+      setRead(status === 404 ? "missing" : status === 415 ? "binary" : "failed");
+    });
+    return () => abort.abort();
+  }, [nodeId, file.path, info?.modifiedAt]);
+  if (read === "missing") return <FileCard file={file} info={null} onToast={onToast} />;
+  if (read === "binary")
+    return <FileCard file={{ ...file, show: "other" }} info={info} onToast={onToast} />;
+  const name = t.file.preview(file.name);
+  return (
+    <section className="file-view is-text" aria-label={name}>
+      <FileBar
+        file={file}
+        info={typeof read === "object" ? { size: read.size, modifiedAt: read.modifiedAt } : info}
+        onToast={onToast}
+      />
+      {typeof read === "object" ? (
+        <pre className="file-text" tabIndex={0}>
+          {read.text}
+        </pre>
+      ) : (
+        <div className="file-stage">
+          <p className="file-note">{read === "failed" ? t.file.failed : t.file.loading}</p>
+        </div>
+      )}
+      {typeof read === "object" && read.truncated && (
+        <p className="file-hint">{t.file.truncated(fileSize(new Blob([read.text]).size))}</p>
+      )}
+    </section>
+  );
 }
 
 /**
@@ -216,7 +325,6 @@ function RemoteFile({ uri }: { uri: string }) {
         <div className="file-card-meta">
           <span className="mono">{uri}</span>
         </div>
-        <p className="file-note">{t.file.remoteNote}</p>
       </div>
       {web && (
         <a className="btn plain" href={uri} target="_blank" rel="noopener noreferrer">

@@ -1,4 +1,5 @@
 import { aheadKind, onlyGaps } from "../data/reasons.js";
+import { keepUnchanged, useSteady } from "./stable.js";
 import { DetailsContext, useWantDetails } from "../data/details.js";
 import {
   createContext,
@@ -20,6 +21,7 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useKeyPress,
   useReactFlow,
   useStore,
   type Edge,
@@ -33,11 +35,10 @@ import { createPortal } from "react-dom";
 import { primaryOf, type Graph, type Hand, type Primary } from "../data/store.js";
 import type { SnapshotCommit, SnapshotRef, SyncFlag, SyncFlags } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
-import { FileGlyph, Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
+import { FileGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { fileOf, infoOf, previewOf, useFiles } from "../data/files.js";
 import type { LocalFile } from "../panel/FileView.js";
 import { CardPreview, previewHeight } from "./CardPreview.js";
-import { Tray, Pet } from "../components/Pet.js";
 import {
   CARD,
   GAP,
@@ -56,7 +57,7 @@ import { PUBLIC } from "../shell/work.js";
 import { continueDrag } from "../shell/drag.js";
 import { nearest, refPath, regionPath } from "./geometry.js";
 import { fitZoom, watchSpace } from "./pointer.js";
-import { routeLinks, type Route } from "./route.js";
+import { routeLinks, type Route, type Run } from "./route.js";
 import { Timeline } from "./Timeline.js";
 import {
   INK_STYLE,
@@ -97,12 +98,17 @@ import { useCanvas, type Picks } from "./useCanvas.js";
 import {
   boxRect,
   REGION_PAD,
+  clearOf,
+  clearWithin,
+  standClear,
+  within,
   cornerOf,
   fitBox,
   heldBy,
   membersOf,
   newRegionId,
   placeCards,
+  snapTo,
   shifted,
   type Region,
 } from "./canvas.js";
@@ -131,17 +137,40 @@ import { RegionProducts } from "./Reaction.js";
 import { api } from "../data/api.js";
 import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
-// At 100% a card shows all it has; there is nothing more to see closer in.
 const NO_CODE: readonly CodeEdge[] = [];
-const ZOOM = { min: 0.4, max: 1 };
+/** Keys the sidebar tree answers itself while one of its rows has focus. */
+const TREE_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+  "Enter",
+  "*",
+]);
+// At 100% a card shows all it has (cuca 2026-10-21: only sanity bounds); past it a card only grows, and far
+// out the map gathers (see GATHER).
+const ZOOM = { min: 0.04, max: 4 };
+// Views the map picks by itself go no further out than this, however much they hold.
+const FIT_MIN = 0.4;
 // Below this, card names get too small to read at a glance; views the map picks by itself stay above it.
 const READABLE = 0.9;
-// Each card's second line of facts, under its title row. It is always laid out, so zooming never moves
-// a card; far out it is hidden.
-const DETAIL_H = 18;
 // Further out than these, a card shows only its type and name, the name a size and then two sizes larger
 // so it still reads.
 const FAR = [0.7, 0.5];
+/**
+ * Further out than `below`, the map gathers: cards keep their place and outline but drop their text, and the
+ * Nodes at `depth` and above carry names sized to read at `z`, the far end of the band; a Node at `depth`
+ * also counts what is under it. Nothing moves; only what is drawn changes.
+ */
+const GATHER = [
+  { below: 0.3, depth: 2, z: 0.2 },
+  { below: 0.2, depth: 1, z: 0.12 },
+  { below: 0.12, depth: 1, z: 0.07 },
+  { below: 0.07, depth: 0, z: 0.04 },
+];
+
 // A selected card this close to an edge, or under a floating panel, is brought further in.
 const COMFORT = 56;
 // Room kept clear around fitted cards; the bottom leaves space for the toolbar.
@@ -168,8 +197,6 @@ type CardData = {
   selected: boolean;
   /** Picked with the box or with Shift / Ctrl, to move together. */
   picked: boolean;
-  /** Close up, a second line of facts under its title row. */
-  detail: boolean;
   top: boolean;
   /** Nodes under it, and how many of them are behind: named on it when the map is zoomed far out. */
   under: { n: number; behind: number } | null;
@@ -189,16 +216,61 @@ type LinkData = {
   hot: boolean;
   from: Rect;
   to: Rect;
-  /** A reference's way round the cards; without one it curves straight across. */
+  /** A way round the cards, for a reference or a tree line to a card placed by hand; without one a
+   * reference curves straight across and a tree line takes its elbow. */
   route?: Route;
+  /** How far across the gap a tree line's trunk runs, when it keeps its elbow beside another line. */
+  bend?: number;
 };
 type RegionLineData = { kind: RegionLineKind; from: Rect; to: Rect; tip: string };
-type GhostData = { name: string; w: number; h: number; region: string };
 type Peek = { id: string; left: number; top: number; above: boolean };
-/** A card in a region keeps a faint copy at its place in the tree: `ghost:<id>`. */
-const GHOST = "ghost:";
 /** How long a dragged card waits over another before letting go forms a region. */
 const HOLD = 450;
+/** Room round a stray tree line's ends where cards count as in its way, and how many it goes round. */
+const STRAY_PAD = 120;
+// Screen pixels at the top of the map the title bar and the legend keep; a card stepping aside stays below them.
+const SEEN_TOP = 96;
+// Zoom buttons and keys answer at once; an eased step reads as lag.
+const ZOOM_NOW = { duration: 0 };
+// Held while dragging blank space, these draw the box instead of moving the map.
+const BOX_KEYS = ["Control", "Meta", "Shift"];
+// Lines among more cards than this find their way just after the map is drawn; past the crowd, never.
+const STRAY_NOW = 60;
+// Milliseconds of put-off ways found in one go, so the frames between keep coming.
+const LATER_SLICE = 12;
+const STRAY_CROWD = 240;
+/** A tree line's way round cards, kept while the cards round it stay where they were. */
+type Stray = { id: string; key: string; route?: Route };
+
+const same = (a: Rect, b: Rect) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+
+/** Where across the gap a crowded tree line's trunk may run, halfway first, to keep off other lines. */
+const BENDS = [GAP / 2, GAP / 2 - 15, GAP / 2 + 15];
+/** Room a tree line keeps from cards other than its own two: 4 screen pixels at 45%. */
+const LINE_ROOM = 9;
+/** The elbow LinkEdge draws for a tree line: its trunk's x and the rows it joins. */
+const elbowOf = (from: Rect, to: Rect) => ({
+  sx: from.x + from.w,
+  sy: from.y + (from.head ?? from.h) / 2,
+  mid: from.x + from.w + GAP / 2,
+  tx: to.x,
+  ty: to.y + (to.head ?? to.h) / 2,
+});
+/** Whether a tree line's elbow, as LinkEdge draws it, passes through or close by a card other than its own two. */
+function elbowCrosses(from: Rect, to: Rect, cards: Rect[]) {
+  const { sx, sy, mid, tx, ty } = elbowOf(from, to);
+  const hit = (r: Rect, x1: number, x2: number, y1: number, y2: number) =>
+    r.x - LINE_ROOM < Math.max(x1, x2) &&
+    Math.min(x1, x2) < r.x + r.w + LINE_ROOM &&
+    r.y - LINE_ROOM < Math.max(y1, y2) &&
+    Math.min(y1, y2) < r.y + r.h + LINE_ROOM;
+  return cards.some(
+    (r) =>
+      !same(r, from) &&
+      !same(r, to) &&
+      (hit(r, sx, mid, sy, sy) || hit(r, mid, mid, sy, ty) || hit(r, mid, tx, ty, ty)),
+  );
+}
 
 /** Card controls that act without selecting the card. */
 type Actions = {
@@ -262,20 +334,27 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
   const files = useFiles();
   const n = data.graph.nodes.get(data.id)!;
   const state = data.graph.states.get(data.id)!;
-  const hands = data.graph.handedTo(data.id);
   const p = primaryOf(n.type);
   const foldBehind = data.fold?.ids.filter((id) => flags[id]?.behind).length ?? 0;
   const file = fileOf(n);
   const local = file?.kind === "file" ? file : null;
   const missing = !!local && infoOf(files, local.path) === null;
   const open = !!data.preview?.open;
-  const tileSize = data.top ? 26 : 22;
-  const glyph = local && (
-    <FileGlyph show={local.show} missing={missing} size={data.top ? 15 : 13} kind={p} />
-  );
+  const glyph = local && <FileGlyph show={local.show} missing={missing} size={15} kind={p} />;
+  // One status, the most pressing: a broken Node, a missing file, behind, ahead. Behind points down, filled;
+  // ahead points up, open (judge 2026-10-21, node-erpb58).
+  const status = n.invalid
+    ? "invalid"
+    : missing
+      ? "missing"
+      : flag?.behind
+        ? "behind"
+        : flag?.ahead
+          ? "ahead"
+          : null;
   const card = (
     <div
-      className={`mcard t-${p}${local ? " is-file" : ""}${missing ? " is-missing" : ""}${data.top ? " is-top" : ""}${data.folded ? " is-stack" : ""}${data.rel ? " is-rel" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.picked ? " is-picked" : ""}${data.detail ? " has-detail" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${n.invalid ? " is-invalid" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? ` is-behind${onlyGaps(flag.behind.reasons) ? " is-gap" : ""}` : ""}`}
+      className={`mcard t-${p}${local ? " is-file" : ""}${missing ? " is-missing" : ""}${data.top ? " is-top" : ""}${data.folded ? " is-stack" : ""}${data.rel ? " is-rel" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.picked ? " is-picked" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${n.invalid ? " is-invalid" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? ` is-behind${onlyGaps(flag.behind.reasons) ? " is-gap" : ""}` : ""}`}
       style={
         {
           width: data.w,
@@ -290,36 +369,9 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
           {data.pin}
         </span>
       )}
-      {local && data.preview ? (
-        // The file's tile opens a look at the file under the card, as a note embeds it.
-        <button
-          type="button"
-          className={`tile k-${p} is-file mcard-preview nopan nodrag${open ? " is-open" : ""}`}
-          style={{ width: tileSize, height: tileSize }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onPreview(data.id);
-          }}
-          aria-label={open ? t.map.closePreview : t.map.openPreview}
-          aria-pressed={open}
-          data-tip={open ? t.map.closePreview : t.map.openPreview}
-        >
-          {glyph}
-          <span className="mcard-preview-eye">
-            <Icon name={open ? "unpreview" : "preview"} size={data.top ? 14 : 12} />
-          </span>
-        </button>
-      ) : local ? (
-        <span
-          className={`tile k-${p} is-file`}
-          style={{ width: tileSize, height: tileSize }}
-          title={missing ? t.file.missing : local.path}
-        >
-          {glyph}
-        </span>
-      ) : (
-        <TypeTile kind={n.type} size={data.top ? 30 : 24} />
-      )}
+      <span className="mcard-type">
+        <TypeGlyph type={n.type} size={data.top ? 19 : 17} />
+      </span>
       <span className="mcard-name">{n.name}</span>
       {data.under && (
         // Short on the card, the behind count marked as the legend marks it; spelled out on hover.
@@ -328,7 +380,7 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
           {data.under.behind > 0 && <i className="mcard-sum-behind">{data.under.behind}</i>}
         </span>
       )}
-      {state.recent && <i className="new-dot" title={t.node.recent} />}
+      {state.recent && !status && <i className="new-dot" title={t.node.recent} />}
       {data.src?.changed && (
         <span className="mcard-changed" title={t.side.changedSince}>
           <Icon name="clock" size={12} />
@@ -339,20 +391,41 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
           {data.src.n}
         </span>
       )}
-      {data.rel ? (
+      {data.rel && (
         <span className="mcard-rel">
           {data.rel === "cites" ? t.map.relCites : t.map.relCitedBy}
         </span>
-      ) : local?.ext ? (
-        <span className="mcard-tag is-ext">{local.ext}</span>
-      ) : (
-        n.tags.length > 0 && (
-          <span className="mcard-tag" title={n.tags.join(", ")}>
-            {n.tags[0]}
-          </span>
-        )
       )}
-      {hands.length > 0 && <Faces graph={data.graph} hands={hands} />}
+      {local &&
+        (data.preview ? (
+          // The file's mark opens a look at the file under the card, as a note embeds it.
+          <button
+            type="button"
+            className={`mcard-file mcard-preview nopan nodrag${open ? " is-open" : ""}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPreview(data.id);
+            }}
+            aria-label={open ? t.map.closePreview : t.map.openPreview}
+            aria-pressed={open}
+            data-tip={open ? t.map.closePreview : t.map.openPreview}
+          >
+            {glyph}
+            <span className="mcard-preview-eye">
+              <Icon name={open ? "unpreview" : "preview"} size={13} />
+            </span>
+          </button>
+        ) : (
+          <span className="mcard-file" title={missing ? t.file.missing : local.path}>
+            {glyph}
+          </span>
+        ))}
+      {status && (
+        <span className={`mcard-status is-${status}`}>
+          {(status === "behind" || status === "ahead") && <StatusMark kind={status} />}
+          {t.map.status[status]}
+        </span>
+      )}
       {data.fold && (
         <button
           type="button"
@@ -392,7 +465,6 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
           <Icon name={data.folded ? "plus" : "minus"} size={10} />
         </button>
       )}
-      {data.detail && <Detail graph={data.graph} id={data.id} flag={flag} path={local?.path} />}
     </div>
   );
   // A preview hangs under its card; the card stays the title row that links meet.
@@ -405,65 +477,6 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
     );
   return card;
 });
-
-/**
- * The lanes a Node went to in published Cards, up to three faces: a Role, or the public area. One still
- * waiting to be received has a blue ring and an envelope, amber when that Card pinned an older version;
- * one received and still being done, to be returned, has a grey ellipsis. Finished lanes stay quiet. A
- * Role's face selects the Role.
- */
-function Faces({ graph, hands }: { graph: Graph; hands: Hand[] }) {
-  const { activeRole, onRole } = useContext(MapActions);
-  // Two faces at most, those still waiting on a Card first; the rest are counted.
-  const need = (h: Hand) => (h.old ? 3 : h.waiting ? 2 : h.doing ? 1 : 0);
-  const shown = [...hands].sort((x, y) => need(y) - need(x)).slice(0, 2);
-  return (
-    <span className="mcard-faces">
-      {shown.map((h) => {
-        const role = h.lane === PUBLIC ? undefined : graph.roles.get(h.lane);
-        const tip = t.map.handed(
-          role?.title ?? (h.lane === PUBLIC ? null : t.work.goneRole(h.lane)),
-          h.cards,
-          h.waiting,
-          h.doing,
-          h.old,
-        );
-        const cls = `mcard-face${h.old ? " is-old" : h.waiting ? " is-waiting" : ""}${activeRole !== null && activeRole === h.lane ? " is-active" : ""}`;
-        const face = h.lane === PUBLIC ? <Tray size={18} /> : <Pet id={h.lane} size={18} />;
-        const badge = h.waiting ? "mail" : h.doing ? "working" : null;
-        const envelope = badge && (
-          <i className={`face-env${badge === "mail" ? "" : ` is-${badge}`}`}>
-            <Icon name={badge} size={8} />
-          </i>
-        );
-        return role ? (
-          <button
-            key={h.lane}
-            type="button"
-            className={`${cls} nopan nodrag`}
-            aria-label={tip}
-            data-tip={tip}
-            onClick={(e) => {
-              e.stopPropagation();
-              onRole(role.id);
-            }}
-          >
-            {face}
-            {envelope}
-          </button>
-        ) : (
-          <span key={h.lane || "public"} className={cls} data-tip={tip}>
-            {face}
-            {envelope}
-          </span>
-        );
-      })}
-      {hands.length > shown.length && (
-        <span className="mcard-more">+{hands.length - shown.length}</span>
-      )}
-    </span>
-  );
-}
 
 function LensLabel({ data }: NodeProps<Node<LabelData>>) {
   return (
@@ -484,8 +497,10 @@ function LinkEdge({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps<Ed
       </>
     );
   }
+  if (data?.route)
+    return <BaseEdge id={id} path={data.route.path} className={`link link-tree${state}`} />;
   // Rounded elbow: siblings share one trunk, like an outline.
-  const mid = sourceX + GAP / 2,
+  const mid = sourceX + (data?.bend ?? GAP / 2),
     r = Math.min(6, Math.abs(targetY - sourceY) / 2),
     dir = Math.sign(targetY - sourceY);
   const path =
@@ -519,20 +534,6 @@ function RegionEdge({ id, data }: EdgeProps<Edge<RegionLineData>>) {
   );
 }
 
-/** Where a card in a region stands in the tree: faint, and a click goes to its region. */
-function GhostCard({ data }: NodeProps<Node<GhostData>>) {
-  return (
-    <div
-      className="mghost"
-      style={{ width: data.w, height: data.h }}
-      title={t.map.region.ghost(data.region)}
-    >
-      <Handles />
-      <span className="mghost-name">{data.name}</span>
-    </div>
-  );
-}
-
 /**
  * Regions under the cards: a tinted block with its name, how many cards stand in it and a way to
  * dissolve it. Its edge shows dashed while a card dragged over it would join, and while one is drawn.
@@ -540,9 +541,6 @@ function GhostCard({ data }: NodeProps<Node<GhostData>>) {
 function RegionLayer({
   regions,
   members,
-  related,
-  reactions,
-  reading,
   outside,
   outward,
   onOutward,
@@ -553,12 +551,6 @@ function RegionLayer({
 }: {
   regions: Region[];
   members: Map<string, string[]>;
-  /** Regions with at least one line between their cards. */
-  related: ReadonlySet<string>;
-  /** What each region's cards give together, by region; a region with one shows it instead of the no-relation line. */
-  reactions: Map<string, Reaction[]>;
-  /** Relations are still being read: say so instead of that there are none. */
-  reading: boolean;
   /** How many cards outside each region its members are directly related to. */
   outside: Map<string, number>;
   /** The region looking one layer out, if any. */
@@ -585,12 +577,12 @@ function RegionLayer({
             data-region={r.id}
             style={{ left: r.box[0], top: r.box[1], width: r.box[2], height: r.box[3] }}
           >
-            <div className="map-region-head">
+            <div className="map-region-head nopan">
               {editing === r.id ? (
                 <input
                   className="map-region-input"
                   aria-label={t.map.region.name}
-                  placeholder={t.map.region.unnamed}
+                  placeholder={t.map.region.name}
                   defaultValue={r.name}
                   autoFocus
                   onFocus={(e) => e.currentTarget.select()}
@@ -611,7 +603,7 @@ function RegionLayer({
                   title={t.map.region.rename}
                   onClick={() => onEdit(r.id)}
                 >
-                  {r.name || t.map.region.unnamed}
+                  {r.name}
                 </span>
               )}
               <span className="map-region-count">{t.map.region.count(ids.length)}</span>
@@ -636,15 +628,6 @@ function RegionLayer({
                 <Icon name="ungroup" size={14} />
               </button>
             </div>
-            {ids.length > 1 && reading && !related.has(r.id) && (
-              <div className="map-region-none">{t.map.region.reading}</div>
-            )}
-            {ids.length > 1 &&
-              !reading &&
-              !related.has(r.id) &&
-              !reactions.get(r.id)?.some(listed) && (
-                <div className="map-region-none">{t.map.region.none}</div>
-              )}
           </div>
         );
       })}
@@ -653,62 +636,43 @@ function RegionLayer({
   );
 }
 
-/**
- * The second line a card gets close up: why it is behind or ahead, then its tags (or a file's path), when
- * it last changed and what it is linked to. Only facts the map already has, nothing summarised.
- */
-function Detail({
-  graph,
-  id,
-  flag,
-  path,
-}: {
-  graph: Graph;
-  id: string;
-  flag?: SyncFlag;
-  path?: string;
-}) {
-  const n = graph.nodes.get(id)!;
-  const changed = changedAt(graph, id);
-  const cites =
-    n.links.filter((l) => l.ref?.kind === "node").length +
-    n.materials.filter((m) => m.kind === "node").length;
-  const citedBy = n.incoming.filter((i) => i.from.kind === "node").length;
-  const facts = [
-    path ?? n.tags.join(" · "),
-    changed && t.map.changedAgo(ago(changed)),
-    n.childIds.length > 0 && t.map.children(n.childIds.length),
-    cites > 0 && t.map.cites(cites),
-    citedBy > 0 && t.map.citedBy(citedBy),
-  ].filter(Boolean);
-  return (
-    <span className="mcard-detail">
-      {n.invalid && <b className="is-invalid">{t.map.invalidWhy()}</b>}
-      {flag?.behind && <b className="is-behind">{t.map.behindWhy(flag.behind.reasons)}</b>}
-      {flag?.ahead && (
-        <b className="is-ahead">{t.map.aheadWhy(null, aheadKind(flag.ahead.reasons))}</b>
-      )}
-      {facts.join(" · ")}
-    </span>
-  );
-}
+/** A hover reads a Node's own file only when it is text or an image this small, so passing over cards stays light. */
+const PEEK_BYTES = 1024 * 1024;
 
 function PeekCard({ graph, peek, flag }: { graph: Graph; peek: Peek; flag?: SyncFlag }) {
+  const files = useFiles();
   const n = graph.nodes.get(peek.id);
   if (!n) return null;
+  const own = previewOf(n, files);
+  const file =
+    own &&
+    (own.show === "text" || own.show === "image") &&
+    (infoOf(files, own.path)?.size ?? Infinity) <= PEEK_BYTES
+      ? own
+      : null;
   const cites =
     n.links.filter((l) => l.ref?.kind === "node").length +
     n.materials.filter((m) => m.kind === "node").length;
   const citedBy = n.incoming.filter((i) => i.from.kind === "node").length;
   const changed = changedAt(graph, n.id);
+  // What the card leaves out: its type and tags, and the lanes it went to in Cards.
+  const lanes = graph
+    .handedTo(n.id)
+    .map((h: Hand) =>
+      h.lane === PUBLIC
+        ? t.work.public
+        : (graph.roles.get(h.lane)?.title ?? t.work.goneRole(h.lane)),
+    );
   const facts = [
+    [n.type, ...n.tags].filter(Boolean).join(" · "),
+    lanes.length > 0 && t.map.handedTo(lanes),
     changed && t.map.changedAgo(ago(changed)),
     n.childIds.length > 0 && t.map.children(n.childIds.length),
     cites > 0 && t.map.cites(cites),
     citedBy > 0 && t.map.citedBy(citedBy),
   ].filter(Boolean);
   // Until the snapshot is in, the map knows no summary; a peek with nothing else to say stays closed.
-  if (!graph.detailed && !n.invalid && !flag?.behind && !flag?.ahead && facts.length === 0)
+  if (!graph.detailed && !n.invalid && !flag?.behind && !flag?.ahead && !file && facts.length === 0)
     return null;
   return (
     <div
@@ -739,7 +703,12 @@ function PeekCard({ graph, peek, flag }: { graph: Graph; peek: Peek; flag?: Sync
           <span>{t.map.aheadNext(aheadKind(flag.ahead.reasons))}</span>
         </div>
       )}
-      {graph.detailed && <p>{n.description || t.node.noSummary}</p>}
+      {n.description && <p>{n.description}</p>}
+      {file && (
+        <div className="map-peek-file">
+          <CardPreview file={file} graph={graph} />
+        </div>
+      )}
       {facts.length > 0 && <div className="map-peek-meta">{facts.join(" · ")}</div>}
     </div>
   );
@@ -861,7 +830,9 @@ function FlagCounts({
             onSelect({ kind: "node", id: ids[i] });
           }}
         >
-          <i className="map-flag-sw" />
+          <span className={`mcard-status is-${state}`}>
+            <StatusMark kind={state} />
+          </span>
           {state === "behind" ? t.map.behindCount(ids.length) : t.map.aheadCount(ids.length)}
         </button>
       ))}
@@ -869,7 +840,26 @@ function FlagCounts({
   );
 }
 
-const nodeTypes = { node: NodeCard, label: LensLabel, ghost: GhostCard };
+/** Behind points down, filled; ahead points up, open. */
+function StatusMark({ kind }: { kind: "behind" | "ahead" }) {
+  return (
+    <svg viewBox="0 0 10 9" aria-hidden="true">
+      {kind === "ahead" ? (
+        <path
+          d="M5 1.2 9 8H1z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+      ) : (
+        <path d="M1 1h8L5 7.8z" fill="currentColor" />
+      )}
+    </svg>
+  );
+}
+
+const nodeTypes = { node: NodeCard, label: LensLabel };
 const edgeTypes = { link: LinkEdge, region: RegionEdge };
 const NOTHING: ReadonlySet<string> = new Set();
 const KEYS: Record<string, [number, number]> = {
@@ -1120,7 +1110,7 @@ function MapContent({
   const grown = useCallback(
     (id: string) => {
       const file = previews.has(id) ? previewFile(id) : null;
-      return file ? previewHeight(file) : DETAIL_H;
+      return file ? previewHeight(file) : 0;
     },
     [previews, previewFile],
   );
@@ -1133,11 +1123,18 @@ function MapContent({
   };
   // Cards picked with the box or with Shift / Ctrl, which move together.
   const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
+  // Cards placed by hand: the tree closes over where they were. Only which cards, not where, lays it out again.
+  const awayKey = Object.keys(canvas.positions).sort().join(" ");
+  const away = useMemo(() => new Set(awayKey ? awayKey.split(" ") : []), [awayKey]);
   const tree = useMemo(
-    () => treeLayout(graph, folded, openOutputs, grown, shown.kidsOf),
-    [graph, folded, openOutputs, grown, shown],
+    () => treeLayout(graph, folded, openOutputs, grown, shown.kidsOf, away),
+    [graph, folded, openOutputs, grown, shown, away],
   );
-  const base = useMemo(() => placeCards(tree, canvas.positions), [tree, canvas.positions]);
+  // Nothing stands on anything: hand-placed cards hold their place and the tree makes room round them.
+  const base = useMemo(
+    () => standClear(placeCards(tree, canvas.positions), away, shown.upOf),
+    [tree, canvas.positions, away, shown],
+  );
 
   // Node cards a drawn line can hold on to, where they stand. It holds only for the look.
   const cardAnchors = useMemo<Anchor[]>(
@@ -1314,16 +1311,6 @@ function MapContent({
     () => new Map([...members].flatMap(([r, ids]) => ids.map((id) => [id, r] as const))),
     [members],
   );
-  // Cards standing in a region away from their place in the tree leave a ghost there.
-  const ghosted = useMemo(() => {
-    const out = new Set<string>();
-    for (const id of regionOfCard.keys()) {
-      const a = tree.placed.get(id),
-        b = base.placed.get(id);
-      if (a && b && Math.hypot(a.x - b.x, a.y - b.y) > 1) out.add(id);
-    }
-    return out;
-  }, [regionOfCard, tree, base]);
   // Code imports come with the map read. Links, materials and Cards between a region's cards come with the
   // snapshot, which a region of two or more asks for; until then a region shows its tree and code lines.
   const code: readonly CodeEdge[] = graph.snapshot.modules?.edges ?? NO_CODE;
@@ -1482,8 +1469,6 @@ function MapContent({
         out.set(rid, reactionsIn(graph, flags, compared, ids.filter(visible), timed));
     return out;
   }, [members, graph, flags, compared, visible, timed]);
-  const regionName = (rid: string) =>
-    canvas.regions.find((r) => r.id === rid)?.name || t.map.region.unnamed;
   // The selected Node's references, marked on the cards at either end instead of drawn as lines.
   const rel = useMemo(() => {
     const n = focus ? graph.nodes.get(focus) : undefined;
@@ -1534,6 +1519,8 @@ function MapContent({
     [shown],
   );
 
+  // Cards that did not change keep their objects, so a change to one card draws only that card.
+  const unchanged = useMemo(() => keepUnchanged<Node>(), []);
   const nodes = useMemo<Node[]>(() => {
     const out: Node[] = [];
     const moving = motion?.to === base ? motion : null;
@@ -1560,7 +1547,12 @@ function MapContent({
         position: pos,
         draggable: false,
         // Cards outside the lens, or not yet written at the chosen time, keep their place invisibly.
-        className: host ? "is-tucked" : view.placed.has(id) && exists(id) ? undefined : "is-away",
+        // Cards take their own drags, so only blank space moves the map.
+        className: host
+          ? "is-tucked nopan"
+          : view.placed.has(id) && exists(id)
+            ? "nopan"
+            : "is-away nopan",
         data: {
           graph,
           id,
@@ -1586,7 +1578,6 @@ function MapContent({
                 }
               : null,
           rel: lensView ? null : (rel.get(id) ?? null),
-          detail: !lensView && !(previews.has(id) && previewFile(id)),
           selected: selected?.id === id,
           picked: picked.has(id),
           touched: touched.has(id),
@@ -1598,23 +1589,6 @@ function MapContent({
         },
       });
     }
-    if (!lensView)
-      for (const id of ghosted) {
-        const at = tree.placed.get(id)!;
-        out.push({
-          id: GHOST + id,
-          type: "ghost",
-          position: { x: at.x, y: rectOf(at).y },
-          draggable: false,
-          selectable: false,
-          data: {
-            name: graph.nodes.get(id)?.name ?? id,
-            w: at.w,
-            h: at.head ?? at.h,
-            region: regionName(regionOfCard.get(id)!),
-          },
-        });
-      }
     for (const l of view.labels)
       out.push({
         id: l.id,
@@ -1624,7 +1598,7 @@ function MapContent({
         selectable: false,
         data: { text: l.text },
       });
-    return out;
+    return unchanged(out);
   }, [
     graph,
     base,
@@ -1648,36 +1622,32 @@ function MapContent({
     previewFile,
     previews,
     shown,
-    ghosted,
-    tree,
-    regionOfCard,
     canvas.regions,
   ]);
 
+  const strays = useRef(new Map<string, Stray>());
+  const later = useRef<(() => Stray)[]>([]);
+  const [rerouted, setRerouted] = useState(0);
   const routed = useRef<{ view: typeof view; key: string; routes: Map<string, Route> } | null>(
     null,
   );
+  const unchangedEdges = useMemo(() => keepUnchanged<Edge>(), []);
   const edges = useMemo<Edge[]>(() => {
     const out: Edge<LinkData>[] = [];
     const seen = new Set<string>();
-    const real = (id: string) => (id.startsWith(GHOST) ? id.slice(GHOST.length) : id);
-    const spot = (id: string) =>
-      id.startsWith(GHOST) ? tree.placed.get(real(id)) : view.placed.get(id);
-    // Tree lines keep to the tree: a card in a region is met at its ghost.
-    const inTree = (id: string) => (!lensId && ghosted.has(id) ? GHOST + id : id);
     const add = (source: string, target: string, kind: LinkData["kind"]) => {
       const key = `${source}>${target}`;
-      const a = spot(source),
-        b = spot(target);
+      const a = view.placed.get(source),
+        b = view.placed.get(target);
       if (
         source === target ||
         seen.has(key) ||
         !a ||
         !b ||
-        !visible(real(source)) ||
-        !visible(real(target)) ||
-        !exists(real(source)) ||
-        !exists(real(target))
+        !visible(source) ||
+        !visible(target) ||
+        !exists(source) ||
+        !exists(target)
       )
         return;
       // The lens shows only the focused Node's own lines. Elsewhere references are marks on the cards, not
@@ -1699,7 +1669,7 @@ function MapContent({
     };
     for (const n of graph.snapshot.nodes) {
       const up = visible(n.id) ? shown.upOf(n.id) : null;
-      if (up) add(inTree(up), inTree(n.id), "tree");
+      if (up) add(up, n.id, "tree");
     }
     for (const n of graph.snapshot.nodes) {
       for (const l of n.links)
@@ -1710,6 +1680,104 @@ function MapContent({
     // References find their way round the cards on the map now.
     const cards = [...view.placed.values()].filter((p) => visible(p.id) && exists(p.id));
     const refs = out.filter((e) => e.data!.kind === "ref");
+    // A tree line to a card placed by hand, but not from one to what it carries, or one whose elbow would
+    // pass through a card, goes round the cards between its ends, each line on its own and kept while those
+    // cards stay. Among many cards the way is worked out just after the map is drawn, the elbow standing in
+    // meanwhile; past a crowd it keeps the elbow, rather than hold the map up.
+    if (!lensId) {
+      const kept = new Map<string, Stray>();
+      const boxes = cards.map(rectOf);
+      const wait: (() => Stray)[] = [];
+      // Lines a way round should not run down: every tree trunk, and each way as it is found; a card's
+      // own trunk is its lines' to share.
+      const runs: (Run & { by: string })[] = out.flatMap((e) => {
+        if (e.data!.kind !== "tree" || away.has(e.target)) return [];
+        const { mid, sy, ty } = elbowOf(e.data!.from, e.data!.to);
+        return [{ x: mid, y1: sy, y2: ty, by: e.source }];
+      });
+      const ran = (by: string, route?: Route) => {
+        const pts = route?.points ?? [];
+        for (let i = 1; i < pts.length; i++)
+          if (pts[i]!.x === pts[i - 1]!.x)
+            runs.push({ x: pts[i]!.x, y1: pts[i - 1]!.y, y2: pts[i]!.y, by });
+      };
+      for (const e of out) {
+        if (e.data!.kind !== "tree") continue;
+        const { from, to } = e.data!;
+        const stray =
+          away.has(e.target) ||
+          (away.has(e.source) && !base.islands?.get(e.source)?.includes(e.target));
+        if (!stray && !elbowCrosses(from, to, boxes)) continue;
+        // The cards round its ends and round the way it went last; a way that strays past them is found
+        // again with the cards it passed, until it keeps within them.
+        const around = (pts: Route["points"]) => {
+          const xs = [from.x, from.x + from.w, to.x, to.x + to.w, ...pts.map((p) => p.x)],
+            ys = [from.y, from.y + from.h, to.y, to.y + to.h, ...pts.map((p) => p.y)];
+          const x1 = Math.min(...xs) - STRAY_PAD,
+            x2 = Math.max(...xs) + STRAY_PAD,
+            y1 = Math.min(...ys) - STRAY_PAD,
+            y2 = Math.max(...ys) + STRAY_PAD;
+          return boxes.filter((r) => r.x < x2 && r.x + r.w > x1 && r.y < y2 && r.y + r.h > y1);
+        };
+        const keyOf = (near: Rect[]) =>
+          [from, to, ...near].map((r) => `${r.x},${r.y},${r.w},${r.h}`).join(" ");
+        const was = strays.current.get(e.id);
+        const first = around(was?.route?.points ?? []);
+        if (first.length > STRAY_CROWD) {
+          // Past the crowd it keeps its elbow, its trunk moved over off any other line it would run down.
+          const { mid, sy, ty } = elbowOf(from, to);
+          const lo = Math.min(sy, ty),
+            hi = Math.max(sy, ty);
+          const bend = BENDS.find((b) =>
+            runs.every(
+              (r) =>
+                r.by === e.source ||
+                Math.abs(r.x - (mid - GAP / 2 + b)) >= 12 ||
+                Math.max(r.y1, r.y2) <= lo ||
+                Math.min(r.y1, r.y2) >= hi,
+            ),
+          );
+          const b = bend ?? GAP / 2;
+          if (b !== GAP / 2) e.data!.bend = b;
+          runs.push({ x: mid - GAP / 2 + b, y1: sy, y2: ty, by: e.source });
+          continue;
+        }
+        const key = keyOf(first);
+        if (was?.key === key) {
+          kept.set(e.id, was);
+          e.data!.route = was.route;
+          ran(e.source, was.route);
+          continue;
+        }
+        // Each way found joins the lines the next one keeps off, put-off ways included.
+        const find = (): Stray => {
+          const others = runs.filter((r) => r.by !== e.source);
+          const keep = (got: Stray) => (ran(e.source, got.route), got);
+          let near = first;
+          for (let tries = 0; tries < 5; tries++) {
+            // Within one column, round the left side when the right is shut.
+            const found =
+              routeLinks(near, [{ id: e.id, from, to, loop: 1 }], others).get(e.id) ??
+              routeLinks(near, [{ id: e.id, from, to, loop: -1 }], others).get(e.id);
+            // The cards it passed join the ones it went round, so each try sees more, never fewer.
+            const wider = [...new Set([...near, ...around(found?.points ?? [])])];
+            if (wider.length === near.length || wider.length > STRAY_CROWD || tries === 4)
+              return keep({ id: e.id, key: keyOf(around(found?.points ?? [])), route: found });
+            near = wider;
+          }
+          return keep({ id: e.id, key });
+        };
+        if (first.length > STRAY_NOW) {
+          wait.push(find);
+          continue;
+        }
+        const got = find();
+        kept.set(e.id, got);
+        e.data!.route = got.route;
+      }
+      strays.current = kept;
+      later.current = wait;
+    }
     // Hover and focus only restyle lines, so the same references over the same cards keep their routes.
     const key = [...cards.map((p) => p.id), "|", ...refs.map((e) => e.id)].join(" ");
     if (routed.current?.view !== view || routed.current.key !== key)
@@ -1731,7 +1799,7 @@ function MapContent({
     for (const e of refs) e.data!.route = routed.current.routes.get(e.id);
     // Lines that matter now draw last, above the rest.
     const sorted: Edge[] = out.sort((x, y) => Number(x.data!.hot) - Number(y.data!.hot));
-    if (lensId) return sorted;
+    if (lensId) return unchangedEdges(sorted);
     for (const l of [...lines.values()].flat()) {
       const a = view.placed.get(l.from),
         b = view.placed.get(l.to);
@@ -1756,8 +1824,128 @@ function MapContent({
         data: { kind: l.kind, from: rectOf(a), to: rectOf(b), tip },
       });
     }
-    return sorted;
-  }, [graph, view, lensId, visible, shown, exists, focus, lit, hover, tree, ghosted, lines]);
+    return unchangedEdges(sorted);
+  }, [
+    graph,
+    view,
+    lensId,
+    visible,
+    shown,
+    exists,
+    focus,
+    lit,
+    hover,
+    away,
+    base.islands,
+    lines,
+    rerouted,
+  ]);
+  // The ways put off while the map was drawn, found a few at a time between frames and kept for the lines
+  // to take up once all are found.
+  useEffect(() => {
+    const wait = [...later.current];
+    if (!wait.length) return;
+    let t: ReturnType<typeof setTimeout>;
+    const step = () => {
+      const until = performance.now() + LATER_SLICE;
+      while (wait.length && performance.now() < until) {
+        const got = wait.shift()!();
+        strays.current.set(got.id, got);
+      }
+      if (wait.length) t = setTimeout(step, 0);
+      else setRerouted((n) => n + 1);
+    };
+    t = setTimeout(step, 0);
+    return () => clearTimeout(t);
+  }, [edges]);
+
+  // The gathered map's names for every band, laid out only once the map gathers; the zoom only picks which show. A Node at the gathered depth is
+  // named when its branch leaves room for the name before the next one below; a card moved by hand is not
+  // where its branch is, so its branch is measured without it.
+  const layLabels = useCallback(() => {
+    const out: Label[] = [];
+    if (lensId) return out;
+    const on = (id: string) => view.placed.has(id) && visible(id) && exists(id);
+    const branch = new Map<string, string[]>();
+    const under = (id: string): string[] => {
+      let ids = branch.get(id);
+      if (!ids) {
+        ids = shown.kidsOf(id).flatMap((k) => [...(on(k.id) ? [k.id] : []), ...under(k.id)]);
+        branch.set(id, ids);
+      }
+      return ids;
+    };
+    // Its marks count every card it stands for, itself and all under it, drawn or folded away.
+    const counted = new Map<string, { behind: number; ahead: number }>();
+    const count = (id: string): { behind: number; ahead: number } => {
+      let c = counted.get(id);
+      if (!c) {
+        c = { behind: flags[id]?.behind ? 1 : 0, ahead: flags[id]?.ahead ? 1 : 0 };
+        for (const k of shown.kidsOf(id)) {
+          const d = count(k.id);
+          c.behind += d.behind;
+          c.ahead += d.ahead;
+        }
+        counted.set(id, c);
+      }
+      return c;
+    };
+    // Names measured as the band draws them, in map units: wide letters a full size, narrow ones a little over half.
+    const ems = (text: string) =>
+      [...text].reduce((w, c) => w + (c.charCodeAt(0) > 0x2e7f ? 1 : 0.58), 0);
+    GATHER.forEach(({ depth: g, z }, band) => {
+      const taken: Rect[] = [];
+      const want: (Label & { depth: number; box: Rect })[] = [];
+      for (const p of view.placed.values()) {
+        const n = graph.nodes.get(p.id);
+        if (!n || n.depth > g || !on(p.id)) continue;
+        const rect = rectOf(p);
+        const ids = n.depth === g ? under(p.id) : [];
+        const stay = [
+          rect,
+          // Cards placed by hand on their own stand apart; those carried with a card still count.
+          ...ids.filter((u) => !away.has(u)).map((u) => rectOf(view.placed.get(u)!)),
+        ];
+        const top = Math.min(...stay.map((r) => r.y)),
+          bottom = Math.max(...stay.map((r) => r.y + r.h));
+        if (n.depth === g && (bottom - top) * z < 18) continue;
+        const label = {
+          id: p.id,
+          name: n.name,
+          band,
+          x: rect.x,
+          y: n.depth === g ? (top + bottom) / 2 : rect.y + rect.h / 2,
+          under: ids.length,
+          ...count(p.id),
+        };
+        // A mark is its triangle and its count.
+        const mark = (n: number) => (n ? 8 + 13 + 13 * 0.6 * String(n).length : 0);
+        const w =
+          (6 +
+            14 * ems(label.name) +
+            (label.under ? 8 + 13 * 0.6 * String(label.under).length : 0) +
+            mark(label.behind) +
+            mark(label.ahead)) /
+          z;
+        const h = 22 / z;
+        want.push({ ...label, depth: n.depth, box: { x: label.x, y: label.y - h / 2, w, h } });
+      }
+      // Shallower names first, then the ones over more; a name that would cross one already placed is left out.
+      want.sort((a, b) => a.depth - b.depth || b.under - a.under);
+      for (const { depth: _, box, ...label } of want) {
+        if (
+          taken.some(
+            (t) =>
+              box.x < t.x + t.w && t.x < box.x + box.w && box.y < t.y + t.h && t.y < box.y + box.h,
+          )
+        )
+          continue;
+        taken.push(box);
+        out.push(label);
+      }
+    });
+    return out;
+  }, [view, away, graph, visible, exists, shown, flags, lensId]);
 
   // ---------- viewport ----------
   /** Width the map can actually show: on narrow screens the details panel floats over its right side. */
@@ -1785,13 +1973,30 @@ function MapContent({
     },
     [flow, clearWidth],
   );
+  /** The part of the map in sight, in map units: clear of the panel, the legend above and the tools below. */
+  const seenArea = (): Rect | null => {
+    const el = box.current;
+    if (!el) return null;
+    const v = flow.getViewport();
+    const left = 16,
+      top = SEEN_TOP,
+      right = clearWidth() - 16,
+      bottom = el.clientHeight - PAD.bottom;
+    if (right <= left || bottom <= top) return null;
+    return {
+      x: (left - v.x) / v.zoom,
+      y: (top - v.y) / v.zoom,
+      w: (right - left) / v.zoom,
+      h: (bottom - top) / v.zoom,
+    };
+  };
   /** Fit map rectangles into the clear area, zooming no further in than `maxZoom` or out than `minZoom`. */
   const fitRects = useCallback(
     (
       rects: Rect[],
       maxZoom = 1,
       motion: { duration: number } = { duration: 400 },
-      minZoom = ZOOM.min,
+      minZoom = FIT_MIN,
     ) => {
       const el = box.current;
       if (!el || !rects.length) return;
@@ -1821,9 +2026,12 @@ function MapContent({
     [visible],
   );
 
-  /** The view the map opens with, and the fit button: everything if it fits at a readable size, else from the top. */
+  /**
+   * The view the map opens with: everything if it fits at a readable size, else from the top. The fit
+   * button and F ask for everything (`floor` down to the far end), as far out as that takes.
+   */
   const overview = useCallback(
-    (motion: { duration: number } = { duration: 400 }) => {
+    (motion: { duration: number } = { duration: 400 }, floor = READABLE) => {
       const el = box.current;
       const rects = [...viewRects(view), ...(regionsShown ? canvas.regions.map(boxRect) : [])];
       if (!el || !rects.length) return;
@@ -1833,7 +2041,7 @@ function MapContent({
         y2 = Math.max(...rects.map((r) => r.y + r.h));
       const w = clearWidth() - PAD.left - PAD.right,
         h = el.clientHeight - PAD.top - PAD.bottom;
-      const zoom = Math.min(1, Math.max(Math.min(w / (x2 - x1), h / (y2 - y1)), READABLE));
+      const zoom = Math.min(1, Math.max(Math.min(w / (x2 - x1), h / (y2 - y1)), floor));
       void flow.setViewport(
         {
           x:
@@ -2118,6 +2326,8 @@ function MapContent({
       const typing = /INPUT|TEXTAREA|SELECT/.test(el.tagName) || el.isContentEditable;
       // Keys belong to the map only while attention is on it.
       if (typing || !(el === document.body || el.closest(".map, .sidebar"))) return;
+      // The tree moves and folds with its own keys.
+      if (el.closest("[role=tree]") && TREE_KEYS.has(e.key)) return;
       if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[zy]$/i.test(e.key)) {
         e.preventDefault();
         (e.key.toLowerCase() === "y" || e.shiftKey ? latest.current.redo : latest.current.undo)();
@@ -2137,10 +2347,10 @@ function MapContent({
         f();
       };
       if (key === "l") return node && act(() => setLens((l) => !l));
-      if (key === "f") return act(() => latest.current.overview());
-      if (key === "0") return act(() => void flow.zoomTo(1, { duration: 250 }));
-      if (key === "=" || key === "+") return act(() => void flow.zoomIn({ duration: 200 }));
-      if (key === "-") return act(() => void flow.zoomOut({ duration: 200 }));
+      if (key === "f") return act(() => latest.current.overview(undefined, ZOOM.min));
+      if (key === "0") return act(() => void flow.zoomTo(1, ZOOM_NOW));
+      if (key === "=" || key === "+") return act(() => void flow.zoomIn(ZOOM_NOW));
+      if (key === "-") return act(() => void flow.zoomOut(ZOOM_NOW));
       if (key === "t")
         return act(() => (timeOpen ? latest.current.closeTime() : latest.current.openTime()));
       if (key === "p") return act(() => setInkTool("select"));
@@ -2238,6 +2448,7 @@ function MapContent({
   }, [base]);
   // Space held down: the left button moves the map instead.
   const space = useRef<ReturnType<typeof watchSpace> | null>(null);
+  const spaceDown = useKeyPress("Space");
   useEffect(() => {
     const watching = watchSpace(window);
     space.current = watching;
@@ -2391,10 +2602,22 @@ function MapContent({
     arrange({ positions, regions: { [id]: { id, name: "", box } } });
     if (!inView(boxRect({ id, name: "", box }))) fitRects([boxRect({ id, name: "", box })], 1);
   };
-  const overDock = (ev: PointerEvent) =>
-    !!document.elementFromPoint(ev.clientX, ev.clientY)?.closest(".roles");
+  // Where the robots stand, read once per press: asking the page what is under the pointer on every
+  // move would make it lay out the moving cards each frame.
+  const dock = useRef<DOMRect | null>(null);
+  const overDock = (ev: PointerEvent) => {
+    const r = dock.current;
+    return (
+      !!r &&
+      ev.clientX >= r.left &&
+      ev.clientX <= r.right &&
+      ev.clientY >= r.top &&
+      ev.clientY <= r.bottom
+    );
+  };
   const onPress = (e: React.PointerEvent) => {
     const el = box.current;
+    dock.current = document.querySelector(".roles")?.getBoundingClientRect() ?? null;
     const target = e.target as HTMLElement;
     if (e.button !== 0 || !el || inking || lensView || moment || space.current?.held()) return;
     if (target.closest("button, a, input, textarea, .panel")) return;
@@ -2414,7 +2637,10 @@ function MapContent({
           if (ids.length && overDock(ev)) {
             el.classList.remove("is-moving");
             els.forEach((n) => (n.style.translate = ""));
-            continueDrag({ kind: "node", id: ids[0], ids }, { x: ev.clientX, y: ev.clientY });
+            continueDrag(
+              { kind: "node", id: ids[0], ids, from: "map" },
+              { x: ev.clientX, y: ev.clientY },
+            );
             return false;
           }
           el.classList.add("is-moving");
@@ -2447,7 +2673,18 @@ function MapContent({
     if (card) {
       const id = card.dataset.id!;
       const ids = picked.has(id) ? [...picked] : [id];
-      const els = ids.flatMap((i) => cardEl(i) ?? []);
+      // Placed by hand, each carries the cards laid out under it, short of those placed by hand themselves.
+      const carried: string[] = [];
+      const carry = (i: string) => {
+        if (folded.has(i)) return;
+        for (const { id: c } of shown.kidsOf(i))
+          if (!away.has(c) && !ids.includes(c) && base.placed.has(c) && !carried.includes(c)) {
+            carried.push(c);
+            carry(c);
+          }
+      };
+      ids.forEach(carry);
+      const els = [...ids, ...carried].flatMap((i) => cardEl(i) ?? []);
       let gone = false;
       // The card held over, once it has waited long enough; and the region the pointer is over.
       let over: string | null = null,
@@ -2470,11 +2707,70 @@ function MapContent({
         if (kind === "join") onto = id;
         else into = id;
       };
+      // While they move, the card under the pointer lines up with the cards near it (Alt lets it go free),
+      // and their lines follow as plain curves; the lines find their way round the cards once they land.
+      const lead = base.placed.get(id);
+      const rest = [...view.placed.values()]
+        .filter(
+          (q) => !ids.includes(q.id) && !carried.includes(q.id) && visible(q.id) && exists(q.id),
+        )
+        .map(rectOf);
+      let snap: [number, number] = [0, 0];
+      const port = el.querySelector<HTMLElement>(".react-flow__viewport");
+      const seen = el.getBoundingClientRect();
+      const top = flow.screenToFlowPosition({ x: seen.left, y: seen.top }),
+        bottom = flow.screenToFlowPosition({ x: seen.right, y: seen.bottom });
+      const guide = (axis: "x" | "y") => {
+        const g = document.createElement("div");
+        g.className = `map-guide is-${axis}`;
+        g.hidden = true;
+        port?.append(g);
+        return g;
+      };
+      const guides = { x: guide("x"), y: guide("y") };
+      const moving = new Set([...ids, ...carried]);
+      const NS = "http://www.w3.org/2000/svg";
+      const sketch = document.createElementNS(NS, "svg");
+      sketch.setAttribute("class", "map-sketch");
+      const linked = edges.flatMap((ed) => {
+        const a = view.placed.get(ed.source),
+          b = view.placed.get(ed.target);
+        if (!a || !b || !(moving.has(ed.source) || moving.has(ed.target))) return [];
+        const line = document.createElementNS(NS, "path");
+        sketch.append(line);
+        return [
+          {
+            ed,
+            a,
+            b,
+            line,
+            real: el.querySelector<SVGElement>(`.react-flow__edge[data-id="${CSS.escape(ed.id)}"]`),
+          },
+        ];
+      });
+      const sketchAt = (mx: number, my: number) => {
+        for (const { ed, a, b, line } of linked) {
+          const sx = a.x + a.w + (moving.has(ed.source) ? mx : 0),
+            sy = a.y + (moving.has(ed.source) ? my : 0),
+            tx = b.x + (moving.has(ed.target) ? mx : 0),
+            ty = b.y + (moving.has(ed.target) ? my : 0);
+          const bend = Math.max(40, Math.abs(tx - sx) / 2);
+          line.setAttribute("d", `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`);
+        }
+      };
+      let sketching = false;
+      const unsketch = () => {
+        sketch.remove();
+        guides.x.remove();
+        guides.y.remove();
+        for (const { real } of linked) if (real) real.style.visibility = "";
+      };
       const clear = () => {
         clearTimeout(wait);
         mark("join", null);
         mark("into", null);
         glow.forEach((n) => n.classList.remove("is-react"));
+        unsketch();
       };
       track(
         e,
@@ -2491,13 +2787,48 @@ function MapContent({
               {
                 kind: "node",
                 id,
+                from: "map",
                 ...(ids.length > 1 ? { ids: [id, ...ids.filter((i) => i !== id)] } : {}),
               },
               { x: ev.clientX, y: ev.clientY },
             );
             return false;
           }
-          els.forEach((n) => (n.style.translate = `${dx / zoom}px ${dy / zoom}px`));
+          if (!sketching && port) {
+            sketching = true;
+            port.prepend(sketch);
+            for (const { real } of linked) if (real) real.style.visibility = "hidden";
+          }
+          const mx = dx / zoom,
+            my = dy / zoom;
+          snap =
+            lead && !ev.altKey
+              ? snapTo(
+                  { ...rectOf(lead), x: rectOf(lead).x + mx, y: rectOf(lead).y + my },
+                  rest,
+                  8 / zoom,
+                )
+              : [0, 0];
+          const [ax, ay] = snap;
+          if (lead) {
+            const r = rectOf(lead);
+            Object.assign(guides.x.style, {
+              left: `${r.x + mx + ax}px`,
+              top: `${top.y}px`,
+              height: `${bottom.y - top.y}px`,
+              width: `${1 / zoom}px`,
+            });
+            Object.assign(guides.y.style, {
+              top: `${lead.y + my + ay}px`,
+              left: `${top.x}px`,
+              width: `${bottom.x - top.x}px`,
+              height: `${1 / zoom}px`,
+            });
+          }
+          guides.x.hidden = !ax;
+          guides.y.hidden = !ay;
+          els.forEach((n) => (n.style.translate = `${mx + ax}px ${my + ay}px`));
+          sketchAt(mx + ax, my + ay);
           glow.forEach((n) => n.classList.add("is-react"));
           if (!regionsShown) return;
           const p = flow.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
@@ -2523,19 +2854,91 @@ function MapContent({
           clear();
           if (!moved || gone) return;
           el.classList.remove("is-moving");
-          const dx = (ev.clientX - e.clientX) / zoom,
-            dy = (ev.clientY - e.clientY) / zoom;
           settling.current = els;
           if (joining) return gather(joining, ids);
+          const dx = (ev.clientX - e.clientX) / zoom + snap[0],
+            dy = (ev.clientY - e.clientY) / zoom + snap[1];
+          const dropped = (cx: number, cy: number) =>
+            ids.flatMap((i) => {
+              const p = base.placed.get(i);
+              return p ? [{ i, at: cornerOf(p, dx + cx, dy + cy), r: rectOf(p) }] : [];
+            });
+          // Let go over other cards, they step aside to the nearest free spot, as the map will stand with
+          // the tree closed over where they were; nothing else moves.
+          const at = dropped(0, 0);
+          const lifted = treeLayout(
+            graph,
+            folded,
+            openOutputs,
+            grown,
+            shown.kidsOf,
+            new Set([...away, ...ids]),
+          );
+          const landed = placeCards(lifted, {
+            ...canvas.positions,
+            ...Object.fromEntries(at.map((d) => [d.i, d.at])),
+          });
+          const after = standClear(
+            landed,
+            new Set([...away].filter((a) => !moving.has(a))),
+            shown.upOf,
+          );
+          const going = [
+            ...at.map(({ at: [x, y], r }) => ({ ...r, x, y })),
+            ...carried.flatMap((c) => {
+              const p = landed.placed.get(c);
+              return p ? [rectOf(p)] : [];
+            }),
+          ];
+          const others = [...after.placed.values()]
+            .filter((q) => !moving.has(q.id) && visible(q.id) && exists(q.id))
+            .map(rectOf);
+          // They step aside within sight when there is room there, else wherever is nearest.
+          const sight = seenArea();
+          const [cx, cy] = (sight && clearWithin(going, others, sight)) ?? clearOf(going, others);
+          // Kept where the map will stand them, so nothing jumps once they land.
+          const put = Object.fromEntries(dropped(cx, cy).map((d) => [d.i, d.at]));
+          const stood = standClear(
+            placeCards(lifted, { ...canvas.positions, ...put }),
+            new Set([...away, ...ids]),
+            shown.upOf,
+            sight ? { ids: new Set(Object.keys(put)), box: sight } : undefined,
+          );
           const positions: Record<string, Pt> = {};
           const rects: Rect[] = [];
-          for (const i of ids) {
-            const p = base.placed.get(i);
-            if (!p) continue;
-            positions[i] = cornerOf(p, dx, dy);
-            rects.push({ ...rectOf(p), x: positions[i][0], y: positions[i][1] });
+          for (const i of Object.keys(put)) {
+            const p = stood.placed.get(i)!;
+            positions[i] = cornerOf(p);
+            rects.push(rectOf(p));
+          }
+          // A card placed by hand that lost cards to the drop re-centres over the rest; it moves instead,
+          // so its topmost card, and everything above the gap, stays where it was.
+          for (const [held, under] of base.islands ?? []) {
+            if (moving.has(held) || !under.some((u) => moving.has(u))) continue;
+            const rest = under.filter((u) => !moving.has(u) && stood.placed.has(u));
+            const first = rest.sort((a, b) => base.placed.get(a)!.y - base.placed.get(b)!.y)[0];
+            const was = first && base.placed.get(first),
+              now = first && stood.placed.get(first),
+              p = stood.placed.get(held);
+            if (was && now && p) positions[held] = cornerOf(p, was.x - now.x, was.y - now.y);
           }
           const r = region ? canvas.regions.find((g) => g.id === region) : undefined;
+          // Where they came to rest out of sight, the view follows just far enough to show them.
+          if (sight && !rects.every((q) => within(q, sight))) {
+            const v = flow.getViewport();
+            const x1 = Math.min(...rects.map((q) => q.x)),
+              x2 = Math.max(...rects.map((q) => q.x + q.w)),
+              y1 = Math.min(...rects.map((q) => q.y)),
+              y2 = Math.max(...rects.map((q) => q.y + q.h));
+            const dx =
+                x1 < sight.x ? sight.x - x1 : x2 > sight.x + sight.w ? sight.x + sight.w - x2 : 0,
+              dy =
+                y1 < sight.y ? sight.y - y1 : y2 > sight.y + sight.h ? sight.y + sight.h - y2 : 0;
+            void flow.setViewport(
+              { ...v, x: v.x + dx * v.zoom, y: v.y + dy * v.zoom },
+              { duration: 200 },
+            );
+          }
           arrange({
             positions,
             // Dropped into a region, the cards join it, and it grows to hold them.
@@ -2545,10 +2948,12 @@ function MapContent({
       );
       return;
     }
-    // Anywhere else on the map, lines included, a drag draws the box.
+    // Anywhere else on the map, lines included, a plain drag moves the map; with Ctrl it draws the box,
+    // and with Shift the box adds to what is picked.
     if (!target.closest(".react-flow")) return;
+    const add = e.shiftKey;
+    if (!add && !e.ctrlKey && !e.metaKey) return;
     const r = el.getBoundingClientRect();
-    const add = e.shiftKey || e.ctrlKey || e.metaKey;
     const from = { x: e.clientX - r.left, y: e.clientY - r.top };
     track(
       e,
@@ -2627,6 +3032,24 @@ function MapContent({
   );
   const momentText = useMemo(() => (moment ? summarize(moment) : ""), [moment, summarize]);
 
+  // Handed to every card: steady, so a change elsewhere does not draw every card again.
+  const onNodeClick = useSteady((e: React.MouseEvent, node: Node) => {
+    if (node.type !== "node") return;
+    // Shift or Ctrl adds a card to the picked ones, or takes it out.
+    if (e.shiftKey || e.ctrlKey || e.metaKey)
+      return setPicked((old) => {
+        const next = new Set(old);
+        if (!next.delete(node.id)) next.add(node.id);
+        return next;
+      });
+    setPicked(new Set());
+    onSelect({ kind: "node", id: node.id });
+  });
+  const onNodeMouseEnter = useSteady((_: React.MouseEvent, node: Node) => {
+    if (node.type === "node") hoverSoon(node.id, 150);
+  });
+  const onNodeMouseLeave = useSteady(() => hoverSoon(null, 100));
+
   return (
     <div
       className={`map${lensView ? " is-lens" : ""}${morphing ? " is-morphing" : ""}${timeOpen ? " is-time" : ""}`}
@@ -2657,45 +3080,26 @@ function MapContent({
             nodeClickDistance={5}
             paneClickDistance={5}
             disableKeyboardA11y
-            panOnDrag={[1]}
+            panOnDrag={[0, 1]}
+            selectionKeyCode={BOX_KEYS}
             panActivationKeyCode="Space"
+            noPanClassName={spaceDown ? "pan-anywhere" : "nopan"}
             onInit={() => setReady(true)}
             onMoveStart={() => setPeek(null)}
             onMoveEnd={countOutside}
-            onNodeClick={(e, node) => {
-              if (node.type === "ghost") {
-                const rid = regionOfCard.get(node.id.slice(GHOST.length));
-                const r = rid && canvas.regions.find((g) => g.id === rid);
-                if (r) fitRects([boxRect(r)], 1);
-                return;
-              }
-              if (node.type !== "node") return;
-              // Shift or Ctrl adds a card to the picked ones, or takes it out.
-              if (e.shiftKey || e.ctrlKey || e.metaKey)
-                return setPicked((old) => {
-                  const next = new Set(old);
-                  if (!next.delete(node.id)) next.add(node.id);
-                  return next;
-                });
-              setPicked(new Set());
-              onSelect({ kind: "node", id: node.id });
-            }}
-            onNodeMouseEnter={(_, node) => {
-              if (node.type === "node") hoverSoon(node.id, 150);
-            }}
-            onNodeMouseLeave={() => hoverSoon(null, 100)}
+            onNodeClick={onNodeClick}
+            onNodeMouseEnter={onNodeMouseEnter}
+            onNodeMouseLeave={onNodeMouseLeave}
             onPaneClick={() => {
               setPicked(new Set());
               onSelect(null);
             }}
           >
+            <GatherLayer lay={layLabels} />
             {regionsShown && (
               <RegionLayer
                 regions={canvas.regions}
                 members={members}
-                related={linked}
-                reactions={reactions}
-                reading={!graph.detailed}
                 outside={outCount}
                 outward={outwardRegion ? outward : null}
                 onOutward={setOutward}
@@ -2820,6 +3224,30 @@ function MapContent({
           <span className="map-hint-text">{t.map.lensOf(lensName)}</span>
           <button type="button" onClick={() => setLens(false)}>
             {t.map.exit}
+            <kbd>Esc</kbd>
+          </button>
+        </div>
+      ) : picked.size ? (
+        <div className="panel map-hint">
+          <span className="map-hint-text">{t.map.picked(picked.size)}</span>
+          {[...picked].some((id) => canvas.positions[id]) && (
+            <button
+              type="button"
+              title={t.map.tidyTitle}
+              onClick={() =>
+                arrange({
+                  positions: Object.fromEntries(
+                    [...picked].filter((id) => canvas.positions[id]).map((id) => [id, null]),
+                  ),
+                })
+              }
+            >
+              {t.map.tidy}
+              <kbd>R</kbd>
+            </button>
+          )}
+          <button type="button" onClick={() => setPicked(new Set())}>
+            {t.map.unpick}
             <kbd>Esc</kbd>
           </button>
         </div>
@@ -2965,17 +3393,17 @@ function MapContent({
         <button
           type="button"
           className="tool sq zoom-step"
-          onClick={() => void flow.zoomOut({ duration: 200 })}
+          onClick={() => void flow.zoomOut(ZOOM_NOW)}
           aria-label={t.map.zoomOut}
           data-tip={t.map.zoomOut}
         >
           <Icon name="minus" size={15} />
         </button>
-        <ZoomValue onReset={() => void flow.zoomTo(1, { duration: 250 })} />
+        <ZoomValue onReset={() => void flow.zoomTo(1, ZOOM_NOW)} />
         <button
           type="button"
           className="tool sq zoom-step"
-          onClick={() => void flow.zoomIn({ duration: 200 })}
+          onClick={() => void flow.zoomIn(ZOOM_NOW)}
           aria-label={t.map.zoomIn}
           data-tip={t.map.zoomIn}
         >
@@ -2984,7 +3412,7 @@ function MapContent({
         <button
           type="button"
           className="tool sq"
-          onClick={() => overview()}
+          onClick={() => overview(undefined, ZOOM.min)}
           aria-label={t.map.fit}
           data-tip={t.map.fit}
         >
@@ -3013,7 +3441,7 @@ function MapContent({
         >
           <Icon name="help" size={15} />
         </button>
-        {keyOpen && <MapKey graph={graph} />}
+        {keyOpen && <MapKey />}
         <FarFace box={box} />
       </div>
     </div>
@@ -3026,12 +3454,82 @@ function MapContent({
  */
 function FarFace({ box }: { box: RefObject<HTMLDivElement | null> }) {
   const far = useStore((s) => FAR.filter((z) => s.transform[2] < z).length);
+  const band = useStore((s) => GATHER.filter((g) => s.transform[2] < g.below).length);
   useEffect(() => {
-    if (!box.current) return;
-    if (far) box.current.dataset.far = String(far);
-    else delete box.current.dataset.far;
-  }, [box, far]);
+    const el = box.current;
+    if (!el) return;
+    if (far) el.dataset.far = String(far);
+    else delete el.dataset.far;
+    if (band) el.dataset.gather = String(band - 1);
+    else delete el.dataset.gather;
+  }, [box, far, band]);
   return null;
+}
+
+type Label = {
+  id: string;
+  name: string;
+  /** Its band in GATHER. */
+  band: number;
+  /** Its left edge, at its card, and its middle, at its card or at the middle of its branch. */
+  x: number;
+  y: number;
+  /** How much is under it, when it is a Node at the gathered depth with room to say so. */
+  under: number;
+  behind: number;
+  ahead: number;
+};
+
+/**
+ * The gathered map's names, laid out once per view for every band; the zoom only picks the band. Each sits
+ * on its card, its text sized for the band, haloed so it reads over the outlines beside it.
+ */
+function GatherLayer({ lay }: { lay: () => Label[] }) {
+  const host = useStore(
+    (s) => s.domNode?.querySelector<HTMLElement>(".react-flow__viewport") ?? null,
+  );
+  const gathered = useStore((s) => s.transform[2] < GATHER[0].below);
+  const labels = useMemo(() => (gathered ? lay() : []), [gathered, lay]);
+  // Names keep their size on screen through the band: the live zoom, never nearer than the band's far end.
+  const zf = useStore((s) => {
+    const z = s.transform[2];
+    const g = GATHER.find((g, i) => z < g.below && !(z < (GATHER[i + 1]?.below ?? 0)));
+    return g ? Math.max(z, g.z) : 1;
+  });
+  const names = useMemo(
+    () =>
+      labels.map((l) => (
+        <div
+          key={`${l.band}:${l.id}`}
+          className="map-gname"
+          data-g={l.band}
+          style={{ left: l.x, top: l.y }}
+        >
+          <b>{l.name}</b>
+          {l.under > 0 && <span>{l.under}</span>}
+          {l.behind > 0 && (
+            <span className="mcard-status is-behind">
+              <StatusMark kind="behind" />
+              {l.behind}
+            </span>
+          )}
+          {l.ahead > 0 && (
+            <span className="mcard-status is-ahead">
+              <StatusMark kind="ahead" />
+              {l.ahead}
+            </span>
+          )}
+        </div>
+      )),
+    [labels],
+  );
+  if (!host) return null;
+  return createPortal(
+    <div className="map-gather" aria-hidden="true" style={{ "--zf": zf } as CSSProperties}>
+      {names}
+    </div>,
+    host,
+  );
 }
 
 /** The current zoom; click for 100%. Its own component, so zooming redraws only this. */
@@ -3051,8 +3549,7 @@ function ZoomValue({ onReset }: { onReset: () => void }) {
 }
 
 /** What the marks on the map mean, opened from the toolbar. */
-function MapKey({ graph }: { graph: Graph }) {
-  const role = graph.snapshot.roles[0]?.id ?? "role";
+function MapKey() {
   return (
     <dl className="panel mapkey">
       <div>
@@ -3061,25 +3558,24 @@ function MapKey({ graph }: { graph: Graph }) {
         </dt>
         <dd>{t.map.keyRecent}</dd>
       </div>
-      <div>
-        <dt>
-          <span className="mcard-face">
-            <Pet id={role} size={16} />
-          </span>
-        </dt>
-        <dd>{t.map.keyRole}</dd>
-      </div>
-      <div>
-        <dt>
-          <span className="mcard-face is-waiting">
-            <Pet id={role} size={16} />
-            <i className="face-env">
-              <Icon name="mail" size={8} />
-            </i>
-          </span>
-        </dt>
-        <dd>{t.map.keyWaiting}</dd>
-      </div>
+      {(["goal", "prompt", "output"] as const).map((p) => (
+        <div key={p}>
+          <dt>
+            <span className={`key-shape t-${p}`} />
+          </dt>
+          <dd>{t.map[p === "goal" ? "keyGoal" : p === "prompt" ? "keyPrompt" : "keyOutput"]}</dd>
+        </div>
+      ))}
+      {(["behind", "ahead"] as const).map((s) => (
+        <div key={s}>
+          <dt>
+            <span className={`mcard-status is-${s}`}>
+              <StatusMark kind={s} />
+            </span>
+          </dt>
+          <dd>{s === "behind" ? t.map.keyBehind : t.map.keyAhead}</dd>
+        </div>
+      ))}
       <div>
         <dt>
           <span className="mcard-pin is-key">1</span>

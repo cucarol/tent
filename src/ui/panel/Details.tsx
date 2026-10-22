@@ -13,7 +13,7 @@ import type {
   SnapshotRef,
   SyncFlag,
 } from "../data/types.js";
-import { CardGlyph, Icon, NodeGlyph, TypeGlyph } from "../components/Glyph.js";
+import { CardGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
 import { ago, inlineDiff, shortHash, trimSegments, when, type Segment } from "../util.js";
 import { t } from "../i18n.js";
@@ -21,7 +21,7 @@ import { t } from "../i18n.js";
 const glyphOf = (graph: Graph, target: SnapshotRef, size = 15) =>
   target.kind === "node" ? (
     graph.nodes.get(target.id) ? (
-      <NodeGlyph node={graph.nodes.get(target.id)!} size={size} />
+      <TypeGlyph type={graph.nodes.get(target.id)!.type} size={size} />
     ) : (
       <TypeGlyph type="prompt" size={size} />
     )
@@ -343,6 +343,8 @@ export function ReviewRow({
 }) {
   const last = latestVerification(doc?.frontmatter.verified);
   const tier = doc?.trustTier ?? "unverified";
+  // Nothing checked and nothing wrong: no row saying so.
+  if (!node?.invalid && !flag?.behind && !last && tier === "unverified") return null;
   return (
     <PropRow label={t.review.label}>
       <div className="review">
@@ -359,12 +361,36 @@ export function ReviewRow({
   );
 }
 
-export function PropRow({ label, children }: { label: string; children: ReactNode }) {
+/** A property; a list takes a line of its own (wide) and shows its first few. */
+export function PropRow({
+  label,
+  wide,
+  children,
+}: {
+  label: string;
+  wide?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <div className="prop">
+    <div className={`prop${wide ? " is-wide" : ""}`}>
       <dt>{label}</dt>
       <dd>{children}</dd>
     </div>
+  );
+}
+
+/** The first few of a list, and +N for the rest. */
+function Capped({ items, cap = 8 }: { items: ReactNode[]; cap?: number }) {
+  const [all, setAll] = useState(false);
+  return (
+    <>
+      {all ? items : items.slice(0, cap)}
+      {items.length > cap && (
+        <button type="button" className="prop-more" onClick={() => setAll(!all)}>
+          {all ? t.page.showLess : `+${items.length - cap}`}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -433,10 +459,17 @@ export function NodeProps({
         )}
       </PropRow>
       {node.childIds.length > 0 && (
-        <PropRow label={t.rel.children}>
-          {graph.childrenOf(node.id).map((c) => (
-            <RefLink key={c.id} graph={graph} target={{ kind: "node", id: c.id }} onOpen={onOpen} />
-          ))}
+        <PropRow label={t.rel.children} wide>
+          <Capped
+            items={graph.childrenOf(node.id).map((c) => (
+              <RefLink
+                key={c.id}
+                graph={graph}
+                target={{ kind: "node", id: c.id }}
+                onOpen={onOpen}
+              />
+            ))}
+          />
         </PropRow>
       )}
       {/* Links, citations and materials come with the snapshot, after the map. */}
@@ -446,40 +479,48 @@ export function NodeProps({
         </PropRow>
       )}
       {outgoing.length > 0 && (
-        <PropRow label={t.rel.linksTo}>
-          {outgoing.map((r) => (
-            <RefLink key={`${r.kind}:${r.id}`} graph={graph} target={r} onOpen={onOpen} />
-          ))}
+        <PropRow label={t.rel.linksTo} wide>
+          <Capped
+            items={outgoing.map((r) => (
+              <RefLink key={`${r.kind}:${r.id}`} graph={graph} target={r} onOpen={onOpen} />
+            ))}
+          />
         </PropRow>
       )}
       {incoming.length > 0 && (
-        <PropRow label={t.rel.citedBy}>
-          {incoming.map((i, k) => (
-            <RefLink
-              key={k}
-              graph={graph}
-              target={i.from}
-              onOpen={onOpen}
-              note={incomingNote(i)}
-              flag={i.changedSince && pendingCard(graph, i.from) ? t.rel.changedSince : undefined}
-            />
-          ))}
+        <PropRow label={t.rel.citedBy} wide>
+          <Capped
+            items={incoming.map((i, k) => (
+              <RefLink
+                key={k}
+                graph={graph}
+                target={i.from}
+                onOpen={onOpen}
+                note={incomingNote(i)}
+                flag={i.changedSince && pendingCard(graph, i.from) ? t.rel.changedSince : undefined}
+              />
+            ))}
+          />
         </PropRow>
       )}
       {files.length > 0 && (
-        <PropRow label={t.rel.materials}>
-          {files.map((m, k) => (
-            <span
-              key={k}
-              className="ref-link plain"
-              data-tip={
-                (m.field === "resource" ? t.rel.mainMaterial : t.rel.sourceN((m.index ?? 0) + 1)) +
-                (m.kind === "text" ? t.rel.textDescription : "")
-              }
-            >
-              <MaterialName material={m} />
-            </span>
-          ))}
+        <PropRow label={t.rel.materials} wide>
+          <Capped
+            items={files.map((m, k) => (
+              <span
+                key={k}
+                className="ref-link plain"
+                data-tip={
+                  (m.field === "resource"
+                    ? t.rel.mainMaterial
+                    : t.rel.sourceN((m.index ?? 0) + 1)) +
+                  (m.kind === "text" ? t.rel.textDescription : "")
+                }
+              >
+                <MaterialName material={m} />
+              </span>
+            ))}
+          />
         </PropRow>
       )}
       {children}

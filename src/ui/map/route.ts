@@ -10,19 +10,26 @@ import type { Rect } from "./layout.js";
  * The search runs on a sparse grid: lines just outside every card's edges, two lanes in each gap between
  * columns (a stub's length from either side, clear of the tree's trunk halfway across), and the ends of each
  * link. A turn costs as much as BEND pixels of length, so routes stay simple rather than merely short, and
- * running along a card's edge costs HUG times its length, so lines travel in the lanes instead.
+ * running along a card's edge costs HUG times its length, so lines travel in the lanes instead. Running down
+ * another line (a tree's trunk, a way already found) costs ALONG times, so lines keep apart.
  */
 /** `loop` picks the side a link within one column goes round on: -1 left, 1 right (the default). */
 export type RefLink = { id: string; from: Rect; to: Rect; loop?: -1 | 1 };
 /** The line as SVG path and arrow, and the corners it turns at, ends included. */
 export type Route = { path: string; arrow: string; points: Pt[] };
 
-/** Clearance kept around cards; half the gap between two stacked cards, so a line can pass between them. */
-const M = 7;
+/** Clearance kept around cards: 4 screen pixels at 45%. Lines go round a stack of cards, not between them. */
+const M = 9;
 /** Straight run out of a card's side before the first turn. */
 const STUB = 20;
 const BEND = 36;
 const HUG = 3;
+const ALONG = 6;
+/** How near a vertical run comes to another line before it counts as running down it: anywhere in the gap
+ * a tree's trunk takes, so no way runs close beside one (3.4 px off a trunk at 45% read as one line). */
+const BESIDE = 20;
+/** A vertical stretch of a line already drawn, which a new way should not run along. */
+export type Run = { x: number; y1: number; y2: number };
 /** Spacing between lines that share a card side or a gap. */
 const SPREAD = 6;
 const NUDGE = 4;
@@ -55,7 +62,11 @@ const OFF = 8;
 const cy = (r: Rect) => r.y + (r.head ?? r.h) / 2;
 const round = (v: number) => Math.round(v * 2) / 2;
 
-export function routeLinks(obstacles: Rect[], links: RefLink[]): Map<string, Route> {
+export function routeLinks(
+  obstacles: Rect[],
+  links: RefLink[],
+  runs: readonly Run[] = [],
+): Map<string, Route> {
   const out = new Map<string, Route>();
   if (!links.length) return out;
 
@@ -106,6 +117,7 @@ export function routeLinks(obstacles: Rect[], links: RefLink[]): Map<string, Rou
     obstacles,
     ends.map((e) => e.x + e.dir * STUB),
     ends.map((e) => e.y),
+    runs,
   );
   const routes: { link: RefLink; points: Pt[] }[] = [];
   for (const link of links) {
@@ -117,7 +129,10 @@ export function routeLinks(obstacles: Rect[], links: RefLink[]): Map<string, Rou
     if (!middle) continue;
     routes.push({ link, points: simplify([{ x: a.x, y: a.y }, ...middle, { x: b.x, y: b.y }]) });
   }
-  nudge(routes.map((r) => r.points));
+  nudge(
+    routes.map((r) => r.points),
+    obstacles,
+  );
   for (const { link, points } of routes) out.set(link.id, draw(points));
   return out;
 }
@@ -130,11 +145,20 @@ type Grid = {
   /** Per horizontal line, the x ranges cards block; per vertical line, the y ranges. */
   rowBlocks: [number, number][][];
   colBlocks: [number, number][][];
-  /** Vertical lines that run just along a card's side. */
+  /** Vertical lines that run just along a card's side, and horizontal ones just along its top or bottom. */
   hug: boolean[];
+  hugRow: boolean[];
+  /** Per vertical line, the y ranges where it would run down another line, and those where it would hug one. */
+  along: [number, number][][];
+  tight: [number, number][][];
 };
 
-function buildGrid(obstacles: Rect[], extraX: number[], extraY: number[]): Grid {
+function buildGrid(
+  obstacles: Rect[],
+  extraX: number[],
+  extraY: number[],
+  runs: readonly Run[] = [],
+): Grid {
   const xs = new Set<number>(extraX.map(round)),
     ys = new Set<number>(extraY.map(round));
   let x1 = Infinity,
@@ -163,6 +187,17 @@ function buildGrid(obstacles: Rect[], extraX: number[], extraY: number[]): Grid 
     lanes.add(round(next - STUB));
   }
   lanes.forEach((x) => xs.add(x));
+  // And a row halfway down each gap between a card and the next one under it, for lines to cross in.
+  const rows = new Set<number>();
+  for (const r of obstacles) {
+    const bottom = r.y + r.h;
+    let next = Infinity;
+    for (const o of obstacles)
+      if (o.y > bottom + 2 * M + 4 && o.y < next && o.x < r.x + r.w && r.x < o.x + o.w) next = o.y;
+    if (next < Infinity) rows.add(round((bottom + next) / 2));
+  }
+  rows.forEach((y) => ys.add(y));
+  const edges = new Set(obstacles.flatMap((r) => [round(r.y - M), round(r.y + r.h + M)]));
   for (const e of extraX) {
     x1 = Math.min(x1, e);
     x2 = Math.max(x2, e);
@@ -190,7 +225,23 @@ function buildGrid(obstacles: Rect[], extraX: number[], extraY: number[]): Grid 
       .map((r) => [r.y - M, r.y + r.h + M] as [number, number]),
   );
   const hug = X.map((x) => margins.has(x) && !lanes.has(x));
-  return { xs: X, ys: Y, rowBlocks, colBlocks, hug };
+  const hugRow = Y.map((y) => edges.has(y) && !rows.has(y));
+  const beside = (within: number) =>
+    X.map((x) =>
+      runs
+        .filter((r) => Math.abs(r.x - x) < within)
+        .map((r) => [Math.min(r.y1, r.y2), Math.max(r.y1, r.y2)] as [number, number]),
+    );
+  return {
+    xs: X,
+    ys: Y,
+    rowBlocks,
+    colBlocks,
+    hug,
+    hugRow,
+    along: beside(BESIDE),
+    tight: beside(BESIDE / 2),
+  };
 }
 
 const clear = (blocks: [number, number][], a: number, b: number) => {
@@ -212,7 +263,7 @@ const DX = [1, -1, 0, 0],
  * Both points are on the grid. Returns the grid points passed, `from` and `to` included.
  */
 function search(grid: Grid, from: Pt, startDir: number, to: Pt, endDir: number): Pt[] | null {
-  const { xs, ys, rowBlocks, colBlocks, hug } = grid;
+  const { xs, ys, rowBlocks, colBlocks, hug, hugRow, along, tight } = grid;
   const W = xs.length;
   const fi = xs.indexOf(round(from.x)),
     fj = ys.indexOf(round(from.y));
@@ -252,7 +303,14 @@ function search(grid: Grid, from: Pt, startDir: number, to: Pt, endDir: number):
           ? clear(rowBlocks[j]!, xs[i]!, xs[ni]!) && free(colBlocks[ni]!, ys[j]!)
           : clear(colBlocks[i]!, ys[j]!, ys[nj]!) && free(rowBlocks[nj]!, xs[i]!);
       if (!ok) continue;
-      const step = Math.abs(xs[ni]! - xs[i]!) + Math.abs(ys[nj]! - ys[j]!) * (hug[i] ? HUG : 1);
+      const down = Math.abs(ys[nj]! - ys[j]!);
+      // Where it must run beside another line, as far from it as the gap allows.
+      const beside = down > 0 && !clear(along[i]!, ys[j]!, ys[nj]!);
+      const close = beside && !clear(tight[i]!, ys[j]!, ys[nj]!);
+      const across = Math.abs(xs[ni]! - xs[i]!);
+      const step =
+        across * (hugRow[j] ? HUG : 1) +
+        down * (close ? 2 * ALONG : beside ? ALONG : hug[i] ? HUG : 1);
       const nc = c + step + (nd === d ? 0 : BEND);
       const nk = key(ni, nj, nd);
       if (nc < (cost.get(nk) ?? Infinity)) {
@@ -342,9 +400,15 @@ function simplify(points: Pt[]): Pt[] {
 
 /**
  * Lines that run along the same grid line over the same stretch move apart, a few pixels each way.
- * Only inner runs move; the first and last stay on their card sides.
+ * Only inner runs move; the first and last stay on their card sides. None moves nearer a card than M.
  */
-function nudge(routes: Pt[][]) {
+function nudge(routes: Pt[][], obstacles: readonly Rect[]) {
+  const roomy = (vertical: boolean, at: number, lo: number, hi: number) =>
+    obstacles.every((r) =>
+      vertical
+        ? at <= r.x - M + 0.5 || at >= r.x + r.w + M - 0.5 || hi <= r.y - M || lo >= r.y + r.h + M
+        : at <= r.y - M + 0.5 || at >= r.y + r.h + M - 0.5 || hi <= r.x - M || lo >= r.x + r.w + M,
+    );
   type Run = { points: Pt[]; at: number; lo: number; hi: number };
   const runs = new Map<string, Run[]>();
   for (const points of routes)
@@ -372,10 +436,13 @@ function nudge(routes: Pt[][]) {
     list.forEach((r, n) => {
       // Lanes have room either side; the gap between two stacked cards has less.
       const room = key[0] === "x" ? 5 : M - 3;
-      const shift = Math.max(-room, Math.min(room, (track[n]! - (ends.length - 1) / 2) * NUDGE));
+      const want = Math.max(-room, Math.min(room, (track[n]! - (ends.length - 1) / 2) * NUDGE));
       const a = r.points[r.at]!,
         b = r.points[r.at + 1]!;
-      if (key[0] === "x") a.x = b.x = a.x + shift;
+      const vertical = key[0] === "x",
+        at = vertical ? a.x : a.y;
+      const shift = [want, -want].find((d) => roomy(vertical, at + d, r.lo, r.hi)) ?? 0;
+      if (vertical) a.x = b.x = a.x + shift;
       else a.y = b.y = a.y + shift;
     });
   }

@@ -4,10 +4,13 @@
 // the place before or after it, in that Card's lane.
 // Drop targets carry data-drop: "lane:<roleId>" ("lane:" is the public area), "card:<cardId>", or
 // "at:<cardId>", which data-drop-split turns into "at:<cardId>:before" or ":after" by the pointer's height.
+// A Node row in the sidebar tree is "tree:<nodeId>", and data-drop-zones adds ":before", ":inside" or
+// ":after": dropped there, a Node dragged from the sidebar moves in Tent. Nodes carried off the map are
+// marked `from: "map"`; the map never changes Tent, so the tree does not take them.
 import { useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
 
 /** `ids`, for Nodes carried together, lists all of them in order, `id` first. */
-export type Dragged = { kind: "node" | "card"; id: string; ids?: string[] };
+export type Dragged = { kind: "node" | "card"; id: string; ids?: string[]; from?: "map" };
 export type DragState = { item: Dragged; x: number; y: number; over: string | null };
 export type DropHandler = {
   accepts: (item: Dragged, target: string) => boolean;
@@ -60,6 +63,11 @@ function targetAt(item: Dragged, x: number, y: number) {
     if (el.hasAttribute("data-drop-split")) {
       const r = el.getBoundingClientRect();
       target += y < r.top + r.height / 2 ? ":before" : ":after";
+    }
+    if (el.hasAttribute("data-drop-zones")) {
+      const r = el.getBoundingClientRect();
+      const at = (y - r.top) / r.height;
+      target += at < 0.28 ? ":before" : at > 0.72 ? ":after" : ":inside";
     }
     if (handler?.accepts(item, target)) return target;
   }

@@ -1,16 +1,17 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, describe, type KnownWorkspace } from "../data/api.js";
 import { primaryOf, type Graph } from "../data/store.js";
 import type { SnapshotNode, SnapshotRef } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
 import { hasUnsavedNodeDrafts } from "../data/node-drafts.js";
-import { Icon, NodeGlyph, TypeTile } from "../components/Glyph.js";
-import { fileOf } from "../data/files.js";
+import { FileMark, Icon, TypeTile } from "../components/Glyph.js";
 import { Tray, Pet } from "../components/Pet.js";
 import { t, type Lang } from "../i18n.js";
 import { ago, pathTail, when } from "../util.js";
 import { beginDrag, useDragState } from "./drag.js";
 import { carried, PUBLIC, sourceIds, type Work } from "./work.js";
+import { ContextMenu, useNodeActions } from "../panel/Manage.js";
+import { useWantDetails } from "../data/details.js";
 
 export type ThemePref = "light" | "dark" | "system";
 
@@ -18,7 +19,7 @@ type Props = {
   graph: Graph;
   selected: SnapshotRef | null;
   open: boolean;
-  /** Folded Nodes, shared with the map. */
+  /** Folded Nodes in the tree; the map folds on its own. */
   collapsed: ReadonlySet<string>;
   work: Work;
   /** The open draft is on the page, so its lane shows it folded. */
@@ -27,7 +28,8 @@ type Props = {
   lang: Lang;
   onTheme: (pref: ThemePref) => void;
   onLang: (lang: Lang) => void;
-  onFold: (id: string) => void;
+  /** Fold (`expand` false), unfold (true) or flip a Node; `deep` takes every Node under it along. */
+  onFold: (id: string, expand?: boolean, deep?: boolean) => void;
   onOpen: (ref: SnapshotRef) => void;
   /** Open a Role or Card as a page. */
   onPage: (ref: SnapshotRef) => void;
@@ -40,6 +42,7 @@ type Props = {
   onMarkAllSeen: () => void;
   /** The robot the pointer rests on in the dock; the tree marks what its Cards carry. */
   hotLane: string | null;
+  onToast: (text: string) => void;
 };
 
 /** How long a pointer rests on a row before its preview opens. */
@@ -159,6 +162,7 @@ function Tree({
   onOpen,
   onLocate,
   onMarkAllSeen,
+  onToast,
 }: Props & {
   hotLane: string | null;
   peeking: string | null;
@@ -167,6 +171,20 @@ function Tree({
   const drag = useDragState();
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
+  // The row a right click opened a menu on; its dialogs stay after the menu closes.
+  const [acting, setActing] = useState<{ id: string; at: { x: number; y: number } | null } | null>(
+    null,
+  );
+  // Rows whose names hold the filter, with the Nodes they hang from opened to show them.
+  const [filter, setFilter] = useState<string | null>(null);
+  const q = filter?.trim().toLowerCase() ?? "";
+  const shown = q ? new Set<string>() : null;
+  if (shown)
+    for (const n of graph.snapshot.nodes)
+      if (n.name.toLowerCase().includes(q)) {
+        shown.add(n.id);
+        for (const a of graph.ancestors(n.id)) shown.add(a.id);
+      }
   const openCard = work.openDraft ? graph.cards.get(work.openDraft) : undefined;
   const inDraft = work.openDraft ? sourceIds(graph, openCard, work.draft) : [];
   // The published Card on the page: its sources in order, and which changed after it was sent.
@@ -192,10 +210,43 @@ function Tree({
   const hides = (n: SnapshotNode, set: Set<string>): boolean =>
     graph.childrenOf(n.id).some((k) => set.has(k.id) || hides(k, set));
 
+  /**
+   * The usual tree keys: up, down, Home and End move; right opens a row or steps into it, left closes it or
+   * steps up to its parent; * opens the row and its siblings; Enter opens the Node.
+   */
+  const onRowKey = (
+    e: React.KeyboardEvent<HTMLElement>,
+    n: SnapshotNode,
+    parent: string | null,
+    open: boolean | null,
+  ) => {
+    const all = [...(e.currentTarget.parentElement?.children ?? [])] as HTMLElement[];
+    const at = all.indexOf(e.currentTarget);
+    const go = (el: HTMLElement | undefined) => el?.focus();
+    const keys: Record<string, () => void> = {
+      ArrowDown: () => go(all[at + 1]),
+      ArrowUp: () => go(all[at - 1]),
+      Home: () => go(all[0]),
+      End: () => go(all.at(-1)),
+      ArrowRight: () => (open === false ? onFold(n.id, true) : open && go(all[at + 1])),
+      ArrowLeft: () => (open ? onFold(n.id, false) : go(all.find((r) => r.dataset.id === parent))),
+      "*": () =>
+        graph
+          .childrenOf(parent)
+          .filter((k) => graph.childrenOf(k.id).length)
+          .forEach((k) => onFold(k.id, true)),
+      Enter: () => onOpen({ kind: "node", id: n.id }),
+    };
+    if (!keys[e.key] || e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    keys[e.key]();
+  };
+
   const rows: ReactNode[] = [];
-  const walk = (n: SnapshotNode, depth: number) => {
+  const walk = (n: SnapshotNode, depth: number, parent: string | null) => {
+    if (shown && !shown.has(n.id)) return;
     const kids = graph.childrenOf(n.id);
-    const folded = kids.length > 0 && collapsed.has(n.id);
+    const folded = kids.length > 0 && !shown && collapsed.has(n.id);
     const state = graph.states.get(n.id)!;
     const at = inDraft.indexOf(n.id);
     const ref = refs.get(n.id);
@@ -232,6 +283,10 @@ function Tree({
       );
     const active = selected?.kind === "node" && selected.id === n.id;
     const lifted = drag?.item.kind === "node" && drag.item.id === n.id;
+    // Where a Node dragged here would land: just above this row, inside it, or just below.
+    const landing = drag?.over?.startsWith(`tree:${n.id}:`)
+      ? drag.over.slice(n.id.length + 6)
+      : null;
     const cls = [
       "row",
       depth ? "" : "is-top",
@@ -240,6 +295,9 @@ function Tree({
       used && !carries && !inside ? "is-dim" : "",
       lifted ? "is-lifted" : "",
       peeking === n.id ? "is-peek" : "",
+      landing ? `is-drop-${landing}` : "",
+      shown && n.name.toLowerCase().includes(q) ? "is-match" : "",
+      acting?.id === n.id && acting.at ? "is-menu" : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -252,9 +310,24 @@ function Tree({
         tabIndex={0}
         aria-selected={active}
         aria-expanded={kids.length ? !folded : undefined}
+        data-id={n.id}
+        data-drop={`tree:${n.id}`}
+        data-drop-zones=""
         onClick={() => onOpen({ kind: "node", id: n.id })}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          clearTimeout(timer.current);
+          onPeek(null);
+          setActing({ id: n.id, at: { x: e.clientX, y: e.clientY } });
+        }}
         onKeyDown={(e) => {
-          if (e.key === "Enter") onOpen({ kind: "node", id: n.id });
+          // The menu key, or Shift+F10, opens the row's menu where the row is.
+          if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+            e.preventDefault();
+            const r = e.currentTarget.getBoundingClientRect();
+            return setActing({ id: n.id, at: { x: r.left + 24, y: r.bottom } });
+          }
+          onRowKey(e, n, parent, kids.length ? !folded : null);
         }}
         onPointerDown={(e) => beginDrag(e, { kind: "node", id: n.id })}
         onPointerEnter={(e) => {
@@ -277,14 +350,14 @@ function Tree({
             aria-label={t.side.fold(n.name)}
             onClick={(e) => {
               e.stopPropagation();
-              onFold(n.id);
+              onFold(n.id, undefined, e.altKey);
             }}
           >
             <Icon name="chevron" size={13} />
           </button>
         )}
-        {fileOf(n) && <NodeGlyph node={n} size={13} />}
         <span className="t">{n.name}</span>
+        <FileMark node={n} size={12} />
         {state.recent && !marks.length && !active && (
           <i className="new-dot" title={t.node.recent} />
         )}
@@ -320,15 +393,47 @@ function Tree({
         </span>
       </div>,
     );
-    if (!folded) kids.forEach((k) => walk(k, depth + 1));
+    if (!folded) kids.forEach((k) => walk(k, depth + 1, n.id));
   };
-  graph.childrenOf(null).forEach((n) => walk(n, 0));
+  graph.childrenOf(null).forEach((n) => walk(n, 0, null));
 
   const context = card
     ? t.side.cardSources(refs.size)
     : hotLane !== null
       ? t.side.carriedBy(work.laneName(hotLane))
       : null;
+  const roots = graph.childrenOf(null);
+  const tools = (
+    <span className="tree-tools">
+      <button
+        type="button"
+        className={filter !== null ? "is-on" : ""}
+        aria-pressed={filter !== null}
+        aria-label={t.side.filter}
+        data-tip={t.side.filter}
+        onClick={() => setFilter((f) => (f === null ? "" : null))}
+      >
+        <Icon name="search" size={13} />
+      </button>
+      <button
+        type="button"
+        aria-label={t.side.foldAll}
+        data-tip={t.side.foldAll}
+        onClick={() => roots.forEach((r) => onFold(r.id, false, true))}
+      >
+        <Icon name="shrink" size={13} />
+      </button>
+      <button
+        type="button"
+        aria-label={t.side.openAll}
+        data-tip={t.side.openAll}
+        data-tip-end=""
+        onClick={() => roots.forEach((r) => onFold(r.id, true, true))}
+      >
+        <Icon name="expand" size={13} />
+      </button>
+    </span>
+  );
   return (
     <div className="tree" role="tree" aria-label={t.side.tree}>
       <div className="tree-label">
@@ -351,9 +456,75 @@ function Tree({
             </button>
           )
         )}
+        {!context && tools}
       </div>
-      <div className="tree-rows">{rows}</div>
+      {filter !== null && (
+        <input
+          className="tree-filter"
+          autoFocus
+          value={filter}
+          placeholder={t.side.filterHint}
+          aria-label={t.side.filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.stopPropagation();
+              setFilter(null);
+            }
+          }}
+        />
+      )}
+      <div className="tree-rows">
+        {rows}
+        {shown && !shown.size && <p className="tree-none">{t.side.filterNone}</p>}
+      </div>
+      {acting && graph.nodes.get(acting.id) && (
+        <TreeMenu
+          key={acting.id}
+          graph={graph}
+          node={graph.nodes.get(acting.id)!}
+          at={acting.at}
+          onClose={() => setActing((a) => (a ? { ...a, at: null } : a))}
+          onToast={onToast}
+          onOpen={onOpen}
+        />
+      )}
     </div>
+  );
+}
+
+/** A row's right-click menu and the dialogs it opens. */
+function TreeMenu({
+  graph,
+  node,
+  at,
+  onClose,
+  onToast,
+  onOpen,
+}: {
+  graph: Graph;
+  node: SnapshotNode;
+  at: { x: number; y: number } | null;
+  onClose: () => void;
+  onToast: (text: string) => void;
+  onOpen: (ref: SnapshotRef) => void;
+}) {
+  // Deleting counts what it breaks, which comes with the snapshot: ask for it while the menu is open.
+  useWantDetails(!!at && !graph.detailed);
+  const { items, dialogs } = useNodeActions({
+    graph,
+    node,
+    onGone: () => {},
+    onToast,
+    onMade: (id) => onOpen({ kind: "node", id }),
+    tree: true,
+  });
+  const close = useCallback(onClose, [onClose]);
+  return (
+    <>
+      {at && <ContextMenu at={at} items={items} onClose={close} />}
+      {dialogs}
+    </>
   );
 }
 
@@ -406,10 +577,6 @@ function Peek({ graph, work, id, top }: { graph: Graph; work: Work; id: string; 
             ))}
           </span>
         )}
-      </div>
-      <div className="peek-hint">
-        {t.side.dragHint}
-        <Icon name="addToCard" size={12} />
       </div>
     </div>
   );

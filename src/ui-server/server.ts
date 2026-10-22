@@ -29,12 +29,15 @@ import { NodeWriteError, writeNodeDocument } from "../core/graph/node-document-w
 import { nodeTrustTier } from "../core/base/node-provenance.js";
 import { confirmNodeSync } from "../core/graph/node-sync.js";
 import { archiveNode, restoreNode } from "../core/graph/node-lifecycle.js";
-import { deleteNode, renameNode } from "../core/graph/ops.js";
+import { createNode, deleteNode, renameNode } from "../core/graph/ops.js";
+import { moveNode, type MovePosition } from "../core/graph/move-ops.js";
+import { loadNodeCatalog } from "../core/graph/node-catalog.js";
 import { editRoleContext } from "../core/read/role-context.js";
 import { deleteRole, RoleDeleteError } from "../core/write/role-delete.js";
 import { readRoleDocument } from "../core/store/role-document.js";
 import { readNodeForEdit } from "../core/read/node-query.js";
-import { TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/base/paths.js";
+import { nodeNotePath, TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/base/paths.js";
+import { resolvedMaterialOccurrences } from "../core/base/material.js";
 import { findTentSystemRoot } from "../core/workspace/status.js";
 import { readWorkspaceRevision } from "../core/workspace/workspace-revision.js";
 import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
@@ -73,6 +76,8 @@ export type UiServer = {
 const MB = 1024 * 1024;
 const BODY_LIMIT = { document: 2 * MB };
 const FILE_LIMIT = 20 * MB;
+/** A Node's text files are shown up to this many bytes; the page says when a file goes on. */
+const TEXT_LIMIT = 256 * 1024;
 /** Audio and video play from a blob in the page, so they get a larger, still bounded, allowance. */
 const MEDIA_LIMIT = 200 * MB;
 const MEDIA_TYPES: Record<string, string> = {
@@ -180,6 +185,12 @@ async function startWorkspaceServer(
   const fs = new NodeFs(tentRoot, "ui");
   const queryFs = fs;
   const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot };
+  /** Where a Node lives now, for the writes that take a path. */
+  const nodePath = async (id: string) => {
+    const node = (await loadNodeCatalog(fs)).byId.get(id);
+    if (!node) throw new HttpError(404, "NOT_FOUND", `Node not found: ${id}`);
+    return node.path;
+  };
   const dependencyRepository = createModuleDependencyRepositoryReader(workspaceRoot);
   const { workspaceId } = await readWorkspaceSettings(fs);
   if (!workspaceId) throw new Error(`Workspace has no workspaceId: ${tentRoot}`);
@@ -258,8 +269,9 @@ async function startWorkspaceServer(
     const route = `${method} ${url.pathname}`;
     const nodeId = /^\/api\/nodes\/([^/]+)$/.exec(url.pathname)?.[1];
     const nodeConfirmId = /^\/api\/nodes\/([^/]+)\/confirm$/.exec(url.pathname)?.[1];
+    const nodeTextId = /^\/api\/nodes\/([^/]+)\/text$/.exec(url.pathname)?.[1];
     const cardRoute = /^\/api\/cards\/([^/]+)(?:\/(move|deprecate))?$/.exec(url.pathname);
-    const nodeAction = /^\/api\/nodes\/([^/]+)\/(archive|restore|rename)$/.exec(url.pathname);
+    const nodeAction = /^\/api\/nodes\/([^/]+)\/(archive|restore|rename|move)$/.exec(url.pathname);
     const roleRoute = /^\/api\/roles\/([^/]+)(?:\/(status))?$/.exec(url.pathname);
 
     if (route === "GET /api/revision") {
@@ -356,6 +368,12 @@ async function startWorkspaceServer(
         await (url.searchParams.get("capture") === "true" ? serial(read) : read()),
       );
     }
+    if (nodeTextId && method === "GET")
+      return json(
+        res,
+        200,
+        await nodeText(decodeURIComponent(nodeTextId), url.searchParams.get("path") ?? ""),
+      );
     if (nodeConfirmId && method === "POST") {
       const id = decodeURIComponent(nodeConfirmId);
       const input = record(await readJson(req, BODY_LIMIT.document));
@@ -417,6 +435,26 @@ async function startWorkspaceServer(
         200,
         await serial(() => managed(deleteNode(env, decodeURIComponent(nodeId)))),
       );
+    // A new Node under another, or at the top; the sidebar's menu makes them.
+    if (route === "POST /api/nodes") {
+      const input = record(await readJson(req, BODY_LIMIT.document));
+      const parent = optionalNodeId(input.parent, "parent");
+      return json(
+        res,
+        200,
+        await serial(() =>
+          managed(
+            (async () => ({
+              nodeId: await createNode(env, {
+                name: requiredString(input.name, "name"),
+                type: requiredString(input.type, "type"),
+                parentId: parent,
+              }),
+            }))(),
+          ),
+        ),
+      );
+    }
     if (nodeAction && method === "POST") {
       const id = decodeURIComponent(nodeAction[1]!);
       const input = record(await readJson(req, BODY_LIMIT.document));
@@ -429,7 +467,16 @@ async function startWorkspaceServer(
               ? archiveNode(env, id)
               : nodeAction[2] === "restore"
                 ? restoreNode(env, id, requiredString(input.archiveCommit, "archiveCommit"))
-                : renameNode(env, id, requiredString(input.name, "name")),
+                : nodeAction[2] === "move"
+                  ? (async () =>
+                      moveNode(
+                        env,
+                        id,
+                        optionalNodeId(input.parent, "parent"),
+                        movePosition(input),
+                        await nodePath(id),
+                      ))()
+                  : renameNode(env, id, requiredString(input.name, "name")),
           ),
         ),
       );
@@ -651,6 +698,42 @@ async function startWorkspaceServer(
       "Content-Security-Policy": "sandbox",
     });
     res.end(await fsp.readFile(real));
+  }
+
+  /**
+   * The head of a text file a Node names in its resource or sources, for the page to show as written.
+   * Only the files the Node names are read here, up to TEXT_LIMIT bytes, cut at a line end.
+   */
+  async function nodeText(id: string, relative: string) {
+    const node = await readNodeForEdit(fs, id);
+    const named = resolvedMaterialOccurrences(node.frontmatter, nodeNotePath(node.path)).flatMap(
+      (o) =>
+        o.locator?.kind === "path" && !o.locator.directory && !o.locator.prefix
+          ? [path.posix.normalize(`.tent/${o.locator.target}`)]
+          : [],
+    );
+    if (!named.includes(relative))
+      throw new HttpError(403, "FORBIDDEN_PATH", "Only files the Node names can be read here");
+    const { real, stat } = await workspaceFile(relative);
+    const handle = await fsp.open(real, "r");
+    try {
+      const head = Buffer.alloc(Math.min(stat.size, TEXT_LIMIT));
+      const { bytesRead } = await handle.read(head, 0, head.length, 0);
+      const bytes = head.subarray(0, bytesRead);
+      if (bytes.includes(0)) throw new HttpError(415, "NOT_TEXT", `Not a text file: ${relative}`);
+      const truncated = stat.size > bytesRead;
+      const text = new TextDecoder().decode(bytes);
+      const end = truncated ? text.lastIndexOf("\n") + 1 : 0;
+      return {
+        path: relative,
+        size: stat.size,
+        modifiedAt: stat.mtime.toISOString(),
+        text: end > 0 ? text.slice(0, end) : text,
+        truncated,
+      };
+    } finally {
+      await handle.close();
+    }
   }
 
   /** Size and modification time of workspace files; null for a missing file or a refused path. */
@@ -902,6 +985,26 @@ function optionalString(value: unknown, name: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") throw new HttpError(422, "INVALID_INPUT", `${name} must be text`);
   return value;
+}
+
+/** A Node id, or null for the top level. */
+function optionalNodeId(value: unknown, name: string): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string" || !/^node-[a-z0-9-]+$/.test(value))
+    throw new HttpError(422, "INVALID_INPUT", `${name} must be a node- id or null`);
+  return value;
+}
+
+/** Where a moved Node goes among its new siblings: before or after one, else last inside its parent. */
+function movePosition(input: Record<string, unknown>): MovePosition {
+  const before = optionalNodeId(input.before, "before"),
+    after = optionalNodeId(input.after, "after");
+  if (before && after) throw new HttpError(422, "INVALID_INPUT", "Give before or after, not both");
+  return before
+    ? { mode: "before", siblingId: before }
+    : after
+      ? { mode: "after", siblingId: after }
+      : { mode: "inside" };
 }
 
 function requiredString(value: unknown, name: string): string {

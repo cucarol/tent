@@ -46,11 +46,11 @@ const MapView = lazy(() => import("./map/MapView.js").then((view) => ({ default:
 const VISITS_KEY = "tent-visits-v1";
 /**
  * Pane widths. Each edge holds at its limits; pulled `fold` or `fill` pixels past one and let go, the pane
- * folds (the sidebar to its rail, the details closed) or the details fill the page. The map keeps `map`.
+ * folds (the sidebar to its rail, the details closed) or the details fill the page. The map keeps `map`;
+ * under the filled page it stays a `strip`, pulled `open` out to come back, so two edges never meet.
  */
 const SIDE = { min: 220, max: 400, initial: 280, rail: 52, fold: 60, open: 68 };
-const DETAIL = { min: 360, initial: 460, map: 320, fill: 60, fold: 80 };
-type Edge = { x: number; label: string | null };
+const DETAIL = { min: 360, initial: 460, map: 320, fill: 60, fold: 80, strip: 36, open: 40 };
 
 const darkQuery =
   typeof window !== "undefined" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
@@ -100,13 +100,19 @@ export function App() {
   const [sideWidth, setSideWidth] = useState(() =>
     Math.min(SIDE.max, Math.max(SIDE.min, readStored("tent-side-width", SIDE.initial))),
   );
-  const [edge, setEdge] = useState<Edge | null>(null);
   const [themePref, setThemePref] = useState<ThemePref>(() =>
     readStored("tent-theme-pref", "system"),
   );
   const [selected, setSelected] = useState<SnapshotRef | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => new Set(readStored<string[]>("tent-collapsed-v1", [])),
+  );
+  // The tree folds on its own (cuca 2026-10-21); it starts from what the map had folded.
+  const [treeFolded, setTreeFolded] = useState<Set<string>>(
+    () =>
+      new Set(
+        readStored<string[]>("tent-tree-folded-v1", readStored<string[]>("tent-collapsed-v1", [])),
+      ),
   );
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -271,14 +277,16 @@ export function App() {
   useEffect(() => writeStored("tent-detail-width", detailWidth), [detailWidth]);
   useEffect(() => writeStored("tent-side-width", sideWidth), [sideWidth]);
   useEffect(() => writeStored("tent-collapsed-v1", [...collapsed]), [collapsed]);
+  useEffect(() => writeStored("tent-tree-folded-v1", [...treeFolded]), [treeFolded]);
 
   // Keep the path to the selected Node open, in the tree and on the map.
   useEffect(() => {
     if (!graph || selected?.kind !== "node") return;
     const path = graph.ancestors(selected.id).map((a) => a.id);
-    setCollapsed((c) =>
-      path.some((id) => c.has(id)) ? new Set([...c].filter((id) => !path.includes(id))) : c,
-    );
+    const unfold = (c: Set<string>) =>
+      path.some((id) => c.has(id)) ? new Set([...c].filter((id) => !path.includes(id))) : c;
+    setCollapsed(unfold);
+    setTreeFolded(unfold);
   }, [graph, selected?.id]);
 
   const open = useCallback((ref: SnapshotRef | null) => {
@@ -395,9 +403,9 @@ export function App() {
   }, [toast]);
 
   /**
-   * Drags a pane edge. The width follows the pointer between min and max and holds there; a line keeps
-   * following and names what pulling on will do, and once past `fold` below min or `fill` above max it is
-   * done at once, without letting go (cuca 2026-10-17: "拖不动 然后继续拖就触发").
+   * Drags a pane edge. The width follows the pointer between min and max and holds there; once pulled
+   * `fold` below min or `fill` above max it is done at once, without letting go (cuca 2026-10-17: "拖不动
+   * 然后继续拖就触发"). No line follows the pointer past the edge (cuca 2026-10-21).
    */
   const dragEdge = (
     e: React.PointerEvent,
@@ -407,8 +415,8 @@ export function App() {
       sign: 1 | -1;
       min: number;
       max: number;
-      fold?: { by: number; label: string };
-      fill?: { by: number; label: string };
+      fold?: number;
+      fill?: number;
       onWidth?: (width: number) => void;
       onDone: (zone: "fold" | "fill" | null, width: number) => void;
     },
@@ -422,11 +430,7 @@ export function App() {
       width = Math.round(Math.min(o.max, Math.max(o.min, raw)));
       o.onWidth?.(width);
       const zone =
-        o.fold && raw < o.min - o.fold.by
-          ? "fold"
-          : o.fill && raw > o.max + o.fill.by
-            ? "fill"
-            : null;
+        o.fold && raw < o.min - o.fold ? "fold" : o.fill && raw > o.max + o.fill ? "fill" : null;
       if (zone) {
         end(zone);
         // The press that folded or filled is not also a click on what is now under it.
@@ -437,17 +441,12 @@ export function App() {
           () => setTimeout(() => window.removeEventListener("click", swallow, { capture: true })),
           { once: true },
         );
-        return;
       }
-      const label =
-        o.fold && raw < o.min ? o.fold.label : o.fill && raw > o.max ? o.fill.label : null;
-      setEdge(raw < o.min || raw > o.max ? { x: ev.clientX, label } : null);
     };
     const end = (zone: "fold" | "fill" | null) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       document.body.classList.remove("is-resizing");
-      setEdge(null);
       o.onDone(zone, width);
     };
     const up = () => end(null);
@@ -463,7 +462,7 @@ export function App() {
           sign: 1,
           min: SIDE.min,
           max: SIDE.max,
-          fold: { by: SIDE.fold, label: t.app.edgeFoldSide },
+          fold: SIDE.fold,
           onWidth: setSideWidth,
           onDone: (zone) => {
             if (zone === "fold") {
@@ -477,7 +476,7 @@ export function App() {
           sign: 1,
           min: SIDE.rail,
           max: SIDE.rail,
-          fill: { by: SIDE.open, label: t.app.edgeOpenSide },
+          fill: SIDE.open,
           onDone: (zone) => zone === "fill" && setSideOpen(true),
         });
   /** The details' edge: resize them, pull past the widest to fill the page, or past the narrowest to close. */
@@ -490,8 +489,8 @@ export function App() {
       sign: -1,
       min: DETAIL.min,
       max: Math.max(DETAIL.min, (surface?.clientWidth ?? 1200) - DETAIL.map),
-      fold: { by: DETAIL.fold, label: t.app.edgeClose },
-      fill: { by: DETAIL.fill, label: t.app.edgeFill },
+      fold: DETAIL.fold,
+      fill: DETAIL.fill,
       onWidth: setDetailWidth,
       onDone: (zone) => {
         if (!zone) return;
@@ -544,7 +543,21 @@ export function App() {
       onPage={openPage}
     />
   );
-  /** Fold or unfold a Node's children in both the tree and the map; folding away the selection selects the folded Node. */
+  /** Fold or unfold a Node's children in the tree only; `deep` takes every Node under it along. */
+  const foldTree = (id: string, expand?: boolean, deep?: boolean) => {
+    const under = (n: string): string[] =>
+      graph.childrenOf(n).flatMap((k) => [k.id, ...under(k.id)]);
+    setTreeFolded((c) => {
+      const folding = !(expand ?? c.has(id));
+      const next = new Set(c);
+      for (const n of deep ? [id, ...under(id)] : [id]) {
+        if (folding) next.add(n);
+        else next.delete(n);
+      }
+      return next;
+    });
+  };
+  /** Fold or unfold a Node's children on the map; folding away the selection selects the folded Node. */
   const fold = (id: string, expand?: boolean) => {
     const folding = !(expand ?? collapsed.has(id));
     setCollapsed((c) => {
@@ -575,14 +588,14 @@ export function App() {
               graph={graph}
               selected={selected}
               open={sideOpen}
-              collapsed={collapsed}
+              collapsed={treeFolded}
               work={work}
               draftOnPage={selected?.kind === "card" && selected.id === work.openDraft}
               themePref={themePref}
               lang={lang}
               onTheme={setThemePref}
               onLang={switchLang}
-              onFold={fold}
+              onFold={foldTree}
               onOpen={open}
               onPage={openPage}
               onLocate={locate}
@@ -592,10 +605,11 @@ export function App() {
               onResetWidth={() => setSideWidth(SIDE.initial)}
               onMarkAllSeen={() => markSeen(graph.snapshot.nodes.map((n) => n.id))}
               hotLane={hotLane}
+              onToast={showToast}
             />
 
             <div
-              className={`surface${selected && !reading ? " has-detail" : ""}`}
+              className={`surface${selected && !reading ? " has-detail" : ""}${reading ? " is-reading" : ""}`}
               style={{ "--detail-w": `${detailWidth}px` } as CSSProperties}
             >
               <main className="stage" aria-hidden={reading || undefined}>
@@ -658,6 +672,28 @@ export function App() {
               )}
 
               {reading && (
+                <button
+                  type="button"
+                  className="map-strip"
+                  onPointerDown={(e) =>
+                    dragEdge(e, {
+                      width: DETAIL.strip,
+                      sign: 1,
+                      min: DETAIL.strip,
+                      max: DETAIL.strip,
+                      fill: DETAIL.open,
+                      onDone: (zone) => zone === "fill" && setExpanded(false),
+                    })
+                  }
+                  onClick={() => setExpanded(false)}
+                  aria-label={t.reader.back}
+                  data-tip={t.app.mapStrip}
+                >
+                  <Icon name="map" size={16} />
+                  <span>{t.app.map}</span>
+                </button>
+              )}
+              {reading && (
                 <Reader
                   roles={dock}
                   graph={graph}
@@ -681,15 +717,6 @@ export function App() {
               />
             )}
             <DragGhost graph={graph} work={work} />
-            {edge && (
-              <div
-                className={`edge-line${edge.label ? " is-armed" : ""}${edge.x > window.innerWidth - 240 ? " flip" : ""}`}
-                style={{ left: edge.x }}
-                aria-hidden="true"
-              >
-                {edge.label && <span>{edge.label}</span>}
-              </div>
-            )}
             {toast && (
               <div className={`toast${toast === t.app.offline ? " has-face" : ""}`} role="status">
                 {toast === t.app.offline && <Pet id="tent" size={28} mood="off" />}

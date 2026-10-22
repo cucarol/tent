@@ -1,14 +1,14 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, describe } from "../data/api.js";
 import type { Graph } from "../data/store.js";
 import type { SnapshotCard, SnapshotNode, SnapshotRole } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
 import { cardStage, cardStateLabel } from "../data/card-state.js";
 import { PUBLIC, type Work } from "../shell/work.js";
-import { Icon } from "../components/Glyph.js";
+import { Icon, TypeGlyph } from "../components/Glyph.js";
 import { t } from "../i18n.js";
 
-type Item = { label: string; note?: string; danger?: boolean; run: () => void };
+export type Item = { label: string; note?: string; danger?: boolean; run: () => void };
 
 /** The quiet ⋯ in a page's bar: the object's rarer actions, the destructive one last and set apart. */
 function MoreMenu({ items }: { items: Item[] }) {
@@ -229,19 +229,52 @@ export function deleteImpact(graph: Graph, node: SnapshotNode) {
   return { kids, links, cards };
 }
 
-export function NodeMenu({
+const TYPES = ["goal", "prompt", "output"] as const;
+
+/**
+ * A Node's actions as menu items, with the dialogs they open. The page's ⋯ takes the usual ones; the
+ * sidebar's right click (`tree`) adds making a Node under it, moving it and copying its id or path. Delete
+ * comes last, after archive, which is what we recommend.
+ */
+export function useNodeActions({
   graph,
   node,
   onGone,
   onToast,
-}: Common & { graph: Graph; node: SnapshotNode; onGone: () => void }) {
-  const [asking, setAsking] = useState<"rename" | "delete" | null>(null);
+  onMade,
+  tree = false,
+}: Common & {
+  graph: Graph;
+  node: SnapshotNode;
+  onGone: () => void;
+  /** A Node made under this one; the sidebar opens it. */
+  onMade?: (id: string) => void;
+  tree?: boolean;
+}) {
+  const [asking, setAsking] = useState<"rename" | "delete" | "child" | "move" | null>(null);
   const [name, setName] = useState(node.name);
+  const [type, setType] = useState<(typeof TYPES)[number]>("prompt");
+  const [find, setFind] = useState("");
   const [busy, run] = useRun(onToast);
-  const { kids, links, cards } = deleteImpact(graph, node);
   const archived = node.status === "deprecated";
   const restoreFrom = archived ? archiveCommitOf(graph, node) : undefined;
+  const copy = (text: string) => () =>
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => onToast(t.manage.copied(text)))
+      .catch(() => onToast(text));
   const items: Item[] = [
+    ...(tree
+      ? [
+          {
+            label: t.manage.newChild,
+            run: () => {
+              setName("");
+              setAsking("child");
+            },
+          },
+        ]
+      : []),
     {
       label: t.manage.rename,
       run: () => {
@@ -249,11 +282,24 @@ export function NodeMenu({
         setAsking("rename");
       },
     },
+    ...(tree
+      ? [
+          {
+            label: t.manage.moveNode,
+            run: () => {
+              setFind("");
+              setAsking("move");
+            },
+          },
+          { label: t.manage.copyId, run: copy(node.id) },
+          { label: t.manage.copyPath, run: copy(`.tent/${node.notePath}`) },
+        ]
+      : []),
     ...(!archived
       ? [
           {
             label: t.manage.archive,
-            note: t.manage.archiveNote(kids.length) || undefined,
+            note: t.manage.archiveNote(below(graph, node).length) || undefined,
             run: () => void run(() => api.archiveNode(node.id), t.manage.archived(node.name)),
           },
         ]
@@ -266,12 +312,26 @@ export function NodeMenu({
             },
           ]
         : []),
-    { label: t.manage.delete, danger: true, run: () => setAsking("delete") },
+    // What deleting breaks comes with the snapshot; until it is in, there is nothing to tell, so no delete.
+    ...(graph.detailed
+      ? [{ label: t.manage.delete, danger: true, run: () => setAsking("delete") }]
+      : []),
   ];
   const trimmed = name.trim();
-  return (
+  // Where it can move: anywhere but into itself, or where it already is.
+  const inside = new Set([node.id, ...below(graph, node).map((k) => k.id)]);
+  const q = find.trim().toLowerCase();
+  const places = graph.snapshot.nodes
+    .filter((n) => !inside.has(n.id) && n.id !== node.parentId && n.status !== "deprecated")
+    .filter((n) => !q || n.name.toLowerCase().includes(q))
+    .slice(0, 40);
+  const moveTo = async (parent: string | null) => {
+    const into = parent ? (graph.nodes.get(parent)?.name ?? parent) : null;
+    if (await run(() => api.moveNode(node.id, { parent }), t.work.movedNode(node.name, 1, into)))
+      setAsking(null);
+  };
+  const dialogs = (
     <>
-      <MoreMenu items={items} />
       {asking === "rename" && (
         <Ask
           title={t.manage.renameTitle}
@@ -296,30 +356,223 @@ export function NodeMenu({
           <p className="ask-note">{t.manage.renameNote}</p>
         </Ask>
       )}
-      {asking === "delete" && (
+      {asking === "child" && (
         <Ask
-          title={t.manage.deleteTitle(node.name)}
-          confirm={t.manage.delete}
-          danger
+          title={t.manage.newChildTitle(node.name)}
+          confirm={t.manage.make}
           busy={busy}
+          disabled={!trimmed}
           onCancel={() => setAsking(null)}
           onConfirm={async () => {
-            if (await run(() => api.deleteNode(node.id), t.manage.deleted(node.name))) {
-              setAsking(null);
-              onGone();
-            }
+            let made = "";
+            const ok = await run(async () => {
+              made = (await api.createNode(node.id, trimmed, type)).nodeId;
+            }, t.manage.made(trimmed));
+            if (!ok) return;
+            setAsking(null);
+            onMade?.(made);
           }}
         >
-          <ul className="ask-list">
-            {kids.length > 0 && <li className="is-strong">{t.manage.deleteKids(kids.length)}</li>}
-            {links > 0 && <li>{t.manage.deleteLinks(links)}</li>}
-            {cards > 0 && <li>{t.manage.deleteCards(cards)}</li>}
-            <li>{t.manage.deleteKeeps}</li>
-          </ul>
-          {!archived && <p className="ask-note">{t.manage.deleteArchiveHint}</p>}
+          <label className="ask-field">
+            <span>{t.manage.nameLabel}</span>
+            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <div className="ask-types" role="radiogroup" aria-label={t.manage.typeLabel}>
+            {TYPES.map((k) => (
+              <button
+                key={k}
+                type="button"
+                role="radio"
+                aria-checked={type === k}
+                className={`ask-type${type === k ? " is-on" : ""}`}
+                onClick={() => setType(k)}
+              >
+                <TypeGlyph type={k} size={14} />
+                {k}
+              </button>
+            ))}
+          </div>
         </Ask>
       )}
+      {asking === "move" && (
+        <Ask
+          title={t.manage.moveTitle(node.name)}
+          confirm={t.manage.moveTop}
+          busy={busy}
+          disabled={node.parentId === null}
+          onCancel={() => setAsking(null)}
+          onConfirm={() => void moveTo(null)}
+        >
+          <input
+            className="ask-find"
+            autoFocus
+            value={find}
+            placeholder={t.manage.moveFind}
+            aria-label={t.manage.moveFind}
+            onChange={(e) => setFind(e.target.value)}
+          />
+          <div className="ask-places" role="listbox" aria-label={t.manage.moveTitle(node.name)}>
+            {places.map((n) => (
+              <button
+                key={n.id}
+                type="button"
+                role="option"
+                aria-selected={false}
+                className="ask-place"
+                disabled={busy}
+                onClick={() => void moveTo(n.id)}
+              >
+                <TypeGlyph type={n.type} size={13} />
+                <span className="ask-place-name">{n.name}</span>
+                <span className="ask-place-path">
+                  {graph
+                    .ancestors(n.id)
+                    .map((a) => a.name)
+                    .join(" / ")}
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="ask-note">{t.manage.moveNote}</p>
+        </Ask>
+      )}
+      {asking === "delete" && (
+        <DeleteAsk
+          graph={graph}
+          node={node}
+          busy={busy}
+          run={run}
+          onGone={onGone}
+          onCancel={() => setAsking(null)}
+        />
+      )}
     </>
+  );
+  return { items, dialogs };
+}
+
+function DeleteAsk({
+  graph,
+  node,
+  busy,
+  run,
+  onGone,
+  onCancel,
+}: {
+  graph: Graph;
+  node: SnapshotNode;
+  busy: boolean;
+  run: ReturnType<typeof useRun>[1];
+  onGone: () => void;
+  onCancel: () => void;
+}) {
+  const { kids, links, cards } = deleteImpact(graph, node);
+  return (
+    <Ask
+      title={t.manage.deleteTitle(node.name)}
+      confirm={t.manage.delete}
+      danger
+      busy={busy}
+      onCancel={onCancel}
+      onConfirm={async () => {
+        if (await run(() => api.deleteNode(node.id), t.manage.deleted(node.name))) {
+          onCancel();
+          onGone();
+        }
+      }}
+    >
+      <ul className="ask-list">
+        {kids.length > 0 && <li className="is-strong">{t.manage.deleteKids(kids.length)}</li>}
+        {links > 0 && <li>{t.manage.deleteLinks(links)}</li>}
+        {cards > 0 && <li>{t.manage.deleteCards(cards)}</li>}
+        <li>{t.manage.deleteKeeps}</li>
+      </ul>
+      {node.status !== "deprecated" && <p className="ask-note">{t.manage.deleteArchiveHint}</p>}
+    </Ask>
+  );
+}
+
+export function NodeMenu(props: Common & { graph: Graph; node: SnapshotNode; onGone: () => void }) {
+  const { items, dialogs } = useNodeActions(props);
+  return (
+    <>
+      <MoreMenu items={items} />
+      {dialogs}
+    </>
+  );
+}
+
+/** A menu at the pointer, for a right click: the same items as a ⋯, closed by a click away or Esc. */
+export function ContextMenu({
+  at,
+  items,
+  onClose,
+}: {
+  at: { x: number; y: number };
+  items: Item[];
+  onClose: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [spot, setSpot] = useState(at);
+  useLayoutEffect(() => {
+    // Kept on screen: a menu opened near an edge opens the other way.
+    const r = box.current?.getBoundingClientRect();
+    if (!r) return;
+    setSpot({
+      x: Math.min(at.x, window.innerWidth - r.width - 8),
+      y: at.y + r.height > window.innerHeight - 8 ? Math.max(8, at.y - r.height) : at.y,
+    });
+    box.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+  }, [at.x, at.y]);
+  useEffect(() => {
+    const away = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node)) onClose();
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("blur", onClose);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [onClose]);
+  return (
+    <div
+      ref={box}
+      className="more-pop is-context"
+      role="menu"
+      style={{ left: spot.x, top: spot.y }}
+      onKeyDown={(e) => {
+        const all = [...(box.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? [])];
+        const now = all.indexOf(document.activeElement as HTMLElement);
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          all[(now + (e.key === "ArrowDown" ? 1 : all.length - 1)) % all.length]?.focus();
+        }
+      }}
+    >
+      {items.map((item, i) => (
+        <button
+          key={item.label}
+          type="button"
+          role="menuitem"
+          className={`more-item${item.danger ? " is-danger" : ""}${item.danger && i > 0 ? " is-apart" : ""}`}
+          onClick={() => {
+            onClose();
+            item.run();
+          }}
+        >
+          <span>{item.label}</span>
+          {item.note && <small>{item.note}</small>}
+        </button>
+      ))}
+    </div>
   );
 }
 

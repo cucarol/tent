@@ -255,7 +255,6 @@ export function RegionProduct({ list: all, nameOf }: { list: Reaction[]; nameOf:
   }, [open]);
   const list = all.filter(listed);
   if (!list.length) return null;
-  const quiet = all.length - list.length;
   const sum = summaryOf(list);
   const x = t.map.react;
   const kinds = new Set(list.map((r) => r.kind));
@@ -284,7 +283,6 @@ export function RegionProduct({ list: all, nameOf }: { list: Reaction[]; nameOf:
               <Facts r={r} nameOf={nameOf} />
             </section>
           ))}
-          {quiet > 0 && <div className="react-quiet">{x.quiet(quiet)}</div>}
           <div className="react-foot">{one === "verify" ? x.judge : x.judgeAll}</div>
         </div>
       )}

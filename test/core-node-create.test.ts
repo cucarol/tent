@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { initializeFixtureRepository } from "./scratch.js";
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const scratch = path.resolve(".scratch");
@@ -120,3 +121,33 @@ test("invalid initial references never publish a partial Node", async (t) => {
   assert.equal(await adapter.exists("invalid"), false);
   assert.equal((await loadTent(adapter)).byPath.has("invalid"), false);
 });
+
+for (const state of ["missing", "duplicate", "invalid"] as const) {
+  test(`creation by parent ID rejects a ${state} parent without writing`, async (t) => {
+    const adapter = await fixture(t);
+    initializeFixtureRepository(path.join(adapter.workspaceRoot!, ".tent"));
+    const env = { fs: adapter, clock: { now: () => "2026-10-22T00:00:00.000Z" }, tentName: "test" };
+    if (state !== "missing") {
+      await adapter.writeFile(
+        "Parent/Parent.md",
+        `---\nid: node-parent\ntype: ${state === "invalid" ? "unknown" : "goal"}\n---\nParent\n`,
+      );
+    }
+    if (state === "duplicate")
+      await adapter.writeFile("Copy/Copy.md", "---\nid: node-parent\ntype: goal\n---\nCopy\n");
+    const head = await adapter.history.currentCommit();
+    const writes: string[] = [];
+    const write = adapter.writeFile.bind(adapter);
+    t.mock.method(adapter, "writeFile", async (file: string, raw: string) => {
+      writes.push(file);
+      await write(file, raw);
+    });
+    await assert.rejects(
+      createNode(env, { parentId: "node-parent", name: "Child", type: "prompt" }),
+      /not found|Duplicate|invalid/i,
+    );
+    assert.deepEqual(writes, []);
+    assert.equal(await adapter.history.currentCommit(), head);
+    assert.equal(await adapter.exists("Parent/Child"), false);
+  });
+}

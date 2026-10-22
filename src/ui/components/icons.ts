@@ -85,6 +85,7 @@ export const ICON_SVG = {
   type: '<path d="M12 4v16"/><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/>',
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
   redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"/>',
+  map: '<rect x="3" y="4" width="6" height="5" rx="1.6"/><rect x="15" y="4" width="6" height="5" rx="1.6"/><rect x="15" y="15" width="6" height="5" rx="1.6"/><path d="M9 6.5h6M12 6.5v11h3"/>',
   region: '<rect x="3.5" y="3.5" width="17" height="17" rx="5.5" stroke-dasharray="3 3.2"/>',
   ungroup:
     '<rect x="11" y="14" width="10" height="7" rx="2"/><rect x="3" y="3" width="10" height="7" rx="2"/>',
