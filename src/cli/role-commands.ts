@@ -169,17 +169,18 @@ export async function runRoleCommand(
 }
 
 export function roleHelpText() {
-  return `tent role — durable Role Markdown, directly through Core
-  tent role list [--include-deprecated] [--start N --expected-revision HASH] [--limit N]
-  tent role create --title TEXT [--body TEXT|-] [--id role-ID]
-  tent role show role-ID [--view body|raw] [--start N --end N --expected-etag HASH]
-  tent role write role-ID --base-etag HASH [--raw TEXT|- | --body TEXT|-]
-                  [--title TEXT] [--status draft|stable|deprecated]
-  tent role delete role-ID --base-etag HASH
-All commands accept --workspace PATH and --json. list reads headers; show reads the selected document without capturing history.
-Use the returned page.next range and ETag to continue a long read. Writes reject stale ETags.
-Reading never imports a Node or creates a Role. Legacy documents require explicit conversion.
-Delete removes the Role document; Tent Git keeps its history and its id is never reused. Unfinished Cards block deletion: deprecate them, or move pending ones, first.
+  return `tent role — long-running work directions that receive Cards
+
+  tent role list [--include-deprecated] [--limit <n>] [--start <n> --expected-revision <revision>]
+  tent role show <role-id> [--view body|raw] [--start <n> --end <n> --expected-etag <etag>]
+  tent role create --title <text> [--body <text>|-] [--id <role-id>]
+  tent role write <role-id> --base-etag <etag> [--body <text>|- | --raw <text>|-] [--title <text>] [--status draft|stable|deprecated]
+  tent role delete <role-id> --base-etag <etag>
+
+A Role's body holds its purpose, boundaries, way of working and links to Nodes; shared facts stay in Nodes.
+show reads in pages; continue with page.next. Writes need the latest ETag.
+Retire a Role with write --status deprecated. First collect returned Cards, finish outstanding returns, move pending targets or deprecate unfinished Cards; the same goes for delete, which removes the document for good. Tent's Git keeps the history, and the id is never reused.
+--workspace <path> picks the Workspace; --json prints JSON.
 `;
 }
 

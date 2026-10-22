@@ -32,13 +32,23 @@ import { pageItems } from "./reader-page.js";
 import { cliErrorText, type ErrorContext } from "./error-text.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
 
-export const workspaceHelpText = `tent workspace export --output <new-output-or-scratch-directory>
-tent workspace check [--json]
-tent workspace check-modules [--json]
-tent workspace brief [--role <roleId>] [--json]
-tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
-tent workspace scan [--json] [--draft <new-file>]
-Accepts --workspace <root> and --json. check reports broken links, invalid material addresses, missing local files, unavailable Markdown material sections and Node documents whose disk and Tent Git presence differ (node-git-mismatch) after collecting valid native edits; invalid files remain untouched. Exit 1 means issues or inspection errors; JSON remains on stdout. check-modules checks module coverage, size, imports and cochange without collecting edits; a clean map emits no text. brief lists all invalid Nodes and pending Cards, then prioritizes ahead and changed sources; optional detail fits 4 KiB. --role filters Card inputs; Node counts remain Workspace-wide. drift reports ahead and behind Nodes. Use node confirm after reviewing a Node; Tent records hashes itself.`;
+export const workspaceHelpText = `tent workspace — the whole Workspace at once
+
+  tent workspace brief [--role <role-id>] [--json]
+  tent workspace check [--json]
+  tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
+  tent workspace scan [--draft <new-file>] [--json]
+  tent workspace check-modules [--json]
+  tent workspace export --output <new-directory>
+
+brief: where to start. Counts, invalid Nodes and waiting Cards, then ahead and behind Nodes, with optional detail within 4 KiB; mandatory Cards and invalid Nodes can exceed that budget. Omitted detail is counted. --role keeps only that Role's Cards.
+check: broken links, invalid or missing materials, missing Markdown sections, and Node files whose disk and Tent Git presence differ after valid native edits are collected. Exits 1 when it finds any; JSON still goes to stdout.
+drift: every ahead and behind Node, in pages.
+scan: drafts a module map from the code; --draft saves it as a write-many batch.
+check-modules: checks the module map for coverage, size, imports and files that change together. Prints nothing when the map is clean.
+export: copies the context graph and its Git history to a new directory.
+When a behind Node still holds, run tent node confirm after reviewing it; Tent records the versions itself.
+--workspace <path> picks the Workspace.`;
 
 export async function runWorkspaceCommand(
   sub: string,

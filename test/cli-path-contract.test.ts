@@ -222,7 +222,7 @@ test("incoming and outgoing Node relations expose directly readable identity fil
 
 test("help explains Git Bash path conversion where paths are described", () => {
   assert.match(cardHelpText(), /MSYS_NO_PATHCONV=1/);
-  assert.match(nodeHelpText(), /MSYS_NO_PATHCONV=1/);
+  assert.match(nodeHelpText(), /tent node <command> --help/);
   for (const sub of ["create", "link-output", "search", "write", "write-many"])
     assert.match(nodeHelpText(sub), /MSYS_NO_PATHCONV=1/, sub);
   assert.doesNotMatch(nodeHelpText("history"), /MSYS_NO_PATHCONV/);

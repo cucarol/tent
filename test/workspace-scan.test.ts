@@ -442,7 +442,7 @@ test("scan rejects removed history flags and incompatible options before reading
     workspace: path.resolve(".scratch/no-workspace"),
   });
   assert.equal(help.exitCode, 0);
-  assert.match(help.stdout, /workspace scan \[--json\]/);
+  assert.match(help.stdout, /workspace scan \[--draft <new-file>\] \[--json\]/);
   assert.ok(!help.stdout.includes("--commits"));
 });
 

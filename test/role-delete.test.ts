@@ -234,7 +234,7 @@ test("CLI Role delete requires its id and ETag and reports a JSON deletion recei
   assert.equal(await adapter.exists(role.path), false);
   assert.ok(
     roleHelpText().includes(
-      "Delete removes the Role document; Tent Git keeps its history and its id is never reused. Unfinished Cards block deletion: deprecate them, or move pending ones, first.",
+      "Retire a Role with write --status deprecated. First collect returned Cards, finish outstanding returns, move pending targets or deprecate unfinished Cards; the same goes for delete, which removes the document for good. Tent's Git keeps the history, and the id is never reused.",
     ),
   );
 });

@@ -277,3 +277,18 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
     await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   }
 });
+
+test("Node help separates the overview from command notes and applicable footers", () => {
+  const overview = nodeHelpText();
+  assert.match(overview, /Read\n/);
+  assert.match(overview, /Record\n/);
+  assert.match(overview, /Organize\n/);
+  assert.match(overview, /tent node <command> --help/);
+  assert.doesNotMatch(overview, /partial page|JSON by|MSYS_NO_PATHCONV/);
+  assert.doesNotMatch(nodeHelpText("history"), /--body - reads stdin|--by records/);
+  assert.match(nodeHelpText("append"), /unique matching section/);
+  assert.match(nodeHelpText("write-many"), /JSON by records/);
+  assert.doesNotMatch(nodeHelpText("write-many"), /--by records/);
+  assert.match(nodeHelpText("create"), /preset \(direction,/);
+  assert.doesNotMatch(nodeHelpText("create"), /\$\{presets\}/);
+});

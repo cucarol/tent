@@ -869,47 +869,81 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
   tags: ["tent node tags [--include-archived] [--json]"],
 };
 export function nodeHelpText(sub?: string): string {
-  const commands = NODE_COMMAND_HELP;
+  if (!sub || !Object.prototype.hasOwnProperty.call(NODE_COMMAND_HELP, sub))
+    return `tent node — read and record Nodes
+
+Read
+  tent node get <id> [--full]                   One Node: its text, materials and what changed.
+  tent node list [--parent <id>] [--type <type>] [--tag <tag>]...
+                                                Children of a Node, or matching Nodes below it.
+  tent node search --resource <path>            Nodes whose materials cover a file.
+  tent node read-many <id>...                   Several Nodes in one page.
+  tent node relations <id> --direction parent|children|outgoing|incoming
+  tent node history <id>                        Saved versions.
+  tent node check <id>                          Why a Node is ahead or behind.
+  tent node tags                                Tags in use, with counts.
+
+Record
+  tent node create <name> --type goal|prompt|output [--parent <id>] [--body -]
+  tent node append <id> --body - [--heading <title>]
+  tent node write <id> --base-etag <etag> --body -
+  tent node write-many --input-json -
+  tent node confirm <id> --base-etag <etag>     A behind Node still holds.
+  tent node link-output <goal-id> --resource <path>
+
+Organize
+  tent node rename|move|archive|restore|delete
+
+tent node <command> --help shows all of its options.`;
   const notes: Record<string, string> = {
-    list: "Default reads scan headers and return bounded metadata without full-document ETags. Without filters the list shows direct children; --type and repeated --tag (all must match) select matching Nodes from the whole subtree under --parent, or the Workspace. --full explicitly reads the complete tree.",
-    get: 'All body/raw reads return text, including --full; view chooses the content, never the field name. Reads are read-only and return nodeId, text and etag at the top level. Use --context for a separate goal context summary up to 1 KiB. A page that holds the complete body returns the full ETag; read:<etag> appears only when the body was truncated and allows continuation and metadata edits only. Read with --full before replacing or confirming content. Range JSON uses {"unit":"utf16","start":0,"end":10}. Continue a cursor with the same source, expected ETag and query. --version-json reads the captured Git document even after live edits/deletion.',
+    list: "Without filters, lists the children of --parent, or the root Nodes. --type and --tag search the whole subtree instead; repeated --tag must all match. --full lists the whole tree; --include-archived adds archived Nodes. Ordinary list entries carry no ETag; read a Node with get before editing them.",
+    get: 'Prints the Node\'s text, its declared material paths and any changed-since notice, and its ETag. A long body comes in pages; continue with --cursor and --expected-etag from the last page. An ETag that starts with read: comes from a partial page and allows only metadata edits; read with --full before replacing or confirming content. --view body prints the body only, raw the whole file. --context adds a summary of the goals above it, up to 1 KiB. --range reads part of the body, as {"unit":"utf16","start":0,"end":10}. --version-json reads a saved version, even after the Node was edited or deleted.',
     "read-many":
-      "Reads are read-only; all items share 16 KiB. Resume the input list using page.nextIndex as --start with the same Node IDs. A partial item has its own live cursor: continue with node get --expected-etag <item.etag> --cursor <item.page.nextCursor> and the same view. If the file changes, restart the read. Each new batch observes current live documents.",
+      "Reads several Nodes into one 16 KiB page. Continue with --start <page.nextIndex> and the same ids. An item cut short continues with node get --expected-etag <item.etag> --cursor <item.page.nextCursor> and the same view.",
     check:
-      "Inspect the computed synchronization state and output drift against current local material versions; no Hook or manual hash is needed. Directory materials report up to 20 changed file paths and the omitted count.",
+      "Shows why a Node is ahead or behind: which materials or goals changed since it was saved or confirmed. A directory material lists up to 20 changed files.",
     confirm:
-      "After reviewing the complete live Node and its evidence, confirm that it remains valid. Tent records current material versions and, for an output, the current versions and materials of every goal ancestor. This does not prove semantic correctness.",
+      "After you have read the whole Node and checked it against its materials, records that it still holds; their current versions become its new baseline. Needs the ETag from a complete live read.",
     "link-output":
-      "Create an output child of the selected goal; --tags adds tags, none are added automatically. Local file or slash-marked directory paths, including / addresses, resolve from the Workspace root and are saved relative to the output document. Node IDs and absolute URIs are supported. Local materials must exist and be readable. The default name is the file or directory name, or Output for the root. Remote addresses are never fetched. The returned nodeId identifies the new output. --card explicitly selects its response Card. Automatic selection requires --role matching the receiver of exactly one incomplete Card for this goal; otherwise choose --card. The receipt names the selected Card.",
+      "Records a file or directory as an output under <goal-id>. Paths start at the Workspace root; end a directory with /. The name defaults to the file or directory name. --card ties the output to the Card it answers; with only --role, Tent picks the Card when that Role has exactly one unfinished Card for this goal.",
     search:
-      "Look up active Nodes by a Workspace file path or absolute URI. Results include exact material matches and directory/prefix coverage, most specific first, with the matching field and address. Only headers are read; no document ETag is returned. Text search uses the Agent's own file tools.",
-    create: `Body, resource, ordered sources and tags are saved together. Local material versions are recorded in Git with the Node. An output keeps what was seen when it is saved: later changes to its material or goals never make it behind; a goal that changes after its outputs is ahead instead. The type is goal, prompt or output; tags name form and topic, preferably from tent node tags or the presets ${NODE_TAG_PRESETS.join(", ")}. Source entries use {resource, ...metadata}; local paths resolve from the Workspace root, including / addresses, and are saved relative to the new Node document. Card response sources /cards/<card-id>.md keep their .tent root. Bare sources are descriptive unless they match an existing Workspace file or a directory marked with a trailing /; use ./ for a path that does not exist yet. Node IDs and absolute URIs are supported. --id <node-id> sets the new Node's id, so a retry after an unclear result cannot create a duplicate. An existing id or sibling name fails and names the existing Node. Names follow Windows file-name rules on every platform.`,
+      "Finds Nodes whose materials name or cover a file, most specific first. Search text with your own tools.",
+    create:
+      "Creates a Node under --parent, or at the root. A goal is what should become true, a prompt holds rules and context to follow, an output records a result at one moment; an output never goes behind when its materials or goals change later. Tags name form and topic: reuse one from tent node tags or a preset (${presets}). --resource and --sources-json name materials: paths start at the Workspace root, a trailing / marks a directory, and ./ marks a path that does not exist yet; Node ids and URLs also work. --id fixes the new id, so a retry cannot create a duplicate. Names follow Windows file-name rules on every platform.".replace(
+        "${presets}",
+        NODE_TAG_PRESETS.join(", "),
+      ),
     write:
-      'Write JSON: {"baseEtag":"<observed>","body":"...","frontmatter":{"resource":"src/file.ts","sources":[{"resource":".tent/Other/Other.md"}]},"confirm":true,"readBack":true}. Omitted fields and unchanged material declarations are preserved. New local material declarations in frontmatter use Workspace-root paths, as in create. Ordinary saves retain existing material and goal baselines, including full-body output rewrites, metadata edits, no-ops and append. Only --confirm or confirm:true confirms the final saved content and refreshes its bases, requiring a complete live-read ETag. Unavailable known materials keep their baseline and leave a goal or prompt behind; an output does not go behind for them. Baselines are retained in Git by Node ID, outside frontmatter. A read:<etag> basis permits metadata-only edits; replacing or confirming content requires the ETag from a complete read. readBack returns actual saved bytes as a bounded page; continue partial pages with node get --expected-etag and its cursor.',
+      'Replaces the body. --input-json can also change resource, sources and tags: {"baseEtag":"<etag>","body":"...","frontmatter":{"resource":"src/file.ts"},"confirm":true,"readBack":true}; omitted fields stay as they are. Replacing or confirming content needs the ETag from a complete live read; a read: ETag allows metadata-only edits. A save keeps the old baselines, so a behind Node stays behind; add --confirm when the new content has been checked against its materials. --read-back prints the saved bytes in a bounded page; continue partial results with node get using the returned cursor and ETag.',
     append:
-      "Append under the Workspace lock without a prior read or ETag. --heading adds a level-two Markdown heading. Existing and new content are separated by one blank line; the saved body ends with one newline. Ordinary saves retain material baselines.",
-    tags: "Without arguments, list the tags of current Nodes with their counts, marking presets; --include-archived also counts deprecated Nodes. Prefer an existing tag or a preset to a new synonym. Tags add no behavior.",
+      "Adds text without reading the Node first. --heading appends to the unique matching section, or creates a ## section if it is missing. Keeps the old baselines.",
     "write-many":
-      'Batch JSON: {"items":[{"op":"create","ref":"rules","name":"Rules","type":"prompt","body":"..."},{"op":"update","nodeId":"node-existing","baseEtag":"<complete-read etag>","body":"...","confirm":true}]}. Create parent is null/omitted, an existing Node ID or @ref. @ref also works in Markdown links and material addresses, including forward references. New resource and sources fields use Workspace-root file or slash-marked directory paths, as in create; raw updates use stored document-relative addressing. Unchanged material declarations are preserved. Ordinary updates retain recorded material baselines; confirm:true refreshes the final saved content and output bases. All items validate before saving under one lock and one Tent commit; failures roll back the batch. Ordered results contain nodeId, path and etag. Existing Node updates require a complete read ETag; read: bases are rejected.',
+      'Saves a batch in one commit; if any item fails, nothing is saved. {"items":[{"op":"create","ref":"rules","name":"Rules","type":"prompt","body":"..."},{"op":"update","nodeId":"node-abc123","baseEtag":"<etag>","body":"...","confirm":true}]}. A create\'s parent is an existing id or @ref; @ref also works in links and material paths, even for items later in the batch. New resource and sources paths start at the Workspace root; raw updates use stored document-relative paths. Updates need ETags from complete reads. Results list nodeId, path and etag in input order.',
+    tags: "Lists the tags in use with their counts and marks the presets. Tags only help find Nodes; they change no behavior.",
+    archive:
+      "Marks the Node and everything under it archived, in one commit. tent node restore <id> --archive-commit <commit> undoes exactly that commit.",
   };
-  const selected =
-    sub && Object.prototype.hasOwnProperty.call(commands, sub) ? [sub] : Object.keys(commands);
   return [
-    `tent node — direct Core operations`,
+    ...NODE_COMMAND_HELP[sub],
+    ...(notes[sub] ? ["", notes[sub]] : []),
     "",
-    ...selected.flatMap((key) => commands[key]),
-    "",
-    ...new Set(selected.map((key) => notes[key]).filter(Boolean)),
-    ...(selected.some((key) =>
-      ["create", "link-output", "search", "write", "write-many"].includes(key),
-    )
+    "--workspace <path> picks the Workspace; --json prints JSON. Options also take --key=value, and -- ends them.",
+    ...(["create", "write", "append"].includes(sub) ? ["--body - reads stdin."] : []),
+    ...(["create", "write", "append", "confirm", "link-output"].includes(sub)
       ? [
-          "Git Bash rewrites arguments that start with / (such as /docs/x.md) into Windows paths; run the command with MSYS_NO_PATHCONV=1 to keep them.",
+          "--by records who wrote it: human:<id>, process:<id> or <producer>/<version>; without it, Tent records tent/<version>.",
         ]
       : []),
-    "All commands accept --workspace <path>. Options accept --key=value; use -- to end options.",
-    "Content writes and confirmations accept --by <actor>; JSON writes accept by in the input. Accepted actor formats are human:<id>, process:<id>, and <producer>/<version>. Without a known actor, Tent records tent/<version>.",
-    "Use --body - or --prompt - where supported to read stdin. Mutations use the Workspace lock and capture selected Git versions.",
+    ...(sub === "write-many"
+      ? [
+          "JSON by records who wrote it: human:<id>, process:<id> or <producer>/<version>; without it, Tent records tent/<version>.",
+        ]
+      : []),
+    ...(["create", "link-output", "search", "write", "write-many"].includes(sub)
+      ? [
+          "In Git Bash, run commands whose arguments start with / (such as /docs/x.md) with MSYS_NO_PATHCONV=1.",
+        ]
+      : []),
   ].join("\n");
 }
 

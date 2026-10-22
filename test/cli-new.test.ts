@@ -30,7 +30,7 @@ test("new rejects retired repair flags before changing an existing Tent", async 
     "Keep this context",
   );
   const { stdout } = await run("--help");
-  assert.match(stdout, /independent local Git/);
+  assert.match(stdout, /with its own Git history/);
   assert.doesNotMatch(stdout, /--repair-existing/);
 });
 

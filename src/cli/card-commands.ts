@@ -270,36 +270,25 @@ export async function runCardCommand(
 }
 
 export function cardHelpText(_sub?: string) {
-  return `tent card — recorded prompt input with optional Role context
-  tent card create --prompt TEXT|- [--title TEXT] [--source NODE-ID|PATH|JSON ...] [--target role-ID] [--return-to role-ID] [--id card-ID]
-  tent card list [--role role-ID --include-open] [--state pending|consumed|returned|closed] [--include-deprecated]
-                 [--start N --expected-revision HASH] [--limit N]
-  tent card show card-ID [--view body|raw] [--start N --end N --expected-etag HASH]
-  tent card move card-ID [--to role-ID | --public] [--before card-ID | --after card-ID] --base-etag HASH
-  tent card deprecate card-ID --base-etag HASH
-  tent card take card-ID [--role role-ID]
-  tent card return card-ID --role role-ID --result TEXT
-  tent card watch --role role-ID [--include-open] [--timeout SECONDS]
-All commands accept --workspace PATH and --json. CLI output is paged; Core returns complete data.
-list prints newest first, except --state pending, which prints queue order; --start N continues the same page set under --expected-revision.
-Sources keep their order. Selected Node/Role sources retain commit/path; external sources are addresses only.
---source file paths use the Workspace root: docs/req.md, ./docs/req.md and /docs/req.md name the same file.
-End a directory source with /, for example src/; its nonignored files form the material.
-Use --source node-ID for a Node, or --source .tent/Area/Topic/Topic.md for its Workspace path. JSON resource uses the same rules.
-Git Bash rewrites arguments that start with / (such as /docs/req.md) into Windows paths; run the command with MSYS_NO_PATHCONV=1 to keep them.
-A ./, / or .tent/ source that names no existing file, directory, Node or Role prints a warning on stderr; the Card still keeps it.
-Show is a preview; take records reception and returns an input page. A replay is not a new execution.
-Use page.next for long input. Put requirements in Nodes; a Card briefly points to them. Update Nodes when requirements change.
-Targeted Cards require their Role; untargeted Cards without returnTo can be received without one.
-Each Role has a queue of pending Cards, and so do untargeted Cards (the public area). A new Card joins the end of its queue; take Cards from the front.
-Watch reads committed pending Cards addressed to that Role in queue order, then returned Cards whose returnTo names it in return order; it writes no files and exits when input exists.
---include-open adds public pending Cards after the Role's own, marked [public]. Public Cards wake no Role otherwise. Taking one claims it; if another Role took it first, take names that Role.
-It checks HEAD every 3 seconds; omit --timeout to wait indefinitely, or use 0 for one immediate check.
-Watch exit codes: 0 = Cards (one line per Card, or a JSON array); 2 = timeout (no output); 1 = error.
-Cards track delivery only: pending, then consumed; with returnTo, then returned and closed. Without returnTo, take completes a Card. With returnTo, the receiving Role returns one line of at most 200 characters, details in Nodes, and the returnTo Role takes the Card again to close it. An identical return or take is a replay; a different result is rejected.
-Only published pending Cards can move. --to or --public picks the queue; --before or --after places the Card next to another pending Card in that queue, otherwise it joins the end. A move writes only the moved Card.
-Requirements awaiting a decision belong in Nodes marked status: draft.
-Cancelled published tasks can be deprecated without changing their input or reception. Deprecated Cards are excluded from lists by default.
+  return `tent card — send work to a Role and collect the result
+
+  tent card create --prompt <text>|- [--title <text>] [--source <node-id|path>]... [--target <role-id>] [--return-to <role-id>] [--id <card-id>]
+  tent card show <card-id> [--view body|raw] [--start <n> --end <n> --expected-etag <etag>]
+  tent card list [--role <role-id> [--include-open]] [--state pending|consumed|returned|closed] [--include-deprecated]
+                 [--limit <n>] [--start <n> --expected-revision <revision>]
+  tent card take <card-id> [--role <role-id>]
+  tent card return <card-id> --role <role-id> --result <one line>
+  tent card watch --role <role-id> [--include-open] [--timeout <seconds>]
+  tent card move <card-id> [--to <role-id> | --public] [--before <card-id> | --after <card-id>] --base-etag <etag>
+  tent card deprecate <card-id> --base-etag <etag>
+
+A Card is a short request that points at Nodes. Keep the requirements in Nodes and change them there; a sent Card's input never changes.
+Sources keep their order. Paths start at the Workspace root: docs/req.md, ./docs/req.md and /docs/req.md are the same file; end a directory with /. Name a Node by its id or its .tent/ path. An explicit ./, / or .tent/ source that names nothing prints a warning; the Card keeps it. Bare descriptive sources are kept without that warning.
+Each Role has a queue, and Cards without --target wait in the public area. New Cards join the end; take from the front. move changes the queue or the place in it.
+take receives a Card and prints its input; it needs --role for a targeted Card or one with --return-to. With --return-to, the receiver returns one line of at most 200 characters, with details in Nodes, and the return-to Role takes the Card again to close it. Repeating the same take or return is a replay, not a second run.
+watch waits for the Role's pending Cards in queue order, then Cards returned to it in return order. --include-open adds public Cards, marked [public]; taking one claims it. It checks every 3 seconds; --timeout 0 checks once. Exit codes: 0 = Cards (one line each, or a JSON array); 2 = timeout (no output); 1 = error.
+show previews a Card without taking it; continue long input with page.next. list shows newest first, except --state pending, which shows queue order. deprecate cancels a Card and hides it from lists.
+--workspace <path> picks the Workspace; --json prints JSON. In Git Bash, run commands whose arguments start with / with MSYS_NO_PATHCONV=1.
 `;
 }
 

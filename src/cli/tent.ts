@@ -137,28 +137,33 @@ function packageRoot(): string {
 }
 
 function helpText(): string {
-  return `Tent CLI
+  return `Tent keeps a context graph of your project in .tent/, next to the code.
 
-Run from a Workspace containing .tent/, or select one with --workspace.
+Run it inside a Workspace, or name one with --workspace <path>.
 
-  tent new <workspace-path>           Create empty .tent and independent local Git.
-  tent node list|get|create|write|…    Find, read and maintain Node documents.
-  tent role list|show|write|create     Optional persistent Role context.
-  tent card create|list|show|take|move|deprecate|watch
-                                     Recorded inputs and optional Role reception.
-  tent workspace export --output <dir>  Export the context graph and its Git history.
-  tent workspace check --json        Inspect links and material addresses without edits.
-  tent workspace brief --json        Read current Node states, inputs and outputs (4 KiB).
-  tent workspace drift --json        Inspect ahead and behind Nodes.
-  tent ui [--workspace <path>] [--port <n>] [--no-open]
-                                     Open the local Web UI; Ctrl+C closes its server.
-  tent hook start|stop --host codex   Native dynamic entry and mechanical advice.
+Start
+  tent new <path>                    Create an empty Tent in <path>/.tent with its own Git history.
+  tent ui [--port <n>] [--no-open]   Open the map in the browser; Ctrl+C stops it.
 
-Use tent node|role|card|workspace --help for command details.
-All document commands call Core directly; no background Service is started.
-  -h, --help                         Show this help.
-  -v, --version                      Show version, commit and build time.
-  tent version --json                Show build identity and runtime path as JSON.
+Read and record
+  tent workspace brief               Where to start: what changed and which Cards wait.
+  tent node get|list|search          Read Nodes.
+  tent node create|append|write|confirm
+                                     Record facts and keep them current.
+  tent workspace check               Broken links and missing materials.
+  tent workspace drift               Every Node that is ahead or behind.
+
+Hand off work
+  tent card create|take|return|watch Send work to a Role and collect the result.
+  tent role list|show|create         Long-running work directions that receive Cards.
+
+More
+  tent workspace scan|check-modules|export
+  tent hook start|stop --host codex|claude-code
+                                     Called by the host's hooks, not by hand.
+  tent <node|card|role|workspace> --help
+                                     Every command and option in that group.
+  tent --version                     Version, commit and build time; tent version --json adds the runtime path.
 `;
 }
 

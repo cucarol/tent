@@ -195,8 +195,6 @@ test("direct Node CLI creates standard materials and uses observed CAS for metad
     assert.equal(rejected.exitCode, 1);
     assert.match(rejected.stderr, /Unknown option/);
   }
-  assert.match(nodeHelpText(), /direct Core/);
-  assert.doesNotMatch(nodeHelpText(), /Service-backed|Local Service/);
 });
 
 test("direct selected queries read headers elsewhere, retain selected bytes and never resume pending mutations", async (t) => {

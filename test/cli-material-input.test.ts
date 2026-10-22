@@ -397,7 +397,7 @@ test("actor validation explains all formats without exposing a validation JSON d
     assert.match(rejected.stderr, new RegExp(`\\nNext: tent node ${sub} --help[^\\n]*\\n$`));
   }
   for (const sub of ["create", "write", "link-output", "confirm", "write-many"])
-    assert.match(nodeHelpText(sub), /human:<id>, process:<id>, and <producer>\/<version>/);
+    assert.match(nodeHelpText(sub), /human:<id>, process:<id> or <producer>\/<version>/);
 });
 
 test("successful mutation output identifies the resolved Workspace in human and JSON output", async (t) => {

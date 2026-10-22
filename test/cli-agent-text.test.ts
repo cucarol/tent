@@ -237,7 +237,10 @@ test("complete first-page ETags authorize writes and confirmations; partial and 
   );
   assert.equal(await adapter.readFile("Long/Long.md"), before);
   assert.equal(await adapter.history.currentCommit(), head);
-  assert.match(nodeHelpText("get"), /A page that holds the complete body returns the full ETag/);
+  assert.match(
+    nodeHelpText("get"),
+    /An ETag that starts with read: comes from a partial page and allows only metadata edits/,
+  );
 });
 
 test("fixed-id creation refuses name/id collisions without overwriting and points to the existing Node", async (t) => {
@@ -363,10 +366,10 @@ test("unknown subcommands preserve the command diagnosis and leave existing Card
   const failed = await card("interrupt", ["card-existing"]);
   assert.equal(failed.stderr.split("\n")[0], "Unknown card command: interrupt");
   assert.doesNotMatch(failed.stderr, /not found/i);
-  assert.match(await next(failed, /^Next: tent card --help/), /tent card show card-ID/);
+  assert.match(await next(failed, /^Next: tent card --help/), /tent card show <card-id>/);
   const failedRole = await role("interrupt", ["role-existing"]);
   assert.equal(failedRole.stderr.split("\n")[0], "Unknown role subcommand: interrupt");
-  assert.match(await next(failedRole, /^Next: tent role --help/), /tent role show role-ID/);
+  assert.match(await next(failedRole, /^Next: tent role --help/), /tent role show <role-id>/);
   assert.match(ok(await card("show", ["card-existing"])), /Existing card/);
   assert.match(
     ok(await role("show", ["role-existing"])),
@@ -457,13 +460,13 @@ test("judge W1-W4 wording is exact, Next runs, and text conflicts do not expose 
   assert.equal(await adapter.history.currentCommit(), head);
 });
 
-test("judge W5 help uses the approved sentences once and removes superseded wording", () => {
+test("judge help explains stable ids and partial-read limits once", () => {
   const create = nodeHelpText("create"),
     get = nodeHelpText("get");
   const createText =
-    "--id <node-id> sets the new Node's id, so a retry after an unclear result cannot create a duplicate. An existing id or sibling name fails and names the existing Node. Names follow Windows file-name rules on every platform.";
+    "--id fixes the new id, so a retry cannot create a duplicate. Names follow Windows file-name rules on every platform.";
   const getText =
-    "A page that holds the complete body returns the full ETag; read:<etag> appears only when the body was truncated and allows continuation and metadata edits only. Read with --full before replacing or confirming content.";
+    "An ETag that starts with read: comes from a partial page and allows only metadata edits; read with --full before replacing or confirming content.";
   assert.equal(create.split(createText).length, 2);
   assert.equal(get.split(getText).length, 2);
   assert.doesNotMatch(

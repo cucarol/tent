@@ -36,7 +36,7 @@ function runCli(
 test("top-level help presents the canonical public collaboration model", async () => {
   const help = await runCli("--help");
   assert.equal(help.code, 0, help.stderr);
-  assert.match(help.stdout, /tent role list\|show\|write\|create/);
+  assert.match(help.stdout, /tent role list\|show\|create/);
   assert.doesNotMatch(help.stdout, /config\|write|OKF facts/);
   assert.match(help.stdout, /tent card/);
   assert.doesNotMatch(help.stdout, /role-init/);

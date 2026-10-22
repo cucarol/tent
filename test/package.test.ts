@@ -182,8 +182,8 @@ test("retired skill-install command cannot change a user skill directory", async
 test("CLI help and version expose only the current surface", async () => {
   const help = await runCliOk(repoRoot, "--help");
   assert.match(help.stdout, /tent node/);
-  assert.match(help.stdout, /new <workspace-path>/);
-  assert.match(help.stdout, /independent local Git/);
+  assert.match(help.stdout, /new <path>/);
+  assert.match(help.stdout, /with its own Git history/);
   assert.doesNotMatch(help.stdout, /--repair-existing/);
   assert.doesNotMatch(help.stdout, /init-map|approved-digest/);
   assert.doesNotMatch(help.stdout, /skill-install/);
