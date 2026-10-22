@@ -17,6 +17,8 @@ import { nodeNotePath } from "../base/paths.js";
 import { isCoverageGoal } from "../base/material-coverage.js";
 import { rewriteMarkdownDestinations } from "../base/links.js";
 import { createHash } from "node:crypto";
+import { cachedSemanticContent } from "../base/semantic-content-cache.js";
+import { markdownSyntax } from "../base/markdown-syntax.js";
 import { assertSystemMaterial, systemMaterialPath } from "./material-target.js";
 
 import type { NodeBasisRecord } from "../base/node-basis-record.js";
@@ -125,32 +127,54 @@ export function nodeSemanticContent(
   nodes?: ReadonlyMap<string, Pick<CatalogNode, "nodeId" | "path">>,
   workspaceRoot?: string,
 ): string {
+  const normalizedBody = body.replace(/\r\n?/g, "\n");
+  let nodePaths: Map<string, string> | undefined;
+  const mapped = new Map<string, string>();
   const canonicalAddress = (resource: string) => {
+    if (mapped.has(resource)) return mapped.get(resource)!;
+    let value = resource;
     try {
       const locator = materialLocator(resource, documentPath, false);
-      if (locator.kind === "path" && !isDirectoryMaterial(locator)) {
-        const node =
-          nodes && [...nodes.values()].find((n) => nodeNotePath(n.path) === locator.target);
-        if (node) return `node:${node.nodeId}${locator.suffix}`;
-      }
-      return materialIdentity(locator) ?? resource;
+      if (locator.kind === "path" && !isDirectoryMaterial(locator) && nodes) {
+        if (!nodePaths) {
+          nodePaths = new Map();
+          for (const node of nodes.values()) {
+            const file = nodeNotePath(node.path);
+            if (!nodePaths.has(file)) nodePaths.set(file, node.nodeId);
+          }
+        }
+        const id = nodePaths.get(locator.target);
+        if (id !== undefined) value = `node:${id}${locator.suffix}`;
+        else value = materialIdentity(locator) ?? resource;
+      } else value = materialIdentity(locator) ?? resource;
     } catch {
-      return resource;
+      // Invalid addresses retain their original semantic bytes.
     }
+    mapped.set(resource, value);
+    return value;
   };
-  return canonicalJson({
-    addresses: materialOccurrences(data)
-      .filter(
-        ({ resource, field }) =>
-          field !== "sources" || !isCardResponseSource(resource, documentPath, workspaceRoot),
-      )
-      .map(({ resource, track }) =>
-        track ? [canonicalAddress(resource), track] : canonicalAddress(resource),
-      ),
-    body: rewriteMarkdownDestinations(body.replace(/\r\n?/g, "\n"), canonicalAddress),
-  });
+  const addresses = materialOccurrences(data)
+    .filter(
+      ({ resource, field }) =>
+        field !== "sources" || !isCardResponseSource(resource, documentPath, workspaceRoot),
+    )
+    .map(({ resource, track }) =>
+      track ? [canonicalAddress(resource), track] : canonicalAddress(resource),
+    );
+  return cachedSemanticContent(
+    () => {
+      // Resolve only this body's destinations; unrelated Nodes do not invalidate it.
+      if (normalizedBody.includes("[") || normalizedBody.includes("<"))
+        for (const { url } of markdownSyntax(normalizedBody).destinations) canonicalAddress(url);
+      return [addresses, normalizedBody, [...mapped]];
+    },
+    () =>
+      canonicalJson({
+        addresses,
+        body: rewriteMarkdownDestinations(normalizedBody, canonicalAddress),
+      }),
+  );
 }
-
 export async function retainedNodeRecords(
   fs: FsAdapter,
 ): Promise<Record<string, NodeBasisRecord | null>> {

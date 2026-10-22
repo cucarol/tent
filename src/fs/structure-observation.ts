@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   structureMaterialCoverage,
   materialCoverageContains,
+  type MaterialCoverage,
 } from "../core/base/material-coverage.js";
 import {
   externalStructureDependencies,
@@ -52,6 +53,9 @@ type StructureSnapshot = {
     Promise<{ live: string[]; all: Array<{ filename: string; workspacePath: string }> }>
   >;
   types: Map<string, ReturnType<typeof sourcePathType>>;
+  resolvedTypes: Map<string, Awaited<ReturnType<typeof sourcePathType>>>;
+  members: Map<string, string[]>;
+  sourceVersions: Map<string, string>;
   derived: Map<string, Promise<StructureDerivedStore>>;
 };
 const structureSnapshot = new AsyncLocalStorage<StructureSnapshot>();
@@ -63,6 +67,9 @@ export function withStructureSnapshot<T>(action: () => Promise<T>, fresh = false
     sources: new Map(),
     paths: new Map(),
     types: new Map(),
+    resolvedTypes: new Map(),
+    members: new Map(),
+    sourceVersions: new Map(),
     derived: new Map(),
   };
   return structureSnapshot.run(snapshot, async () => {
@@ -167,9 +174,17 @@ async function observeStructureMaterialInScope(
       };
     },
   );
-  const memberSources = paths.live.filter(
-    (file) =>
-      materialCoverageContains(coverage, file) && isImportSource(file) && !isTestSource(file),
+  const coverageMembers = (item: MaterialCoverage) => {
+    const key = JSON.stringify([workspaceRoot, cacheDir, item]);
+    let members = snapshot?.members.get(key);
+    if (!members) {
+      members = paths.live.filter((file) => materialCoverageContains(item, file));
+      snapshot?.members.set(key, members);
+    }
+    return members;
+  };
+  const memberSources = coverageMembers(coverage).filter(
+    (file) => isImportSource(file) && !isTestSource(file),
   );
   const members = new Set(memberSources);
   const rustMembers = memberSources.filter((member) => member.endsWith(".rs"));
@@ -200,8 +215,11 @@ async function observeStructureMaterialInScope(
     if (members.has(workspacePath) || neededConfig(workspacePath)) {
       file.content = await readSource(filename);
     } else {
-      const type = await shared(snapshot?.types, filename, () => sourcePathType(filename));
+      const type =
+        snapshot?.resolvedTypes.get(filename) ??
+        (await shared(snapshot?.types, filename, () => sourcePathType(filename)));
       if (!type) throw new Error(`ENOENT: Structure source disappeared: ${workspacePath}`);
+      snapshot?.resolvedTypes.set(filename, type);
       if (type === "directory") continue;
     }
     files.push(file);
@@ -209,12 +227,19 @@ async function observeStructureMaterialInScope(
   // Core requests only Cargo ancestry/path-dependency facts and source bytes
   // needed to establish these members' module contexts and resolve their uses.
   const byPath = new Map(files.map((file) => [file.path, file]));
-  const nodeMembers = new Set(
-    paths.live.filter((file) => nodeCoverage.some((item) => materialCoverageContains(item, file))),
-  );
+  // Keep listing order, including when declarations overlap or are reordered.
+  const coveredMembers = new Set(nodeCoverage.flatMap(coverageMembers));
+  const nodeMembers = new Set(paths.live.filter((file) => coveredMembers.has(file)));
   const fingerprint = (value: unknown) =>
     createHash("sha256").update(JSON.stringify(value)).digest("hex");
-  const sourceVersion = (content: string) => createHash("sha256").update(content).digest("hex");
+  const sourceVersion = (content: string) => {
+    let version = snapshot?.sourceVersions.get(content);
+    if (!version) {
+      version = createHash("sha256").update(content).digest("hex");
+      snapshot?.sourceVersions.set(content, version);
+    }
+    return version;
+  };
   const derived = cacheDir
     ? await shared(snapshot?.derived, cacheDir, () => loadStructureDerivedStore(cacheDir))
     : undefined;

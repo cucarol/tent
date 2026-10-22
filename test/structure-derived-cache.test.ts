@@ -4,7 +4,10 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { serialize, deserialize } from "node:v8";
 import { test, type TestContext } from "node:test";
-import { observeStructureMaterial } from "../src/fs/structure-observation.js";
+import {
+  observeStructureMaterial,
+  withStructureSnapshot,
+} from "../src/fs/structure-observation.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
 
@@ -64,6 +67,34 @@ test("structure derivations reuse exact validated inputs and invalidate only cha
   const union = ["../../src/a/", "../../src/b/"];
   assert.deepEqual((await observe(undefined, true, union)).structureDependencies, []);
   assert.deepEqual(await observe(undefined, true, union), await observe(undefined, false, union));
+});
+
+test("shared structure membership preserves overlapping union order and resets between reads", async (t) => {
+  const { observe, write } = await fixture(t);
+  const queries = [
+    ["../../src/a/", ["../../src/a/", "../../src/b/"]],
+    ["../../src/b/", ["../../src/b/", "../../src/a/"]],
+    ["../../src/a/", ["../../src/a/", "../../src/shared/"]],
+  ] as const;
+  const direct = await Promise.all(
+    queries.map(([resource, union]) => observe(resource, false, [...union])),
+  );
+  const read = () =>
+    withStructureSnapshot(async () => {
+      const results = [];
+      for (const [resource, union] of queries)
+        results.push(await observe(resource, true, [...union]));
+      return results;
+    });
+  assert.deepEqual(await read(), direct);
+  assert.deepEqual(await read(), direct);
+  await write("src/a/main.ts", 'import "../b/main.js";\n');
+  const changed = await read();
+  assert.notDeepEqual(changed, direct);
+  assert.deepEqual(
+    changed,
+    await Promise.all(queries.map(([resource, union]) => observe(resource, false, [...union]))),
+  );
 });
 
 test("available paths, live membership and config versions invalidate structure derivations", async (t) => {

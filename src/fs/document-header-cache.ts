@@ -10,13 +10,16 @@ import {
 import { renameWithRetry } from "./rename-with-retry.js";
 import { withFileReadScope } from "./file-state-cache.js";
 import { withPersistedMarkdownSyntax } from "./markdown-syntax-cache.js";
+import { withPersistedSemanticContent } from "./semantic-content-cache.js";
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest();
 
 /** A brief shares validated file observations and parsed headers, never a complete result. */
 export async function withDocumentHeaderCache<T>(systemRoot: string, action: () => Promise<T>) {
   return withFileReadScope(() =>
-    withPersistedMarkdownSyntax(systemRoot, () => withParsedHeaders(systemRoot, action)),
+    withPersistedMarkdownSyntax(systemRoot, () =>
+      withPersistedSemanticContent(systemRoot, () => withParsedHeaders(systemRoot, action)),
+    ),
   );
 }
 
