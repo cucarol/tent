@@ -26,6 +26,8 @@ export interface FsAdapter {
   observationScope?<T>(action: () => Promise<T>, options?: { forceContent?: boolean }): Promise<T>;
   /** Git index membership of an explicit local file; undefined when it cannot be established. */
   materialIsTracked?(resource: string, documentPath: string): Promise<boolean | undefined>;
+  /** Validated local text for explicit-write advice; never fetch remote materials. */
+  readMaterialText?(resource: string, documentPath: string): Promise<string | undefined>;
   readonly history?: GitDocumentHistory;
   /** File paths in the independent Tent Git HEAD tree; undefined without Tent Git. */
   retainedDocumentPaths?(): Promise<string[] | undefined>;

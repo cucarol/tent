@@ -2,7 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 import * as z from "zod/v4";
 import { readOnlyFs } from "../store/adapter.js";
 import { canonicalDocumentReferencesWithPaths } from "../graph/document-links.js";
-import { validateSystemMaterials } from "../graph/material-target.js";
+import { validateSystemMaterials, systemMaterialPath } from "../graph/material-target.js";
+import { materialLocator } from "../base/material.js";
 import { contentEtag } from "../base/etag.js";
 import { documentLifecycle } from "../base/document-status.js";
 import {
@@ -352,9 +353,26 @@ async function writeNodesBatchUnlocked(
   }
   const beforeOrder = (await fs.exists(ORDER_PATH)) ? await fs.readFile(ORDER_PATH) : null;
   const warnings: string[] = [];
+  const warningFs = {
+    workspaceRoot: fs.workspaceRoot,
+    materialIsTracked: fs.materialIsTracked?.bind(fs),
+    readMaterialText: async (resource: string, documentPath: string) => {
+      const target = systemMaterialPath(
+        materialLocator(resource, documentPath, true),
+        fs.workspaceRoot,
+      );
+      const prepared = target === undefined ? undefined : finalDocuments.get(target);
+      return prepared ?? fs.readMaterialText?.(resource, documentPath);
+    },
+  };
   for (const node of planned)
     warnings.push(
-      ...(await nodeMaterialWarnings(fs, parseFrontmatter(node.raw).data, nodeNotePath(node.path))),
+      ...(await nodeMaterialWarnings(
+        warningFs,
+        parseFrontmatter(node.raw).data,
+        nodeNotePath(node.path),
+        node.before === null ? {} : parseFrontmatter(node.before).data,
+      )),
     );
   const order = await loadOrder(readOnlyFs(fs));
   for (const node of planned.filter((n) => n.before === null)) {

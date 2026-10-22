@@ -131,7 +131,12 @@ export async function savePreparedNodeDocumentUnlocked(
   );
   const changed = raw !== diskRaw;
   const path = nodeNotePath(node.path);
-  const warnings = await nodeMaterialWarnings(fs, parseFrontmatter(raw).data, path);
+  const warnings = await nodeMaterialWarnings(
+    fs,
+    parseFrontmatter(raw).data,
+    path,
+    parseFrontmatter(diskRaw).data,
+  );
   const currentRaw = await fs.readFile(path);
   if (currentRaw !== diskRaw)
     throw new NodeWriteError(

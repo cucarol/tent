@@ -11,7 +11,7 @@ import { execFile } from "node:child_process";
 import { GitDocumentHistory, type CaptureMetadata } from "../core/store/git-history.js";
 import { isHistoryDocument, isHistoryFile } from "../core/store/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
-import { observeMaterialResource } from "./source-observation.js";
+import { observeMaterialResource, readStructureSource } from "./source-observation.js";
 import { withStructureSnapshot, withoutStructureSnapshot } from "./structure-observation.js";
 import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import {
@@ -21,7 +21,7 @@ import {
 } from "../core/graph/node-sync-record.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { loadNodeCatalog } from "../core/graph/node-catalog.js";
-import { materialLocator } from "../core/base/material.js";
+import { materialLocator, localMaterialPath } from "../core/base/material.js";
 import { assertSystemMaterial } from "../core/graph/material-target.js";
 import { materialIsTracked } from "./material-tracking.js";
 import { createHash } from "node:crypto";
@@ -86,6 +86,18 @@ export class NodeFs implements FsAdapter {
     return this.workspaceRoot
       ? materialIsTracked(this.workspaceRoot, resource, documentPath)
       : undefined;
+  }
+
+  async readMaterialText(resource: string, documentPath: string) {
+    if (!this.workspaceRoot) return;
+    const locator = materialLocator(resource, documentPath, true);
+    const filename = localMaterialPath(locator, this.workspaceRoot);
+    if (!filename) return;
+    await assertSystemMaterial(this, locator);
+    return readStructureSource(
+      locator.kind === "uri" ? nodePath.parse(filename).root : this.workspaceRoot,
+      filename,
+    );
   }
 
   async observeMaterial(
