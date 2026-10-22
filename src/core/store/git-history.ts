@@ -1299,14 +1299,19 @@ export class GitDocumentHistory {
         return { blob: oid(match[1]!), path: documentPath(match[2]!) };
       })
       .filter((entry) => directory !== undefined || isHistoryDocument(entry.path));
-    const blobs = await readBlobs(
-      this.root,
-      new Set(entries.map((entry) => entry.blob)),
-      (raw) => raw,
+    // A selected version read may already have validated this exact history.
+    // Reuse its immutable blob bytes, without starting a history replay for a directory read.
+    const snapshot =
+      this.snapshotHead === commit ? await this.snapshotPromise?.catch(() => undefined) : undefined;
+    const missing = new Set(
+      entries
+        .filter((entry) => !snapshot || !(entry.blob in snapshot.blobs))
+        .map((entry) => entry.blob),
     );
+    const blobs = await readBlobs(this.root, missing, (raw) => raw);
     return new Map(
       entries.map((entry) => {
-        const raw = blobs.get(entry.blob)!;
+        const raw = snapshot?.blobs[entry.blob] ?? blobs.get(entry.blob)!;
         if (raw instanceof Error) throw raw;
         return [entry.path, raw];
       }),

@@ -20,6 +20,38 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, init = true)
   return { workspace, root, git, history: new GitDocumentHistory(root) };
 }
 
+test("directory reads reuse only the requested history and remain independent of history replay", async (t) => {
+  const { root, history } = await fixture(t);
+  const first = await history.captureUnlocked([
+    { path: "Main/Main.md", raw: "---\nid: node-main\n---\nfirst" },
+  ]);
+  const reader = new GitDocumentHistory(root);
+  await reader.readVersions(first.versions);
+  assert.equal(
+    (await reader.readDirectory(first.commit!)).get("Main/Main.md"),
+    "---\nid: node-main\n---\nfirst",
+  );
+  const second = await history.captureUnlocked([
+    { path: "Main/Main.md", raw: "---\nid: node-main\n---\nsecond" },
+  ]);
+  assert.equal(
+    (await reader.readDirectory(second.commit!)).get("Main/Main.md"),
+    "---\nid: node-main\n---\nsecond",
+  );
+  assert.equal(
+    (await reader.readDirectory(first.commit!)).get("Main/Main.md"),
+    "---\nid: node-main\n---\nfirst",
+  );
+  const cold = new GitDocumentHistory(root);
+  (cold as unknown as { snapshot: () => never }).snapshot = () => {
+    throw new Error("Directory read must not replay history");
+  };
+  assert.deepEqual(
+    await cold.readDirectory(second.commit!),
+    await reader.readDirectory(second.commit!),
+  );
+});
+
 test("unchanged output documents and records do not create history solely for confirmation", async (t) => {
   const { root, history, git } = await fixture(t);
   const raw = "---\nid: node-output\ntype: output\ntags: [evidence]\n---\nunchanged\n";

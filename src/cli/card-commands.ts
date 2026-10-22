@@ -232,20 +232,8 @@ export async function runCardCommand(
         expectedEtag: value("expected-etag"),
         retainedState: true,
       };
-      const observed = workspaceReadPaths(await readCardDocument(fs, id, options), workspaceRoot);
-      pageText(observed, `card.${sub}:${id}`, {
-        start: number("start"),
-        end: number("end"),
-        maxBytes: 16 * 1024 - 256,
-      });
       result = pageText(
-        workspaceReadPaths(
-          await readCardDocument(fs, id, {
-            ...options,
-            expectedEtag: observed.etag,
-          }),
-          workspaceRoot,
-        ),
+        workspaceReadPaths(await readCardDocument(fs, id, options), workspaceRoot),
         `card.${sub}:${id}`,
         { start: number("start"), end: number("end") },
       );

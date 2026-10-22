@@ -689,6 +689,11 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
     const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
       await fs.readBinary(cardPath(id)),
     );
+    const checkedPage = async (metadata: Record<string, unknown>) => {
+      if ((await fs.readFile(cardPath(id))) !== raw)
+        throw new ReaderError("SOURCE_CHANGED", "Card changed during lookup");
+      return cardPage(id, raw, options, metadata);
+    };
     let checked: Awaited<ReturnType<typeof checkedCard>>;
     try {
       checked = await checkedCard(fs, id);
@@ -700,12 +705,17 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
           ? { uncaptured: true }
           : {}),
       };
-      return cardPage(id, raw, options, metadata);
+      return checkedPage(metadata);
     }
     if (checked.current.raw !== raw)
       throw new ReaderError("SOURCE_CHANGED", "Card changed during lookup");
     const { current, history, publishedVersion } = checked;
-    const stateFs = options.retainedState ? await retainedDocumentFs(fs) : fs;
+    const notice = async () => {
+      if (documentLifecycle(current.data).status !== "deprecated") return {};
+      const readNotice = async () =>
+        deprecatedCardNotice(options.retainedState ? await retainedDocumentFs(fs) : fs, current);
+      return fs.observationScope ? fs.observationScope(readNotice) : readNotice();
+    };
     const metadata = {
       publishedVersion,
       sources: current.data.sources,
@@ -717,12 +727,12 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
       returnTo: current.data.returnTo,
       result: current.data.result,
       ...documentLifecycle(current.data),
-      ...(await deprecatedCardNotice(stateFs, current)),
+      ...(await notice()),
       ...(options.retainedState && (await uncapturedChecker(fs))(current.path, raw)
         ? { uncaptured: true as const }
         : {}),
     };
-    const page = cardPage(id, raw, options, metadata);
+    const page = await checkedPage(metadata);
     if (!options.capture) return { ...page, version: checked.version };
     const captured = await history.captureUnlocked([{ path: current.path, raw }], {
       operation: "document.external-capture",

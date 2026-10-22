@@ -48,6 +48,69 @@ async function fixture(t: TestContext) {
 const code = (expected: string) => (error: unknown) =>
   (error as { code?: string }).code === expected;
 
+test("ordinary Card reads ignore unrelated documents and never acquire the write lock", async (t) => {
+  const { adapter } = await fixture(t);
+  const card = await createCardDocument(adapter, { prompt: "Selected task" });
+  adapter.history.readDirectory = async () => {
+    throw new Error("Unrelated directory read");
+  };
+  adapter.withLock = async () => {
+    throw new Error("Write lock held elsewhere");
+  };
+  const shown = await readCardDocument(adapter, card.cardId, { retainedState: true });
+  assert.equal(shown.text, "Selected task");
+  assert.equal(shown.state, "pending");
+  assert.deepEqual(shown.version, card.version);
+});
+
+test("Card reads reject a selected document edit during retained metadata lookup", async (t) => {
+  const { adapter } = await fixture(t);
+  const card = await createCardDocument(adapter, { prompt: "Selected task" });
+  const blobs = adapter.history.documentBlobs.bind(adapter.history);
+  adapter.history.documentBlobs = async () => {
+    const result = await blobs();
+    await adapter.writeFile(card.path, (await adapter.readFile(card.path)) + "changed");
+    return result;
+  };
+  await assert.rejects(
+    readCardDocument(adapter, card.cardId, { retainedState: true }),
+    code("SOURCE_CHANGED"),
+  );
+});
+
+for (const diagnostic of ["INPUT_CHANGED", "INVALID_DOCUMENT"]) {
+  test(`Card diagnostic ${diagnostic} rejects edits during retained metadata lookup`, async (t) => {
+    const { adapter } = await fixture(t);
+    const card = await createCardDocument(adapter, { prompt: "Selected task" });
+    const original = await adapter.readFile(card.path);
+    const invalid =
+      diagnostic === "INPUT_CHANGED"
+        ? original.replace("Selected task", "Manual task")
+        : original.replace("state: pending", "state: invalid-value");
+    assert.notEqual(invalid, original);
+    await adapter.writeFile(card.path, invalid);
+    const shown = await readCardDocument(adapter, card.cardId, {
+      view: "raw",
+      retainedState: true,
+    });
+    assert.equal((shown as any).diagnostic.code, diagnostic);
+    assert.equal(shown.text, invalid);
+    const blobs = adapter.history.documentBlobs.bind(adapter.history);
+    let changed = false;
+    adapter.history.documentBlobs = async () => {
+      const result = await blobs();
+      await adapter.writeFile(card.path, original);
+      changed = true;
+      return result;
+    };
+    await assert.rejects(
+      readCardDocument(adapter, card.cardId, { view: "raw", retainedState: true }),
+      code("SOURCE_CHANGED"),
+    );
+    assert.equal(changed, true);
+  });
+}
+
 test("take completes an interrupted reception from consumed files and pending Git exactly once", async (t) => {
   const { adapter, root } = await fixture(t);
   for (const roleId of [undefined, "role-a"]) {
