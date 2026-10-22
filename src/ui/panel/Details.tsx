@@ -5,6 +5,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Graph } from "../data/store.js";
 import { api, ApiError, describe, type NodeDocument } from "../data/api.js";
+import type { NodeSection } from "../data/node-details.js";
 import type {
   SnapshotFile,
   SnapshotIncoming,
@@ -12,6 +13,9 @@ import type {
   SnapshotNode,
   SnapshotRef,
   SyncFlag,
+  NodeHistoryDetails,
+  NodeHistoryEntry,
+  NodeRelationsDetails,
 } from "../data/types.js";
 import { CardGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { Pet } from "../components/Pet.js";
@@ -38,15 +42,19 @@ export function RefLink({
   onOpen,
   note,
   flag,
+  name,
+  exists,
 }: {
   graph: Graph;
   target: SnapshotRef;
   onOpen: (ref: SnapshotRef) => void;
   note?: string;
   flag?: string;
+  name?: string;
+  exists?: boolean;
 }) {
   const glyph = glyphOf(graph, target);
-  if (!graph.exists(target))
+  if (!(exists ?? graph.exists(target)))
     return (
       <span className="ref-link missing">
         {glyph}
@@ -59,10 +67,10 @@ export function RefLink({
       className="ref-link"
       onClick={() => onOpen(target)}
       data-tip={note}
-      title={target.kind === "card" ? graph.name(target) : undefined}
+      title={target.kind === "card" ? (name ?? graph.name(target)) : undefined}
     >
       {glyph}
-      <span>{graph.name(target)}</span>
+      <span>{name ?? graph.name(target)}</span>
       {flag && <small className="ref-flag">{flag}</small>}
     </button>
   );
@@ -219,11 +227,13 @@ export function History({
   id,
   path,
   hashes,
+  items,
 }: {
-  graph: Graph;
+  graph?: Graph;
   id: string;
   path: string;
-  hashes: string[];
+  hashes?: string[];
+  items?: NodeHistoryEntry[];
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const [all, setAll] = useState(false);
@@ -232,18 +242,22 @@ export function History({
     setOpen(null);
     setAll(false);
   }, [path]);
-  if (!hashes.length) return <p className="empty">{t.history.none}</p>;
+  const entries =
+    items ??
+    (hashes ?? []).flatMap((hash) => {
+      const commit = graph?.commits.get(hash);
+      const file =
+        commit?.files.find((x) => x.ref?.id === id) ??
+        commit?.files.find((x) => x.path === path && !x.ref);
+      return commit && file ? [{ hash, date: commit.date, file }] : [];
+    });
+  if (!entries.length) return <p className="empty">{t.history.none}</p>;
   // A renamed or moved document keeps its id; its older versions sit at the old path.
-  const shown = (all ? hashes : hashes.slice(0, RECENT)).flatMap((h) => {
-    const c = graph.commits.get(h);
-    const f =
-      c?.files.find((x) => x.ref?.id === id) ?? c?.files.find((x) => x.path === path && !x.ref);
-    return c && f ? [{ h, c, f }] : [];
-  });
+  const shown = all ? entries : entries.slice(0, RECENT);
   return (
     <>
       <ol className="versions">
-        {shown.map(({ h, c, f }) => {
+        {shown.map(({ hash: h, date, file: f }) => {
           const patch = loaded.get(patchKey(f));
           return (
             <li key={h} className={open === h ? "is-open" : ""}>
@@ -262,7 +276,7 @@ export function History({
                         ? t.history.deleted
                         : t.history.changed}
                   </span>
-                  <span className="version-when">{when(c.date)}</span>
+                  <span className="version-when">{when(date)}</span>
                 </span>
                 {patch !== undefined && <Stat {...countLines(patch)} />}
                 <span className="version-hash">{shortHash(h)}</span>
@@ -272,19 +286,15 @@ export function History({
           );
         })}
       </ol>
-      {hashes.length > RECENT && (
+      {entries.length > RECENT && (
         <button type="button" className="versions-more" onClick={() => setAll((a) => !a)}>
-          {all ? t.history.showFewer : t.history.showAll(hashes.length)}
+          {all ? t.history.showFewer : t.history.showAll(entries.length)}
           <Icon name={all ? "chevron" : "down"} size={13} />
         </button>
       )}
     </>
   );
 }
-
-/** A newer version only matters as a warning while the Card that pinned the old one is still waiting to be received. */
-const pendingCard = (graph: Graph, ref: SnapshotRef) =>
-  ref.kind === "card" && graph.cards.get(ref.id)?.state === "pending";
 
 function incomingNote(i: SnapshotIncoming) {
   return `${t.rel.via(i.via)}${i.version ? t.rel.pinnedAt(shortHash(i.version.commit)) : ""}`;
@@ -365,14 +375,16 @@ export function ReviewRow({
 export function PropRow({
   label,
   wide,
+  hidden,
   children,
 }: {
   label: string;
   wide?: boolean;
+  hidden?: boolean;
   children: ReactNode;
 }) {
   return (
-    <div className={`prop${wide ? " is-wide" : ""}`}>
+    <div className={`prop${wide ? " is-wide" : ""}`} hidden={hidden}>
       <dt>{label}</dt>
       <dd>{children}</dd>
     </div>
@@ -394,6 +406,20 @@ function Capped({ items, cap = 8 }: { items: ReactNode[]; cap?: number }) {
   );
 }
 
+/** Unread and failed sections stay distinct from a successful empty answer. */
+export function ReadState({ section }: { section: NodeSection<unknown> }) {
+  if (section.error)
+    return (
+      <p className="empty" role="alert">
+        {describe(section.error)}{" "}
+        <button type="button" className="btn plain" onClick={section.retry}>
+          {t.app.retry}
+        </button>
+      </p>
+    );
+  return section.data === null ? <p className="empty">{t.page.reading}</p> : null;
+}
+
 /**
  * Where a Node sits and what it touches: versions, Roles, parent and children, the documents it links to,
  * what cites it, and its materials. Replaces a separate relations page.
@@ -403,21 +429,37 @@ export function NodeProps({
   node,
   onOpen,
   onHistory,
+  details,
   children,
 }: {
   graph: Graph;
   node: SnapshotNode;
   onOpen: (ref: SnapshotRef) => void;
   onHistory?: () => void;
+  details: {
+    history: NodeSection<NodeHistoryDetails>;
+    outgoing: NodeSection<NodeRelationsDetails>;
+    incoming: NodeSection<NodeRelationsDetails>;
+    incomingOpen: boolean;
+    onIncoming: () => void;
+  };
   /** Rows the page adds after these. */
   children?: ReactNode;
 }) {
   const family = new Set([node.id, node.parentId, ...node.childIds]);
+  const relations = details.outgoing.data;
+  const refs = new Map(
+    [...(relations?.refs ?? []), ...(details.incoming.data?.refs ?? [])].map((ref) => [
+      `${ref.kind}:${ref.id}`,
+      ref,
+    ]),
+  );
+  const namedLink = (ref: SnapshotRef) => refs.get(`${ref.kind}:${ref.id}`);
   const outgoing = [
     ...new Map(
       [
-        ...node.links.flatMap((l) => (l.ref ? [l.ref] : [])),
-        ...node.materials.flatMap((m) =>
+        ...(relations?.links ?? []).flatMap((l) => (l.ref ? [l.ref] : [])),
+        ...(relations?.materials ?? []).flatMap((m) =>
           (m.kind === "node" || m.kind === "role") && m.id ? [{ kind: m.kind, id: m.id }] : [],
         ),
       ]
@@ -426,28 +468,38 @@ export function NodeProps({
     ).values(),
   ];
   // Links between parent and child are already the tree; the rest is what really cites it.
-  const incoming = node.incoming.filter(
+  const incoming = (details.incoming.data?.incoming ?? []).filter(
     (i) => !(i.from.kind === "node" && family.has(i.from.id) && i.via === "link"),
   );
-  const files = node.materials.filter((m) => m.kind !== "node" && m.kind !== "role");
-  const roles = graph.rolesOf(node.id);
-  const latest = node.history[0] ? graph.commits.get(node.history[0]) : undefined;
+  const files = (relations?.materials ?? []).filter((m) => m.kind !== "node" && m.kind !== "role");
+  const roles = relations?.roles ?? [];
+  const history = details.history.data?.items ?? [];
+  const latest = history[0];
   return (
     <dl className="props">
       <PropRow label={t.props.versions}>
         {latest ? (
           <button type="button" className="ref-link plain" onClick={onHistory}>
             <Icon name="clock" size={15} />
-            <span>{t.props.versionsValue(node.history.length, ago(latest.date))}</span>
+            <span>{t.props.versionsValue(history.length, ago(latest.date))}</span>
           </button>
+        ) : details.history.data ? (
+          <span className="prop-none">{t.history.none}</span>
         ) : (
-          <span className="prop-none">{graph.detailed ? t.history.none : t.page.reading}</span>
+          <ReadState section={details.history} />
         )}
       </PropRow>
       {roles.length > 0 && (
         <PropRow label={t.props.roles}>
           {roles.map((r) => (
-            <RefLink key={r.id} graph={graph} target={{ kind: "role", id: r.id }} onOpen={onOpen} />
+            <RefLink
+              key={r.id}
+              graph={graph}
+              target={{ kind: "role", id: r.id }}
+              onOpen={onOpen}
+              name={r.title}
+              exists
+            />
           ))}
         </PropRow>
       )}
@@ -472,57 +524,63 @@ export function NodeProps({
           />
         </PropRow>
       )}
-      {/* Links, citations and materials come with the snapshot, after the map. */}
-      {!graph.detailed && (
-        <PropRow label={t.rel.linksTo}>
-          <span className="prop-none">{t.page.reading}</span>
-        </PropRow>
-      )}
-      {outgoing.length > 0 && (
-        <PropRow label={t.rel.linksTo} wide>
-          <Capped
-            items={outgoing.map((r) => (
-              <RefLink key={`${r.kind}:${r.id}`} graph={graph} target={r} onOpen={onOpen} />
-            ))}
-          />
-        </PropRow>
-      )}
-      {incoming.length > 0 && (
-        <PropRow label={t.rel.citedBy} wide>
-          <Capped
-            items={incoming.map((i, k) => (
-              <RefLink
-                key={k}
-                graph={graph}
-                target={i.from}
-                onOpen={onOpen}
-                note={incomingNote(i)}
-                flag={i.changedSince && pendingCard(graph, i.from) ? t.rel.changedSince : undefined}
-              />
-            ))}
-          />
-        </PropRow>
-      )}
-      {files.length > 0 && (
-        <PropRow label={t.rel.materials} wide>
-          <Capped
-            items={files.map((m, k) => (
-              <span
-                key={k}
-                className="ref-link plain"
-                data-tip={
-                  (m.field === "resource"
-                    ? t.rel.mainMaterial
-                    : t.rel.sourceN((m.index ?? 0) + 1)) +
-                  (m.kind === "text" ? t.rel.textDescription : "")
-                }
-              >
-                <MaterialName material={m} />
-              </span>
-            ))}
-          />
-        </PropRow>
-      )}
+      <PropRow label={t.rel.linksTo} wide hidden={!!relations && !outgoing.length}>
+        {!relations && <ReadState section={details.outgoing} />}
+        <Capped
+          items={outgoing.map((r) => (
+            <RefLink
+              key={`${r.kind}:${r.id}`}
+              graph={graph}
+              target={r}
+              onOpen={onOpen}
+              name={namedLink(r)?.title}
+              exists={namedLink(r)?.exists}
+            />
+          ))}
+        />
+      </PropRow>
+      <PropRow label={t.rel.citedBy} wide>
+        {!details.incomingOpen ? (
+          <button type="button" className="ref-link plain" onClick={details.onIncoming}>
+            {t.rel.loadIncoming}
+          </button>
+        ) : !details.incoming.data ? (
+          <ReadState section={details.incoming} />
+        ) : !incoming.length ? (
+          <span className="prop-none">{t.rel.noIncoming}</span>
+        ) : null}
+        <Capped
+          items={incoming.map((i, k) => (
+            <RefLink
+              key={k}
+              graph={graph}
+              target={i.from}
+              onOpen={onOpen}
+              note={incomingNote(i)}
+              name={i.title}
+              exists={namedLink(i.from)?.exists ?? true}
+              flag={i.changedSince && i.cardState === "pending" ? t.rel.changedSince : undefined}
+            />
+          ))}
+        />
+      </PropRow>
+      <PropRow label={t.rel.materials} wide hidden={!files.length}>
+        <Capped
+          items={files.map((m, k) => (
+            <span
+              key={k}
+              className="ref-link plain"
+              data-tip={
+                (m.field === "resource" ? t.rel.mainMaterial : t.rel.sourceN((m.index ?? 0) + 1)) +
+                (m.kind === "text" ? t.rel.textDescription : "") +
+                (m.error ? ` · ${m.error}` : "")
+              }
+            >
+              <MaterialName material={m} />
+            </span>
+          ))}
+        />
+      </PropRow>
       {children}
     </dl>
   );

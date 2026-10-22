@@ -38,6 +38,11 @@ import { readRoleDocument } from "../core/store/role-document.js";
 import { readNodeForEdit } from "../core/read/node-query.js";
 import { nodeNotePath, TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import { resolvedMaterialOccurrences } from "../core/base/material.js";
+import {
+  readNodeHistoryDetails,
+  readNodeCardsDetails,
+  readNodeRelationsDetails,
+} from "../core/read/node-details.js";
 import { findTentSystemRoot } from "../core/workspace/status.js";
 import { readWorkspaceRevision } from "../core/workspace/workspace-revision.js";
 import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
@@ -353,6 +358,17 @@ async function startWorkspaceServer(
       if (!fresh && req.headers["if-none-match"] === result.etag)
         return end(res, 304, { ETag: result.etag });
       return jsonBody(res, 200, result.body!, { ETag: result.etag });
+    }
+    const nodeDetail = /^\/api\/nodes\/([^/]+)\/(history|cards|relations)$/.exec(url.pathname);
+    if (nodeDetail && method === "GET") {
+      const id = decodeURIComponent(nodeDetail[1]!);
+      if (nodeDetail[2] === "history")
+        return json(res, 200, await readNodeHistoryDetails(queryFs, id));
+      if (nodeDetail[2] === "cards") return json(res, 200, await readNodeCardsDetails(queryFs, id));
+      const direction = url.searchParams.get("direction") ?? "outgoing";
+      if (direction !== "outgoing" && direction !== "incoming")
+        throw new HttpError(400, "INVALID_INPUT", "Expected outgoing or incoming direction");
+      return json(res, 200, await readNodeRelationsDetails(queryFs, id, direction));
     }
     if (nodeId && method === "GET") {
       const read = async () => {

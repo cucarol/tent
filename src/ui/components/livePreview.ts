@@ -281,7 +281,7 @@ class TableWidget extends WidgetType {
 const focusChanged = StateEffect.define<boolean>();
 
 /** Tables replace whole lines, which only a state field may do. They show as tables until the cursor enters them. */
-function tables(refKind: (href: string) => RefKind | null): Extension {
+function tables(refKind: (href: string) => RefKind | null, initiallyFocused: boolean): Extension {
   const render = (state: EditorState, focused: boolean) => {
     const out: Range<Decoration>[] = [];
     syntaxTree(state).iterate({
@@ -308,7 +308,10 @@ function tables(refKind: (href: string) => RefKind | null): Extension {
     return Decoration.set(out);
   };
   const field = StateField.define<{ focused: boolean; decorations: DecorationSet }>({
-    create: (state) => ({ focused: false, decorations: render(state, false) }),
+    create: (state) => ({
+      focused: initiallyFocused,
+      decorations: render(state, initiallyFocused),
+    }),
     update(value, tr) {
       let focused = value.focused;
       for (const effect of tr.effects) if (effect.is(focusChanged)) focused = effect.value;
@@ -541,6 +544,7 @@ const taskToggle = EditorView.domEventHandlers({
 export function livePreview(
   refKind: (href: string) => RefKind | null,
   imageOf: ImageOf = () => null,
+  initiallyFocused = false,
 ): Extension {
   const plugin = ViewPlugin.fromClass(
     class {
@@ -562,7 +566,7 @@ export function livePreview(
     },
     { decorations: (plugin) => plugin.decorations },
   );
-  return [plugin, tables(refKind), taskToggle];
+  return [plugin, tables(refKind, initiallyFocused), taskToggle];
 }
 
 /** The link under a position; a link wrapped around an image wins over the image. */

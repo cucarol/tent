@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { tableModel } from "../src/ui/components/livePreview.js";
 import { Patch } from "../src/ui/panel/Details.js";
-import { plainLine } from "../src/ui-server/snapshot.js";
+import { plainLine } from "../src/core/base/document-title.js";
 import { inlineDiff, lineDiff, trimSegments } from "../src/ui/util.js";
 
 test("a conflict shows the lines that differ, with a little context", () => {

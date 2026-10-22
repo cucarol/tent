@@ -7,7 +7,8 @@ import { primaryOf, refKey } from "../data/store.js";
 import { loadableImage, resolveHref, workspaceImagePath } from "../util.js";
 import { t } from "../i18n.js";
 import { glyphSvg } from "./Glyph.js";
-import type { SnapshotRef } from "../data/types.js";
+import type { NodeRelationsDetails, SnapshotRef } from "../data/types.js";
+import { documentRef } from "../data/document-links.js";
 
 /** An image that cannot be shown, as a marker naming its file. */
 function fileChip(path: string, alt: string) {
@@ -23,11 +24,13 @@ export function Markdown({
   body,
   fromPath,
   graph,
+  relations,
   onOpen,
 }: {
   body: string;
   fromPath: string;
   graph: Graph;
+  relations?: NodeRelationsDetails | null;
   onOpen: (ref: SnapshotRef) => void;
 }) {
   const html = useMemo(() => {
@@ -35,8 +38,8 @@ export function Markdown({
     box.innerHTML = DOMPurify.sanitize(marked.parse(body, { gfm: true, async: false }) as string);
     box.querySelectorAll("a[href]").forEach((anchor) => {
       const target = resolveHref(fromPath, anchor.getAttribute("href") ?? "");
-      const ref = target.tentPath ? graph.snapshot.paths[target.tentPath] : undefined;
-      if (ref && graph.exists(ref)) {
+      const ref = documentRef(graph, fromPath, anchor.getAttribute("href") ?? "", relations);
+      if (ref) {
         const glyph = glyphSvg(
           ref.kind === "node" ? primaryOf(graph.nodes.get(ref.id)!.type) : ref.kind,
         );
@@ -72,7 +75,7 @@ export function Markdown({
       img.replaceWith(fileChip(target.file ?? target.tentPath ?? src, img.alt));
     });
     return box.innerHTML;
-  }, [body, fromPath, graph]);
+  }, [body, fromPath, graph, relations]);
 
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {

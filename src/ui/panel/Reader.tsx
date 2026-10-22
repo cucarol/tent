@@ -11,7 +11,8 @@ import {
   type UIEvent,
 } from "react";
 import { useWantDetails } from "../data/details.js";
-import { api, ApiError, describe, type NodeDocument } from "../data/api.js";
+import { useNodeSection } from "../data/node-details.js";
+import { api, ApiError, describe } from "../data/api.js";
 import { cardTitle, primaryOf, type Graph } from "../data/store.js";
 import type {
   CodeFacts,
@@ -20,13 +21,14 @@ import type {
   SnapshotNode,
   SnapshotRef,
   SnapshotRole,
+  NodeCardSummary,
 } from "../data/types.js";
 import { editDraft, isDraft, useDraft, type Draft } from "../data/drafts.js";
 import { cardStage, cardStateLabel, resultParts } from "../data/card-state.js";
 import { nodeDrafts as drafts } from "../data/node-drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { FileView } from "./FileView.js";
-import { fileOf } from "../data/files.js";
+import { fileOf, FilesContext, useFileInfo } from "../data/files.js";
 import { Tray, Pet, turnPet } from "../components/Pet.js";
 import { Markdown } from "../components/Markdown.js";
 import {
@@ -38,6 +40,7 @@ import {
   PropRow,
   RefLink,
   ReviewRow,
+  ReadState,
 } from "./Details.js";
 import { useFlags } from "../data/flags.js";
 import { CardMenu, NodeMenu, RoleMenu } from "./Manage.js";
@@ -98,7 +101,7 @@ function useWidth(box: RefObject<HTMLElement | null>) {
 export function Reader(props: Props) {
   const { graph, target } = props;
   // A page shows links, versions and Cards: opening one is what reads them.
-  useWantDetails(!graph.detailed);
+  useWantDetails(target.kind !== "node" && !graph.detailed);
   const box = useRef<HTMLElement>(null);
   const narrow = useWidth(box) < NARROW;
   const node = target.kind === "node" ? graph.nodes.get(target.id) : undefined;
@@ -131,7 +134,9 @@ export function Reader(props: Props) {
       {!node && !role && !card && (
         <>
           <PageTop {...props} crumbs={[]} />
-          <p className="empty pg-missing">{t.sheet.notFound}</p>
+          <p className="empty pg-missing">
+            {target.kind !== "node" && !graph.detailed ? t.page.reading : t.sheet.notFound}
+          </p>
         </>
       )}
     </section>
@@ -623,10 +628,80 @@ function CopyId({ id, onToast }: { id: string; onToast: (text: string) => void }
 
 /** The saved text an edit started from; saving checks the file still has it. */
 type Base = { etag: string; body: string };
+const readNodeDocument = (id: string) => api.node(id);
+const readOutgoing = (id: string) => api.nodeRelations(id, "outgoing");
+const readIncoming = (id: string) => api.nodeRelations(id, "incoming");
+
+export function NodeCardLine({
+  card,
+  onOpen,
+}: {
+  card: NodeCardSummary;
+  onOpen: (ref: SnapshotRef) => void;
+}) {
+  const stage = cardStage(card);
+  const lane = card.lane;
+  return (
+    <button
+      type="button"
+      className={`card-line${stage === "pending" ? " is-waiting" : ""}`}
+      onClick={() => onOpen({ kind: "card", id: card.id })}
+    >
+      <Icon
+        name={
+          stage === "pending"
+            ? "mail"
+            : stage === "doing"
+              ? "working"
+              : stage === "returned"
+                ? "returned"
+                : "check"
+        }
+        size={14}
+      />
+      <span className="cl-text">
+        <span className="t">{card.title || t.card.contextOnly(card.sources.length)}</span>
+        <span className="w">
+          {laneIcon(lane.id ?? PUBLIC, 13)}
+          <span>{lane.id === null ? t.work.public : (lane.title ?? t.work.goneRole(lane.id))}</span>
+          <span className="dot-sep">·</span>
+          {cardStateLabel(card)} · {ago(card.publishedAt)}
+        </span>
+      </span>
+    </button>
+  );
+}
 
 function NodePage(props: PageProps & { node: SnapshotNode }) {
-  const { graph, node, work, narrow, startEditing, onOpen, onExpand, onLocate, onToast } = props;
+  const {
+    graph,
+    node: mapNode,
+    work,
+    narrow,
+    startEditing,
+    onOpen,
+    onExpand,
+    onLocate,
+    onToast,
+  } = props;
+  const document = useNodeSection(mapNode.id, readNodeDocument);
+  const doc = document.data;
+  // Let the first text arrive before metadata and retained-source scans compete for the disk.
+  // A failed body read still permits the other sections to load and retry independently.
+  const bodySettled = !!doc || !!document.error;
+  const history = useNodeSection(mapNode.id, api.nodeHistory, bodySettled);
+  const cards = useNodeSection(mapNode.id, api.nodeCards, bodySettled);
+  const outgoing = useNodeSection(mapNode.id, readOutgoing, bodySettled);
+  const [incomingOpen, setIncomingOpen] = useState(false);
+  const incoming = useNodeSection(mapNode.id, readIncoming, incomingOpen && bodySettled);
+  const node = {
+    ...mapNode,
+    body: doc?.body ?? "",
+    links: outgoing.data?.links ?? [],
+    materials: outgoing.data?.materials ?? [],
+  };
   const flags = useFlags();
+  const files = useFileInfo({ ...graph.snapshot, nodes: [node] }, flags);
   const panel = props.mode === "panel";
   const kept = drafts.get(node.id);
   const [editing, setEditing] = useState(() => startEditing || !!kept?.editing);
@@ -637,33 +712,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
   const [conflict, setConflict] = useState<Base | null>(null);
   const [showDiff, setShowDiff] = useState(false);
   const [saving, setSaving] = useState(false);
-  const version = node.history[0];
-  const [read, setRead] = useState<{
-    doc: NodeDocument;
-    body: string;
-    version: string | undefined;
-  } | null>(null);
-  const doc =
-    read?.doc.nodeId === node.id && read.body === node.body && read.version === version
-      ? read.doc
-      : null;
-  const acceptRead = (doc: NodeDocument) => setRead({ doc, body: node.body, version });
-  useEffect(() => {
-    let live = true;
-    api.node(node.id).then(
-      (doc) => live && acceptRead(doc),
-      (error) => {
-        if (!live) return;
-        setRead(null);
-        // Deleted meanwhile: the next snapshot closes the page, so there is nothing to report.
-        if (!(error instanceof ApiError && error.status === 404)) onToast(describe(error));
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [node.id, node.body, version]);
-  // What was just saved shows until the refreshed map catches up.
+  // What was just saved shows until the next direct document read returns.
   const [savedBody, setSavedBody] = useState<string | null>(null);
   const [editorKey, setEditorKey] = useState(0);
   // The latest text, even before React has rendered it: Ctrl+S can follow a keystroke at once.
@@ -692,6 +741,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
       (doc) => {
         if (!live) return;
         setBase({ etag: doc.etag, body: doc.body });
+        document.retry();
         const typed = draftRef.current;
         if ((typed === null || typed === node.body) && typed !== doc.body) {
           setDraft(doc.body);
@@ -705,22 +755,22 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
     };
   }, [editing, base, node.id]);
 
-  // Say so when a change made elsewhere replaces what you are reading. The map alone has no text, so
-  // the snapshot's arrival is not a change.
-  const shownBody = useRef(graph.detailed ? node.body : null);
+  // A fresh direct read follows external edits, even when the map's metadata did not change.
+  const shownBody = useRef<string | null>(null);
   useEffect(() => {
-    if (!graph.detailed) return;
+    if (!doc) return;
     if (
-      shownBody.current !== null &&
-      shownBody.current !== node.body &&
-      draft === null &&
-      savedBody === null
+      (shownBody.current !== null &&
+        shownBody.current !== doc.body &&
+        draft === null &&
+        savedBody === null) ||
+      (savedBody !== null && savedBody !== doc.body)
     )
       onToast(t.reader.updated);
-    shownBody.current = node.body;
-    if (savedBody !== null && node.body === savedBody) setSavedBody(null);
-  }, [node.body, graph.detailed]);
-  const staleBase = editing && !!base && !conflict && node.body !== base.body;
+    shownBody.current = doc.body;
+    if (savedBody !== null) setSavedBody(null);
+  }, [doc, node.body]);
+  const staleBase = editing && !!base && !conflict && !!doc && doc.body !== base.body;
   const follow = (ref: SnapshotRef) => {
     if (draft !== null && draft !== node.body) onToast(t.reader.keptEdits);
     onOpen(ref);
@@ -749,6 +799,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
       const saved = await api.saveNode(node.id, { baseEtag: on.etag, body: text });
       setSavedBody(saved.body);
       stopEditing();
+      document.retry();
       onToast(saved.changed ? t.reader.saved : t.reader.unchanged);
     } catch (error) {
       const current = error instanceof ApiError && error.details?.current;
@@ -770,9 +821,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
 
   const openCard = work.openDraft ? graph.cards.get(work.openDraft) : undefined;
   const at = work.openDraft ? sourceIds(graph, openCard, work.draft).indexOf(node.id) : -1;
-  const carried = graph.snapshot.cards
-    .filter((c) => !isDraft(c) && c.sources.some((s) => s.id === node.id))
-    .sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""));
+  const carried = cards.data?.items ?? [];
   const actions = editing ? (
     <>
       <span className="muted pg-hint">{t.reader.baseVersion}</span>
@@ -837,29 +886,28 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
         <Icon name={at >= 0 ? "check" : "addToCard"} size={15} />
         {at < 0 ? t.side.attach : narrow ? t.page.inDraftShort(at + 1) : t.page.inDraft(at + 1)}
       </button>
-      {/* Deleting counts the links and Cards it breaks, which come with the snapshot. */}
-      {graph.detailed && (
-        <NodeMenu graph={graph} node={node} onGone={props.onClose} onToast={onToast} />
-      )}
+      <NodeMenu graph={graph} node={mapNode} onGone={props.onClose} onToast={onToast} />
     </>
   );
-  // Under the text at every width; with nothing carried yet, nothing to show.
+  // Under the text at every width; successful empty reads leave no section.
   const carriedSection =
-    graph.detailed && !carried.length ? null : (
-      <Section title={graph.detailed ? t.page.carried(carried.length) : t.page.carriedHead}>
-        {!graph.detailed ? (
-          <p className="empty">{t.page.reading}</p>
+    cards.data && !carried.length && !cards.data.diagnostics.length ? null : (
+      <Section title={cards.data ? t.page.carried(carried.length) : t.page.carriedHead}>
+        {!cards.data ? (
+          <ReadState section={cards} />
         ) : (
           <More count={carried.length} shown={narrow ? 3 : 6}>
             {(n) =>
-              carried
-                .slice(0, n)
-                .map((c) => (
-                  <CardLine key={c.id} graph={graph} work={work} card={c} onOpen={onOpen} />
-                ))
+              carried.slice(0, n).map((c) => <NodeCardLine key={c.id} card={c} onOpen={onOpen} />)
             }
           </More>
         )}
+        {cards.data?.diagnostics.map((diagnostic, i) => (
+          <p className="empty" role="alert" key={i}>
+            {diagnostic.cardId}
+            {diagnostic.resource ? " · " + diagnostic.resource : ""}: {diagnostic.error}
+          </p>
+        ))}
       </Section>
     );
   return (
@@ -953,6 +1001,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
                   fromPath={node.notePath}
                   graph={graph}
                   label={t.reader.editLabel(node.name)}
+                  relations={outgoing.data}
                   live={live}
                   onChange={change}
                   onSave={() => save()}
@@ -962,11 +1011,20 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
               </Suspense>
             ) : (
               <>
-                <FileView node={node} onToast={onToast} />
+                <FilesContext.Provider value={files}>
+                  <FileView node={node} onToast={onToast} />
+                </FilesContext.Provider>
+                {!!document.error && body.trim() && <ReadState section={document} />}
                 {body.trim() ? (
-                  <Markdown body={body} fromPath={node.notePath} graph={graph} onOpen={onOpen} />
-                ) : !graph.detailed && !doc ? (
-                  <p className="empty">{t.page.reading}</p>
+                  <Markdown
+                    body={body}
+                    fromPath={node.notePath}
+                    graph={graph}
+                    relations={outgoing.data}
+                    onOpen={onOpen}
+                  />
+                ) : !doc ? (
+                  <ReadState section={document} />
                 ) : (
                   !fileOf(node) && <p className="empty">{t.node.noBody}</p>
                 )}
@@ -975,7 +1033,18 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
           </div>
         }
         props={
-          <NodeProps graph={graph} node={node} onOpen={onOpen}>
+          <NodeProps
+            graph={graph}
+            node={node}
+            onOpen={onOpen}
+            details={{
+              history,
+              outgoing,
+              incoming,
+              incomingOpen,
+              onIncoming: () => setIncomingOpen(true),
+            }}
+          >
             <ReviewRow doc={doc} flag={flags[node.id]} node={node} />
             <PropRow label="id">
               <CopyId id={node.id} onToast={onToast} />
@@ -989,15 +1058,18 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
           </>
         }
         tail={
-          graph.detailed ? (
-            <Section title={t.page.versions} count={node.history.length}>
-              <History graph={graph} id={node.id} path={node.notePath} hashes={node.history} />
-            </Section>
-          ) : (
-            <Section title={t.page.versions}>
-              <p className="empty">{t.page.reading}</p>
-            </Section>
-          )
+          <Section title={t.page.versions} count={history.data?.items.length}>
+            <ReadState section={history} />
+            {/* Keep this Node's expansion state while a replacement read is pending or failed. */}
+            <div hidden={!history.data}>
+              <History
+                key={node.id}
+                id={node.id}
+                path={node.notePath}
+                items={history.data?.items ?? []}
+              />
+            </div>
+          </Section>
         }
       />
     </>

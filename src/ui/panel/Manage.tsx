@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, describe } from "../data/api.js";
+import { useWantDetails } from "../data/details.js";
 import type { Graph } from "../data/store.js";
 import type { SnapshotCard, SnapshotNode, SnapshotRole } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
@@ -11,8 +12,8 @@ import { t } from "../i18n.js";
 export type Item = { label: string; note?: string; danger?: boolean; run: () => void };
 
 /** The quiet ⋯ in a page's bar: the object's rarer actions, the destructive one last and set apart. */
-function MoreMenu({ items }: { items: Item[] }) {
-  const [open, setOpen] = useState(false);
+function MoreMenu({ items, initiallyOpen = false }: { items: Item[]; initiallyOpen?: boolean }) {
+  const [open, setOpen] = useState(initiallyOpen);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -494,9 +495,26 @@ function DeleteAsk({
 
 export function NodeMenu(props: Common & { graph: Graph; node: SnapshotNode; onGone: () => void }) {
   const { items, dialogs } = useNodeActions(props);
+  const [requested, setRequested] = useState(false);
+  const wantDetails = useWantDetails(false);
+  if (!props.graph.detailed)
+    return (
+      <button
+        type="button"
+        className="icon-btn"
+        aria-label={t.manage.more}
+        data-tip={requested ? t.page.reading : t.manage.more}
+        onClick={() => {
+          setRequested(true);
+          wantDetails();
+        }}
+      >
+        <Icon name="working" size={16} />
+      </button>
+    );
   return (
     <>
-      <MoreMenu items={items} />
+      <MoreMenu items={items} initiallyOpen={requested} />
       {dialogs}
     </>
   );

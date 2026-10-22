@@ -100,6 +100,41 @@ async function fixture(t: TestContext) {
 
 const json = <T>(reply: Reply) => JSON.parse(reply.body) as T;
 
+test("Node detail endpoints are authenticated pure reads with independent sections", async (t) => {
+  const { tent, call, workspace } = await fixture(t);
+  const tentRoot = path.join(workspace, ".tent");
+  const head = await git(tentRoot, "rev-parse", "--verify", "HEAD").catch(() => null);
+  const dirty = await git(tentRoot, "status", "--porcelain");
+  for (const section of [
+    "history",
+    "cards",
+    "relations?direction=outgoing",
+    "relations?direction=incoming",
+  ]) {
+    const route = `/api/nodes/node-main/${section}`;
+    assert.equal((await call("GET", route, { token: null })).status, 401);
+    const reply = await call("GET", route);
+    assert.equal(reply.status, 200, reply.body);
+    assert.equal(json<{ nodeId: string }>(reply).nodeId, "node-main");
+    assert.equal(reply.headers["cache-control"], "no-store");
+  }
+  assert.equal((await call("GET", "/api/nodes/node-main/relations?direction=both")).status, 400);
+  assert.equal((await call("GET", "/api/nodes/node-missing/history")).status, 404);
+  assert.equal((await call("GET", "/api/nodes/invalid/cards")).status, 422);
+  await tent.writeFile(
+    "Other/Other.md",
+    "---\nid: node-other\ntype: goal\n---\n[Main](/Main/Main.md)\n",
+  );
+  const incoming = await call("GET", "/api/nodes/node-main/relations?direction=incoming");
+  assert.equal(
+    json<{ incoming: { from: { id: string } }[] }>(incoming).incoming[0]?.from.id,
+    "node-other",
+  );
+  await tent.writeFile("Other/Other.md", "---\nid: node-other\ntype: goal\n---\nThe goal.\n");
+  assert.equal(await git(tentRoot, "rev-parse", "--verify", "HEAD").catch(() => null), head);
+  assert.equal(await git(tentRoot, "status", "--porcelain"), dirty);
+});
+
 test("invalid stale_after is isolated while map and sync keep serving the workspace", async (t) => {
   const { tent, call } = await fixture(t);
   await tent.writeFile(

@@ -241,7 +241,10 @@ test("the page reads the map first and the snapshot only where a view needs it",
   // An empty link opens nothing, even beside a Node listed under the empty id.
   assert.match(app, /const ref: SnapshotRef | null = !ids*? null/);
   // Each view that shows what the snapshot holds asks for it.
-  assert.match(src("../src/ui/panel/Reader.tsx"), /useWantDetails\(!graph\.detailed\)/);
+  assert.match(
+    src("../src/ui/panel/Reader.tsx"),
+    /useWantDetails\(target\.kind !== "node" && !graph\.detailed\)/,
+  );
   assert.match(src("../src/ui/panel/Overlays.tsx"), /useWantDetails\(!graph\.detailed\)/);
   assert.match(src("../src/ui/shell/Dock.tsx"), /useWantDetails\(open && !graph\.detailed\)/);
   const view = src("../src/ui/map/MapView.tsx");

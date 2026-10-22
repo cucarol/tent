@@ -9,6 +9,9 @@ import type {
   OutputComparison,
   Snapshot,
   SyncFlags,
+  NodeHistoryDetails,
+  NodeCardsDetails,
+  NodeRelationsDetails,
 } from "./types.js";
 
 const TOKEN_KEY = "tent-token";
@@ -202,6 +205,13 @@ export const api = {
   sync: () => call<{ revision: string; nodes: SyncFlags }>("/api/sync"),
   node: (id: string, capture = false) =>
     call<NodeDocument>(`/api/nodes/${encodeURIComponent(id)}${capture ? "?capture=true" : ""}`),
+  nodeHistory: (id: string) =>
+    call<NodeHistoryDetails>(`/api/nodes/${encodeURIComponent(id)}/history`),
+  nodeCards: (id: string) => call<NodeCardsDetails>(`/api/nodes/${encodeURIComponent(id)}/cards`),
+  nodeRelations: (id: string, direction: "outgoing" | "incoming") =>
+    call<NodeRelationsDetails>(
+      `/api/nodes/${encodeURIComponent(id)}/relations?direction=${direction}`,
+    ),
   saveNode: (id: string, edit: NodeEdit) =>
     wrote(call<SavedNode>(`/api/nodes/${encodeURIComponent(id)}`, send("PUT", edit))),
   /** Removes the Node and everything under it; referenced files and links pointing at it stay. */

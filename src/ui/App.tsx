@@ -18,7 +18,8 @@ import {
   withMap,
   type Visits,
 } from "./data/store.js";
-import { DetailsContext, detailLoader } from "./data/details.js";
+import { detailLoader } from "./data/details.js";
+import { NodeDetailsProvider } from "./data/node-details.js";
 import type { WorkspaceMap } from "../core/read/workspace-map.js";
 import { api, ApiError, changes, describe } from "./data/api.js";
 import type { Snapshot, SnapshotRef } from "./data/types.js";
@@ -81,6 +82,7 @@ export function App() {
   // The map read draws the first screen; the full snapshot is read only when a view asks for details.
   const [map, setMap] = useState<WorkspaceMap | null>(null);
   const [full, setFull] = useState<Snapshot | null>(null);
+  const [liveRevision, setLiveRevision] = useState<string | undefined>(undefined);
   const snapshot = useMemo(
     () => (map ? (full ? withMap(full, map) : mapSnapshot(map)) : null),
     [map, full],
@@ -215,6 +217,8 @@ export function App() {
       busy = true;
       try {
         const now = (await api.revision()).revision;
+        if (stopped) return;
+        setLiveRevision(now);
         if (revision) {
           if (now !== revision) {
             const [fresh, m] = await Promise.all([api.snapshot(revision), api.map()]);
@@ -289,20 +293,24 @@ export function App() {
     setTreeFolded(unfold);
   }, [graph, selected?.id]);
 
-  const open = useCallback((ref: SnapshotRef | null) => {
-    setSelected(ref);
-    setEditOnExpand(false);
-    if (!ref) setExpanded(false);
-    try {
-      history.replaceState(
-        null,
-        "",
-        `${location.search}${ref ? `#${ref.id}` : ""}` || location.pathname,
-      );
-    } catch {
-      /* ignore */
-    }
-  }, []);
+  const open = useCallback(
+    (ref: SnapshotRef | null) => {
+      if (ref && ref.kind !== "node") wantDetails();
+      setSelected(ref);
+      setEditOnExpand(false);
+      if (!ref) setExpanded(false);
+      try {
+        history.replaceState(
+          null,
+          "",
+          `${location.search}${ref ? `#${ref.id}` : ""}` || location.pathname,
+        );
+      } catch {
+        /* ignore */
+      }
+    },
+    [wantDetails],
+  );
 
   // A Node counts as read once you move on from it, so its "new" mark stays visible while it is open.
   const snapshotRef = useRef(snapshot);
@@ -357,7 +365,13 @@ export function App() {
   }, [graph]);
   // An object deleted elsewhere closes its details.
   useEffect(() => {
-    if (graph && selected && !graph.exists(selected)) open(null);
+    if (
+      graph &&
+      selected &&
+      (selected.kind === "node" || graph.detailed) &&
+      !graph.exists(selected)
+    )
+      open(null);
   }, [graph]);
 
   useEffect(() => {
@@ -576,7 +590,7 @@ export function App() {
 
   return (
     // Views read the messages while rendering; remounting them on a language change redraws every string.
-    <DetailsContext.Provider value={wantDetails}>
+    <NodeDetailsProvider revision={liveRevision} wantDetails={wantDetails}>
       <FlagsContext.Provider value={shownFlags}>
         <FilesContext.Provider value={files}>
           <div
@@ -726,7 +740,7 @@ export function App() {
           </div>
         </FilesContext.Provider>
       </FlagsContext.Provider>
-    </DetailsContext.Provider>
+    </NodeDetailsProvider>
   );
 }
 

@@ -1042,6 +1042,7 @@ export async function listCardDocumentHeaders(
   const items: Array<Record<string, unknown>> = [];
   const selected: Array<Record<string, unknown> & { path: string }> = [];
   const sourceSets = new Map<string, MaterialSource[]>();
+  const sourceErrors = new Map<string, string>();
   const isUncaptured = options.uncaptured ? await uncapturedChecker(fs) : undefined;
   const completed = options.unfinishedOnly ? await completedCardPaths(fs) : undefined;
   const entries = (await fs.exists(CARDS_DIR))
@@ -1097,6 +1098,8 @@ export async function listCardDocumentHeaders(
           items.push(item);
           selected.push(item);
           sourceSets.set(id, Array.isArray(data.sources) ? (data.sources as MaterialSource[]) : []);
+          const sources = sourcesSchema.safeParse(data.sources);
+          if (!sources.success) sourceErrors.set(id, sources.error.message);
         } catch {
           items.push({
             cardId: id,
@@ -1151,7 +1154,7 @@ export async function listCardDocumentHeaders(
       bId = String(b.cardId);
     return aId < bId ? -1 : aId > bId ? 1 : 0;
   });
-  return { items: visible, sourceSets };
+  return { items: visible, sourceSets, sourceErrors };
 }
 
 export async function listCardDocuments(

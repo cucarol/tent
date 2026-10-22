@@ -463,6 +463,8 @@ const zh = {
     children: "下级",
     linksTo: "链接到",
     citedBy: "被引用",
+    loadIncoming: "展开读取入链",
+    noIncoming: "没有入链",
     via: (via: string): string =>
       via === "link"
         ? "正文链接"
@@ -1246,6 +1248,8 @@ const en: Messages = {
     children: "Children",
     linksTo: "Links to",
     citedBy: "Cited by",
+    loadIncoming: "Read incoming links",
+    noIncoming: "No incoming links",
     via: (via) =>
       via === "link"
         ? "Text link"

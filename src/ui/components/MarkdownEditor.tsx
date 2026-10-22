@@ -15,7 +15,8 @@ import {
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { tags } from "@lezer/highlight";
 import { primaryOf, type Graph } from "../data/store.js";
-import type { SnapshotRef } from "../data/types.js";
+import type { NodeRelationsDetails, SnapshotRef } from "../data/types.js";
+import { documentRef } from "../data/document-links.js";
 import { t } from "../i18n.js";
 import { relativeHref, resolveHref, workspaceImagePath } from "../util.js";
 import { followLinks, livePreview, type RefKind } from "./livePreview.js";
@@ -24,6 +25,7 @@ type Props = {
   value: string;
   fromPath: string;
   graph: Graph;
+  relations?: NodeRelationsDetails | null;
   label: string;
   /** Hide Markdown markup away from the cursor. */
   live: boolean;
@@ -209,17 +211,10 @@ const editorTheme = EditorView.theme({
   },
 });
 
-/** The Tent document a link points at, if it exists. */
-function refOf(graph: Graph, fromPath: string, href: string): SnapshotRef | null {
-  const target = resolveHref(fromPath, href);
-  const ref = target.tentPath ? graph.snapshot.paths[target.tentPath] : undefined;
-  return ref && graph.exists(ref) ? ref : null;
-}
-
 /** What a link points at inside the workspace, so live preview can show the same glyph as the reading view. */
-function refKindOf(graph: Graph, fromPath: string) {
+function refKindOf(graph: Graph, fromPath: string, relations?: NodeRelationsDetails | null) {
   return (href: string): RefKind | null => {
-    const ref = refOf(graph, fromPath, href);
+    const ref = documentRef(graph, fromPath, href, relations);
     if (!ref) return null;
     return ref.kind === "node" ? primaryOf(graph.nodes.get(ref.id)!.type) : ref.kind;
   };
@@ -252,6 +247,7 @@ export default function MarkdownEditor({
   value,
   fromPath,
   graph,
+  relations,
   label,
   live,
   onChange,
@@ -262,14 +258,12 @@ export default function MarkdownEditor({
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>(null);
   const mode = useRef(new Compartment());
-  const preview = useRef(
-    livePreview(refKindOf(graph, fromPath), (src) => workspaceImagePath(fromPath, src)),
-  );
-  const latest = useRef({ onChange, onSave, onOpen, onToast });
-  latest.current = { onChange, onSave, onOpen, onToast };
+  const latest = useRef({ graph, fromPath, relations, onChange, onSave, onOpen, onToast });
+  latest.current = { graph, fromPath, relations, onChange, onSave, onOpen, onToast };
 
   const follow = (href: string) => {
-    const ref = refOf(graph, fromPath, href);
+    const { graph, fromPath, relations } = latest.current;
+    const ref = documentRef(graph, fromPath, href, relations);
     if (ref) return latest.current.onOpen(ref);
     const target = resolveHref(fromPath, href);
     if (target.external && /^(https?|mailto):/i.test(target.external))
@@ -292,7 +286,7 @@ export default function MarkdownEditor({
           search({ top: false }),
           markdown({ base: markdownLanguage }),
           syntaxHighlighting(markdownStyle),
-          mode.current.of(live ? preview.current : []),
+          mode.current.of([]),
           followLinks(follow),
           autocompletion({ override: [nodeLinks(graph, fromPath)], icons: false }),
           placeholder(t.editor.placeholder),
@@ -330,8 +324,21 @@ export default function MarkdownEditor({
   useEffect(() => {
     const editor = view.current;
     if (!editor) return;
-    editor.dispatch({ effects: mode.current.reconfigure(live ? preview.current : []) });
-    editor.focus();
+    editor.dispatch({
+      effects: mode.current.reconfigure(
+        live
+          ? livePreview(
+              refKindOf(graph, fromPath, relations),
+              (src) => workspaceImagePath(fromPath, src),
+              editor.hasFocus,
+            )
+          : [],
+      ),
+    });
+  }, [live, graph, fromPath, relations]);
+
+  useEffect(() => {
+    view.current?.focus();
   }, [live]);
 
   return <div className="md-editor" ref={host} />;

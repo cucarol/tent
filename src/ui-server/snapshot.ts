@@ -1,4 +1,5 @@
 // Build the Web UI read model (src/ui/data/types.ts) from Core.
+import { plainLine } from "../core/base/document-title.js";
 import { readOnlyFs, type FsAdapter } from "../core/store/adapter.js";
 import { listHistoryChanges } from "../core/read/history-query.js";
 import {
@@ -251,17 +252,6 @@ export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
     commits,
     paths: Object.fromEntries(byPath),
   };
-}
-
-/** A Markdown line as the plain text a title shows: no heading, list or quote marker, no inline marks. */
-export function plainLine(line: string): string {
-  return line
-    .replace(/^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)+/, "")
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/(`+)(.+?)\1/g, "$2")
-    .replace(/(\*\*|__|~~)(.+?)\1/g, "$2")
-    .replace(/(^|[^\w*])\*(?!\s)(.+?)\*(?!\w)/g, "$1$2")
-    .trim();
 }
 
 function identityRef(id: string): SnapshotRef | null {

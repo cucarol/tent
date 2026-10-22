@@ -1,5 +1,13 @@
 // Read model the Web UI renders; `tent ui` serves it (src/ui-server/snapshot.ts builds it from Core).
 import type { ModuleDependencies } from "../../core/graph/module-dependencies.js";
+export type {
+  NodeHistoryDetails,
+  NodeHistoryEntry,
+  NodeCardsDetails,
+  NodeCardSummary,
+  NodeRelationsDetails,
+  NodeDetailRef,
+} from "../../core/read/node-details-types.js";
 
 export type RefKind = "node" | "role" | "card";
 export type SnapshotRef = { kind: RefKind; id: string };
