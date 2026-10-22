@@ -67,8 +67,7 @@ export type OutputComparison = {
   /** Unknown never claims a change or a match. */
   goals: { goalId: string; state: "current" | "changed" | "unknown" }[];
   changedSince: (
-    | { kind: "material"; resource: string }
-    | { kind: "goal" | "ancestor-goal"; nodeId: string; name: string }
+    { kind: "material"; resource: string } | { kind: "goal"; nodeId: string; name: string }
   )[];
 };
 

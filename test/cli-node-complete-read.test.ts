@@ -119,7 +119,8 @@ test("every partial page and explicit range remains read-only while full reads p
   assert.equal(full.etag, contentEtag(raw));
   const fullRaw = await cli("get", ["node-alpha", "--view", "raw", "--full"]);
   assert.equal(fullRaw.text, raw);
-  assert.deepEqual(Object.keys(fullRaw).sort(), ["etag", "nodeId", "text"]);
+  assert.deepEqual(Object.keys(fullRaw).sort(), ["etag", "materials", "nodeId", "text"]);
+  assert.deepEqual(fullRaw.materials, ["customer discussion"]);
   assert.equal(fullRaw.etag, contentEtag(raw));
   assert.equal(
     prepareNodeDocumentWrite({ id: "node-alpha", path: "A" }, raw, {
@@ -256,7 +257,14 @@ test("complete bounded body and raw reads retain their ordinary replacement basi
   const raw = await adapter.readFile("B/B.md");
   for (const view of ["body", "raw"]) {
     const node = await cli("get", ["node-bravo", "--view", view]);
-    assert.deepEqual(Object.keys(node).sort(), ["etag", "nodeId", "text", "uncaptured"]);
+    assert.deepEqual(Object.keys(node).sort(), [
+      "etag",
+      "materials",
+      "nodeId",
+      "text",
+      "uncaptured",
+    ]);
+    assert.deepEqual(node.materials, []);
     assert.equal(node.uncaptured, true);
     assert.equal(node.text, view === "raw" ? raw : parseFrontmatter(raw).body);
     assert.equal(node.etag, contentEtag(raw));

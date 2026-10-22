@@ -166,7 +166,7 @@ export function formatTextPage(value: unknown): string {
           .map((change) =>
             change.kind === "material"
               ? `- material ${change.resource}`
-              : `- ${change.kind === "goal" ? "goal" : "ancestor goal"} ${change.name} (${change.nodeId})`,
+              : `- goal ${change.name} (${change.nodeId})`,
           )
           .join(
             "\n",

@@ -75,7 +75,6 @@ test("selected outputs compare every ancestor goal independently without acknowl
     changedSince: [
       { kind: "material", resource: "../../../../../result.txt" },
       { kind: "goal", nodeId: inner, name: "Inner" },
-      { kind: "ancestor-goal", nodeId: outer, name: "Outer" },
     ],
   });
   assert.deepEqual(compared[1], initial[1]);
@@ -100,9 +99,7 @@ test("missing baselines and unavailable materials are unknown, while a proven ch
   });
   comparison = (await readOutputComparisons(fs, [outputs[0]!]))[0]!;
   assert.equal(comparison.goals[1]!.state, "changed");
-  assert.deepEqual(comparison.changedSince, [
-    { kind: "ancestor-goal", nodeId: outer, name: "Outer" },
-  ]);
+  assert.deepEqual(comparison.changedSince, []);
   await fs.writeFile(
     "Outer/Inner/Imported/Imported.md",
     "---\nid: node-imported\ntype: output\n---\nImported\n",

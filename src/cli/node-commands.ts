@@ -1,4 +1,4 @@
-import { workspaceReadPaths } from "./read-paths.js";
+import { workspaceReadPaths, nodeReadMaterials } from "./read-paths.js";
 import { formatCliTime } from "./time-text.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
@@ -406,6 +406,7 @@ export async function runNodeCommand(
               nodeId: edit.nodeId,
               text: view === "raw" ? edit.raw : edit.body,
               etag: edit.etag,
+              materials: nodeReadMaterials(edit.frontmatter, edit.path, workspaceRoot),
               ...(edit.uncaptured ? { uncaptured: true } : {}),
               ...(edit.changedSince ? { changedSince: edit.changedSince } : {}),
             }),
@@ -427,14 +428,20 @@ export async function runNodeCommand(
           node.view === "summary"
             ? workspaceReadPaths(compactItem(node), workspaceRoot)
             : (() => {
-                const paged = pageText(node, `node.get:${nodeId}`, {
-                  cursor: flags.cursor,
-                  maxBytes: 16 * 1024 - 1280,
-                });
+                const paged = pageText(
+                  { ...node, materials: nodeReadMaterials(node, node.path, workspaceRoot) },
+                  `node.get:${nodeId}`,
+                  {
+                    cursor: flags.cursor,
+                    maxBytes: 16 * 1024 - 1280,
+                  },
+                );
                 return {
                   nodeId: paged.nodeId,
                   text: paged.text,
                   etag: paged.etag,
+                  materials: paged.materials,
+                  ...(!paged.materials ? { materialsOmitted: true } : {}),
                   ...("uncaptured" in paged && paged.uncaptured ? { uncaptured: true } : {}),
                   ...(paged.partial
                     ? {
@@ -1020,10 +1027,17 @@ function coreReaderFlags(flags: Record<string, string>) {
 
 function formatNodeRead(value: unknown): string {
   return formatWithContext(value, (content) => {
-    const node = content as { nodeId: string; etag: string; text?: string; uncaptured?: boolean };
+    const node = content as {
+      nodeId: string;
+      etag: string;
+      text?: string;
+      uncaptured?: boolean;
+      materials?: string[];
+      materialsOmitted?: boolean;
+    };
     return node.text === undefined
       ? (node.uncaptured ? `${uncapturedNotice}\n` : "") + JSON.stringify(content, null, 2)
-      : `${node.nodeId}\nETag: ${node.etag}\n${formatTextPage(content)}`;
+      : `${node.nodeId}\nETag: ${node.etag}\n${(node.materials ?? []).map((material) => `Material: ${material}\n`).join("")}${node.materialsOmitted ? "Materials omitted; use node get --full to read all declarations.\n" : ""}${formatTextPage(content)}`;
   });
 }
 

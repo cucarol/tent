@@ -252,7 +252,7 @@ export class ContextReader {
       viewLength: text.length,
       text: text.slice(requested.start, requested.end),
       partial: requested.start !== 0 || requested.end !== text.length,
-      ...(view === "body" && d.materials ? structuredClone(d.materials) : {}),
+      ...(d.materials ? structuredClone(d.materials) : {}),
     };
   }
   list(input: z.infer<typeof readerListSchema> = {}) {

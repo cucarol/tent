@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { runNodeCommand } from "../src/cli/node-commands.js";
+import { nodeReadMaterials } from "../src/cli/read-paths.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { git } from "./helpers.js";
@@ -11,6 +13,113 @@ import { createNode } from "../src/core/graph/ops.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
+
+test("material display preserves directory and prefix selectors without opening files", () => {
+  assert.deepEqual(
+    nodeReadMaterials(
+      {
+        resource: "../../output/missing%20file.md#Heading",
+        sources: [
+          { resource: "../../src/" },
+          { resource: "../../src/node-*" },
+          { resource: "../../" },
+          {
+            resource: pathToFileURL(
+              path.resolve(".scratch", "nonexistent-material-display", "src") + path.sep,
+            ).href,
+          },
+          { resource: "https://example.com/doc" },
+          { resource: "conversation" },
+        ],
+      },
+      "Owner",
+      path.resolve(".scratch", "nonexistent-material-display"),
+    ),
+    [
+      "output/missing file.md",
+      "src/",
+      "src/node-*",
+      "./",
+      "src/",
+      "https://example.com/doc",
+      "conversation",
+    ],
+  );
+});
+
+test("node get preserves foreign file URIs when the host cannot map them", async (t) => {
+  const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-foreign-material-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  await initializeFixtureWorkspace(workspace);
+  const resource =
+    process.platform === "win32" ? "file:///home/example/report.md" : "file://other-host/report.md";
+  const created = await runNodeCommand(
+    "create",
+    ["Foreign", "--type", "prompt", "--resource", resource, "--body", "Body remains readable"],
+    { workspace, json: true },
+  );
+  assert.equal(created.exitCode, 0, created.stderr);
+  const nodeId = JSON.parse(created.stdout).node.nodeId;
+  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const head = await adapter.history.currentCommit();
+  for (const flags of [[], ["--full"], ["--view", "raw"], ["--full", "--view", "raw"]]) {
+    const read = await runNodeCommand("get", [nodeId, ...flags], { workspace, json: true });
+    assert.equal(read.exitCode, 0, read.stderr);
+    const value = JSON.parse(read.stdout);
+    assert.deepEqual(value.materials, [resource]);
+    assert.match(value.text, /Body remains readable/);
+    const text = await runNodeCommand("get", [nodeId, ...flags], { workspace });
+    assert.equal(text.exitCode, 0, text.stderr);
+    assert.ok(text.stdout.includes(`Material: ${resource}\n`));
+  }
+  assert.equal(await adapter.history.currentCommit(), head);
+});
+
+test("node get shows decoded own material paths below ETag even with an empty body", async (t) => {
+  const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-material-paths-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  await initializeFixtureWorkspace(workspace);
+  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const env = {
+    fs: adapter,
+    clock: { now: () => "2026-10-22T00:00:00.000Z" },
+    tentName: "Materials",
+  };
+  await fs.mkdir(path.join(workspace, "output", "资料"), { recursive: true });
+  await fs.writeFile(path.join(workspace, "output", "资料", "report.md"), "PRIVATE MATERIAL BODY");
+  await fs.writeFile(path.join(workspace, "source note.md"), "PRIVATE SOURCE BODY");
+  await createNode(env, { parentPath: "", name: "Parent", type: "goal" });
+  const id = await createNode(env, {
+    parentPath: "Parent",
+    name: "Empty",
+    type: "output",
+    body: "",
+    resource: "../../../output/%E8%B5%84%E6%96%99/report.md",
+    sources: [{ resource: "../../../source%20note.md" }],
+  });
+  const head = await adapter.history.currentCommit();
+  const version = { commit: head, path: "Parent/Empty/Empty.md" };
+  const expected = ["output/资料/report.md", "source note.md"];
+  for (const args of [
+    [id],
+    [id, "--full"],
+    [id, "--view", "raw"],
+    [id, "--full", "--view", "raw"],
+    [id, "--version-json", JSON.stringify(version)],
+  ]) {
+    const json = await runNodeCommand("get", args, { workspace, json: true });
+    assert.equal(json.exitCode, 0, json.stderr);
+    assert.deepEqual(JSON.parse(json.stdout).materials, expected);
+    const text = await runNodeCommand("get", args, { workspace });
+    assert.equal(text.exitCode, 0, text.stderr);
+    assert.match(
+      text.stdout,
+      /ETag: [^\n]+\nMaterial: output\/资料\/report.md\nMaterial: source note.md\n/,
+    );
+    assert.doesNotMatch(text.stdout, /PRIVATE MATERIAL BODY|PRIVATE SOURCE BODY/);
+  }
+  assert.equal(await adapter.history.currentCommit(), head);
+});
 
 test("complete output CLI reads expose changedSince in JSON and approved text without saving it", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-output-freeze-"));
@@ -45,7 +154,6 @@ test("complete output CLI reads expose changedSince in JSON and approved text wi
   const expected = [
     { kind: "material", resource: "../../../../result.txt" },
     { kind: "goal", nodeId: inner, name: "Inner" },
-    { kind: "ancestor-goal", nodeId: outer, name: "Outer" },
   ];
   const head = await adapter.history.currentCommit();
   const before = await adapter.readFile(version.path);
@@ -59,7 +167,7 @@ test("complete output CLI reads expose changedSince in JSON and approved text wi
     const text = await run("get", args, false);
     assert.ok(
       text.includes(
-        `Changed since this output was saved or confirmed:\n- material ../../../../result.txt\n- goal Inner (${inner})\n- ancestor goal Outer (${outer})\nIt still records what it saw then. If a change makes it wrong for current work, record a new output; if it still holds, confirm it.`,
+        `Changed since this output was saved or confirmed:\n- material ../../../../result.txt\n- goal Inner (${inner})\nIt still records what it saw then. If a change makes it wrong for current work, record a new output; if it still holds, confirm it.`,
       ),
       text,
     );

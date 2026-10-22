@@ -466,10 +466,12 @@ test("native body saves retain exact bytes and old bases; node get is pure and t
     assert.deepEqual(Object.keys(read).sort(), [
       "changedSince",
       "etag",
+      "materials",
       "nodeId",
       "text",
       "uncaptured",
     ]);
+    assert.deepEqual(read.materials, [], "ancestor material declarations are not own materials");
     assert.ok(
       read.changedSince.some(
         (change: { kind: string; nodeId?: string }) =>

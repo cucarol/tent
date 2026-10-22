@@ -619,8 +619,7 @@ export async function inspectNodesSync(
 }
 
 export type OutputChange =
-  | { kind: "material"; resource: string }
-  | { kind: "goal" | "ancestor-goal"; nodeId: string; name: string };
+  { kind: "material"; resource: string } | { kind: "goal"; nodeId: string; name: string };
 
 export type OutputComparison = {
   nodeId: string;
@@ -635,9 +634,13 @@ function outputChanges(inspection: NodeSyncInspection, catalog: NodeCatalog): Ou
     .filter((material) => !material.goalId)
     .map((material) => ({ kind: "material", resource: material.resource }));
   const goals: OutputChange[] = [
-    ...new Set(changed.flatMap((material) => material.goalId ?? [])),
+    ...new Set(
+      changed.flatMap((material) =>
+        material.goalId === inspection.goalId && material.goalId ? [material.goalId] : [],
+      ),
+    ),
   ].map((id) => ({
-    kind: id === inspection.goalId ? "goal" : "ancestor-goal",
+    kind: "goal",
     nodeId: id,
     name: catalog.byId.get(id)!.name,
   }));

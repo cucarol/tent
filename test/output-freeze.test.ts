@@ -61,7 +61,7 @@ async function fixture(tag: string) {
 }
 
 for (const tag of ["asset", "evidence", "analysis", "issue"]) {
-  test(`output ${tag} stays frozen while full reads distinguish own, direct and ancestor changes`, async () => {
+  test(`output ${tag} stays frozen while full reads report only own and nearest goal changes`, async () => {
     const { fs, output, outer, inner, prompt, confirm } = await fixture(tag);
     await fs.writeFile("../result.txt", "second");
     assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
@@ -88,7 +88,6 @@ for (const tag of ["asset", "evidence", "analysis", "issue"]) {
     assert.deepEqual(changes, [
       { kind: "material", resource: "../../../../result.txt" },
       { kind: "goal", nodeId: inner, name: "Inner" },
-      { kind: "ancestor-goal", nodeId: outer, name: "Outer" },
     ]);
     assert.deepEqual((await readNodeForEdit(fs, output, { changes: true })).changedSince, changes);
     const batch = await prepareNodeBatch(fs, "ws-test");
@@ -125,7 +124,7 @@ for (const evidence of ["confirmation", "new output"] as const) {
     assert.ok((await inspectNodeSync(fs, inner)).ahead);
     assert.equal((await listCardDocuments(fs)).items[0]!.state, "consumed");
     const olderChanges = (await readNodeForEdit(fs, output, { changes: true })).changedSince;
-    assert.equal(olderChanges?.length, 2);
+    assert.deepEqual(olderChanges, [{ kind: "goal", nodeId: inner, name: "Inner" }]);
     let matching: string;
     if (evidence === "confirmation") {
       await confirm(other);
@@ -182,9 +181,7 @@ test("partial matches from different outputs cannot combine into current evidenc
   await confirm(output);
   assert.equal((await inspectNodeSync(fs, outer)).ahead, undefined);
   assert.equal((await listCardDocuments(fs)).items[0]!.state, "consumed");
-  assert.deepEqual((await readNodeForEdit(fs, other, { changes: true })).changedSince, [
-    { kind: "ancestor-goal", nodeId: outer, name: "Outer" },
-  ]);
+  assert.deepEqual((await readNodeForEdit(fs, other, { changes: true })).changedSince, undefined);
 });
 
 test("an imported output without a goal baseline cannot establish current evidence", async () => {

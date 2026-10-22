@@ -8,8 +8,10 @@
 | A type or tag | `tent node list --type prompt --tag decision` | `items[].nodeId`, `path` |
 | The tree | `tent node list`, then `--cursor <page.nextCursor>` | `items` |
 | A Node's next page | `tent node get <id> --cursor <page.nextCursor>` | `text` |
-| A whole Node | `tent node get <id> --full --json`; `--view raw` adds frontmatter | `text`, `etag` |
+| A whole Node | `tent node get <id> --full --json`; `--view raw` adds frontmatter | `text`, `etag`, `materials` |
 | Its surroundings | `tent node get <id> --context` | ancestors, children, links, Cards |
+
+Node reads show each declared material below ETag as `Material: <path>`; JSON exposes `materials`. Local paths are decoded and Workspace-relative, without loading material bodies. Complete output reads report changes to own materials and only the nearest goal; higher goal comparison data remains retained.
 
 Every `path` outside `version` is Workspace-relative. Open `node-`, `role-` and `card-` ids with `node get`, `role show` and `card show`.
 

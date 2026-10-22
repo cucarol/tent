@@ -1,7 +1,37 @@
 import path from "node:path";
 import { nodeNotePath } from "../core/base/paths.js";
-import { materialLocator, localMaterialPath } from "../core/base/material.js";
+import {
+  materialLocator,
+  localMaterialPath,
+  resolvedMaterialOccurrences,
+  isDirectoryMaterial,
+} from "../core/base/material.js";
 import { markdownMaterialHeading } from "../core/base/material-section.js";
+
+/** Declared materials only; resolving their addresses never reads their contents. */
+export function nodeReadMaterials(
+  fields: Record<string, unknown>,
+  nodePath: string,
+  workspaceRoot: string,
+): string[] {
+  return resolvedMaterialOccurrences(fields, nodeNotePath(nodePath)).map(
+    ({ resource, locator }) => {
+      if (!locator) return resource;
+      let filename: string | undefined;
+      try {
+        filename = localMaterialPath(locator, workspaceRoot);
+      } catch {
+        // A file URI from another host can remain readable as a reference.
+        return resource;
+      }
+      if (!filename) return resource;
+      const relative = path.relative(workspaceRoot, filename).replace(/\\/g, "/");
+      if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative))
+        return resource;
+      return (relative || ".") + (isDirectoryMaterial(locator) ? "/" : "");
+    },
+  );
+}
 
 /** Discovery addresses are directly usable by the host's file reader. */
 export function workspaceReadPaths<T>(value: T, workspaceRoot: string): T {
