@@ -28,11 +28,19 @@ export function checkedSourceDirectory(root: string, directory: string): Promise
       if (!inside(root, directory)) throw new Error("Source target escapes root");
       if (path.relative(root, directory) !== "")
         await checkedSourceDirectory(root, path.dirname(directory));
-      const [info, actualRoot, actual] = await Promise.all([
+      const [state, rootPath, directoryPath] = await Promise.allSettled([
         initialSourceState(directory),
         sourceDirectoryRealpath(root),
         sourceDirectoryRealpath(directory),
       ]);
+      // A missing directory can fail both probes. Report a stable failure rather
+      // than letting I/O completion order change material evidence and cursors.
+      if (state.status === "rejected") throw state.reason;
+      if (rootPath.status === "rejected") throw rootPath.reason;
+      if (directoryPath.status === "rejected") throw directoryPath.reason;
+      const info = state.value;
+      const actualRoot = rootPath.value;
+      const actual = directoryPath.value;
       if (path.relative(actualRoot, root) !== "") throw new Error("Workspace root changed");
       if (info.isSymbolicLink())
         throw new Error("Symbolic links are not supported for source files");
