@@ -262,3 +262,37 @@ test("Role writes canonicalize known Node ids in Markdown links", async (t) => {
     "[fact](../Fact/Fact.md)",
   );
 });
+
+test("Role lists filter deprecated headers before paging and mark explicit inclusion", async (t) => {
+  const { root, adapter } = await fixture(t);
+  for (const [roleId, status] of [
+    ["role-a", "deprecated"],
+    ["role-b", "stable"],
+    ["role-c", "draft"],
+  ])
+    await adapter.writeFile(
+      `roles/${roleId}.md`,
+      `---\ntype: role\nid: ${roleId}\ntitle: ${roleId}\nstatus: ${status}\n---\nBody\n`,
+    );
+  const head = await adapter.history.currentCommit();
+  assert.deepEqual(
+    (await listRoleContexts(adapter)).items.map((r) => r.roleId),
+    ["role-b", "role-c"],
+  );
+  assert.deepEqual(
+    (await listRoleContexts(adapter, { includeDeprecated: true })).items.map((r) => r.status),
+    ["deprecated", "stable", "draft"],
+  );
+  const first = await runRoleCommand("list", ["--limit", "1", "--json"], { workspace: root });
+  assert.equal(first.exitCode, 0);
+  assert.equal(JSON.parse(first.stdout).items[0].roleId, "role-b");
+  const text = await runRoleCommand("list", ["--include-deprecated"], { workspace: root });
+  assert.match(text.stdout, /role-a  role-a  deprecated/);
+  const hidden = await runRoleCommand("list", [], { workspace: root });
+  assert.doesNotMatch(hidden.stdout, /role-a/);
+  const json = await runRoleCommand("list", ["--include-deprecated", "--json"], {
+    workspace: root,
+  });
+  assert.equal(JSON.parse(json.stdout).items[0].status, "deprecated");
+  assert.equal(await adapter.history.currentCommit(), head);
+});

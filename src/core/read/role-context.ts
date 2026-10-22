@@ -1,3 +1,4 @@
+import { assertRoleHasNoUnfinishedCards } from "../graph/role-cards.js";
 import { isDeepStrictEqual } from "node:util";
 import { withTentMutation, type FsAdapter } from "../store/adapter.js";
 import { parseFrontmatter, serializeFrontmatter } from "../base/frontmatter.js";
@@ -60,8 +61,13 @@ function shortCause(error: unknown): string {
   return [...(message.split(/\r?\n/)[0] ?? "").replace(/\.$/, "")].slice(0, 200).join("");
 }
 
-export async function listRoleContexts(fs: FsAdapter) {
-  const roles = await roleSummaries(fs),
+export async function listRoleContexts(
+  fs: FsAdapter,
+  options: { includeDeprecated?: boolean } = {},
+) {
+  const roles = (await roleSummaries(fs)).filter(
+      (role) => options.includeDeprecated || role.status !== "deprecated",
+    ),
     revision = canonicalSha256(roles);
   return { revision, items: roles };
 }
@@ -204,6 +210,8 @@ export function editRoleContext(fs: FsAdapter, roleId: string, input: RoleEdit) 
       const after = parseFrontmatter(raw).data;
       await validateSystemMaterials(fs, after, current.path, before.data);
       assertStatusEdit(before.data, after);
+      if (documentLifecycle(after).status === "deprecated")
+        await assertRoleHasNoUnfinishedCards(fs, roleId);
       if ((await fs.readFile(current.path)) !== current.raw)
         throw new Error(
           "Role context changed while resolving references; reread and reconcile your draft",

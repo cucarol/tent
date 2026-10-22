@@ -49,6 +49,7 @@ export async function runRoleCommand(
       allowPositionals: true,
       options: {
         ...Object.fromEntries(flags.map((key) => [key, { type: "string" as const }])),
+        ...(sub === "list" ? { "include-deprecated": { type: "boolean" as const } } : {}),
         json: { type: "boolean" },
         help: { type: "boolean", short: "h" },
       },
@@ -89,11 +90,15 @@ export async function runRoleCommand(
     if (mutation) await captureNativeNodeEdits(fs);
     let result: unknown;
     if (sub === "list")
-      result = pageItems(await listRoleContexts(fs), "role.list", {
-        start: number("start"),
-        limit: number("limit"),
-        expectedRevision: value("expected-revision"),
-      });
+      result = pageItems(
+        await listRoleContexts(fs, { includeDeprecated: values["include-deprecated"] === true }),
+        "role.list",
+        {
+          start: number("start"),
+          limit: number("limit"),
+          expectedRevision: value("expected-revision"),
+        },
+      );
     else if (sub === "show") {
       const options = {
         view: value("view") as "body" | "raw" | undefined,
@@ -165,7 +170,7 @@ export async function runRoleCommand(
 
 export function roleHelpText() {
   return `tent role — durable Role Markdown, directly through Core
-  tent role list [--start N --expected-revision HASH] [--limit N]
+  tent role list [--include-deprecated] [--start N --expected-revision HASH] [--limit N]
   tent role create --title TEXT [--body TEXT|-] [--id role-ID]
   tent role show role-ID [--view body|raw] [--start N --end N --expected-etag HASH]
   tent role write role-ID --base-etag HASH [--raw TEXT|- | --body TEXT|-]
@@ -185,12 +190,16 @@ function formatRole(value: unknown, sub: string) {
     return `${identity.roleId}  ${identity.path ?? ""}\nETag: ${identity.etag}\n${formatTextPage(value)}`;
   if (sub === "list") {
     const result = value as {
-      items: Array<{ roleId: string; title?: string }>;
+      items: Array<{ roleId: string; title?: string; status?: string }>;
       page: { hasMore: boolean; next?: unknown };
     };
     return (
-      result.items.map((item) => `${item.roleId}  ${item.title ?? ""}`).join("\n") +
-      (result.page.hasMore ? `\nNext: ${JSON.stringify(result.page.next)}` : "")
+      result.items
+        .map(
+          (item) =>
+            `${item.roleId}  ${item.title ?? ""}${item.status === "deprecated" ? "  deprecated" : ""}`,
+        )
+        .join("\n") + (result.page.hasMore ? `\nNext: ${JSON.stringify(result.page.next)}` : "")
     );
   }
   return `Updated ${identity.roleId}\nETag: ${identity.etag}`;

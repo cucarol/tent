@@ -1,3 +1,4 @@
+import { RoleCardsError } from "../core/graph/role-cards.js";
 import { inspectWorkspaceSync, readOutputComparisons } from "../core/graph/node-sync.js";
 import { readNodeTimes } from "../core/read/node-times.js";
 import { readMaterialOverlaps } from "../core/read/material-overlaps.js";
@@ -33,7 +34,7 @@ import { createNode, deleteNode, renameNode } from "../core/graph/ops.js";
 import { moveNode, type MovePosition } from "../core/graph/move-ops.js";
 import { loadNodeCatalog } from "../core/graph/node-catalog.js";
 import { editRoleContext } from "../core/read/role-context.js";
-import { deleteRole, RoleDeleteError } from "../core/write/role-delete.js";
+import { deleteRole } from "../core/write/role-delete.js";
 import { readRoleDocument } from "../core/store/role-document.js";
 import { readNodeForEdit } from "../core/read/node-query.js";
 import { nodeNotePath, TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/base/paths.js";
@@ -921,7 +922,7 @@ async function managed<T>(work: Promise<T>): Promise<T> {
     return await work;
   } catch (error) {
     if (error instanceof HttpError) throw error;
-    if (error instanceof RoleDeleteError)
+    if (error instanceof RoleCardsError)
       throw new HttpError(409, error.code, error.message, error.details);
     const message = error instanceof Error ? error.message : String(error);
     if (/already running another write operation/.test(message)) throw error;

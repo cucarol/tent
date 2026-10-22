@@ -1,11 +1,16 @@
+import { RoleCardsError } from "../src/core/graph/role-cards.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { createRoleContext, requireRoleDocument } from "../src/core/read/role-context.js";
-import { deleteRole, RoleDeleteError } from "../src/core/write/role-delete.js";
+import {
+  createRoleContext,
+  editRoleContext,
+  requireRoleDocument,
+} from "../src/core/read/role-context.js";
+import { deleteRole } from "../src/core/write/role-delete.js";
 import {
   createCardDocument,
   deprecateCardDocument,
@@ -116,7 +121,7 @@ test("pending targeted Cards list every blocker; moving and cancelling them perm
   );
   const head = await adapter.history.currentCommit();
   await assert.rejects(deleteRole(adapter, role.roleId, { baseEtag: role.etag }), (error) => {
-    assert.ok(error instanceof RoleDeleteError);
+    assert.ok(error instanceof RoleCardsError);
     assert.equal(error.code, "PENDING_CARDS");
     assert.deepEqual(error.details.cardIds, [first.cardId, second.cardId]);
     assert.match(error.message, /card-first, card-second/);
@@ -156,11 +161,11 @@ test("unfinished returns protect both Roles and release each at its delivery bou
     await assert.rejects(
       deleteRole(adapter, subject.roleId, { baseEtag: subject.etag }),
       (error) => {
-        assert.ok(error instanceof RoleDeleteError);
+        assert.ok(error instanceof RoleCardsError);
         assert.deepEqual(error.details.cardIds, blockers);
         assert.equal(
           error.message,
-          `Role has unfinished Cards: ${blockers.join(", ")}. Deprecate them, or move pending ones, before deleting it.`,
+          `Role has unfinished Cards: ${blockers.join(", ")}. Collect returned Cards, finish outstanding returns, move pending targets, or deprecate the Cards before retiring the Role.`,
         );
         return true;
       },
@@ -173,7 +178,7 @@ test("unfinished returns protect both Roles and release each at its delivery bou
   await deleteRole(adapter, worker.roleId, { baseEtag: worker.etag });
   // The return address remains protected even after its original target is moved.
   await assert.rejects(deleteRole(adapter, role.roleId, { baseEtag: role.etag }), (error) => {
-    assert.ok(error instanceof RoleDeleteError);
+    assert.ok(error instanceof RoleCardsError);
     assert.deepEqual(error.details.cardIds, ["card-consumed", "card-pending", "card-returned"]);
     return true;
   });
@@ -330,4 +335,82 @@ test("Role delete plans cannot remove another path or introduce associated write
   assert.equal(await adapter.readFile(role.path), raw);
   assert.equal(await adapter.readFile("other.md"), raw);
   assert.equal(await adapter.exists(DELETE_PENDING_PATH), false);
+});
+
+test("Role deprecation protects delivery addresses and preserves failed writes", async (t) => {
+  const { adapter, role, root } = await fixture(t);
+  const worker = await createRoleContext(adapter, { roleId: "role-worker", title: "Worker" });
+  const card = await createCardDocument(adapter, {
+    cardId: "card-return",
+    prompt: "Work",
+    target: worker.roleId,
+    returnTo: role.roleId,
+  });
+  async function blocked(subject: typeof role, raw = false) {
+    const before = await adapter.readFile(subject.path);
+    const head = await adapter.history.currentCommit();
+    await assert.rejects(
+      editRoleContext(adapter, subject.roleId, {
+        baseEtag: subject.etag,
+        ...(raw
+          ? { raw: before.replace("type: role", "type: role\nstatus: deprecated") }
+          : { frontmatter: { status: "deprecated" } }),
+      }),
+      (error) => {
+        assert.ok(error instanceof RoleCardsError);
+        assert.equal(error.code, "PENDING_CARDS");
+        assert.deepEqual(error.details.cardIds, [card.cardId]);
+        return true;
+      },
+    );
+    assert.equal(await adapter.readFile(subject.path), before);
+    assert.equal(await adapter.history.currentCommit(), head);
+  }
+  await blocked(worker);
+  await blocked(role, true);
+  const cli = await runRoleCommand(
+    "write",
+    [worker.roleId, "--base-etag", worker.etag, "--status", "deprecated"],
+    { workspace: root },
+  );
+  assert.equal(cli.exitCode, 1);
+  assert.match(cli.stderr, /card-return/);
+  await takeCardDocument(adapter, card.cardId, worker.roleId);
+  await blocked(worker, true);
+  await blocked(role);
+  await returnCardDocument(adapter, card.cardId, { roleId: worker.roleId, result: "done" });
+  await editRoleContext(adapter, worker.roleId, {
+    baseEtag: worker.etag,
+    frontmatter: { status: "deprecated" },
+  });
+  await blocked(role);
+  await takeCardDocument(adapter, card.cardId, role.roleId);
+  await editRoleContext(adapter, role.roleId, {
+    baseEtag: role.etag,
+    frontmatter: { status: "deprecated" },
+  });
+});
+
+test("Role deprecation ignores completed and cancelled Cards and still checks CAS", async (t) => {
+  const { adapter, role } = await fixture(t);
+  const done = await createCardDocument(adapter, { prompt: "One-way", target: role.roleId });
+  await takeCardDocument(adapter, done.cardId, role.roleId);
+  const cancelled = await createCardDocument(adapter, { prompt: "Cancelled", target: role.roleId });
+  await deprecateCardDocument(adapter, cancelled.cardId, cancelled.etag);
+  const before = await adapter.readFile(role.path);
+  for (const baseEtag of ["", "stale"])
+    await assert.rejects(
+      editRoleContext(adapter, role.roleId, { baseEtag, frontmatter: { status: "deprecated" } }),
+      /baseEtag/,
+    );
+  assert.equal(await adapter.readFile(role.path), before);
+  const retired = await editRoleContext(adapter, role.roleId, {
+    baseEtag: role.etag,
+    frontmatter: { status: "deprecated" },
+  });
+  const restored = await editRoleContext(adapter, role.roleId, {
+    baseEtag: retired.etag,
+    frontmatter: { status: "stable" },
+  });
+  assert.ok(restored.changed);
 });

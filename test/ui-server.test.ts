@@ -1667,11 +1667,16 @@ test("Role delete HTTP reports unfinished returns and permits deprecated receipt
       json: { baseEtag: role.etag },
     });
     assert.equal(blocked.status, 409, blocked.body);
+    const archived = await call("POST", `/api/roles/${role.roleId}/status`, {
+      json: { baseEtag: role.etag, archived: true },
+    });
+    assert.equal(archived.status, 409, archived.body);
+    assert.deepEqual(json(archived), json(blocked));
     assert.deepEqual(
       json<{ error: { code: string; details: { cardIds: string[] } } }>(blocked).error,
       {
         code: "PENDING_CARDS",
-        message: `Role has unfinished Cards: ${card.cardId}. Deprecate them, or move pending ones, before deleting it.`,
+        message: `Role has unfinished Cards: ${card.cardId}. Collect returned Cards, finish outstanding returns, move pending targets, or deprecate the Cards before retiring the Role.`,
         details: { cardIds: [card.cardId] },
       },
     );
