@@ -318,7 +318,10 @@ test(
     assert.equal(taken.state, "consumed");
     assert.equal("progress" in taken, false);
     assert.equal((await json(["card", "take", card.cardId, "--role", role.roleId])).replayed, true);
-    await assert.rejects(cli(["card", "interrupt", card.cardId]), /Unknown card command/);
+    await assert.rejects(
+      cli(["card", "interrupt", card.cardId]),
+      /Unknown command: tent card interrupt/,
+    );
     await assert.rejects(
       cli(["node", "write", node.nodeId, "--body", "Lost", "--base-etag", before.etag]),
       /conflict|etag/i,

@@ -64,7 +64,7 @@ import { canonicalSha256 } from "../core/base/canonical-digest.js";
 import { inspectNodeSync, confirmNodeSync, linkNodeOutput } from "../core/graph/node-sync.js";
 import { goalContextText } from "./goal-context.js";
 import { retainedDocumentFs } from "../core/graph/retained-read.js";
-import { cliErrorText, type ErrorContext } from "./error-text.js";
+import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 
 export type NodeCommandOptions = {
   workspace?: string;
@@ -127,7 +127,8 @@ export async function runNodeCommand(
     if (flags.help === "true" || ["help", "--help", "-h"].includes(sub)) {
       return { exitCode: 0, stdout: nodeHelpText(sub) + "\n", stderr: "" };
     }
-    if (!Object.prototype.hasOwnProperty.call(NODE_COMMAND_HELP, sub)) return usage(nodeHelpText());
+    if (!Object.prototype.hasOwnProperty.call(NODE_COMMAND_HELP, sub))
+      throw unknownCommandError("tent node", sub, Object.keys(NODE_COMMAND_HELP));
     if (flags.context !== undefined && sub !== "get")
       return usage("--context is only valid for node get");
     if (flags.id !== undefined && sub !== "create")
@@ -247,13 +248,7 @@ export async function runNodeCommand(
         if (Object.keys(flags).some((key) => !allowed.includes(key)))
           return usage(nodeHelpText(sub));
         if (!flags["base-etag"])
-          return usage(
-            [
-              `node confirm needs --base-etag <etag>: the etag of a complete live read of ${target}.`,
-              `Get it with \`tent node get ${target} --json\` (etag); a read:<etag> from a partial page is rejected, so use --full for long Nodes.`,
-              `Usage: ${NODE_COMMAND_HELP.confirm![0]}`,
-            ].join("\n"),
-          );
+          throw new Error("tent node confirm needs --base-etag from a complete read.");
         const nodeId = nodeRef(target);
         const saved = await confirmNodeSync(fs, nodeId, {
           baseEtag: flags["base-etag"],
@@ -657,6 +652,8 @@ export async function runNodeCommand(
           ((body === undefined && flags.confirm === undefined) ||
             !flagValue(flags, "base-etag")?.trim())
         ) {
+          if (!flagValue(flags, "base-etag")?.trim())
+            throw new Error("tent node write needs --base-etag from a complete read.");
           return usage(
             "tent node write <nodeId> --body <text>|- --base-etag <etag> [--read-back] [--json]",
           );

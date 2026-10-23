@@ -164,7 +164,7 @@ test("removed legacy and migration commands are not part of the CLI", async () =
   for (const command of removed) {
     const result = await run(process.execPath, [cliBuilt, command], repoRoot);
     assert.notEqual(result.code, 0, `${command} must not remain callable`);
-    assert.match(result.stderr, new RegExp(`Unknown command: ${command}`));
+    assert.match(result.stderr, new RegExp(`Unknown command: tent ${command}`));
   }
 });
 
@@ -175,7 +175,7 @@ test("retired skill-install command cannot change a user skill directory", async
   await fs.writeFile(userSkill, "# user skill\n");
   const result = await runCli(repoRoot, "skill-install", "--dir", target, "--force");
   assert.notEqual(result.code, 0);
-  assert.match(result.stderr, /Unknown command: skill-install/);
+  assert.match(result.stderr, /Unknown command: tent skill-install/);
   assert.equal(await fs.readFile(userSkill, "utf8"), "# user skill\n");
 });
 

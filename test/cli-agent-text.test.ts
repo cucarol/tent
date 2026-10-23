@@ -357,19 +357,27 @@ test("recovery targets come from parsed command operands, not ID-like body or na
 });
 
 test("unknown subcommands preserve the command diagnosis and leave existing Cards and Roles unchanged", async (t) => {
-  const { card, role, next, adapter } = await fixture(t);
+  const { node, card, role, workspace, next, adapter } = await fixture(t);
   ok(await card("create", ["--id", "card-existing", "--prompt", "Existing card"]));
   ok(await role("create", ["--id", "role-existing", "--title", "Existing role"]));
   const before = await adapter.readFile("cards/card-existing.md");
   const beforeRole = await adapter.readFile("roles/role-existing.md");
   const head = await adapter.history.currentCommit();
-  const failed = await card("interrupt", ["card-existing"]);
-  assert.equal(failed.stderr.split("\n")[0], "Unknown card command: interrupt");
-  assert.doesNotMatch(failed.stderr, /not found/i);
-  assert.match(await next(failed, /^Next: tent card --help/), /tent card show <card-id>/);
-  const failedRole = await role("interrupt", ["role-existing"]);
-  assert.equal(failedRole.stderr.split("\n")[0], "Unknown role subcommand: interrupt");
-  assert.match(await next(failedRole, /^Next: tent role --help/), /tent role show <role-id>/);
+  for (const [group, run, args, required] of [
+    ["node", node, ["node-peer"], ["get", "write", "confirm"]],
+    ["card", card, ["card-existing"], ["show", "take", "return"]],
+    ["role", role, ["role-existing"], ["list", "show", "write"]],
+    ["workspace", workspace, [], ["brief", "check", "scan"]],
+  ] as const) {
+    const failed = await run("frob", [...args]);
+    const lines = failed.stderr.trimEnd().split("\n");
+    assert.equal(lines[0], `Unknown command: tent ${group} frob`);
+    assert.match(lines[1]!, /^Commands: /);
+    for (const sub of required) assert.ok(lines[1]!.split(" ").includes(sub));
+    assert.equal(lines.length, 3, failed.stderr);
+    assert.doesNotMatch(failed.stderr, /not found|Usage:/i);
+    await next(failed, new RegExp(`^Next: tent ${group} --help`));
+  }
   assert.match(ok(await card("show", ["card-existing"])), /Existing card/);
   assert.match(
     ok(await role("show", ["role-existing"])),
@@ -377,6 +385,120 @@ test("unknown subcommands preserve the command diagnosis and leave existing Card
   );
   assert.equal(await adapter.readFile("cards/card-existing.md"), before);
   assert.equal(await adapter.readFile("roles/role-existing.md"), beforeRole);
+  assert.equal(await adapter.history.currentCommit(), head);
+});
+
+test("unknown top-level commands show one command list and runnable help", async () => {
+  const error = await promisify(execFile)(
+    process.execPath,
+    ["--import", "tsx", "src/cli/tent.ts", "frob"],
+    { windowsHide: true },
+  ).then(
+    () => assert.fail("Unknown command succeeded"),
+    (error: { code: number; stdout: string; stderr: string }) => error,
+  );
+  assert.equal(error.code, 1);
+  assert.equal(error.stdout, "");
+  assert.equal(
+    error.stderr.trimEnd(),
+    "Unknown command: tent frob\nCommands: new node card role workspace ui hook\nNext: tent --help",
+  );
+  const help = await promisify(execFile)(
+    process.execPath,
+    ["--import", "tsx", "src/cli/tent.ts", "--help"],
+    {
+      windowsHide: true,
+    },
+  );
+  assert.match(help.stdout, /^Tent keeps a context graph/);
+});
+
+test("missing Nodes have a short diagnosis and runnable discovery without writes", async (t) => {
+  const { node, next, adapter } = await fixture(t);
+  const head = await adapter.history.currentCommit();
+  for (const flags of [[], ["--full"], ["--json"]]) {
+    const failed = await node("get", ["node-missing", ...flags]);
+    assert.equal(failed.stderr.split("\n")[0], "Node not found: node-missing.");
+    assert.doesNotMatch(failed.stderr, /Error:|ENOENT|not readable/);
+    await next(failed, /^Next: tent node list --full /);
+  }
+  assert.equal(await adapter.history.currentCommit(), head);
+});
+
+test("missing ETags name the command and recover through a complete Node read or Card and Role show", async (t) => {
+  const { node, card, role, next, adapter } = await fixture(t);
+  ok(await card("create", ["--id", "card-existing", "--prompt", "Existing card"]));
+  ok(await role("create", ["--id", "role-existing", "--title", "Existing role"]));
+  const before = await adapter.readFile("Peer/Peer.md");
+  const head = await adapter.history.currentCommit();
+  for (const sub of ["write", "confirm"]) {
+    const failed = await node(sub, ["node-peer", ...(sub === "write" ? ["--body", "Lost"] : [])]);
+    assert.equal(
+      failed.stderr.split("\n")[0],
+      `tent node ${sub} needs --base-etag from a complete read.`,
+    );
+    assert.doesNotMatch(failed.stderr, /Usage:|workspace brief/);
+    await next(failed, /^Next: tent node get node-peer --full /);
+  }
+  for (const sub of ["deprecate", "move"]) {
+    const failed = await card(sub, ["card-existing", ...(sub === "move" ? ["--public"] : [])]);
+    assert.equal(failed.stderr.split("\n")[0], `tent card ${sub} needs --base-etag from show.`);
+    await next(failed, /^Next: tent card show card-existing /);
+  }
+  for (const sub of ["write", "delete"]) {
+    const failed = await role(sub, [
+      "role-existing",
+      ...(sub === "write" ? ["--body", "Lost"] : []),
+    ]);
+    assert.equal(failed.stderr.split("\n")[0], `tent role ${sub} needs --base-etag from show.`);
+    await next(failed, /^Next: tent role show role-existing /);
+  }
+  assert.equal(await adapter.readFile("Peer/Peer.md"), before);
+  assert.equal(await adapter.history.currentCommit(), head);
+});
+
+test("missing Roles in Card flags and Workspace filters hide system diagnostics and point to role list", async (t) => {
+  const { root, card, role, workspace, next, adapter } = await fixture(t);
+  ok(await card("create", ["--id", "card-existing", "--prompt", "Existing card"]));
+  const head = await adapter.history.currentCommit();
+  for (const call of [
+    () => role("show", ["role-missing"]),
+    () => card("create", ["--prompt", "Work", "--target", "role-missing"]),
+    () => card("create", ["--prompt", "Work", "--return-to", "role-missing"]),
+    () => card("take", ["card-existing", "--role", "role-missing"]),
+    () => card("return", ["card-existing", "--role", "role-missing", "--result", "Done"]),
+    () => card("watch", ["--role", "role-missing", "--timeout", "0"]),
+    () => card("list", ["--role", "role-missing"]),
+    () => workspace("brief", ["--role", "role-missing"]),
+  ]) {
+    const failed = await call();
+    const diagnosis = failed.stderr.split("\n")[0]!;
+    assert.equal(diagnosis, "Role not found: role-missing.");
+    assert.doesNotMatch(diagnosis, /Error:|ENOENT|stat|roles[\\/]/);
+    assert.equal(diagnosis.includes(root), false);
+    await next(failed, /^Next: tent role list /);
+  }
+  assert.equal(await adapter.history.currentCommit(), head);
+});
+
+test("deprecated Roles are identified without system diagnostics in Card flags and Workspace filters", async (t) => {
+  const { card, role, workspace, next, adapter } = await fixture(t);
+  ok(await role("create", ["--id", "role-retired", "--title", "Retired"]));
+  const base = etag(ok(await role("show", ["role-retired"])));
+  ok(await role("write", ["role-retired", "--base-etag", base, "--status", "deprecated"]));
+  const head = await adapter.history.currentCommit();
+  for (const call of [
+    () => card("create", ["--prompt", "Work", "--target", "role-retired"]),
+    () => card("create", ["--prompt", "Work", "--return-to", "role-retired"]),
+    () => card("watch", ["--role", "role-retired", "--timeout", "0"]),
+    () => card("list", ["--role", "role-retired"]),
+    () => workspace("brief", ["--role", "role-retired"]),
+  ]) {
+    const failed = await call();
+    assert.equal(failed.stderr.split("\n")[0], "Role role-retired is deprecated.");
+    assert.doesNotMatch(failed.stderr, /Error:|Role unavailable|not current|ENOENT/);
+    await next(failed, /^Next: tent role list /);
+  }
   assert.equal(await adapter.history.currentCommit(), head);
 });
 

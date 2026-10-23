@@ -217,7 +217,7 @@ test("CLI Role delete requires its id and ETag and reports a JSON deletion recei
   const { root, adapter, role } = await fixture(t);
   const missing = await runRoleCommand("delete", [role.roleId], { workspace: root });
   assert.equal(missing.exitCode, 1);
-  assert.match(missing.stderr, /Role delete requires --base-etag/);
+  assert.match(missing.stderr, /tent role delete needs --base-etag from show\./);
   const wrong = await runRoleCommand("delete", [role.roleId, "--base-etag", "stale"], {
     workspace: root,
   });

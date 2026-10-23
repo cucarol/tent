@@ -54,17 +54,17 @@ test("Role and Card commands route to their canonical modules", async () => {
 
   const unknown = await runCli("not-a-command");
   assert.notEqual(unknown.code, 0);
-  assert.match(unknown.stderr, /Unknown command: not-a-command/);
+  assert.match(unknown.stderr, /Unknown command: tent not-a-command/);
 });
 
 test("retired Role initialization and checkpoint commands stay absent", async () => {
   const roleInit = await runCli("role-init");
   assert.notEqual(roleInit.code, 0);
-  assert.match(roleInit.stderr, /Unknown command: role-init/);
+  assert.match(roleInit.stderr, /Unknown command: tent role-init/);
 
   const roleCpHelp = await runCli("role-checkpoint", "--help");
   assert.notEqual(roleCpHelp.code, 0);
-  assert.match(roleCpHelp.stderr, /Unknown command: role-checkpoint/);
+  assert.match(roleCpHelp.stderr, /Unknown command: tent role-checkpoint/);
 });
 
 test("subcommand help works without required fields, stdin or a Workspace", async () => {

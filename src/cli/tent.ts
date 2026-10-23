@@ -16,6 +16,7 @@ import { runHookCommand } from "./hook.js";
 import { runUiCommand } from "./ui-command.js";
 import { startUiServer } from "../ui-server/server.js";
 import { readBuildIdentity, formatBuildIdentity } from "./build-identity.js";
+import { cliErrorText, unknownCommandError } from "./error-text.js";
 
 export function isInWorkspaceSystemRoot(systemRoot: string): boolean {
   return workspaceRootFromSystemRoot(systemRoot) !== undefined;
@@ -120,7 +121,12 @@ async function main() {
     return;
   }
 
-  return fail(`Unknown command: ${cmd}\nCommands: new node card role workspace ui hook`);
+  return fail(
+    cliErrorText(
+      unknownCommandError("tent", cmd, ["new", "node", "card", "role", "workspace", "ui", "hook"]),
+      "tent",
+    ),
+  );
 }
 
 function fail(msg: string) {

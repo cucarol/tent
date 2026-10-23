@@ -21,7 +21,19 @@ import {
   type CardDocumentState,
 } from "../core/graph/card-document.js";
 import { pageItems, pageText, formatTextPage, uncapturedNotice } from "./reader-page.js";
-import { cliErrorText, type ErrorContext } from "./error-text.js";
+import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
+
+const CARD_COMMANDS = [
+  "create",
+  "move",
+  "deprecate",
+  "list",
+  "get",
+  "show",
+  "take",
+  "return",
+  "watch",
+];
 
 export type CardCommandOptions = {
   workspace?: string;
@@ -40,12 +52,7 @@ export async function runCardCommand(
   if (!sub || ["help", "--help", "-h"].includes(sub) || args.includes("--help"))
     return { exitCode: 0, stdout: cardHelpText(sub), stderr: "" };
   try {
-    if (
-      !["create", "move", "deprecate", "list", "get", "show", "take", "return", "watch"].includes(
-        sub,
-      )
-    )
-      throw new Error(`Unknown card command: ${sub}`);
+    if (!CARD_COMMANDS.includes(sub)) throw unknownCommandError("tent card", sub, CARD_COMMANDS);
     const fields = [
       "workspace",
       ...(sub === "create"
@@ -113,8 +120,8 @@ export async function runCardCommand(
       throw new Error("Return requires --result TEXT");
     if (sub === "return" && !value("role"))
       throw new Error("Return requires --role role-ID, the Role that took the Card.");
-    if (sub === "deprecate" && !value("base-etag"))
-      throw new Error(`${sub} requires --base-etag from a raw read`);
+    if (["deprecate", "move"].includes(sub) && !value("base-etag"))
+      throw new Error(`tent card ${sub} needs --base-etag from show.`);
     if (
       sub === "move" &&
       (!value("base-etag") ||

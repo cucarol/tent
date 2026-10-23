@@ -29,8 +29,10 @@ import {
 } from "../core/read/context-brief.js";
 import { canonicalSha256 } from "../core/base/canonical-digest.js";
 import { pageItems } from "./reader-page.js";
-import { cliErrorText, type ErrorContext } from "./error-text.js";
+import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
+
+const WORKSPACE_COMMANDS = ["export", "check", "check-modules", "brief", "drift", "scan"];
 
 export const workspaceHelpText = `tent workspace — the whole Workspace at once
 
@@ -59,8 +61,8 @@ export async function runWorkspaceCommand(
   try {
     if (["help", "--help", "-h"].includes(sub))
       return { exitCode: 0, stdout: workspaceHelpText + "\n", stderr: "" };
-    if (!["export", "check", "check-modules", "brief", "drift", "scan"].includes(sub))
-      throw new Error(workspaceHelpText);
+    if (!WORKSPACE_COMMANDS.includes(sub))
+      throw unknownCommandError("tent workspace", sub, WORKSPACE_COMMANDS);
     const { values, positionals } = parseArgs({
       args,
       allowPositionals: true,

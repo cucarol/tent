@@ -232,8 +232,8 @@ test("confirm names the missing ETag, node get shows it and role create prints o
   const { root, globals, text, parse } = await fixture(t);
   const confirm = await runNodeCommand("confirm", ["node-goal"], text);
   assert.equal(confirm.exitCode, 1);
-  assert.match(confirm.stderr, /^node confirm needs --base-etag /);
-  assert.match(confirm.stderr, /tent node get node-goal --json/);
+  assert.match(confirm.stderr, /^tent node confirm needs --base-etag from a complete read\./);
+  assert.match(confirm.stderr, /Next: tent node get node-goal --full/);
   assert.match(confirm.stderr, /etag/);
 
   const etag = parse(await runNodeCommand("get", ["node-goal"], globals)).etag as string;

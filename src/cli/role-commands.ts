@@ -11,7 +11,9 @@ import {
 } from "../core/read/role-context.js";
 import { pageItems, pageText, formatTextPage } from "./reader-page.js";
 import { deleteRole } from "../core/write/role-delete.js";
-import { cliErrorText, type ErrorContext } from "./error-text.js";
+import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
+
+const ROLE_COMMANDS = ["list", "show", "write", "create", "delete"];
 
 export type RoleCommandOptions = {
   workspace?: string;
@@ -30,8 +32,7 @@ export async function runRoleCommand(
   if (!sub || ["help", "--help", "-h"].includes(sub))
     return { exitCode: 0, stdout: roleHelpText(), stderr: "" };
   try {
-    if (!["list", "show", "write", "create", "delete"].includes(sub))
-      throw new Error(`Unknown role subcommand: ${sub}`);
+    if (!ROLE_COMMANDS.includes(sub)) throw unknownCommandError("tent role", sub, ROLE_COMMANDS);
     const flags = [
       "workspace",
       ...(sub === "list"
@@ -74,7 +75,7 @@ export async function runRoleCommand(
     if (sub === "create" && !value("title")?.trim())
       throw new Error("Role create requires --title");
     if (["write", "delete"].includes(sub) && !value("base-etag"))
-      throw new Error(`Role ${sub} requires --base-etag from show`);
+      throw new Error(`tent role ${sub} needs --base-etag from show.`);
     if (sub === "show" && (value("start") === undefined) !== (value("end") === undefined))
       throw new Error("Supply both --start and --end");
     if (sub === "show" && number("start")! > 0 && !value("expected-etag"))

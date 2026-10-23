@@ -66,7 +66,7 @@ test("retired hook installer always rejects and leaves existing host configurati
       ["remove", "--help"],
       ["install", "-h"],
     ]) {
-      await assert.rejects(cli(args), /Unknown command: agent-hooks/);
+      await assert.rejects(cli(args), /Unknown command: tent agent-hooks/);
       assert.equal(await fs.readFile(config, "utf8"), original);
     }
     for (const args of [

@@ -50,5 +50,5 @@ test("existing Git ignore entries and structural markers remain valid", async (t
 });
 
 test("retired agent commands remain unavailable", async () => {
-  await assert.rejects(run("agent", "session-start"), /Unknown command: agent/);
+  await assert.rejects(run("agent", "session-start"), /Unknown command: tent agent/);
 });

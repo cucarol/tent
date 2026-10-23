@@ -10,6 +10,10 @@ export type ErrorContext = {
   details?: unknown;
 };
 
+export function unknownCommandError(command: string, sub: string, commands: readonly string[]) {
+  return new Error(`Unknown command: ${command} ${sub}\nCommands: ${commands.join(" ")}`);
+}
+
 /** Keep the diagnostic, then give one safe, copyable inspection/help command. */
 export function cliErrorText(error: unknown, command: string, context: ErrorContext = {}): string {
   const issues = validationIssueText(error);
@@ -47,8 +51,12 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
     context.outputResource
   )
     message = `Output file not found: ${context.outputResource} (local paths resolve from the Workspace root ${context.workspaceRoot}).`;
-  const missingNode = /^(?:Parent )?Node not found: (node-[a-z0-9]+)\.?$/i.exec(message)?.[1];
+  const missingNode =
+    /^(?:(?:Parent )?Node not found: |Node is not readable in this source: )(node-[a-z0-9]+)\.?$/i.exec(
+      message,
+    )?.[1];
   const missingRole = /^Role not found: (role-[a-z0-9]+)\.?$/i.exec(message)?.[1];
+  const unavailableRole = /^Role unavailable: (role-[a-z0-9]+): ([\s\S]*)$/i.exec(message);
   const fileError = error as NodeJS.ErrnoException | undefined;
   const missingPath = fileError?.path?.replaceAll("\\", "/");
   const missingCard =
@@ -61,14 +69,22 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
       ? /: (node-[a-z0-9]+)\.$/i.exec(message)?.[1]
       : undefined);
   let next = [...command.split(" ").slice(0, 3), "--help"];
-  if (/^Unknown (?:card command|role subcommand):/.test(message))
+  if (/^Unknown command: tent (?:node|card|role|workspace) /.test(message))
     next = [...command.split(" ").slice(0, 2), "--help"];
   else if (existing) next = ["tent", "node", "get", existing, "--full"];
-  else if (missingRole || /^Role unavailable:|^target Role.*missing/i.test(message)) {
+  else if (missingRole || unavailableRole || /^target Role.*missing/i.test(message)) {
     if (missingRole) message = `Role not found: ${missingRole}.`;
+    else if (unavailableRole) {
+      const [, roleId, reason] = unavailableRole;
+      message = /\bENOENT\b/.test(reason!)
+        ? `Role not found: ${roleId}.`
+        : reason === "Error: Role is not current"
+          ? `Role ${roleId} is deprecated.`
+          : `Role unavailable: ${roleId}.`;
+    }
     next = ["tent", "role", "list"];
-  } else if (missingNode || /^Node is not readable in this source:/.test(message)) {
-    if (missingNode) message = `Node not found: ${missingNode}.`;
+  } else if (missingNode) {
+    message = `Node not found: ${missingNode}.`;
     next = ["tent", "node", "list", "--full"];
   } else if (missingCard) {
     message = `Card not found: ${target!.id}.`;
