@@ -147,6 +147,69 @@ test("modules require explicit structure sources and retain all equally specific
   );
 });
 
+test("intent update selects a goal from this turn's modules in changed-file order", async (t) => {
+  const { root, adapter, node } = await fixture(t);
+  await node("AFirst", "node-first", "../../src/first/");
+  await node("ZSecond", "node-second", "../../src/second/");
+  for (const name of ["AFirst", "ZSecond"]) {
+    const file = `${name}/${name}.md`;
+    await adapter.writeFile(
+      file,
+      (await adapter.readFile(file)).replace("type: output", "type: goal"),
+    );
+  }
+  const index = buildStopMaterialIndex(await loadNodeCatalog(adapter), root);
+  for (const files of [
+    ["src/second/only.ts"],
+    [
+      "src/core/other-one.ts",
+      "src/core/other-two.ts",
+      "src/core/other-three.ts",
+      "src/first/one.ts",
+      "src/second/one.ts",
+      "src/second/two.ts",
+    ],
+  ]) {
+    const turn = { ...event(files), signals: ["possible-decision" as const] };
+    assert.deepEqual(questionsForIndexedTurn(index, turn)[0]!.answers, [
+      "Update existing node-second",
+      "Create a confirmed goal or prompt",
+      "Discussion only; do not save",
+    ]);
+    const advice = stopAdvice(index, turn, 4096)!;
+    assert.match(advice, /Update existing node-second/);
+    assert.doesNotMatch(advice, /Update existing node-first/);
+  }
+});
+
+test("intent update is omitted when this turn hits only non-goal modules", async (t) => {
+  const { root, adapter, node } = await fixture(t);
+  await node("AUnrelated", "node-unrelated", "../../src/unrelated/");
+  const unrelated = "AUnrelated/AUnrelated.md";
+  await adapter.writeFile(
+    unrelated,
+    (await adapter.readFile(unrelated)).replace("type: output", "type: goal"),
+  );
+  await adapter.writeFile(
+    "Core/Core.md",
+    (await adapter.readFile("Core/Core.md")).replace("type: output", "type: prompt"),
+  );
+  const index = buildStopMaterialIndex(await loadNodeCatalog(adapter), root);
+  const turn = {
+    ...event(["src/core/other.ts", "src/core/card-one.ts"]),
+    signals: ["possible-decision" as const],
+  };
+  const asked = questionsForIndexedTurn(index, turn);
+  assert.equal(asked.length, 1);
+  assert.deepEqual(asked[0]!.answers, [
+    "Create a confirmed goal or prompt",
+    "Discussion only; do not save",
+  ]);
+  const advice = stopAdvice(index, turn, 4096)!;
+  assert.match(advice, /Create a confirmed goal or prompt; Discussion only; do not save/);
+  assert.doesNotMatch(advice, /Update existing/);
+});
+
 const questions: StopQuestion[] = [
   {
     kind: "possible-intent",

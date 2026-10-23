@@ -14,7 +14,9 @@ export function questionsForIndexedTurn(
   event: SessionObservationEvent,
 ): StopQuestion[] {
   if (event.cancelled || !event.signals.length || event.nodeOrCardChanged) return [];
-  const goal = index.nodes.find((node) => node.type === "goal");
+  const goal = modulesForIndexedTurn(index, event).find((module) =>
+    index.nodes.some((node) => node.nodeId === module.nodeId && node.type === "goal"),
+  );
   return [
     {
       kind: "possible-intent",
