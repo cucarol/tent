@@ -209,7 +209,7 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
   const expectedDependencies = {
     "mdast-util-from-markdown": "^2.0.3",
     yaml: "2.9.0",
-    zod: "4.5.4",
+    zod: "4.6.7",
   };
   assert.deepEqual(sourcePackage.dependencies ?? {}, expectedDependencies);
   const packDir = await temporaryDirectory("tent-pack-");
