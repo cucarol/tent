@@ -28,4 +28,4 @@ Send every task already decided now, one Card per task, in the order it should r
 
 A return is one line of at most 200 characters: the outcome and the Node ids that hold the details. Report progress and completion this way, not with a new Card; send a Card only when the other Role has something to do.
 
-Change requirements in the Nodes; a published Card stays as sent.
+Change requirements in the Nodes; a published Card stays as sent. A Node edit wakes no one: when it gives another Role something to do now, such as a new candidate to check, send that Role a Card naming the Node.
