@@ -18,7 +18,7 @@ export async function withFileLockGuard<T>(lockPath: string, action: () => Promi
     // Publish a complete owner record atomically.
     const pending = await fs.mkdtemp(`${guardPath}.pending-`);
     try {
-      await fs.writeFile(`${pending}/owner.json`, JSON.stringify(owner));
+      await fs.writeFile(`${pending}/owner.json`, JSON.stringify(owner), { flush: true });
       await fs.rename(pending, guardPath);
       break;
     } catch (error) {

@@ -197,9 +197,12 @@ test("SPEC records the Node name, rename rollback, check and Card warning contra
   assert.match(plugin, /`COM1`–`COM9`、`LPT1`–`LPT9`、`COM¹`–`COM³`、`LPT¹`–`LPT³`/);
   assert.match(
     spec,
-    /fails while Tent Git HEAD is still the commit read after the move, the rename is rolled back/,
+    /If recording a completed rename in Tent Git fails, recovery uses actual publication to keep the old or new name/,
   );
-  assert.match(spec, /or Tent Git cannot show whether it does, the disk keeps the new name/);
+  assert.match(
+    spec,
+    /Legacy move\/rename plans without a file transaction retain their structural recovery rules/,
+  );
   assert.match(spec, /`node-git-mismatch` names a Node identity document/);
   assert.match(spec, /`card create` warns on stderr, without changing what it stores/);
 });

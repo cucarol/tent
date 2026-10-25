@@ -388,6 +388,15 @@ async function writeNodesBatchUnlocked(
   for (const node of planned) await check(node, node.before);
   if (((await fs.exists(ORDER_PATH)) ? await fs.readFile(ORDER_PATH) : null) !== beforeOrder)
     throw new Error("Node order changed during batch preparation");
+  await fs.prepareFileTransaction?.(
+    [
+      ...planned.map((n) => ({ path: nodeNotePath(n.path), before: n.before, after: n.raw })),
+      ...(afterOrder !== beforeOrder
+        ? [{ path: ORDER_PATH, before: beforeOrder, after: afterOrder }]
+        : []),
+    ],
+    [...createdPaths].sort((a, b) => a.split("/").length - b.split("/").length),
+  );
   const attempted: PlannedNode[] = [],
     directories: string[] = [];
   let orderAttempted = false;
@@ -430,6 +439,19 @@ async function writeNodesBatchUnlocked(
       ...(warnings.length ? { warnings } : {}),
     };
   } catch (error) {
+    const settled = await fs.recoverFileTransaction?.().catch((recovery) => {
+      throw new AggregateError(
+        [error, recovery],
+        `${String(error)}; recovery also failed: ${String(recovery)}`,
+      );
+    });
+    if (settled !== undefined) {
+      const paths = [...planned.map((n) => nodeNotePath(n.path)), ...directories, ORDER_PATH];
+      const conflicts = settled.filter((p) => paths.includes(p));
+      if (conflicts.length)
+        throw new NodeBatchWriteError({ paths, conflicts: [...conflicts] }, [error]);
+      throw error;
+    }
     const failures: unknown[] = [],
       conflicts: string[] = [];
     async function restore(path: string, before: string | null, after: string) {

@@ -10,6 +10,7 @@ import { NODE_MOVE_PENDING_PATH } from "../src/core/store/node-move-recovery.js"
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { NodeFs, SystemClock } from "../src/fs/node-fs.js";
+import { withFileMutationLock } from "../src/fs/mutation-lock.js";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
 
@@ -217,6 +218,8 @@ async function renameWithCaptureFailure(
     failRead?: boolean;
     failHead?: boolean;
     failRollback?: "missing" | "unreadable";
+    legacy?: boolean;
+    external?: boolean;
   },
 ) {
   const context = await fixture(t);
@@ -235,6 +238,14 @@ async function renameWithCaptureFailure(
     body: "[Parent](../Parent/Parent.md)\n",
   });
   const before = await snapshot(systemRoot);
+  // Legacy adapters hold the same lock but have no durable file-transaction scope.
+  if (inject.legacy)
+    adapter.withLock = (lock, action) =>
+      withFileMutationLock(path.join(systemRoot, lock), action, {
+        waitMs: 8_000,
+        busyMessage: "Legacy fixture mutation lock busy",
+        acquireFailedMessage: "Legacy fixture mutation lock failed",
+      });
   const history = adapter.history;
   const head = await history.currentCommit();
   const capture = history.captureUnlocked.bind(history);
@@ -244,6 +255,8 @@ async function renameWithCaptureFailure(
   history.captureUnlocked = async (changes, metadata) => {
     if (metadata?.operation !== "node.rename") return capture(changes, metadata);
     if (inject.publish) await capture(changes, metadata);
+    if (inject.external)
+      await fs.writeFile(path.join(systemRoot, "Renamed/Renamed.md"), "EXTERNAL RENAME\n");
     failed = true;
     throw new Error("simulated Git failure");
   };
@@ -293,7 +306,10 @@ async function renameWithCaptureFailure(
 test("a rename whose Git capture fails before HEAD changes is rolled back so disk and Tent Git keep the old name", async (t) => {
   const { systemRoot, adapter, env, parent, before, head, error, mismatches } =
     await renameWithCaptureFailure(t, { publish: false });
-  assert.match(error.message, /rolled back[^]*Parent[^]*simulated Git failure/);
+  assert.match(
+    error.message,
+    /file transaction was settled against Tent Git publication[^]*simulated Git failure/,
+  );
   assert.deepEqual(await snapshot(systemRoot), before);
   assert.equal(await adapter.exists(NODE_MOVE_PENDING_PATH), false);
   assert.equal(await adapter.exists("Renamed"), false);
@@ -323,18 +339,31 @@ test("a rename whose capture fails after HEAD records it keeps the new name, eve
     assert.deepEqual(await mismatches(), [], `failRead=${failRead}`);
     assert.match(
       error.message,
-      failRead
-        ? /^Node rename to Renamed is kept on disk because Tent Git could not show whether it was recorded; run workspace check[^]*simulated Git failure/
-        : /^Node rename to Renamed is recorded in Tent Git HEAD and kept on disk[^]*simulated Git failure/,
+      /^Node rename to Renamed failed; its file transaction was settled against Tent Git publication[^]*simulated Git failure/,
     );
     assert.doesNotMatch(error.message, /rolled back/);
   }
 });
 
-test("a rename is not reversed when Tent Git HEAD cannot be read after its capture fails", async (t) => {
+test("an unpublished rename restores the entire group even when a legacy HEAD probe fails", async (t) => {
+  const { systemRoot, adapter, before, head, error, mismatches } = await renameWithCaptureFailure(
+    t,
+    {
+      publish: false,
+      failHead: true,
+    },
+  );
+  assert.match(error.message, /file transaction was settled[^]*simulated Git failure/);
+  assert.deepEqual(await snapshot(systemRoot), before);
+  assert.equal(await adapter.history.currentCommit(), head);
+  assert.deepEqual(await mismatches(), []);
+});
+
+test("a legacy rename is not reversed when Tent Git HEAD cannot be read after its capture fails", async (t) => {
   const { adapter, head, error, mismatches, headTree } = await renameWithCaptureFailure(t, {
     publish: false,
     failHead: true,
+    legacy: true,
   });
   assert.match(
     error.message,
@@ -353,11 +382,25 @@ test("a rename is not reversed when Tent Git HEAD cannot be read after its captu
   ]);
 });
 
-test("a failed rename rollback does not claim its recovery record was absent when Tent cannot tell", async (t) => {
+test("rename failure preserves external bytes and reports conflicts while restoring the owned group", async (t) => {
+  const { adapter, before, head, error } = await renameWithCaptureFailure(t, {
+    publish: false,
+    external: true,
+  });
+  assert.match(error.message, /External edits retained: [^]*Renamed\/Renamed\.md/);
+  assert.match(error.message, /simulated Git failure/);
+  assert.equal(await adapter.readFile("Renamed/Renamed.md"), "EXTERNAL RENAME\n");
+  for (const [file, raw] of Object.entries(before)) assert.equal(await adapter.readFile(file), raw);
+  assert.equal(await adapter.history.currentCommit(), head);
+  assert.ok(adapter.recoveryConflicts.includes("Renamed/Renamed.md"));
+});
+
+test("a failed legacy rename rollback does not claim its recovery record was absent when Tent cannot tell", async (t) => {
   for (const failRollback of ["missing", "unreadable"] as const) {
     const { adapter, head, error, mismatches } = await renameWithCaptureFailure(t, {
       publish: false,
       failRollback,
+      legacy: true,
     });
     assert.match(
       error.message,

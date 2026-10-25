@@ -158,14 +158,20 @@ test("Results count Unicode characters, reject multiline and preserve exact repl
   );
 });
 
-test("Interrupted return and close recover exactly their saved bytes, while simultaneous changes conflict", async (t) => {
+test("unpublished return and close roll back; legacy bytes recover exactly and simultaneous changes conflict", async (t) => {
   const { adapter, create } = await fixture(t);
   const card = await create();
   await takeCardDocument(adapter, card.cardId, "role-worker");
   for (const operation of ["card.return", "card.take"]) {
+    const before = await adapter.readFile(card.path);
+    const beforeHead = await adapter.history.currentCommit();
+    let attemptedRaw: string | undefined;
     const capture = adapter.history.captureUnlocked.bind(adapter.history);
     adapter.history.captureUnlocked = async (changes, meta) => {
-      if (meta?.operation === operation) throw new Error("capture interrupted");
+      if (meta?.operation === operation) {
+        attemptedRaw = changes.find((change) => change.path === card.path)?.raw ?? undefined;
+        throw new Error("capture interrupted");
+      }
       return capture(changes, meta);
     };
     const act = () =>
@@ -174,6 +180,12 @@ test("Interrupted return and close recover exactly their saved bytes, while simu
         : takeCardDocument(adapter, card.cardId, "role-owner");
     await assert.rejects(act(), /capture interrupted/);
     adapter.history.captureUnlocked = capture;
+    assert.equal(await adapter.readFile(card.path), before);
+    assert.equal(await adapter.history.currentCommit(), beforeHead);
+    assert.equal((await readCardDocument(adapter, card.cardId)).diagnostic, undefined);
+    assert.ok(attemptedRaw);
+    // Explicit legacy partial delivery: no durable file transaction accompanies these bytes.
+    await adapter.writeFile(card.path, attemptedRaw);
     const raw = await adapter.readFile(card.path);
     assert.equal((await readCardDocument(adapter, card.cardId)).diagnostic && true, true);
     const parsed = parseFrontmatter(raw);

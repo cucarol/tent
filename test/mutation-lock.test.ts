@@ -200,3 +200,17 @@ test("dead process permits stale reclaim", async (t) => {
     true,
   );
 });
+
+test("fresh dead owner permits restart recovery while a fresh unknown owner remains busy", async (t) => {
+  const dir = await tempRoot();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const lockPath = path.join(dir, "mutation.lock");
+  await fs.writeFile(
+    lockPath,
+    JSON.stringify({ ownerToken: "dead", pid: 999999, createdAt: new Date().toISOString() }),
+  );
+  assert.equal(await mayReclaimLock(lockPath, Date.now, 120000, () => false), true);
+  assert.equal(await mayReclaimLock(lockPath, Date.now, 120000, () => true), false);
+  await fs.writeFile(lockPath, Buffer.alloc(40));
+  assert.equal(await mayReclaimLock(lockPath, Date.now, 120000, () => false), false);
+});

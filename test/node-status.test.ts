@@ -23,8 +23,8 @@ for (const action of ["archive", "restore"] as const) {
     const archived = action === "restore" ? await archiveNode(env, "node-root") : undefined;
     const capture = adapter.history.captureUnlocked.bind(adapter.history);
     let afterCapture = false;
-    adapter.history.captureUnlocked = async (changes) => {
-      const result = await capture(changes);
+    adapter.history.captureUnlocked = async (changes, metadata) => {
+      const result = await capture(changes, metadata);
       const rootChange = changes.find((c) => c.path === "A/A.md");
       if (
         !afterCapture &&
@@ -199,7 +199,7 @@ test("archive undo preflights external edits and retained ABA without changing o
   await assert.rejects(restoreNode(env, "node-root", "f".repeat(40)), /Git/);
 });
 
-test("archive errors expose finite partial writes and reachable preimages; no false success", async (t) => {
+test("archive errors report attempted writes and restore the whole unpublished group", async (t) => {
   const { adapter, env } = await fixture(t);
   const beforeRoot = await adapter.readFile("A/A.md"),
     beforeChild = await adapter.readFile("A/B/B.md");
@@ -214,7 +214,7 @@ test("archive errors expose finite partial writes and reachable preimages; no fa
     assert.ok(asyncError.details.beforeCommit);
     return true;
   });
-  assert.equal(parseFrontmatter(await adapter.readFile("A/A.md")).data.status, "deprecated");
+  assert.equal(await adapter.readFile("A/A.md"), beforeRoot);
   assert.equal(await adapter.readFile("A/B/B.md"), beforeChild);
   const captured = await adapter.history.captureUnlocked([]);
   assert.equal(
@@ -240,14 +240,14 @@ test("archive publication failure reports saved files and preserves the reachabl
   const { adapter, env } = await fixture(t);
   const before = await adapter.readFile("A/A.md");
   const capture = adapter.history.captureUnlocked.bind(adapter.history);
-  adapter.history.captureUnlocked = async (changes) => {
+  adapter.history.captureUnlocked = async (changes, metadata) => {
     if (
       changes.length === 3 &&
       changes.every((c) => c.raw !== null && parseFrontmatter(c.raw).data.status === "deprecated")
     ) {
       throw new Error("injected publication failure");
     }
-    return capture(changes);
+    return capture(changes, metadata);
   };
   let beforeCommit: string | undefined;
   await assert.rejects(archiveNode(env, "node-root"), (error) => {
@@ -259,5 +259,5 @@ test("archive publication failure reports saved files and preserves the reachabl
   });
   assert.ok(beforeCommit);
   assert.equal(await adapter.history.read({ commit: beforeCommit, path: "A/A.md" }), before);
-  assert.equal(parseFrontmatter(await adapter.readFile("A/A.md")).data.status, "deprecated");
+  assert.equal(await adapter.readFile("A/A.md"), before);
 });

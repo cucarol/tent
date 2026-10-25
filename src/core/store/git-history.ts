@@ -10,6 +10,10 @@ import { isHistoryDocument, isHistoryFile } from "./document-history.js";
 import { isDeepStrictEqual } from "node:util";
 import { nodeBasisRecordSchema, type NodeBasisRecord } from "../base/node-basis-record.js";
 import { SYSTEM_REGISTRY_FILES, TEMP_DIR, TENT_SYSTEM_DIR } from "../base/paths.js";
+import { HistoryDamageError, indexDamage } from "./history-damage.js";
+import { syncDirectory } from "../../fs/durable-file.js";
+import { archiveExistingReflogs } from "./git-reflogs.js";
+import { GitRefPublisher } from "./git-ref-publisher.js";
 
 export type DocumentVersion = { commit: string; path: string };
 export type DocumentChange = { path: string; raw: string | null };
@@ -187,6 +191,12 @@ function spawnGit(root: string, args: string[], options: { index?: string } = {}
       "-c",
       "commit.gpgsign=false",
       "-c",
+      "core.fsync=all",
+      "-c",
+      "core.fsyncMethod=fsync",
+      "-c",
+      "core.logAllRefUpdates=false",
+      "-c",
       `core.hooksPath=${path.join(root, ".git", `tent-no-hooks-${randomUUID()}`)}`,
       ...args,
     ],
@@ -198,7 +208,7 @@ function spawnGit(root: string, args: string[], options: { index?: string } = {}
   );
 }
 
-async function runGit(
+export async function runGit(
   root: string,
   args: string[],
   options: { input?: Buffer; index?: string } = {},
@@ -398,10 +408,33 @@ type CaptureScope = {
   headRead?: Promise<string | null>;
   deferMirror?: boolean;
   pendingMirror?: boolean;
+  syncedHead?: string;
 };
 
 /** Git plumbing for selected Markdown documents. Caller holds the Tent mutation lock for captureUnlocked. */
 export class GitDocumentHistory {
+  private readonly publicationObserver = new AsyncLocalStorage<{
+    before(commit: string): Promise<void>;
+    after(): Promise<void>;
+  }>();
+
+  withPublicationObserver<T>(
+    observer: { before(commit: string): Promise<void>; after(): Promise<void> },
+    action: () => Promise<T>,
+  ): Promise<T> {
+    return this.publicationObserver.run(observer, action);
+  }
+
+  async isPublished(commit: string): Promise<boolean> {
+    oid(commit);
+    const head = await this.currentCommit();
+    if (!head) return false;
+    if (head === commit) return true;
+    const ancestors = (await runGit(this.root, ["rev-list", head]))
+      .toString("ascii")
+      .split(/\r?\n/);
+    return ancestors.includes(commit);
+  }
   private readonly root: string;
   private readonly defaultEntry: CaptureMetadata["entry"];
   private knownHead: string | null | undefined;
@@ -415,7 +448,29 @@ export class GitDocumentHistory {
   private derivedHead: string | null | undefined;
   private derivedScope = new AsyncLocalStorage<{ head: string | null }>();
   private captureScope = new AsyncLocalStorage<CaptureScope>();
+  private publisherScope = new AsyncLocalStorage<GitRefPublisher>();
   private mirroredIndex?: { head: string; signature: string };
+
+  /** Start only the transport outside the Workspace lock; observe HEAD inside it. */
+  async withReadyPublisher<T>(action: () => Promise<T>): Promise<T> {
+    if (this.publisherScope.getStore()) return action();
+    let publisher: GitRefPublisher;
+    try {
+      // A process opened before migration must not cache the repository's old
+      // reflog policy. This flag overrides it for the whole invocation.
+      publisher = await GitRefPublisher.open(
+        spawnGit(this.root, ["-c", "core.logAllRefUpdates=false", "update-ref", "--stdin"]),
+      );
+    } catch {
+      // Lock-only operations and explicit repair remain usable without Git.
+      return action();
+    }
+    try {
+      return await this.publisherScope.run(publisher, action);
+    } finally {
+      await publisher.close();
+    }
+  }
 
   /** The lock owns one baseline; publication advances it without rediscovering HEAD. */
   async withCaptureScope<T>(action: () => Promise<T>): Promise<T> {
@@ -425,7 +480,66 @@ export class GitDocumentHistory {
 
   private async captureHead(scope: CaptureScope): Promise<string | null> {
     if (scope.head !== undefined) return scope.head;
-    return (scope.headRead ??= this.currentCommit().then((head) => (scope.head = head)));
+    return (scope.headRead ??= this.checkedCaptureHead().then((head) => (scope.head = head)));
+  }
+
+  private async checkedCaptureHead(): Promise<string | null> {
+    const head = await this.currentCommit();
+    const damage = await indexDamage(this.root, head?.length);
+    if (damage)
+      throw new HistoryDamageError(`the Git index in .tent/.git is unreadable (${damage}).`);
+    return head;
+  }
+
+  /** Flush HEAD's declaration too; Git owns the branch's synced CAS publication. */
+  private async syncPublishedHistory(head: string): Promise<void> {
+    const scope = this.captureScope.getStore();
+    if (scope?.syncedHead === head) return;
+    const files = new Set<string>(["HEAD"]),
+      seen = new Set<string>();
+    let ref = "HEAD";
+    for (;;) {
+      if (seen.has(ref)) throw new HistoryDamageError("cyclic HEAD reference after publication.");
+      seen.add(ref);
+      const raw = await fs
+        .readFile(path.join(this.root, ".git", ref), "utf8")
+        .catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT" && ref !== "HEAD") return undefined;
+          throw error;
+        });
+      if (raw === undefined) {
+        // A packed baseline has no loose file to flush and was not rewritten here.
+        if ((await this.currentCommit()) !== head)
+          throw new Error(
+            "Tent Git history HEAD changed during reference sync; reread before retrying",
+          );
+        break;
+      }
+      const value = raw.trim();
+      files.add(ref);
+      if (!value.startsWith("ref: ")) {
+        oid(value);
+        break;
+      }
+      ref = value.slice(5);
+      if (
+        !ref.startsWith("refs/") ||
+        /[\\\x00-\x20\x7f:]/.test(ref) ||
+        ref.split("/").some((part) => !part || part === "." || part === "..")
+      )
+        throw new HistoryDamageError("invalid HEAD reference after publication.");
+    }
+    for (const file of files) {
+      const filename = path.join(this.root, ".git", file);
+      const handle = await fs.open(filename, "r+");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await syncDirectory(path.dirname(filename));
+    }
+    if (scope) scope.syncedHead = head;
   }
 
   async withDeferredIndexMirror<T>(action: () => Promise<T>): Promise<T> {
@@ -443,6 +557,7 @@ export class GitDocumentHistory {
   }
 
   private async mirrorUnchanged(head: string) {
+    await this.syncPublishedHistory(head);
     const scope = this.captureScope.getStore();
     if (scope?.deferMirror) scope.pendingMirror = true;
     else await this.mirrorIndex(head);
@@ -459,9 +574,11 @@ export class GitDocumentHistory {
     try {
       await runGit(this.root, ["read-tree", head]);
       this.mirroredIndex = { head, signature: await signature() };
-    } catch {
-      // A busy disposable index cannot roll back a published capture. Retry next time.
+    } catch (error) {
       this.mirroredIndex = undefined;
+      // An external index lock may defer the disposable mirror. Storage/sync failures
+      // must still reach the caller, even when HEAD has already been published.
+      if (!/index\.lock['"]?: File exists/i.test(String(error))) throw error;
     }
   }
 
@@ -891,13 +1008,29 @@ export class GitDocumentHistory {
   }
 
   async available(): Promise<boolean> {
-    try {
-      await this.ensureRepository();
-      await this.currentCommit();
-      return true;
-    } catch {
+    if (!(await fs.stat(path.join(this.root, ".git")).catch(() => null))?.isDirectory())
       return false;
+    const head = await this.currentCommit();
+    const damage = await indexDamage(this.root, head?.length);
+    if (damage)
+      throw new HistoryDamageError(`the Git index in .tent/.git is unreadable (${damage}).`);
+    if (
+      head &&
+      !(
+        await fs
+          .stat(path.join(this.root, ".git/objects", head.slice(0, 2), head.slice(2)))
+          .catch(() => null)
+      )?.isFile()
+    ) {
+      try {
+        await runGit(this.root, ["cat-file", "-e", `${head}^{commit}`]);
+      } catch {
+        throw new HistoryDamageError(
+          `the branch ref points to ${head.slice(0, 8)}, which is missing or unreadable in .tent/.git.`,
+        );
+      }
     }
+    return true;
   }
 
   private async ensureRepository(): Promise<string> {
@@ -937,7 +1070,13 @@ export class GitDocumentHistory {
         return entry ? oid(entry.slice(0, entry.indexOf(" "))) : null;
       }
       const target = value.trim();
-      if (!target.startsWith("ref: ")) return oid(target);
+      if (!target.startsWith("ref: ")) {
+        if (!oidPattern.test(target))
+          throw new HistoryDamageError(
+            `the branch ref is unreadable (.tent/.git/${ref} is ${value.includes("\0") ? "zero-filled, likely from an interrupted write" : "not an object ID"}).`,
+          );
+        return oid(target);
+      }
       ref = target.slice(5);
       if (
         !ref.startsWith("refs/") ||
@@ -981,7 +1120,12 @@ export class GitDocumentHistory {
       );
     }
     const capture = this.captureScope.getStore();
-    const before = capture ? await this.captureHead(capture) : await this.currentCommit();
+    const before = capture ? await this.captureHead(capture) : await this.checkedCaptureHead();
+    const publication =
+      metadata.operation === "document.external-capture"
+        ? undefined
+        : this.publicationObserver.getStore();
+    await archiveExistingReflogs(this.root);
     const records = Object.keys(metadata.nodeRecords ?? {}).length ? await this.nodeRecords() : {};
     const recordChanges = Object.fromEntries(
       Object.entries(metadata.nodeRecords ?? {}).filter(
@@ -989,8 +1133,10 @@ export class GitDocumentHistory {
       ),
     );
     metadata = { ...metadata, nodeRecords: recordChanges };
-    if (changes.length === 0 && !Object.keys(recordChanges).length)
+    if (changes.length === 0 && !Object.keys(recordChanges).length) {
+      await publication?.after();
       return { commit: before, created: false, versions: [] };
+    }
 
     commitMessage(metadata, metadata.objectIds ?? []);
 
@@ -1014,6 +1160,7 @@ export class GitDocumentHistory {
       if ((await this.currentCommit()) !== before)
         throw new Error("Tent Git history HEAD changed during capture");
       await this.mirrorUnchanged(before!);
+      await publication?.after();
       return {
         commit: before,
         created: false,
@@ -1062,6 +1209,7 @@ export class GitDocumentHistory {
       // These bytes already belong to HEAD. A busy disposable index cannot
       // turn a published save into a rollback; a later capture retries the mirror.
       if (before) await this.mirrorUnchanged(before);
+      await publication?.after();
       return {
         commit: before,
         created: false,
@@ -1152,20 +1300,33 @@ export class GitDocumentHistory {
           .toString("ascii")
           .trim(),
       );
+      await publication?.before(commit);
       try {
-        await runGit(this.root, [
-          "update-ref",
-          "HEAD",
-          commit,
-          before ?? "0".repeat(commit.length),
-        ]);
+        const publisher = this.publisherScope.getStore();
+        if (publisher?.usable) {
+          try {
+            await publisher.publish(commit, before);
+          } catch (error) {
+            // A lost acknowledgement can follow a completed Git-owned CAS.
+            if ((await this.currentCommit()) !== commit) throw error;
+          }
+        } else {
+          await runGit(this.root, [
+            "update-ref",
+            "HEAD",
+            commit,
+            before ?? "0".repeat(commit.length),
+          ]);
+        }
       } catch (error) {
         throw new Error(`Tent Git history HEAD changed during capture: ${String(error)}`);
       }
       committed = true;
+      await this.syncPublishedHistory(commit);
       // The independent repository's ordinary index mirrors retained HEAD.
       // read-tree updates only the index; external worktree edits remain visible.
       await this.mirrorIndex(commit);
+      await publication?.after();
       const scope = this.captureScope.getStore();
       if (scope) {
         scope.head = commit;

@@ -69,7 +69,14 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
       ? /: (node-[a-z0-9]+)\.$/i.exec(message)?.[1]
       : undefined);
   let next = [...command.split(" ").slice(0, 3), "--help"];
-  if (/^Unknown command: tent (?:node|card|role|workspace) /.test(message))
+  if (errorCode === "TENT_HISTORY_DAMAGED")
+    next = [
+      "tent",
+      "workspace",
+      "repair",
+      ...((error as { chooseHead?: boolean }).chooseHead ? ["--head", "<commit>"] : []),
+    ];
+  else if (/^Unknown command: tent (?:node|card|role|workspace) /.test(message))
     next = [...command.split(" ").slice(0, 2), "--help"];
   else if (existing) next = ["tent", "node", "get", existing, "--full"];
   else if (missingRole || unavailableRole || /^target Role.*missing/i.test(message)) {

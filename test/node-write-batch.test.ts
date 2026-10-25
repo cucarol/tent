@@ -285,9 +285,9 @@ test("batch rollback restores absent order sidecar and no-op update retains exac
 });
 
 test("batch rollback preserves external edits and reports exact conflicting paths", async (t) => {
-  const { env, fs, existing } = await fixture(t);
+  const { env, fs, root, existing } = await fixture(t);
   const before = await fs.history.currentCommit();
-  const write = fs.writeFile.bind(fs);
+  const write = (file: string, raw: string) => writeFile(path.join(root, file), raw);
   const external = serializeFrontmatter(existing.frontmatter, "external edit");
   fs.history.captureUnlocked = async () => {
     await write("Existing/Existing.md", external);
@@ -319,7 +319,7 @@ test("batch rollback preserves external edits and reports exact conflicting path
 });
 
 test("batch detects a new document appearing after directory creation and preserves its external bytes", async (t) => {
-  const { env, fs, existing } = await fixture(t);
+  const { env, fs, root, existing } = await fixture(t);
   const before = await fs.history.currentCommit(),
     beforeOrder = await fs.readFile("order.json");
   const write = fs.writeFile.bind(fs);
@@ -335,7 +335,7 @@ test("batch detects a new document appearing after directory creation and preser
     }
     await write(file, raw);
     if (file === "Existing/Existing.md" && raw !== existing.raw)
-      await write("New/New.md", external);
+      await writeFile(path.join(root, "New/New.md"), external);
   };
   await assert.rejects(
     writeNodesBatch(env, {
@@ -393,10 +393,10 @@ test("batch follows shared canonical rules for images and unused definitions", a
 });
 
 test("batch rollback removes only known documents and preserves hidden external files", async (t) => {
-  const { env, fs, existing } = await fixture(t);
+  const { env, fs, root, existing } = await fixture(t);
   const before = await fs.history.currentCommit(),
     beforeOrder = await fs.readFile("order.json");
-  const write = fs.writeFile.bind(fs);
+  const write = (file: string, raw: string) => writeFile(path.join(root, file), raw);
   fs.history.captureUnlocked = async () => {
     await write("New/.gitkeep", "external hidden file");
     await write("New/Child/.gitignore", "external hidden ignore rules");
@@ -453,4 +453,47 @@ test("batch reports Windows EEXIST empty-directory cleanup as a conflict and ret
   assert.equal(await fs.readFile("Existing/Existing.md"), existing.raw);
   assert.equal(await fs.exists("New/New.md"), false);
   assert.equal(await fs.exists("New"), true);
+});
+
+test("batch retains the original capture error when recovery also fails, then ordinary read restores the group", async (t) => {
+  const { env, fs, root, existing } = await fixture(t);
+  const before = await fs.history.currentCommit(),
+    beforeOrder = await fs.readFile("order.json");
+  const capture = fs.history.captureUnlocked.bind(fs.history),
+    writeBinary = fs.writeBinary.bind(fs);
+  fs.history.captureUnlocked = async (changes, metadata) => {
+    if (metadata?.operation === "node.write-many")
+      throw new Error("original batch capture failure");
+    return capture(changes, metadata);
+  };
+  fs.writeBinary = async (file, bytes) => {
+    if (file === "Existing/Existing.md") throw new Error("batch recovery storage failure");
+    return writeBinary(file, bytes);
+  };
+  await assert.rejects(
+    writeNodesBatch(env, {
+      items: [
+        { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "next" },
+        { op: "create", ref: "new", name: "New", type: "output" },
+      ],
+    }),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.match(error.message, /original batch capture failure/);
+      assert.match(error.message, /batch recovery storage failure/);
+      return true;
+    },
+  );
+  assert.ok(await readFile(path.join(root, ".git/tent-transaction.json"), "utf8"));
+  fs.history.captureUnlocked = capture;
+  fs.writeBinary = writeBinary;
+  assert.equal((await readNodeForEdit(fs, existing.nodeId)).raw, existing.raw);
+  assert.equal(await fs.exists("New"), false);
+  assert.equal(await fs.readFile("order.json"), beforeOrder);
+  assert.equal(await fs.history.currentCommit(), before);
+  assert.equal(await fs.exists(".git/tent-transaction.json"), false);
+  await writeNodesBatch(env, {
+    items: [{ op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "retry" }],
+  });
+  assert.equal((await readNodeForEdit(fs, existing.nodeId)).body, "retry");
 });

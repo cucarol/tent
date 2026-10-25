@@ -1,3 +1,4 @@
+import { transactionResult } from "./transaction-result.js";
 import { workspaceReadPaths } from "./read-paths.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
@@ -31,13 +32,15 @@ import { canonicalSha256 } from "../core/base/canonical-digest.js";
 import { pageItems } from "./reader-page.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
+import { repairHistoryUnlocked, formatHistoryRepair } from "../core/store/git-history-repair.js";
 
-const WORKSPACE_COMMANDS = ["export", "check", "check-modules", "brief", "drift", "scan"];
+const WORKSPACE_COMMANDS = ["export", "check", "check-modules", "brief", "drift", "scan", "repair"];
 
 export const workspaceHelpText = `tent workspace — the whole Workspace at once
 
   tent workspace brief [--role <role-id>] [--json]
   tent workspace check [--json]
+  tent workspace repair [--head <commit>] [--json]
   tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
   tent workspace scan [--draft <new-file>] [--json]
   tent workspace check-modules [--json]
@@ -45,6 +48,7 @@ export const workspaceHelpText = `tent workspace — the whole Workspace at once
 
 brief: where to start. Counts, invalid Nodes and waiting Cards, then ahead and behind Nodes, with optional detail within 4 KiB; mandatory Cards and invalid Nodes can exceed that budget. Omitted detail is counted. --role keeps only that Role's Cards.
 check: broken links, invalid or missing materials, missing Markdown sections, and Node files whose disk and Tent Git presence differ after valid native edits are collected. Exits 1 when it finds any; JSON still goes to stdout.
+repair restores Tent's own Git history after an interrupted write: it backs up the damaged files, points the branch at the latest intact commit, rebuilds the index, restores tracked files that were zero-filled, keeps other edits, then runs git fsck. When more than one commit could be the latest it lists them and stops; rerun with --head <commit>. Damaged caches are rebuilt on read and need no command.
 drift: every ahead and behind Node, in pages.
 scan: drafts a module map from the code; --draft saves it as a write-many batch.
 check-modules: checks the module map for coverage, size, imports and files that change together. Prints nothing when the map is clean.
@@ -56,6 +60,15 @@ export async function runWorkspaceCommand(
   sub: string,
   args: string[],
   globals: NodeCommandOptions = {},
+): Promise<NodeCommandResult> {
+  return transactionResult((opened) => runWorkspaceCommandOpened(sub, args, globals, opened));
+}
+
+async function runWorkspaceCommandOpened(
+  sub: string,
+  args: string[],
+  globals: NodeCommandOptions,
+  opened: (fs: NodeFs) => Promise<void>,
 ): Promise<NodeCommandResult> {
   const errorContext: ErrorContext = { workspace: globals.workspace };
   try {
@@ -72,6 +85,7 @@ export async function runWorkspaceCommand(
         limit: { type: "string" },
         cursor: { type: "string" },
         role: { type: "string" },
+        head: { type: "string" },
         help: { type: "boolean", short: "h" },
         workspace: { type: "string" },
         json: { type: "boolean" },
@@ -85,6 +99,13 @@ export async function runWorkspaceCommand(
       throw new Error("--draft is only valid for workspace scan");
     if (values.role !== undefined && sub !== "brief")
       throw new Error("--role is only valid for workspace brief");
+    if (values.head !== undefined && sub !== "repair")
+      throw new Error("--head is only valid for workspace repair");
+    if (
+      sub === "repair" &&
+      [values.output, values.limit, values.cursor].some((value) => value !== undefined)
+    )
+      throw new Error(workspaceHelpText);
     if (
       sub === "scan" &&
       [values.output, values.limit, values.cursor].some((value) => value !== undefined)
@@ -108,8 +129,22 @@ export async function runWorkspaceCommand(
       cwd: globals.cwd,
       workspace: values.workspace ?? globals.workspace,
     });
-    const fs = new NodeFs(roots.systemRoot, "cli"),
-      { workspaceId } = await readWorkspaceSettings(fs);
+    const fs = new NodeFs(roots.systemRoot, "cli");
+    if (sub === "repair") {
+      const result = await fs.withHistoryRepair(() =>
+        repairHistoryUnlocked(roots.systemRoot, { head: values.head }),
+      );
+      await opened(fs);
+      return {
+        exitCode: 0,
+        stdout:
+          (values.json || globals.json ? JSON.stringify(result) : formatHistoryRepair(result)) +
+          "\n",
+        stderr: "",
+      };
+    }
+    await opened(fs);
+    const { workspaceId } = await readWorkspaceSettings(fs);
     if (!workspaceId)
       throw new Error(
         "Tent workspace identity is missing; explicitly initialize or convert this workspace",

@@ -1,3 +1,4 @@
+import { transactionResult } from "./transaction-result.js";
 import { workspaceReadPaths } from "./read-paths.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
@@ -27,6 +28,15 @@ export async function runRoleCommand(
   sub: string,
   args: string[],
   globals: RoleCommandOptions = {},
+): Promise<RoleCommandResult> {
+  return transactionResult((opened) => runRoleCommandOpened(sub, args, globals, opened));
+}
+
+async function runRoleCommandOpened(
+  sub: string,
+  args: string[],
+  globals: RoleCommandOptions,
+  opened: (fs: NodeFs) => Promise<void>,
 ): Promise<RoleCommandResult> {
   const errorContext: ErrorContext = { workspace: globals.workspace };
   if (!sub || ["help", "--help", "-h"].includes(sub))
@@ -88,6 +98,7 @@ export async function runRoleCommand(
     });
     const mutation = ["create", "write", "delete"].includes(sub);
     const fs = new NodeFs(systemRoot, "cli");
+    await opened(fs);
     if (mutation) await captureNativeNodeEdits(fs);
     let result: unknown;
     if (sub === "list")

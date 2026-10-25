@@ -1,4 +1,5 @@
 import { workspaceReadPaths, nodeReadMaterials } from "./read-paths.js";
+import { transactionResult } from "./transaction-result.js";
 import { formatCliTime } from "./time-text.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
@@ -97,6 +98,15 @@ export async function runNodeCommand(
   args: string[],
   globals: NodeCommandOptions = {},
 ): Promise<NodeCommandResult> {
+  return transactionResult((opened) => runNodeCommandOpened(sub, args, globals, opened));
+}
+
+async function runNodeCommandOpened(
+  sub: string,
+  args: string[],
+  globals: NodeCommandOptions,
+  opened: (fs: NodeFs) => Promise<void>,
+): Promise<NodeCommandResult> {
   const errorContext: ErrorContext = { workspace: globals.workspace };
   try {
     const { positionals, flags, tagFilters } = parseFlags(args);
@@ -184,6 +194,7 @@ export async function runNodeCommand(
       !["get", "read-many", "list", "search", "relations", "history"].includes(sub) &&
       sub !== "tags";
     const fs = new NodeFs(systemRoot, "cli");
+    await opened(fs);
     const { workspaceId } = await readWorkspaceSettings(fs);
     if (!workspaceId)
       throw new Error(

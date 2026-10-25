@@ -1,3 +1,4 @@
+import { transactionResult } from "./transaction-result.js";
 import { workspaceReadPaths } from "./read-paths.js";
 import { formatCliTime } from "./time-text.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
@@ -47,6 +48,15 @@ export async function runCardCommand(
   sub: string,
   args: string[],
   globals: CardCommandOptions = {},
+): Promise<CardCommandResult> {
+  return transactionResult((opened) => runCardCommandOpened(sub, args, globals, opened));
+}
+
+async function runCardCommandOpened(
+  sub: string,
+  args: string[],
+  globals: CardCommandOptions,
+  opened: (fs: NodeFs) => Promise<void>,
 ): Promise<CardCommandResult> {
   const errorContext: ErrorContext = { workspace: globals.workspace };
   if (!sub || ["help", "--help", "-h"].includes(sub) || args.includes("--help"))
@@ -139,6 +149,7 @@ export async function runCardCommand(
     const mutation = ["create", "move", "deprecate", "take", "return"].includes(sub);
     const fs = new NodeFs(systemRoot, "cli"),
       id = positionals[0]!;
+    await opened(fs);
     let result: unknown;
     let warnings: string[] = [];
     if (sub === "watch") {

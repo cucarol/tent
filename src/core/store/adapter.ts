@@ -10,6 +10,14 @@ export interface FsAdapter {
   readonly workspaceRoot?: string;
   /** Native edits rejected at this command boundary; never persisted or used as a cache. */
   invalidNodeEdits?: ReadonlyMap<string, string>;
+  /** External edits preserved while settling an interrupted file transaction. */
+  readonly recoveryConflicts?: readonly string[];
+  /** Settle the current write's durable record under its already-held mutation lock. */
+  recoverFileTransaction?(): Promise<readonly string[] | undefined>;
+  prepareFileTransaction?(
+    writes: readonly { path: string; before: string | null; after: string | null }[],
+    directories: readonly string[],
+  ): Promise<void>;
   /** Observe explicit content or safely validate a coverage address without reading members. */
   observeMaterial?(
     resource: string,
@@ -80,6 +88,8 @@ export function readOnlyFs(fs: FsAdapter): FsAdapter {
           "remove",
           "removeEmptyDir",
           "withLock",
+          "prepareFileTransaction",
+          "recoverFileTransaction",
         ].includes(String(key))
       ) {
         return () => {

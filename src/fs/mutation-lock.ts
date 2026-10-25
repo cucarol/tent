@@ -92,6 +92,9 @@ export async function withFileMutationLock<T>(
         if (!handle) throw new Error(options.acquireFailedMessage);
         try {
           await handle.writeFile(JSON.stringify(record), "utf8");
+          // Restart recovery must distinguish this dead owner from a live writer
+          // still publishing an empty lock; keep the PID readable after a crash.
+          await handle.sync();
         } catch (error) {
           await handle.close().catch(() => undefined);
           await fs.rm(lockPath, { force: true });
@@ -152,7 +155,7 @@ export async function readMutationLockRecord(lockPath: string): Promise<Mutation
 }
 
 /**
- * Reclaim only when the lock is aged AND its PID is absent/unusable.
+ * A known dead owner can be reclaimed immediately; unknown owners require the age window.
  * Live PID (including EPERM) blocks reclaim even past the age window.
  * Malformed bodies with a usable live PID stay busy; no usable PID + aged → reclaim.
  */
@@ -173,16 +176,9 @@ export async function mayReclaimLock(
     return true;
   }
 
-  if (now() - mtimeMs <= staleMs) {
-    return false;
-  }
-
   const pid = await readRecordedPid(lockPath);
-  if (pid !== null && isProcessAliveFn(pid)) {
-    return false;
-  }
-  // Aged + (no usable pid | dead pid) → reclaim.
-  return true;
+  if (pid !== null) return !isProcessAliveFn(pid);
+  return now() - mtimeMs > staleMs;
 }
 
 /**

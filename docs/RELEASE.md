@@ -1,5 +1,9 @@
 # Tent release notes
 
+## Unreleased
+
+- Interrupted saves recover as a complete old or new transaction on the next Tent open; `tent workspace repair` restores damaged Tent history while preserving other edits.
+
 ## 0.2.0
 
 Tent can now join a project already under way. It drafts a module map from the code, asks at the end of each turn that changed mapped code whether a Node should change, and lets you lay related Nodes out together on the map to see how they relate. One build ships packages for both Codex and Claude Code.

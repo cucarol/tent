@@ -107,7 +107,10 @@ test("Role no-op retains exact bytes and explicit edits preserve unknown YAML an
       }),
     /mismatch/,
   );
-  assert.deepEqual(calls, ["roles/role-review.md"]);
+  assert.deepEqual(
+    calls.filter((p: string) => p !== ".git/tent-transaction.json"),
+    ["roles/role-review.md"],
+  );
 });
 
 test("long Role reads continue across fresh CLI processes and reject changes between pages", async (t) => {

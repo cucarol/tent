@@ -158,7 +158,16 @@ export async function savePreparedNodeDocumentUnlocked(
       ...(record ? { nodeRecords: { [nodeId]: record } } : {}),
     });
   } catch (error) {
-    if (changed && (await fs.readFile(path)) === raw) await fs.writeFile(path, diskRaw);
+    try {
+      const settled = await fs.recoverFileTransaction?.();
+      if (settled === undefined && changed && (await fs.readFile(path)) === raw)
+        await fs.writeFile(path, diskRaw);
+    } catch (recovery) {
+      throw new AggregateError(
+        [error, recovery],
+        `${String(error)}; recovery also failed: ${String(recovery)}`,
+      );
+    }
     throw error;
   }
   return {

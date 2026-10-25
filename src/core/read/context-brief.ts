@@ -76,6 +76,7 @@ async function inspectCurrentContextInScope(
     cards,
     changedCardSources,
     roots,
+    ...(fs.recoveryConflicts?.length ? { recoveryConflicts: [...fs.recoveryConflicts] } : {}),
   };
 }
 
@@ -129,6 +130,7 @@ export type ContextBrief = {
   omitted: Record<string, number>;
   synchronizationUncertain?: true;
   cardSourcesUncertain?: true;
+  recoveryConflicts?: string[];
   roleId?: string;
 };
 const shorten = (value: string, length: number) =>
@@ -229,6 +231,7 @@ export function makeContextBrief(
     roots: [],
     baselineOnlyBehind: context.sync.nodes.filter(baselineOnly).length,
     omitted: { roots: 0 },
+    ...(context.recoveryConflicts?.length ? { recoveryConflicts: context.recoveryConflicts } : {}),
     ...(context.changedCardSources.diagnostics.length ? { cardSourcesUncertain: true } : {}),
     ...(context.sync.nodes.some((node) => node.uncertain)
       ? { synchronizationUncertain: true }
@@ -274,6 +277,11 @@ export function makeContextBrief(
 
 export function formatContextBrief(brief: ContextBrief): string {
   const lines = [`behind ${brief.counts.behind} · ahead ${brief.counts.ahead}`];
+  if (brief.recoveryConflicts?.length)
+    lines.push(
+      "Transaction recovery kept external edits:",
+      ...brief.recoveryConflicts.map((p) => `- .tent/${p}`),
+    );
   if (brief.invalidNodes.length) {
     lines.push("Invalid Nodes:");
     for (const node of brief.invalidNodes) lines.push(`- ${node.path}: ${node.reason}`);

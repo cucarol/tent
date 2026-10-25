@@ -370,8 +370,7 @@ test("batch writes share a commit, Role reads capture explicitly, and Git failur
   const retry = await readNodeForEdit(adapter, original.nodeId, { capture: true });
   assert.ok(retry.version);
   assert.equal(await adapter.history!.read(retry.version), retry.raw);
-  // Crash after the logical directory move: next mutation must finish deletion
-  // in Git even though that retry never moves the original live directory.
+  // An unpublished deletion now shares the durable transaction rollback.
   const write = adapter.writeFile.bind(adapter);
   adapter.writeFile = async (file, raw) => {
     if (file === DELETE_PENDING_PATH && JSON.parse(raw).committed)
@@ -381,6 +380,9 @@ test("batch writes share a commit, Role reads capture explicitly, and Git failur
   await assert.rejects(deleteNode(h.mount.env, original.nodeId), /interrupted delete/);
   adapter.writeFile = write;
   await withTentMutation(adapter, async () => {});
+  assert.ok((await git("ls-tree", "-r", "--name-only", "HEAD")).includes("A/A.md"));
+  assert.equal(await adapter.readFile("A/A.md"), retry.raw);
+  await deleteNode(h.mount.env, original.nodeId);
   assert.ok(!(await git("ls-tree", "-r", "--name-only", "HEAD")).includes("A/A.md"));
   assert.equal(await adapter.history!.read(retry.version), retry.raw);
 });
@@ -561,16 +563,25 @@ for (const stage of [
       { adapter } = h;
     const write = adapter.writeFile.bind(adapter),
       move = adapter.move.bind(adapter);
+    let legacyPlan: string | undefined;
+    const recordPlan = async (file: string, raw: string) => {
+      if ([NODE_MOVE_PENDING_PATH, DELETE_PENDING_PATH].includes(file)) legacyPlan = raw;
+      return write(file, raw);
+    };
+    adapter.writeFile = recordPlan;
     if (stage === "corrupt-order") {
       await adapter.writeFile("order.json", "invalid JSON");
     } else if (stage === "move") {
-      // Interrupt after the directory move; recovery also stops, retaining the real plan.
+      // Seed the legacy structural record explicitly after the new transaction rolls back.
       adapter.move = async (from, to) => {
         if (from.startsWith("Moved")) throw new Error("injected pending move");
         return move(from, to);
       };
       await assert.rejects(renameNode(h.mount.env, "node-bravo", "Moved"), /injected pending move/);
       adapter.move = move;
+      adapter.writeFile = write;
+      assert.ok(legacyPlan);
+      await fs.writeFile(path.join(h.mount.systemRoot, NODE_MOVE_PENDING_PATH), legacyPlan);
       assert.equal(await adapter.exists(NODE_MOVE_PENDING_PATH), true);
     } else {
       if (stage === "delete-before") {
@@ -582,12 +593,21 @@ for (const stage of [
         adapter.writeFile = async (file, raw) => {
           if (file === DELETE_PENDING_PATH && JSON.parse(raw).committed)
             throw new Error("injected pending delete");
-          return write(file, raw);
+          return recordPlan(file, raw);
         };
       }
       await assert.rejects(deleteNode(h.mount.env, "node-bravo"), /injected pending delete/);
       adapter.move = move;
       adapter.writeFile = write;
+      assert.ok(legacyPlan);
+      await fs.writeFile(path.join(h.mount.systemRoot, DELETE_PENDING_PATH), legacyPlan);
+      if (stage !== "delete-before") {
+        await fs.mkdir(path.join(h.mount.systemRoot, "temp"), { recursive: true });
+        await fs.rename(
+          path.join(h.mount.systemRoot, "B"),
+          path.join(h.mount.systemRoot, "temp/delete-pending"),
+        );
+      }
       assert.equal(await adapter.exists(DELETE_PENDING_PATH), true);
       if (stage === "delete-conflict")
         await adapter.writeFile("order.json", '{"__root__":["node-alpha"]}\n');

@@ -5,12 +5,12 @@ import * as nodePath from "node:path";
 import type { FsAdapter, Clock } from "../core/store/adapter.js";
 import { withFileMutationLock } from "./mutation-lock.js";
 import { constants } from "node:fs";
-import { checkedSourceFile } from "./checked-source-file.js";
+import { checkedSourceFile, checkedSourceDirectory } from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { GitDocumentHistory, type CaptureMetadata } from "../core/store/git-history.js";
 import { isHistoryDocument, isHistoryFile } from "../core/store/document-history.js";
-import { renameWithRetry } from "./rename-with-retry.js";
+import { durableMkdir, durableReplace, syncDirectory } from "./durable-file.js";
 import { observeMaterialResource, readStructureSource } from "./source-observation.js";
 import { withStructureSnapshot, withoutStructureSnapshot } from "./structure-observation.js";
 import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
@@ -27,6 +27,14 @@ import { materialIsTracked } from "./material-tracking.js";
 import { createHash } from "node:crypto";
 import { documentHeader } from "../core/graph/node-catalog.js";
 import { ReaderError } from "../core/graph/context-reader.js";
+import { HistoryDamageError } from "../core/store/history-damage.js";
+import {
+  FileTransaction,
+  TRANSACTION_PATH,
+  readTransactionConflicts,
+  type TransactionFileState,
+  type ObservedTransactionState,
+} from "../core/store/file-transaction.js";
 import {
   cachedFileValue,
   fileState,
@@ -53,6 +61,157 @@ export class NodeFs implements FsAdapter {
   readonly history: GitDocumentHistory;
   private historyWrites = new AsyncLocalStorage<Map<string, string | null>>();
   private historyPreimages = new AsyncLocalStorage<Map<string, string | null>>();
+  private readonly transactionScope = new AsyncLocalStorage<FileTransaction>();
+  private readonly transactionBypass = new AsyncLocalStorage<boolean>();
+  private readonly boundaryReady = new AsyncLocalStorage<boolean>();
+  private opening?: Promise<void>;
+  recoveryConflicts: readonly string[] = [];
+
+  async prepareFileTransaction(
+    writes: readonly { path: string; before: string | null; after: string | null }[],
+    directories: readonly string[],
+  ) {
+    const bytes = (s: string | null): TransactionFileState =>
+      s === null ? null : { bytes: Buffer.from(s).toString("base64") };
+    await this.transactionScope
+      .getStore()
+      ?.prepare([
+        ...directories.map((path) => ({ path, expected: null, after: "directory" as const })),
+        ...writes.map((w) => ({ path: w.path, expected: bytes(w.before), after: bytes(w.after) })),
+      ]);
+  }
+
+  async recoverFileTransaction(): Promise<readonly string[] | undefined> {
+    const transaction = this.transactionScope.getStore();
+    if (!transaction) return undefined;
+    this.recoveryConflicts = await transaction.recover();
+    return this.recoveryConflicts;
+  }
+
+  /** Explicit history repair must fix damaged refs before a pending transaction can inspect HEAD. */
+  withHistoryRepair<T>(action: () => Promise<T>): Promise<T> {
+    return this.raw(() => this.withLock("mutation.lock", action));
+  }
+
+  private raw<T>(action: () => Promise<T>): Promise<T> {
+    return this.transactionBypass.run(true, () =>
+      this.historyWrites.exit(() => this.historyPreimages.exit(action)),
+    );
+  }
+
+  private transaction(): FileTransaction {
+    const rawFs = new Proxy(this, {
+      get: (target, key) => {
+        const value: unknown = Reflect.get(target, key);
+        return typeof value === "function"
+          ? (...args: unknown[]) => this.raw(() => value.apply(target, args))
+          : value;
+      },
+    });
+    return new FileTransaction(
+      rawFs,
+      (p) => this.fileState(p),
+      (commit) => this.history.isPublished(commit),
+    );
+  }
+
+  private async fileState(p: string): Promise<ObservedTransactionState> {
+    try {
+      let parent = nodePath.dirname(this.abs(p));
+      while (
+        !(await fs.lstat(parent).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        }))
+      ) {
+        const next = nodePath.dirname(parent);
+        if (next === parent) throw new Error("Tent transaction root is missing");
+        parent = next;
+      }
+      try {
+        await checkedSourceDirectory(this.root, parent);
+      } catch (error) {
+        if (/Symbolic links|Source target|Workspace root changed/.test(String(error)))
+          return "external";
+        throw error;
+      }
+      const stat = await fs.lstat(this.abs(p)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (!stat) return null;
+      // Do not follow links from a recovery record or overwrite another file through them.
+      if (stat.isSymbolicLink()) return "external";
+      if (stat.isDirectory()) return "directory";
+      if (!stat.isFile()) return "external";
+      await checkedSourceFile(this.root, this.abs(p));
+      return { bytes: (await fs.readFile(this.abs(p))).toString("base64") };
+    } catch (error) {
+      // An external file can replace an ancestor of several recorded paths.
+      // Preserve it and report those descendants; it must not block other members.
+      if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return "external";
+      throw error;
+    }
+  }
+
+  /** The only read-side mutation: settle an interrupted transaction before observing the workspace. */
+  async ready(): Promise<void> {
+    if (
+      this.transactionBypass.getStore() ||
+      this.transactionScope.getStore() ||
+      this.boundaryReady.getStore()
+    )
+      return;
+    if (this.opening) return this.opening;
+    this.opening = (async () => {
+      const pending = await fs.access(this.abs(TRANSACTION_PATH)).then(
+        () => true,
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        },
+      );
+      if (pending) await this.withLock("mutation.lock", async () => undefined);
+      this.recoveryConflicts = await this.raw(() => readTransactionConflicts(this));
+    })();
+    try {
+      await this.opening;
+    } finally {
+      this.opening = undefined;
+    }
+  }
+
+  private async prepareFiles(changes: { path: string; after: TransactionFileState }[]) {
+    if (!this.transactionBypass.getStore())
+      await this.transactionScope.getStore()?.prepare(changes);
+  }
+
+  private async missingParents(p: string) {
+    const result: { path: string; after: TransactionFileState }[] = [];
+    for (
+      let parent = nodePath.posix.dirname(p);
+      parent !== ".";
+      parent = nodePath.posix.dirname(parent)
+    ) {
+      if ((await this.fileState(parent)) !== null) break;
+      result.unshift({ path: parent, after: "directory" });
+    }
+    return result;
+  }
+
+  private async transactionTree(
+    p: string,
+  ): Promise<{ path: string; after: TransactionFileState }[]> {
+    const state = await this.fileState(p);
+    if (state === null) return [];
+    if (state === "external")
+      throw new Error(`Tent transaction cannot move an external filesystem entry: ${p}`);
+    const result: { path: string; after: TransactionFileState }[] = [{ path: p, after: state }];
+    if (state === "directory")
+      for (const entry of await fs.readdir(this.abs(p)))
+        result.push(...(await this.transactionTree(`${p}/${entry}`)));
+    return result;
+  }
 
   constructor(
     root: string,
@@ -63,7 +222,15 @@ export class NodeFs implements FsAdapter {
     this.history = new GitDocumentHistory(this.root, entry);
   }
 
-  observationScope<T>(action: () => Promise<T>, options?: { forceContent?: boolean }): Promise<T> {
+  async observationScope<T>(
+    action: () => Promise<T>,
+    options?: { forceContent?: boolean },
+  ): Promise<T> {
+    await this.ready();
+    return this.boundaryReady.run(true, () => this.observe(action, options));
+  }
+
+  private observe<T>(action: () => Promise<T>, options?: { forceContent?: boolean }): Promise<T> {
     if (hasFileReadScope() && !options?.forceContent) return withStructureSnapshot(action);
     return withFileReadScope(
       () =>
@@ -143,6 +310,7 @@ export class NodeFs implements FsAdapter {
   }
 
   async listDir(dir: string): Promise<{ name: string; isDir: boolean }[]> {
+    await this.ready();
     return scopedRead(`directory:${this.abs(dir)}`, async () => {
       const entries = await fs.readdir(this.abs(dir), { withFileTypes: true });
       return entries
@@ -152,6 +320,7 @@ export class NodeFs implements FsAdapter {
   }
 
   async readFile(path: string): Promise<string> {
+    await this.ready();
     return (await this.readBytes(path, false)).bytes.toString("utf8");
   }
 
@@ -161,6 +330,7 @@ export class NodeFs implements FsAdapter {
 
   /** A derived cache must retain the identity of the observation that supplied its content. */
   async readFrontmatterObservation(path: string): Promise<{ content: string; state: FileState }> {
+    await this.ready();
     return withFileReadScope(() =>
       scopedRead(`header:${this.abs(path)}`, async () => {
         const full = peekScopedRead<ObservedBytes>(`bytes:${this.abs(path)}`);
@@ -276,12 +446,18 @@ export class NodeFs implements FsAdapter {
     forgetScopedReads();
     const abs = this.abs(path);
     const tracked = await this.beforeHistoryChange([path]);
-    await fs.mkdir(nodePath.dirname(abs), { recursive: true });
-    await this.atomicReplace(abs, content, "utf8");
+    if (!this.transactionBypass.getStore() && this.transactionScope.getStore())
+      await this.prepareFiles([
+        ...(await this.missingParents(path)),
+        { path, after: { bytes: Buffer.from(content).toString("base64") } },
+      ]);
+    await durableMkdir(nodePath.dirname(abs));
+    await durableReplace(abs, content, "utf8");
     if (tracked && isHistoryFile(path)) tracked.set(path, content);
   }
 
   async readBinary(path: string): Promise<Uint8Array> {
+    await this.ready();
     const candidate = this.abs(path);
     await checkedSourceFile(this.root, candidate);
     return (await this.readBytes(path, true)).bytes;
@@ -360,6 +536,7 @@ export class NodeFs implements FsAdapter {
   }
 
   async readContentDigest(path: string): Promise<{ size: number; digest: string }> {
+    await this.ready();
     return withFileReadScope(() =>
       scopedRead(`digest:${this.abs(path)}`, async () => {
         await checkedSourceFile(this.root, this.abs(path));
@@ -385,29 +562,20 @@ export class NodeFs implements FsAdapter {
     forgetScopedReads();
     const abs = this.abs(path);
     const tracked = await this.beforeHistoryChange([path]);
-    await fs.mkdir(nodePath.dirname(abs), { recursive: true });
+    await durableMkdir(nodePath.dirname(abs));
     const payload = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-    await this.atomicReplace(abs, payload);
+    if (!this.transactionBypass.getStore() && this.transactionScope.getStore())
+      await this.prepareFiles([
+        ...(await this.missingParents(path)),
+        { path, after: { bytes: payload.toString("base64") } },
+      ]);
+    await durableReplace(abs, payload);
     if (tracked && isHistoryFile(path))
       tracked.set(path, new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(payload));
   }
 
-  private async atomicReplace(
-    abs: string,
-    data: string | Uint8Array,
-    encoding?: BufferEncoding,
-  ): Promise<void> {
-    const tmp = `${abs}.tmp-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    try {
-      await fs.writeFile(tmp, data, encoding);
-      await renameWithRetry(tmp, abs);
-    } catch (err) {
-      await fs.rm(tmp, { force: true }).catch(() => undefined);
-      throw err;
-    }
-  }
-
   async exists(path: string): Promise<boolean> {
+    await this.ready();
     try {
       await fs.access(this.abs(path));
       return true;
@@ -417,7 +585,9 @@ export class NodeFs implements FsAdapter {
   }
 
   async mkdir(path: string): Promise<void> {
-    await fs.mkdir(this.abs(path), { recursive: true });
+    if (!this.transactionBypass.getStore() && this.transactionScope.getStore())
+      await this.prepareFiles([...(await this.missingParents(path)), { path, after: "directory" }]);
+    await durableMkdir(this.abs(path));
   }
 
   async move(from: string, to: string): Promise<void> {
@@ -425,8 +595,18 @@ export class NodeFs implements FsAdapter {
     const files = this.historyWrites.getStore() ? await this.filesUnder(from) : [];
     const targets = files.map((file) => to + file.slice(from.length));
     const tracked = await this.beforeHistoryChange([...files, ...targets]);
-    await fs.mkdir(nodePath.dirname(this.abs(to)), { recursive: true });
+    if (!this.transactionBypass.getStore() && this.transactionScope.getStore()) {
+      const tree = await this.transactionTree(from);
+      await this.prepareFiles([
+        ...(await this.missingParents(to)),
+        ...tree.map((e) => ({ path: e.path, after: null })),
+        ...tree.map((e) => ({ path: to + e.path.slice(from.length), after: e.after })),
+      ]);
+    }
+    await durableMkdir(nodePath.dirname(this.abs(to)));
     await fs.rename(this.abs(from), this.abs(to));
+    for (const parent of new Set([from, to].map((file) => nodePath.dirname(this.abs(file)))))
+      await syncDirectory(parent);
     if (tracked)
       for (let i = 0; i < files.length; i++) {
         if (isHistoryFile(files[i]!)) tracked.set(files[i]!, null);
@@ -438,12 +618,21 @@ export class NodeFs implements FsAdapter {
     forgetScopedReads();
     const files = this.historyWrites.getStore() ? await this.filesUnder(path) : [];
     const tracked = await this.beforeHistoryChange(files);
+    if (!this.transactionBypass.getStore() && this.transactionScope.getStore())
+      await this.prepareFiles(
+        (await this.transactionTree(path)).map((e) => ({ path: e.path, after: null })),
+      );
+    const present = await this.exists(path);
     await fs.rm(this.abs(path), { recursive: true, force: true });
+    if (present) await syncDirectory(nodePath.dirname(this.abs(path)));
     if (tracked) for (const file of files) if (isHistoryFile(file)) tracked.set(file, null);
   }
 
   async removeEmptyDir(path: string): Promise<void> {
+    if (!this.transactionBypass.getStore() && this.transactionScope.getStore())
+      await this.prepareFiles([{ path, after: null }]);
     await fs.rmdir(this.abs(path));
+    await syncDirectory(nodePath.dirname(this.abs(path)));
   }
 
   /** List the independent Tent Git HEAD tree without reading blobs or writing caches. */
@@ -550,6 +739,11 @@ export class NodeFs implements FsAdapter {
             });
           }
         } catch (error) {
+          if (error instanceof HistoryDamageError)
+            throw new HistoryDamageError(
+              `files may already be saved, but Git capture failed; reread before retrying. ${error.message.replace(/^Tent history: /, "")}`,
+              error.chooseHead,
+            );
           throw new Error(
             `Tent files may already be saved, but Git capture failed; reread before retrying: ${String(error)}`,
           );
@@ -614,23 +808,61 @@ export class NodeFs implements FsAdapter {
 
   async withLock<T>(path: string, action: () => Promise<T>): Promise<T> {
     try {
-      return await withFileMutationLock(
-        this.abs(path),
-        async () =>
-          withoutStructureSnapshot(() =>
-            withoutFileReadScope(() =>
-              this.exists(".git").then((hasGit) =>
-                hasGit ? this.history.withCaptureScope(action) : action(),
+      const locked = () =>
+        withFileMutationLock(
+          this.abs(path),
+          async () =>
+            withoutStructureSnapshot(() =>
+              withoutFileReadScope(() =>
+                this.raw(() => this.exists(".git")).then((hasGit) => {
+                  if (!hasGit || this.transactionBypass.getStore()) return action();
+                  const transaction = this.transaction();
+                  return this.boundaryReady.run(true, async () => {
+                    this.recoveryConflicts = await transaction.recover();
+                    return this.history.withCaptureScope(() =>
+                      this.transactionScope.run(transaction, () =>
+                        this.history.withPublicationObserver(
+                          {
+                            before: (commit) => transaction.beforePublish(commit),
+                            after: () => transaction.finish(),
+                          },
+                          async () => {
+                            try {
+                              const result = await action();
+                              await transaction.finish();
+                              return result;
+                            } catch (error) {
+                              try {
+                                this.recoveryConflicts = await transaction.recover();
+                              } catch (recovery) {
+                                throw new AggregateError(
+                                  [error, recovery],
+                                  `${String(error)}; transaction recovery also failed: ${String(recovery)}`,
+                                );
+                              }
+                              throw error;
+                            }
+                          },
+                        ),
+                      ),
+                    );
+                  });
+                }),
               ),
             ),
-          ),
-        {
-          waitMs: 8_000,
-          busyMessage:
-            "Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying.",
-          acquireFailedMessage: "Cannot acquire the Tent mutation lock.",
-        },
-      );
+          {
+            waitMs: 8_000,
+            busyMessage:
+              "Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying.",
+            acquireFailedMessage: "Cannot acquire the Tent mutation lock.",
+          },
+        );
+      // Checking repository presence must not run read-side recovery here:
+      // only the transport starts before the lock; recovery and HEAD stay inside.
+      return await ((await this.raw(() => this.exists(".git"))) &&
+      !this.transactionBypass.getStore()
+        ? this.history.withReadyPublisher(locked)
+        : locked());
     } finally {
       forgetScopedReads();
     }

@@ -45,7 +45,7 @@ export interface RenameNodeResult {
  * - path-based Markdown links rewritten in the same mutation
  * - unqualified name targets rewrite only when Tent resolution uniquely hits this node
  * - refuses target collision, illegal names, operational paths
- * - on post-move failure: restore notes + tree only when Tent Git HEAD did not record the rename
+ * - on post-move failure: settle the file transaction; legacy adapters prove HEAD before reversing
  */
 export async function renameNode(
   env: OpsEnv,
@@ -60,7 +60,7 @@ export async function renameNode(
         moved = { plan, head: await readHead(env.fs) };
       }),
     { operation: "node.rename" },
-    // Moves restore themselves; a completed move is undone only when HEAD provably did not record it.
+    // Durable transactions own recovery; legacy adapters retain their structural rollback.
     async (error) => {
       if (!moved) return;
       const { plan } = moved;
@@ -68,6 +68,16 @@ export async function renameNode(
         /^Tent files may already be saved, but Git capture failed; reread before retrying: /,
         "Git capture failed: ",
       );
+      const settled = await env.fs.recoverFileTransaction?.().catch((recovery) => {
+        throw new AggregateError(
+          [error, recovery],
+          `${cause}; recovery also failed: ${message(recovery)}`,
+        );
+      });
+      if (settled !== undefined)
+        throw new Error(
+          `Node rename to ${plan.newPath} failed; its file transaction was settled against Tent Git publication.${settled.length ? ` External edits retained: ${settled.join(", ")}.` : ""} Cause: ${cause}`,
+        );
       const published = await renamePublished(env.fs, moved);
       if (published)
         throw new Error(

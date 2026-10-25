@@ -5,11 +5,7 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import {
-  createRoleContext,
-  editRoleContext,
-  requireRoleDocument,
-} from "../src/core/read/role-context.js";
+import { createRoleContext, editRoleContext } from "../src/core/read/role-context.js";
 import { deleteRole } from "../src/core/write/role-delete.js";
 import {
   createCardDocument,
@@ -249,6 +245,8 @@ for (const point of [
 ] as const) {
   test(`Role deletion resumes after ${point} failure with one deletion history entry`, async (t) => {
     const { adapter, role, systemRoot } = await fixture(t);
+    const before = await adapter.readFile(role.path);
+    const beforeHead = await adapter.history.currentCommit();
     const move = adapter.move.bind(adapter),
       write = adapter.writeFile.bind(adapter),
       remove = adapter.remove.bind(adapter),
@@ -276,10 +274,16 @@ for (const point of [
       await remove(file);
     };
     await assert.rejects(deleteRole(adapter, role.roleId, { baseEtag: role.etag }), /injected/);
-    assert.equal(await adapter.exists(DELETE_PENDING_PATH), true);
-    if (point === "before-move")
-      assert.equal((await requireRoleDocument(adapter, role.roleId)).etag, role.etag);
-    else assert.equal(await adapter.exists(role.path), false);
+    const published = point === "cleanup" || point === "journal";
+    assert.equal(await adapter.exists(DELETE_PENDING_PATH), published);
+    if (published) {
+      assert.equal(await adapter.exists(role.path), false);
+      assert.notEqual(await adapter.history.currentCommit(), beforeHead);
+    } else {
+      assert.equal(await adapter.readFile(role.path), before);
+      assert.equal(await adapter.history.currentCommit(), beforeHead);
+      assert.equal(await adapter.exists("temp/delete-pending"), false);
+    }
     const restarted = new NodeFs(systemRoot);
     await deleteRole(restarted, role.roleId, { baseEtag: role.etag });
     assert.equal(await restarted.exists(role.path), false);
@@ -294,15 +298,26 @@ for (const point of [
   });
 }
 
-test("Role recovery rejects changed isolated bytes and a recreated live identity", async (t) => {
+test("legacy Role recovery rejects changed isolated bytes and a recreated live identity", async (t) => {
   const { adapter, role, systemRoot } = await fixture(t);
   const raw = await adapter.readFile(role.path);
   const move = adapter.move.bind(adapter);
+  const write = adapter.writeFile.bind(adapter);
+  let legacyPlan: string | undefined;
+  adapter.writeFile = async (file, raw) => {
+    if (file === DELETE_PENDING_PATH) legacyPlan = raw;
+    return write(file, raw);
+  };
   adapter.move = async (from, to) => {
     await move(from, to);
     throw new Error("interrupted");
   };
   await assert.rejects(deleteRole(adapter, role.roleId, { baseEtag: role.etag }), /interrupted/);
+  assert.ok(legacyPlan);
+  // The new transaction restored the live Role. Reconstruct a legacy interrupted isolation.
+  await fs.writeFile(path.join(systemRoot, DELETE_PENDING_PATH), legacyPlan);
+  await fs.mkdir(path.join(systemRoot, "temp"), { recursive: true });
+  await fs.rename(path.join(systemRoot, role.path), path.join(systemRoot, "temp/delete-pending"));
   const restarted = new NodeFs(systemRoot);
   await restarted.writeFile("temp/delete-pending", raw + "changed");
   await assert.rejects(

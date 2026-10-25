@@ -111,7 +111,7 @@ for (const diagnostic of ["INPUT_CHANGED", "INVALID_DOCUMENT"]) {
   });
 }
 
-test("take completes an interrupted reception from consumed files and pending Git exactly once", async (t) => {
+test("take rolls back an unpublished transaction and still recovers legacy consumed bytes exactly once", async (t) => {
   const { adapter, root } = await fixture(t);
   for (const roleId of [undefined, "role-a"]) {
     const card = await createCardDocument(adapter, {
@@ -119,9 +119,15 @@ test("take completes an interrupted reception from consumed files and pending Gi
       prompt: "Keep the original input",
       ...(roleId ? { target: roleId } : {}),
     });
+    const before = await adapter.readFile(card.path);
+    const beforeHead = await adapter.history.currentCommit();
+    let attemptedRaw: string | undefined;
     const capture = adapter.history.captureUnlocked.bind(adapter.history);
     adapter.history.captureUnlocked = async (changes, metadata) => {
-      if (metadata?.operation === "card.take") throw new Error("interrupted before publication");
+      if (metadata?.operation === "card.take") {
+        attemptedRaw = changes.find((change) => change.path === card.path)?.raw ?? undefined;
+        throw new Error("interrupted before publication");
+      }
       return capture(changes, metadata);
     };
     await assert.rejects(
@@ -129,6 +135,12 @@ test("take completes an interrupted reception from consumed files and pending Gi
       /interrupted before publication/,
     );
     adapter.history.captureUnlocked = capture;
+    assert.equal(await adapter.readFile(card.path), before);
+    assert.equal(await adapter.history.currentCommit(), beforeHead);
+    assert.equal((await readCardDocument(adapter, card.cardId)).state, "pending");
+    assert.ok(attemptedRaw);
+    // A pre-transaction workspace may contain consumed bytes without a published reception.
+    await fs.writeFile(path.join(root, card.path), attemptedRaw);
     const savedBytes = await adapter.readFile(card.path);
     assert.equal(parseFrontmatter(savedBytes).data.state, "consumed");
     assert.equal(parseFrontmatter(await adapter.history.read(card.version)).data.state, "pending");
