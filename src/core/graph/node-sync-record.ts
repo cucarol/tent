@@ -54,7 +54,13 @@ export function coverageGoalAncestors(
   const ancestors = new Set<string>();
   if (!workspaceRoot) return ancestors;
   for (const node of nodes.values()) {
-    if (node.invalid || node.archived || node.type !== "goal") continue;
+    if (
+      node.invalid ||
+      node.archived ||
+      node.type !== "goal" ||
+      parseFrontmatter(node.header).data.status === "draft"
+    )
+      continue;
     if (
       !isCoverageGoal(
         { ...parseFrontmatter(node.header).data, type: node.type },
@@ -80,7 +86,12 @@ export function goalAncestors(node: CatalogNode, byId: Map<string, CatalogNode>)
   const goals: CatalogNode[] = [];
   let parent = node.parentNodeId ? byId.get(node.parentNodeId) : undefined;
   while (parent) {
-    if (!parent.invalid && isRequirementNode({ type: parent.type })) goals.push(parent);
+    if (
+      !parent.invalid &&
+      isRequirementNode({ type: parent.type }) &&
+      parseFrontmatter(parent.header).data.status !== "draft"
+    )
+      goals.push(parent);
     parent = parent.parentNodeId ? byId.get(parent.parentNodeId) : undefined;
   }
   return goals;
@@ -553,7 +564,8 @@ export async function prepareNodeSyncSave(
       (ancestor) =>
         options.previousLocation!.documentPath.startsWith(ancestor.path + "/") &&
         !ancestor.invalid &&
-        isRequirementNode({ type: ancestor.type }),
+        isRequirementNode({ type: ancestor.type }) &&
+        parseFrontmatter(ancestor.header).data.status !== "draft",
     );
   if (goals.length && (options.created || options.confirm || firstGoalPlacement)) {
     record.goals = [];

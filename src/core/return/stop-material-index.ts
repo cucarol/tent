@@ -36,6 +36,7 @@ export function buildStopMaterialIndex(
   const nodes = [...catalog.byId.values()].filter(
     (node) =>
       isUsableNode(catalog.tree.byPath.get(node.path)!) &&
+      catalog.tree.byPath.get(node.path)!.status !== "draft" &&
       !invalidNodePaths.includes(`.tent/${nodeNotePath(node.path)}`),
   );
   return {

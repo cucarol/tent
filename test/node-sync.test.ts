@@ -1491,6 +1491,84 @@ test("entire goal chain, output presence and deprecated outputs are independent"
   assert.ok(inspection.requirementsWithoutOutputs.includes(child));
 });
 
+test("draft goals and outputs are readable but cannot establish requirements or evidence", async (t) => {
+  const { fs, create, edit } = await fixture(t);
+  const outer = await create("Direction", "goal");
+  const draft = await create("Undecided", "goal", "Direction");
+  await edit(draft, { frontmatter: { status: "draft" } });
+  const child = await create("Decided", "goal", "Direction/Undecided");
+  assert.equal((await inspectNodeSync(fs, draft)).ahead, undefined);
+  assert.ok((await inspectNodeSync(fs, child)).ahead, "status is local, not inherited");
+  const output = await create("Evidence", "output", "Direction/Undecided/Decided");
+  assert.deepEqual((await inspectNodeSync(fs, output)).goalIds, [child, outer]);
+  assert.equal((await inspectNodeSync(fs, outer)).ahead, undefined);
+  await edit(draft, { body: "still undecided" });
+  assert.ok((await inspectNodeSync(fs, output)).materials.every((m) => m.state === "current"));
+  await edit(output, { frontmatter: { status: "draft" } });
+  const workspace = await inspectWorkspaceSync(fs);
+  assert.ok(!workspace.nodes.some((node) => node.nodeId === output));
+  assert.match((await readNodeForEdit(fs, output)).raw, /status: draft/);
+  assert.deepEqual(workspace.outputNodes, []);
+  assert.ok(workspace.requirementsWithoutOutputs.includes(outer));
+  assert.ok(workspace.requirementsWithoutOutputs.includes(child));
+  assert.ok(!workspace.requirementsWithoutOutputs.includes(draft));
+  assert.equal(workspace.counts.ahead, 2);
+  assert.ok((await inspectNodeSync(fs, outer)).ahead);
+  assert.ok((await inspectNodeSync(fs, child)).ahead);
+  await edit(output, { frontmatter: { status: "stable" } });
+  assert.equal((await inspectNodeSync(fs, outer)).ahead, undefined);
+  assert.equal((await inspectNodeSync(fs, child)).ahead, undefined);
+  await edit(draft, { frontmatter: { status: "stable" } });
+  assert.ok(
+    (await inspectNodeSync(fs, draft)).ahead,
+    "an output made under a draft did not decide it",
+  );
+  await confirmNodeSync(fs, output, { baseEtag: (await readNodeForEdit(fs, output)).etag });
+  assert.equal((await inspectNodeSync(fs, draft)).ahead, undefined);
+});
+
+for (const sourceType of ["goal", "prompt"] as const) {
+  test(`first effective goal placement from a ${sourceType === "goal" ? "draft goal" : "prompt"} establishes the output basis`, async (t) => {
+    const { fs, env, create, edit } = await fixture(t);
+    const source = await create("Source", sourceType);
+    if (sourceType === "goal") await edit(source, { frontmatter: { status: "draft" } });
+    const target = await create("Target", "goal");
+    const output = await create("Evidence", "output", "Source");
+    assert.equal((await inspectNodeSync(fs, output)).goalIds, undefined);
+    assert.equal((await fs.history.nodeRecords())[output]?.goals, undefined);
+    await moveNode(env, output, target, { mode: "inside" });
+    const moved = await inspectNodeSync(fs, output);
+    assert.deepEqual(moved.goalIds, [target]);
+    assert.ok(moved.materials.some((material) => material.goalId === target));
+    assert.ok(moved.materials.every((material) => material.state === "current"));
+    assert.deepEqual(
+      (await fs.history.nodeRecords())[output]?.goals?.map((goal) => goal.nodeId),
+      [target],
+    );
+    assert.equal((await inspectNodeSync(fs, target)).ahead, undefined);
+    await edit(target, { body: "new requirement" });
+    assert.ok((await inspectNodeSync(fs, target)).ahead, "the initial basis stays frozen");
+  });
+}
+
+test("draft coverage cannot grant an ancestor a confirmed-intent basis", async (t) => {
+  const { fs, env, create, edit } = await fixture(t);
+  const outer = await create("Direction", "goal");
+  const coverage = await createNode(env, {
+    parentPath: "Direction",
+    name: "Coverage",
+    type: "goal",
+    sources: [{ resource: "../../../" }],
+  });
+  await edit(coverage, { frontmatter: { status: "draft" } });
+  await confirmNodeSync(fs, outer, { baseEtag: (await readNodeForEdit(fs, outer)).etag });
+  assert.ok((await inspectNodeSync(fs, outer)).ahead);
+  assert.equal((await inspectNodeSync(fs, coverage)).ahead, undefined);
+  await edit(coverage, { frontmatter: { status: "stable" } });
+  await confirmNodeSync(fs, outer, { baseEtag: (await readNodeForEdit(fs, outer)).etag });
+  assert.equal((await inspectNodeSync(fs, outer)).ahead, undefined);
+});
+
 test("a goal counts ahead and behind independently and each cause resolves separately", async (t) => {
   const { fs, env, resource, workspace, edit } = await fixture(t);
   const goal = await createNode(env, {

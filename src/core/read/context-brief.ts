@@ -71,12 +71,16 @@ async function inspectCurrentContextInScope(
     ...sourceChanges,
     items: sourceChanges.items.filter((item) => aheadIds.has(item.nodeId)),
   };
+  const draftCount = [...currentCatalog.tree.byId.values()].filter(
+    (node) => !node.invalid && !node.archived && node.status === "draft",
+  ).length;
   return {
     sync,
     cards,
     changedCardSources,
     roots,
     ...(fs.recoveryConflicts?.length ? { recoveryConflicts: [...fs.recoveryConflicts] } : {}),
+    ...(draftCount ? { draftCount } : {}),
   };
 }
 
@@ -132,6 +136,7 @@ export type ContextBrief = {
   cardSourcesUncertain?: true;
   recoveryConflicts?: string[];
   roleId?: string;
+  drafts?: { count: number; command: string };
 };
 const shorten = (value: string, length: number) =>
   Array.from(value.replace(/[\r\n\t]/g, " "))
@@ -272,6 +277,9 @@ export function makeContextBrief(
   // Root navigation is appended after actionable detail has received its budget.
   brief.roots = context.roots.slice(0, 12);
   brief.omitted.roots = Math.max(0, context.roots.length - brief.roots.length);
+  // Draft discovery is mandatory and does not spend the optional detail budget.
+  if (context.draftCount)
+    brief.drafts = { count: context.draftCount, command: "tent node list --status draft" };
   return brief;
 }
 
@@ -282,6 +290,7 @@ export function formatContextBrief(brief: ContextBrief): string {
       "Transaction recovery kept external edits:",
       ...brief.recoveryConflicts.map((p) => `- .tent/${p}`),
     );
+  if (brief.drafts) lines.push(`${brief.drafts.count} 条还没定 · ${brief.drafts.command}`);
   if (brief.invalidNodes.length) {
     lines.push("Invalid Nodes:");
     for (const node of brief.invalidNodes) lines.push(`- ${node.path}: ${node.reason}`);

@@ -147,6 +147,44 @@ test("modules require explicit structure sources and retain all equally specific
   );
 });
 
+test("Stop excludes draft module coverage while retaining stable modules beneath it", async (t) => {
+  const { root, adapter } = await fixture(t);
+  const systemRoot = path.join(root, ".tent");
+  await fs.mkdir(path.join(systemRoot, ".git"));
+  const turn = event(["src/core/card-one.ts", "src/core/other.ts"]);
+  const original = await adapter.readFile("Core/Core.md");
+  const stable = await loadStopMaterialIndex(systemRoot, root);
+  assert.ok(modulesForIndexedTurn(stable, turn).some((node) => node.nodeId === "node-core"));
+  const draftRaw = original.replace("type: output", "type: output\nstatus: draft");
+  await adapter.writeFile("Core/Core.md", draftRaw);
+  const expected = buildStopMaterialIndex(await loadNodeCatalog(adapter), root);
+  assert.ok(!expected.nodes.some((node) => node.nodeId === "node-core"));
+  assert.deepEqual(
+    modulesForIndexedTurn(expected, turn)
+      .map((node) => node.nodeId)
+      .sort(),
+    ["node-card", "node-equal"],
+  );
+  assert.deepEqual(
+    modulesForIndexedTurn(expected, turn).find((node) => node.nodeId === "node-card")!.names,
+    ["Core", "Card"],
+  );
+  // A cache primed while stable must apply the changed header on both cold and repeated reads.
+  assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
+  assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
+  const cacheFile = path.join(systemRoot, ".git/tent-material-cache/stop-material-index.json");
+  const legacy = JSON.parse(await fs.readFile(cacheFile, "utf8"));
+  legacy.schema = 6;
+  legacy.index = stable;
+  legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
+  await fs.writeFile(cacheFile, JSON.stringify(legacy));
+  assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 7);
+  assert.equal(await adapter.readFile("Core/Core.md"), draftRaw);
+  await adapter.writeFile("Core/Core.md", original);
+  assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), stable);
+});
+
 test("intent update selects a goal from this turn's modules in changed-file order", async (t) => {
   const { root, adapter, node } = await fixture(t);
   await node("AFirst", "node-first", "../../src/first/");
@@ -509,9 +547,9 @@ test("Stop excludes unknown lifecycle from modules and ordinary materials across
     assert.match(current.statusDiagnostic!, /preserved without assuming currentness/);
   }
   const expected = buildStopMaterialIndex(catalog, root);
-  for (const id of ["node-draft", "node-stable", "node-core"])
+  for (const id of ["node-stable", "node-core"])
     assert.ok(expected.nodes.some((node) => node.nodeId === id));
-  for (const id of ["node-unknownmodule", "node-unknownevidence", "node-deprecated"])
+  for (const id of ["node-draft", "node-unknownmodule", "node-unknownevidence", "node-deprecated"])
     assert.ok(!expected.nodes.some((node) => node.nodeId === id));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
   await fs.mkdir(path.join(systemRoot, ".git"));
@@ -531,7 +569,7 @@ test("Stop excludes unknown lifecycle from modules and ordinary materials across
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 6);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 7);
   assert.deepEqual(modulesForIndexedTurn(expected, event(["unknown/a.ts"])), []);
   assert.deepEqual(questionsForIndexedTurn(expected, event(["only-unknown.txt"])), []);
   const transcript = path.join(root, "unknown-lifecycle.jsonl");

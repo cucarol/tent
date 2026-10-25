@@ -16,7 +16,11 @@ import {
   deprecateCardDocument,
   inspectReceivedCardSourceChanges,
 } from "../src/core/graph/card-document.js";
-import { createRoleContext } from "../src/core/read/role-context.js";
+import {
+  createRoleContext,
+  listRoleContexts,
+  readRolePage,
+} from "../src/core/read/role-context.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { renameNode } from "../src/core/graph/rename-ops.js";
 import { contentEtag } from "../src/core/base/etag.js";
@@ -47,6 +51,121 @@ async function fixture(t: TestContext) {
 }
 const code = (expected: string) => (error: unknown) =>
   (error as { code?: string }).code === expected;
+
+test("a draft Card is diagnosed, raw-readable and cannot be taken", async (t) => {
+  const { adapter } = await fixture(t);
+  const card = await createCardDocument(adapter, { prompt: "Decided task" });
+  const raw = (await adapter.readFile(card.path)).replace(
+    "state: pending",
+    "state: pending\nstatus: draft",
+  );
+  await adapter.writeFile(card.path, raw);
+  const shown = await readCardDocument(adapter, card.cardId, { view: "raw" });
+  assert.equal(shown.text, raw);
+  assert.match(JSON.stringify(shown.diagnostic), /INVALID_DOCUMENT.*draft/);
+  const listed = await listCardDocuments(adapter);
+  assert.match(
+    String(listed.items.find((item) => item.cardId === card.cardId)?.diagnostic),
+    /Card header unavailable/,
+  );
+  await assert.rejects(takeCardDocument(adapter, card.cardId), code("INVALID_DOCUMENT"));
+});
+
+test("draft Roles cannot receive Cards but their documents remain readable", async (t) => {
+  const { adapter } = await fixture(t);
+  const card = await createCardDocument(adapter, { prompt: "Decided task", target: "role-a" });
+  await adapter.writeFile(
+    "roles/role-a.md",
+    (await adapter.readFile("roles/role-a.md")).replace("type: role", "type: role\nstatus: draft"),
+  );
+  await assert.rejects(takeCardDocument(adapter, card.cardId, "role-a"), code("ROLE_UNAVAILABLE"));
+  await assert.rejects(
+    createCardDocument(adapter, { prompt: "Task", target: "role-a" }),
+    code("ROLE_UNAVAILABLE"),
+  );
+  assert.match(await adapter.readFile("roles/role-a.md"), /status: draft/);
+});
+
+test("draft Role Card filters remain readable while Card actions and watch stay unavailable", async (t) => {
+  const { adapter } = await fixture(t);
+  const pending = await createCardDocument(adapter, { prompt: "Pending", target: "role-a" });
+  const consumed = await createCardDocument(adapter, {
+    prompt: "In progress",
+    target: "role-a",
+    returnTo: "role-b",
+  });
+  await takeCardDocument(adapter, consumed.cardId, "role-a");
+  const returned = await createCardDocument(adapter, {
+    prompt: "Await collection",
+    target: "role-b",
+    returnTo: "role-a",
+  });
+  await takeCardDocument(adapter, returned.cardId, "role-b");
+  await returnCardDocument(adapter, returned.cardId, { roleId: "role-b", result: "Done" });
+  const unrelated = await createCardDocument(adapter, { prompt: "Other", target: "role-b" });
+  const open = await createCardDocument(adapter, { prompt: "Public" });
+  const selected = (await listCardDocuments(adapter, { roleId: "role-a" })).items;
+  assert.deepEqual(
+    selected.map((item) => item.cardId).sort(),
+    [pending.cardId, consumed.cardId, returned.cardId].sort(),
+  );
+  const roleRaw = (await adapter.readFile("roles/role-a.md")).replace(
+    "type: role",
+    "type: role\nstatus: draft",
+  );
+  await adapter.writeFile("roles/role-a.md", roleRaw);
+  const head = await adapter.history.currentCommit();
+  for (const action of [
+    () => createCardDocument(adapter, { prompt: "New", target: "role-a" }),
+    () => createCardDocument(adapter, { prompt: "New", returnTo: "role-a" }),
+    () =>
+      moveCardDocument(adapter, unrelated.cardId, {
+        target: "role-a",
+        expectedEtag: unrelated.etag,
+      }),
+    () => takeCardDocument(adapter, pending.cardId, "role-a"),
+    () => takeCardDocument(adapter, returned.cardId, "role-a"),
+    () => returnCardDocument(adapter, consumed.cardId, { roleId: "role-a", result: "Done" }),
+    () => watchCardDocuments(adapter, "role-a", 0),
+  ])
+    await assert.rejects(action, code("ROLE_UNAVAILABLE"));
+  adapter.withLock = async () => {
+    throw new Error("Read-only Role filtering must not acquire the write lock");
+  };
+  assert.deepEqual((await listCardDocuments(adapter, { roleId: "role-a" })).items, selected);
+  assert.deepEqual(
+    (
+      await listCardDocuments(adapter, { roleId: "role-a", state: "pending", includeOpen: true })
+    ).items
+      .map((item) => item.cardId)
+      .sort(),
+    [pending.cardId, open.cardId].sort(),
+  );
+  assert.equal((await readRolePage(adapter, "role-a", { view: "raw" })).text, roleRaw);
+  assert.ok((await listRoleContexts(adapter)).items.some((role) => role.roleId === "role-a"));
+  assert.equal(
+    (await readCardDocument(adapter, pending.cardId, { view: "raw" })).text,
+    await adapter.readFile(pending.path),
+  );
+  assert.equal(await adapter.history.currentCommit(), head);
+  assert.equal(await adapter.readFile("roles/role-a.md"), roleRaw);
+});
+
+test("Card Role filters retain unavailable handling for deprecated and unknown Role status", async (t) => {
+  const { adapter } = await fixture(t);
+  await createCardDocument(adapter, { prompt: "Existing", target: "role-a" });
+  const original = await adapter.readFile("roles/role-a.md");
+  for (const status of ["deprecated", "mystery"]) {
+    await adapter.writeFile(
+      "roles/role-a.md",
+      original.replace("type: role", `type: role\nstatus: ${status}`),
+    );
+    await assert.rejects(
+      listCardDocuments(adapter, { roleId: "role-a" }),
+      code("ROLE_UNAVAILABLE"),
+    );
+  }
+});
 
 test("ordinary Card reads ignore unrelated documents and never acquire the write lock", async (t) => {
   const { adapter } = await fixture(t);

@@ -248,6 +248,59 @@ test("module goals retain exceptions in child prompts, scoped to the nearest mod
   assert.ok((await codes()).includes("deps.cycle"));
 });
 
+test("draft rules, pair exceptions and directory declarations have no module effect", async (t) => {
+  const { root, adapter, node } = await fixture(t);
+  await node("aaaaaa", { type: "goal", ...structure("../../a/") });
+  await node("bbbbbb", { type: "goal", ...structure("../../b/") });
+  const files = Array.from({ length: 30 }, (_, i) => `a/${i}.ts`).concat(
+    Array.from({ length: 3 }, (_, i) => `b/${i}.ts`),
+  );
+  const repository = {
+    head: null,
+    trackedFiles: files,
+    commits: [],
+    sources: {
+      files: files
+        .slice(0, 3)
+        .concat(files.slice(-3))
+        .map((file) => ({
+          path: file,
+          content: `import '../${file.startsWith("a/") ? "b" : "a"}/${path.posix.basename(file)}';`,
+        })),
+      errors: [],
+    },
+  };
+  const inspect = () => checkWorkspaceModules(adapter, root, repository);
+  const baseline = await inspect();
+  await adapter.writeFile(
+    "aaaaaa/Rules/Rules.md",
+    serializeFrontmatter(
+      { id: "node-rule01", type: "prompt", status: "draft" },
+      "allow:module.oversized\nallow:deps.cycle [B](../../bbbbbb/bbbbbb.md)",
+    ),
+  );
+  assert.deepEqual(await inspect(), baseline);
+  await node(
+    "drafts",
+    { type: "goal", status: "draft", ...structure("../../c/") },
+    "allow:map.empty",
+  );
+  assert.deepEqual(await inspect(), baseline);
+  // A decided child module still works beneath the draft declaration.
+  await adapter.writeFile(
+    "drafts/Decided/Decided.md",
+    serializeFrontmatter(
+      {
+        id: "node-decided",
+        type: "goal",
+        ...structure("../../../c/"),
+      },
+      "",
+    ),
+  );
+  assert.ok((await inspect()).modules.some((module) => module.id === "node-decided"));
+});
+
 test("module command reports covered root code without ownership and clears it only after module attachment", async (t) => {
   const { root, write, node } = await fixture(t);
   // A root build script still needs a valid Cargo context; this test isolates ownership.

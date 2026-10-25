@@ -31,8 +31,54 @@ async function fixture(t: TestContext) {
       basis: { head: "a".repeat(40) },
       sources,
     });
-  return { node, read };
+  return { adapter, node, read };
 }
+
+test("draft declarations lose ownership and edges while their stable child modules remain effective", async (t) => {
+  const { adapter, node, read } = await fixture(t);
+  await node("a", ["src/a/"]);
+  await node("b", ["src/b/"]);
+  await adapter.writeFile(
+    "a/Child/Child.md",
+    serializeFrontmatter(
+      {
+        id: "node-child",
+        type: "prompt",
+        sources: [{ resource: "../../../src/a/child/", track: "structure" }],
+      },
+      "Decided child rules.",
+    ),
+  );
+  const sources = [
+    { path: "src/a/one.ts", content: 'import "../b/two.js";' },
+    { path: "src/a/child/three.ts", content: 'import "../../b/two.js";' },
+    { path: "src/b/two.ts", content: "export const n = 1;" },
+  ];
+  const stable = await read(sources);
+  assert.deepEqual(stable.modules, [
+    { nodeId: "node-a", files: 1 },
+    { nodeId: "node-b", files: 1 },
+    { nodeId: "node-child", files: 1 },
+  ]);
+  assert.deepEqual(stable.edges, [
+    { from: "node-a", to: "node-b", imports: 1 },
+    { from: "node-child", to: "node-b", imports: 1 },
+  ]);
+  assert.equal(stable.uncovered, 0);
+
+  await node("a", ["src/a/"], { status: "draft" });
+  const draft = await read(sources);
+  assert.deepEqual(draft.modules, [
+    { nodeId: "node-b", files: 1 },
+    { nodeId: "node-child", files: 1 },
+  ]);
+  assert.deepEqual(draft.edges, [{ from: "node-child", to: "node-b", imports: 1 }]);
+  assert.equal(draft.uncovered, 1);
+  assert.equal(draft.unresolved, 0);
+  assert.match(await adapter.readFile("a/a.md"), /status: draft/);
+  await node("a", ["src/a/"], { status: "stable" });
+  assert.deepEqual(await read(sources), stable);
+});
 
 test("module dependencies aggregate imports in both directions without self edges", async (t) => {
   const { node, read } = await fixture(t);

@@ -52,7 +52,7 @@ const directorySchema = z.strictObject({
 });
 const headerSchema = z.strictObject({ state: stateSchema, content: z.string() });
 const cacheSchema = z.strictObject({
-  schema: z.literal(6),
+  schema: z.literal(7),
   workspaceRoot: z.string(),
   writtenAtNs: z.string().regex(/^\d+$/),
   directories: z.array(z.tuple([relativePath, directorySchema])),
@@ -239,7 +239,7 @@ export async function loadStopMaterialIndex(
       await fs.writeFile(
         temp,
         JSON.stringify({
-          schema: 6,
+          schema: 7,
           workspaceRoot,
           writtenAtNs,
           directories: directoryRecords,

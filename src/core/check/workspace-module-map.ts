@@ -45,7 +45,8 @@ export async function checkWorkspaceModules(
   const inspectionErrors: Array<{ node: string; resource?: string; reason: string }> =
     repository.sources.errors.map((error) => ({ node: error.file, reason: error.reason }));
   const current = [...tent.byPath.values()].filter(
-    (node) => !node.invalid && !node.archived && node.status !== "deprecated",
+    (node) =>
+      !node.invalid && !node.archived && node.status !== "deprecated" && node.status !== "draft",
   );
   for (const node of tent.byPath.values())
     if (node.invalid)

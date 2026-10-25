@@ -150,6 +150,7 @@ test("scan uses active material coverage, excludes body links and respects direc
     "[body](../../docs/body.md#Part)\n[ref][design]\n\n[design]: ../../docs/ref.md\n[unused]: ../../docs/no.md\n\n`[quoted](../../docs/quoted.md)`\n![image](../../docs/quoted.md)\n[remote](https://example.invalid/no.md)",
   );
   await node("docs", { resource: "../../guide/", status: "deprecated" });
+  await node("draft", { resource: "../../src/core-other/", status: "draft" });
   await node("missingdir", { resource: "../../gone/" });
   await adapter.writeFile(
     "roles/role-other.md",

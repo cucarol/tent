@@ -41,7 +41,7 @@ export async function readModuleDependencies(
 ): Promise<ModuleDependencies> {
   const [catalog, repository] = await Promise.all([currentCatalog ?? loadNodeCatalog(fs), input]);
   const modules = [...catalog.tree.byId.values()]
-    .filter(isUsableNode)
+    .filter((node) => isUsableNode(node) && node.status !== "draft")
     .filter((node) => node.fm.sources?.some((source) => source.track === "structure"))
     .map((node) => ({
       nodeId: node.id,

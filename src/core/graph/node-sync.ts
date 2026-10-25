@@ -132,7 +132,11 @@ async function inspectWorkspaceSyncInScope(
 
 function currentNodes(catalog: Awaited<ReturnType<typeof loadNodeCatalog>>) {
   return [...catalog.byId.values()].filter(
-    (n) => !n.archived && !n.invalid && catalog.tree.byPath.get(n.path)!.fm.status !== "deprecated",
+    (n) =>
+      !n.archived &&
+      !n.invalid &&
+      catalog.tree.byPath.get(n.path)!.fm.status !== "deprecated" &&
+      catalog.tree.byPath.get(n.path)!.fm.status !== "draft",
   );
 }
 
@@ -266,6 +270,7 @@ async function inspectCatalogNodesInScope(
         };
       });
   const goalIntentMatches = new Map<string, boolean>();
+  const draftNodes = new Set<string>();
   const coverageAncestors = new WeakMap<Map<string, CatalogNode>, Set<string>>();
   const coversThroughGoals = (nodes: Map<string, CatalogNode>, nodeId: string) => {
     let ancestors = coverageAncestors.get(nodes);
@@ -282,6 +287,8 @@ async function inspectCatalogNodesInScope(
       try {
         const { raw } = await readDocument(current, attempt > 0);
         const data = nodeCatalog.tree.byPath.get(current.path)!.fm;
+        if (data.status === "draft") draftNodes.add(current.nodeId);
+        else draftNodes.delete(current.nodeId);
         const path = nodeNotePath(current.path);
         const record = records[current.nodeId];
         const observations = await observeMaterials(data, path, nodeCatalog, attempt > 0);
@@ -446,7 +453,8 @@ async function inspectCatalogNodesInScope(
               !refreshed.invalid &&
               (refreshed.nodeId === explicitNodeId ||
                 (!refreshed.archived &&
-                  parseFrontmatter(refreshed.header).data.status !== "deprecated"))
+                  parseFrontmatter(refreshed.header).data.status !== "deprecated" &&
+                  parseFrontmatter(refreshed.header).data.status !== "draft"))
             ) {
               current = refreshed;
               continue;
@@ -515,7 +523,9 @@ async function inspectCatalogNodesInScope(
       }
     }),
   );
-  const outputNodes = nodes
+  // Drafts remain readable, but do not establish requirements or evidence.
+  const settledNodes = nodes.filter((node) => !draftNodes.has(node.nodeId));
+  const outputNodes = settledNodes
     .filter((n) => isOutputNode(n))
     .map((n) => ({
       nodeId: n.nodeId,
@@ -524,9 +534,9 @@ async function inspectCatalogNodesInScope(
       ...(n.goalId ? { goalId: n.goalId } : {}),
     }));
   const requirementsWithoutOutputs: string[] = [];
-  for (const goal of nodes.filter((n) => isRequirementNode({ type: n.type }))) {
+  for (const goal of settledNodes.filter((n) => isRequirementNode({ type: n.type }))) {
     if (goal.uncertain) continue;
-    const subtreeOutputs = nodes.filter(
+    const subtreeOutputs = settledNodes.filter(
       (n) => isOutputNode(n) && n.path.startsWith(goal.path + "/"),
     );
     const hasMatchingOutput = subtreeOutputs.some((node) => {
@@ -537,7 +547,9 @@ async function inspectCatalogNodesInScope(
         dependencies.every((material) => material.state === "current")
       );
     });
-    const uncertainSubtree = nodes.some((n) => n.uncertain && n.path.startsWith(goal.path + "/"));
+    const uncertainSubtree = settledNodes.some(
+      (n) => n.uncertain && n.path.startsWith(goal.path + "/"),
+    );
     const coverageGoal = goalIntentMatches.has(goal.nodeId);
     const hasMatchingBasis = goalIntentMatches.get(goal.nodeId) === true || hasMatchingOutput;
     if (!coverageGoal && !subtreeOutputs.length && !uncertainSubtree)
