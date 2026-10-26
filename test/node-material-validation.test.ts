@@ -1,3 +1,7 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -62,9 +66,9 @@ test("query observations distinguish descriptive sources from file resources", a
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-material-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Materials" });
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  await scaffoldInWorkspace(openTestFs(root), { name: "Materials" });
+  const adapter = openTestFs(path.join(root, ".tent"));
   const env = {
     fs: adapter,
     clock: { now: () => "2026-10-04T00:00:00.000Z" },
@@ -252,7 +256,7 @@ test("root escape repairs preserve encoded path components and query/fragment po
 
 test("Card creation validates pinned path and URI sources after live rename or deletion", async (t) => {
   const { root, adapter, env, id, note } = await fixture(t);
-  await git(path.join(root, ".tent"), "init", "--quiet");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   await createRoleContext(adapter, { roleId: "role-review", title: "Review", body: "direction" });
   const rolePath = "roles/role-review.md";
   const saved = await createCardDocument(adapter, {
@@ -281,7 +285,7 @@ test("Card creation validates pinned path and URI sources after live rename or d
   await adapter.writeFile("attachments/ordinary.md", "ordinary bytes");
   const pinned = sources[0]!;
   const invalid: MaterialSource[] = [
-    { ...pinned, version: { ...pinned.version!, commit: "0".repeat(40) } },
+    { ...pinned, version: { ...pinned.version!, commit: "0".repeat(64) } },
     { ...pinned, resource: "/A/Moved/Moved.md" },
     { resource: "/attachments/ordinary.md" },
     {
@@ -289,20 +293,20 @@ test("Card creation validates pinned path and URI sources after live rename or d
       version: { ...pinned.version!, path: "attachments/ordinary.md" },
     },
   ];
-  const head = await git(path.join(root, ".tent"), "rev-parse", "HEAD");
+  const head = await historyHead(path.join(root, ".tent"));
   for (let index = 0; index < invalid.length; index++) {
     const cardId = `card-invalid${index}`;
     await assert.rejects(
       createCardDocument(adapter, { cardId, prompt: "Reject", sources: [invalid[index]!] }),
     );
     assert.equal(await adapter.exists(`cards/${cardId}.md`), false);
-    assert.equal(await git(path.join(root, ".tent"), "rev-parse", "HEAD"), head);
+    assert.equal(await historyHead(path.join(root, ".tent")), head);
   }
 });
 
 test("ordinary .tent files are rejected consistently by new declarations and live observations", async (t) => {
   const { root, adapter, env, id, note } = await fixture(t);
-  await git(path.join(root, ".tent"), "init", "--quiet");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   await adapter.writeFile("attachments/ordinary.md", "ordinary bytes");
   await createRoleContext(adapter, { roleId: "role-review", title: "Review", body: "direction" });
   const role = await requireRoleDocument(adapter, "role-review");
@@ -375,7 +379,7 @@ test("ordinary .tent files are rejected consistently by new declarations and liv
 
 test("file URI Node, Role and Card addresses retain native history and response semantics", async (t) => {
   const { root, adapter, env, note } = await fixture(t);
-  await git(path.join(root, ".tent"), "init", "--quiet");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   await createRoleContext(adapter, { roleId: "role-review", title: "Review", body: "direction" });
   const uri = (file: string) => pathToFileURL(path.join(root, ".tent", file)).href;
   const card = await createCardDocument(adapter, {

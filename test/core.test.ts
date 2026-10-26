@@ -1,3 +1,4 @@
+import { openTestFs } from "./node-fs.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readdir } from "node:fs/promises";
@@ -12,7 +13,7 @@ import { workspaceDocumentPaths } from "../src/core/workspace/workspace-revision
 
 test("Node creation rejects unindexable names before writing and allows nested system basenames", async (t) => {
   const root = await makeTent(t);
-  const fs = new NodeFs(root);
+  const fs = openTestFs(root);
   const env = { fs, clock: new SystemClock(), tentName: "test", tentRoot: root };
   // Initialize persistent lock bookkeeping before comparing product files.
   await fs.withLock("mutation.lock", async () => {});
@@ -45,7 +46,7 @@ test("Node creation rejects unindexable names before writing and allows nested s
 
 test("Node and revision scans never enter transient mutation lock guard directories", async (t) => {
   const root = await makeTent(t);
-  const fs = new NodeFs(root);
+  const fs = openTestFs(root);
   const listDir = fs.listDir.bind(fs);
   const guardNames = [
     "mutation.lock.guard",
@@ -70,7 +71,7 @@ test("Node and revision scans never enter transient mutation lock guard director
 
 test("Core loads and extends the typed Node document forest", async (t) => {
   const root = await makeTent(t);
-  const fs = new NodeFs(root);
+  const fs = openTestFs(root);
   const env = { fs, clock: new SystemClock(), tentName: "test", tentRoot: root };
   const before = await loadTent(fs);
   assert.equal(before.byId.get("node-p1")?.type, "prompt");
@@ -90,7 +91,7 @@ test("Core loads and extends the typed Node document forest", async (t) => {
 
 test("Node creation rejects occupied paths without changing identities, descendants or files", async (t) => {
   const root = await makeTent(t);
-  const fs = new NodeFs(root);
+  const fs = openTestFs(root);
   const env = { fs, clock: new SystemClock(), tentName: "test", tentRoot: root };
   const original = await fs.readFile(nodeNotePath("prompt/表达式任务书"));
   const orderBefore = (await fs.exists("order.json")) ? await fs.readFile("order.json") : null;
@@ -127,7 +128,7 @@ test("Node creation rejects occupied paths without changing identities, descenda
 
 test("Node fallback order uses deterministic code-unit tie breakers", async (t) => {
   const root = await makeTent(t);
-  const fs = new NodeFs(root);
+  const fs = openTestFs(root);
   await fs.writeFile(
     nodeNotePath("goal/e\u0301"),
     serializeFrontmatter({ id: "node-order001", type: "goal" }, "# decomposed\n"),

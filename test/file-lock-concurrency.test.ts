@@ -1,3 +1,5 @@
+import { removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -10,7 +12,7 @@ const fixture = fileURLToPath(new URL("./fixtures/file-lock-contender.ts", impor
 
 async function setup(t: TestContext) {
   await fs.mkdir(".scratch", { recursive: true });
-  const root = await fs.mkdtemp(path.resolve(".scratch/mutation-race-"));
+  const root = await fs.mkdtemp(path.resolve(testScratchRoot(), "mutation-race-"));
   const lock = path.join(root, "mutation.lock");
   const children: ChildProcess[] = [];
   const exits: Promise<void>[] = [];
@@ -20,7 +22,7 @@ async function setup(t: TestContext) {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }
     await Promise.all(exits);
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTestFixture(root, { recursive: true, force: true });
   });
   const marker = (id: string, stage: string) => path.join(root, `${id}.${stage}`);
   const start = (id: string, gate = false, mode = "normal") => {

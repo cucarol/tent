@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -12,7 +13,7 @@ test("UI command selects the workspace and package assets and closes once on Ctr
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-ui-"));
   t.after(async () => {
     assert.equal(path.dirname(workspace), path.resolve(testScratchRoot()));
-    await fs.rm(workspace, { recursive: true, force: true });
+    await removeTestFixture(workspace, { recursive: true, force: true });
   });
   await initializeFixtureWorkspace(workspace);
   const signals = [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
@@ -59,7 +60,7 @@ test("UI rejects invalid arguments before starting a service", async () => {
 
 test("CLI ui dispatch starts a real loopback service and exits after authenticated activity stops", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-ui-dispatch-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
   await initializeFixtureWorkspace(workspace);
   const userDir = path.join(workspace, "test-user");
   const env = {

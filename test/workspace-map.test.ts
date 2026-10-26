@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,8 +10,10 @@ import { testScratchRoot } from "./scratch.js";
 
 test("workspace map reads headers once and omits bodies, Cards, Roles and history", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "workspace-map-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const adapter = openTestFs(path.join(root, ".tent"));
   const workspace = { id: "ws-map", name: "Map" };
   const parent = {
     id: "node-parent",

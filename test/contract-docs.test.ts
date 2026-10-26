@@ -201,7 +201,7 @@ test("SPEC records the Node name, rename rollback, check and Card warning contra
   assert.match(plugin, /`COM1`–`COM9`、`LPT1`–`LPT9`、`COM¹`–`COM³`、`LPT¹`–`LPT³`/);
   assert.match(
     spec,
-    /If recording a completed rename in Tent Git fails, recovery uses actual publication to keep the old or new name/,
+    /If recording a completed rename in Tent history fails, recovery uses actual publication to keep the old or new name/,
   );
   assert.match(
     spec,

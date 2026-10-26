@@ -6,10 +6,12 @@ import { scaffoldTent } from "../core/store/scaffold.js";
 import { TENT_SYSTEM_DIR } from "../core/base/paths.js";
 import { NodeFs } from "./node-fs.js";
 import { renameWithRetry } from "./rename-with-retry.js";
+import { SqliteDocumentHistory } from "../core/store/sqlite-history.js";
+import { initializeGitIgnoreContext } from "./git-ignore-context.js";
 
 const execute = promisify(execFile);
 
-/** Initialize an empty Tent and its independent local history repository. */
+/** Initialize an empty Tent and its independent SQLite history. */
 export async function initializeTentWorkspace(workspaceRoot: string): Promise<void> {
   const root = path.resolve(workspaceRoot);
   const systemRoot = path.join(root, TENT_SYSTEM_DIR);
@@ -24,16 +26,17 @@ export async function initializeTentWorkspace(workspaceRoot: string): Promise<vo
     Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
   );
   const git = (args: string[]) => execute("git", args, { env, windowsHide: true });
-  await git(["--version"]);
   await fs.mkdir(root, { recursive: true });
   const staging = await fs.mkdtemp(path.join(root, ".tent-init-"));
   try {
-    await git(["-C", staging, "init", "--quiet"]);
-    const { stdout } = await git(["-C", staging, "rev-parse", "--show-toplevel"]);
-    if ((await fs.realpath(stdout.trim())) !== (await fs.realpath(staging))) {
-      throw new Error(`Tent history must be rooted at ${staging}`);
+    const adapter = new NodeFs(staging);
+    try {
+      await scaffoldTent(adapter, { name: path.basename(root) });
+      await (adapter.history as SqliteDocumentHistory).initialize();
+      await initializeGitIgnoreContext(staging);
+    } finally {
+      await adapter.close();
     }
-    await scaffoldTent(new NodeFs(staging), { name: path.basename(root) });
     await ensureWorkspaceGitExclude(root, git);
     // Publish a complete, verified Tent. Failed preparation never creates a ready marker.
     await renameWithRetry(staging, systemRoot);
@@ -55,6 +58,8 @@ export async function ensureWorkspaceGitExclude(
     const { stdout } = await git(["-C", root, "rev-parse", "--git-path", "info/exclude"]);
     excludePath = path.resolve(root, stdout.trim());
   } catch (error) {
+    // Git is optional for SQLite initialization; no project repository is created.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     if (
       (error as { code?: number }).code === 128 &&
       /not a git repository/i.test((error as { stderr?: string }).stderr ?? "")

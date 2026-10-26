@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,7 +19,9 @@ import { createTurnPathResolver } from "../src/core/workspace/git-checkout.js";
 
 async function fixture(t: TestContext) {
   const base = await fs.mkdtemp(path.join(testScratchRoot(), "linked-hooks-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(base, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const main = path.join(base, "main");
   await fs.mkdir(path.join(main, "src/core"), { recursive: true });
   await fs.writeFile(path.join(main, "src/core/code.ts"), "export const value = 1;\n");
@@ -58,7 +61,7 @@ async function fixture(t: TestContext) {
 
 test("linked checkout CLI discovery, append and material state use the main Tent", async (t) => {
   const { main, roots, node, systemRoot } = await fixture(t);
-  const initial = await inspectNodeSync(new NodeFs(systemRoot), node.nodeId);
+  const initial = await inspectNodeSync(openTestFs(systemRoot), node.nodeId);
   for (const [index, root] of roots.entries()) {
     const cwd = path.join(root, "src/core");
     assert.equal(await findTentSystemRoot(cwd), systemRoot);
@@ -72,7 +75,7 @@ test("linked checkout CLI discovery, append and material state use the main Tent
       await fs.writeFile(path.join(root, "src/core/new.ts"), "branch-only member\n");
     }
     const resolved = await resolveWorkspacePaths({ cwd });
-    assert.deepEqual(await inspectNodeSync(new NodeFs(resolved.systemRoot), node.nodeId), initial);
+    assert.deepEqual(await inspectNodeSync(openTestFs(resolved.systemRoot), node.nodeId), initial);
     const brief = await runWorkspaceCommand("brief", [], { cwd, json: true });
     assert.equal(brief.exitCode, 0, brief.stderr);
     assert.doesNotMatch(brief.stdout, /branch-only|src\/core\/new\.ts/);
@@ -97,7 +100,7 @@ test("linked checkout CLI discovery, append and material state use the main Tent
   for (const root of roots.slice(1))
     assert.equal(await fs.stat(path.join(root, ".tent")).catch(() => undefined), undefined);
   await fs.writeFile(path.join(main, "src/core/code.ts"), "main changed\n");
-  assert.ok((await inspectNodeSync(new NodeFs(systemRoot), node.nodeId)).behind);
+  assert.ok((await inspectNodeSync(openTestFs(systemRoot), node.nodeId)).behind);
 });
 
 for (const host of ["codex", "claude-code"] as const) {

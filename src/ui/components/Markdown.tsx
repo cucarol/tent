@@ -38,11 +38,11 @@ function refLink(ref: SnapshotRef, name: string, graph: Graph) {
   return link;
 }
 
-const MENTION = /\b(?:node|card)-[a-z0-9]+\b|\b[0-9a-f]{40}\b/gi;
+const MENTION = /\b(?:node|card)-[a-z0-9]+\b|\b[0-9a-f]{64}\b|\b[0-9a-f]{40}\b/gi;
 
 /** A Node or Card id or a full commit hash written in the text, as it reads; null when the id is unknown. */
 function mention(text: string, graph: Graph) {
-  if (text.length === 40 && !text.includes("-")) {
+  if ((text.length === 40 || text.length === 64) && !text.includes("-")) {
     const hash = document.createElement("button");
     hash.type = "button";
     hash.className = "doc-hash";

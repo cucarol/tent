@@ -63,7 +63,7 @@ export async function createTurnPathResolver(
     async relative(filename: string): Promise<string | undefined> {
       if (!workspaceRoot) return undefined;
       const local = path.relative(workspaceRoot, filename).split(path.sep).join("/");
-      // Tent has its own Git repository; these writes still identify Node/Card edits.
+      // Tent owns this operational directory; these writes still identify Node/Card edits.
       if (local.startsWith(".tent/")) return local;
       const owner = await find(path.dirname(filename));
       if (owner && workspace && !samePath(owner.commonDir, workspace.commonDir)) return undefined;

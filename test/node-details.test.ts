@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -20,9 +22,11 @@ import type { FsAdapter } from "../src/core/store/adapter.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-details-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await initializeFixtureWorkspace(root);
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   await adapter.writeFile("Main/Main.md", "---\nid: node-main\ntype: goal\n---\nMain body\n");
   await adapter.writeFile(
     "Other/Other.md",
@@ -145,7 +149,7 @@ test("related Cards follow retained Node identity through moves and path reuse, 
     resource: string;
     version: { commit: string; path: string };
   }>;
-  sources[0]!.version.commit = "0".repeat(40);
+  sources[0]!.version.commit = "0".repeat(64);
   sources.push({ ...sources[0]!, resource: "/Main/Main.md" });
   await adapter.writeFile(bad.path, serializeFrontmatter(broken.data, broken.body));
   const malformed = await createCardDocument(adapter, {
@@ -170,8 +174,8 @@ test("related Cards follow retained Node identity through moves and path reuse, 
   );
   const { source, bodies } = observe(adapter);
   const tentRoot = path.join(root, ".tent");
-  const head = await git(tentRoot, "rev-parse", "HEAD");
-  const dirty = await git(tentRoot, "status", "--porcelain");
+  const head = await historyHead(tentRoot);
+  const dirty = await fs.readFile(path.join(tentRoot, ".git/history.sqlite"), "hex");
   const details = await readNodeCardsDetails(source, "node-main");
   assert.deepEqual(
     details.items.map((item) => item.id),
@@ -220,8 +224,8 @@ test("related Cards follow retained Node identity through moves and path reuse, 
     },
   });
   await assert.rejects(readNodeCardsDetails(racing, "node-main"), { code: "SOURCE_CHANGED" });
-  assert.equal(await git(tentRoot, "rev-parse", "HEAD"), head);
-  assert.equal(await git(tentRoot, "status", "--porcelain"), dirty);
+  assert.equal(await historyHead(tentRoot), head);
+  assert.equal(await fs.readFile(path.join(tentRoot, ".git/history.sqlite"), "hex"), dirty);
 });
 
 test("selected history retains both paths across a rename and does not load Node bodies", async (t) => {

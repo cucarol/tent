@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import { testScratchRoot } from "./scratch.js";
@@ -25,7 +26,7 @@ test("a .tent at a filesystem root derives that root, keeping its separator", ()
 
 test("workspace discovery skips ordinary index.md files and respects explicit boundaries", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "tent-workspace-discovery-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const systemRoot = path.join(root, ".tent");
   const child = path.join(root, "docs");
   await fs.mkdir(systemRoot);
@@ -51,7 +52,7 @@ test("workspace discovery skips ordinary index.md files and respects explicit bo
 
 test("workspace discovery stops at Git checkout and linked-worktree roots", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "tent-git-boundary-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const outer = path.join(root, ".tent");
   await fs.mkdir(outer);
   await fs.writeFile(path.join(outer, "index.md"), tentIndexMarker());
@@ -76,7 +77,7 @@ test("workspace discovery stops at Git checkout and linked-worktree roots", asyn
 
 test("CLI mutation in a nested Git clone cannot reach the outer Tent", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "tent-clone-boundary-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const systemRoot = path.join(root, ".tent");
   await fs.mkdir(systemRoot);
   const marker = tentIndexMarker();

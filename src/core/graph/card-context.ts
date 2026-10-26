@@ -1,6 +1,7 @@
+import { hasDocumentHistory } from "../store/history-port.js";
 import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
-import { documentVersionSchema, type DocumentVersion } from "../store/git-history.js";
+import { documentVersionSchema, type DocumentVersion } from "../store/history-port.js";
 import { materialLocator, isDirectoryMaterial, type MaterialSource } from "../base/material.js";
 import { systemMaterialPath } from "./material-target.js";
 import { loadNodeCatalog } from "./node-catalog.js";
@@ -47,7 +48,7 @@ export async function readCardGoalIds(fs: FsAdapter, cards: readonly CardSourceI
     }),
   );
   if (!selected.length) return result;
-  if (!fs.history || !(await fs.exists(".git"))) {
+  if (!fs.history || !(await hasDocumentHistory(fs))) {
     for (const entry of selected)
       result.get(entry.cardId)!.diagnostics.push("Card source history unavailable");
     return result;

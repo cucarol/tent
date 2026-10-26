@@ -1,97 +1,90 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
-import { test, type TestContext } from "node:test";
-import * as fs from "node:fs/promises";
+import test, { type TestContext } from "node:test";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { createHash } from "node:crypto";
-import { GitDocumentHistory } from "../src/core/store/git-history.js";
+import { randomBytes } from "node:crypto";
+import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { exportGraph } from "../src/fs/graph-export.js";
-import { scaffoldInWorkspace } from "./scaffold.js";
-import { createNode, renameNode } from "../src/core/graph/ops.js";
+import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
+import { createNode } from "../src/core/graph/ops.js";
+import { inspectNodeSync, confirmNodeSync } from "../src/core/graph/node-sync.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
-import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
-import { confirmNodeSync, inspectNodeSync } from "../src/core/graph/node-sync.js";
-import { git } from "./helpers.js";
-import { testScratchRoot } from "./scratch.js";
+import { exportGraph } from "../src/fs/graph-export.js";
 
 async function fixture(t: TestContext) {
-  const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "node-record-version-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(workspace), { name: "Record versions" });
-  const system = path.join(workspace, ".tent");
-  const adapter = new NodeFs(system);
-  await git(system, "init", "--initial-branch=main");
-  const settings = JSON.parse(await adapter.readFile("settings.json")) as { workspaceId: string };
+  const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "record-version-"));
+  await initializeFixtureWorkspace(workspace);
+  const system = path.join(workspace, ".tent"),
+    adapter = openTestFs(system);
+  t.after(async () => {
+    await adapter.close();
+    await removeTestFixture(workspace, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    });
+  });
   const env = {
     fs: adapter,
-    clock: { now: () => "2026-10-05T00:00:00.000Z" },
-    tentName: "Record versions",
+    clock: { now: () => "2026-10-27T00:00:00.000Z" },
+    tentName: "Records",
   };
-  const mount = {
-    workspaceRoot: workspace,
-    systemRoot: system,
-    workspaceId: settings.workspaceId,
-    env,
-  };
-  async function commitTrailers(lines: string[]) {
-    await git(
-      system,
-      "commit",
-      "--allow-empty",
-      "-m",
-      ["test: record declarations", "", ...lines].join("\n"),
-    );
-    return (await git(system, "rev-parse", "HEAD")).trim();
+  async function importedRecords(records: Record<string, unknown>) {
+    const db = new DatabaseSync(path.join(system, ".git/history.sqlite"));
+    try {
+      db.exec("PRAGMA synchronous=EXTRA;BEGIN IMMEDIATE");
+      const head = db.prepare("SELECT id FROM events ORDER BY seq DESC LIMIT 1").get()?.id ?? null,
+        id = randomBytes(32).toString("hex");
+      const seq = Number(
+        db
+          .prepare("INSERT INTO events(id,parent,time,metadata) VALUES(?,?,?,?)")
+          .run(
+            id,
+            head,
+            new Date().toISOString(),
+            JSON.stringify({ operation: "migration.records" }),
+          ).lastInsertRowid,
+      );
+      for (const [key, value] of Object.entries(records))
+        db.prepare("INSERT INTO records VALUES(?,?,?)").run(seq, key, JSON.stringify(value));
+      db.exec("COMMIT");
+      return id;
+    } finally {
+      db.close();
+    }
   }
-  return { workspace, system, adapter, env, mount, commitTrailers };
+  return { workspace, system, adapter, env, importedRecords };
 }
 
-const trailer = (id: string, record: unknown) =>
-  `Tent-Node-Record: ${JSON.stringify([id, record])}`;
-
-test("same-HEAD version 1 derived caches cannot restore an unversioned Node baseline", async (t) => {
-  const { system, adapter, commitTrailers } = await fixture(t);
-  const valid = { v: 1 as const, materials: [], extension: "current" };
+test("a migrated unknown record masks only its Node and cannot be restored by a retired cache", async (t) => {
+  const { adapter, system, importedRecords } = await fixture(t),
+    valid = { v: 1 as const, materials: [], extension: "current" };
   await adapter.history.captureUnlocked([], {
-    operation: "test.record.cache-bases",
-    nodeRecords: { "node-invalidated": valid, "node-unaffected": valid },
+    operation: "test.records",
+    nodeRecords: { "node-unknown": valid, "node-good": valid },
   });
-  const head = await commitTrailers([trailer("node-invalidated", { materials: [] })]);
-  const value = {
-    "node-invalidated": { materials: [{ identity: "stale", version: "a".repeat(64) }] },
-    "node-unaffected": { materials: [], extension: "old cached value" },
-  };
-  const filename = path.join(system, ".git", "tent-derived-node-records.json");
+  const head = await importedRecords({ "node-unknown": null });
   await fs.writeFile(
-    filename,
-    JSON.stringify({
-      version: 1,
-      head,
-      value,
-      digest: createHash("sha256").update(JSON.stringify(value)).digest("hex"),
-    }),
+    path.join(system, ".git/tent-derived-node-records.json"),
+    JSON.stringify({ head, value: { "node-unknown": valid } }),
   );
-  const records = await new GitDocumentHistory(system).nodeRecords();
-  assert.equal(records["node-invalidated"], null);
-  assert.deepEqual(records["node-unaffected"], valid);
-  assert.equal((await git(system, "rev-parse", "HEAD")).trim(), head);
+  assert.deepEqual(await adapter.history.nodeRecords(), {
+    "node-unknown": null,
+    "node-good": valid,
+  });
 });
 
-test("version 1 preserves extension fields throughout material and goal records", async (t) => {
-  const { system, adapter } = await fixture(t);
+test("record extension fields survive fresh readers and caller mutations stay isolated", async (t) => {
+  const { adapter, system } = await fixture(t);
   const material = {
-    identity: "portable-material",
+    identity: "portable",
     version: "a".repeat(64),
     fingerprintVersion: 2 as const,
     extension: { selection: "summary" },
-    repository: {
-      commonDir: "../repository/.git",
-      path: "material.md",
-      blob: "b".repeat(40),
-      extension: { format: "future" },
-    },
+    repository: { commonDir: "../repository/.git", path: "material.md", blob: "b".repeat(40) },
   };
   const record = {
     v: 1 as const,
@@ -105,399 +98,73 @@ test("version 1 preserves extension fields throughout material and goal records"
         extension: ["ancestor"],
       },
     ],
-    extension: { uri: "https://example.invalid/material", enabled: true },
+    extension: { enabled: true },
   };
   await adapter.history.captureUnlocked([], {
-    operation: "test.record.extensions",
+    operation: "test.extensions",
     nodeRecords: { "node-extended": record },
   });
-  const reader = new GitDocumentHistory(system);
-  assert.deepEqual((await reader.nodeRecords())["node-extended"], record);
-  const records = await reader.nodeRecords();
-  records["node-extended"]!.extension = "local mutation";
-  assert.deepEqual((await new GitDocumentHistory(system).nodeRecords())["node-extended"], record);
-  assert.deepEqual((await reader.nodeRecords())["node-extended"], record);
-  assert.deepEqual(await reader.unportableNodeRecordIds(), []);
-});
-
-test("bad declarations isolate each Node, mask old bases and use the final duplicate trailer", async (t) => {
-  const { system, adapter, commitTrailers } = await fixture(t);
-  const badIds = [
-    "node-unversioned",
-    "node-unsupported",
-    "node-short",
-    "node-long",
-    "node-malformed",
-    "node-schema",
-  ];
-  const valid = { v: 1 as const, materials: [], extension: "retained" };
-  await adapter.history.captureUnlocked([], {
-    operation: "test.record.bases",
-    nodeRecords: Object.fromEntries([...badIds, "node-duplicate"].map((id) => [id, valid])),
-  });
-  const latest = { ...valid, extension: "latest" };
-  await commitTrailers([
-    trailer("node-unversioned", { materials: [] }),
-    trailer("node-unsupported", { v: 2, materials: [] }),
-    'Tent-Node-Record: ["node-short"]',
-    'Tent-Node-Record: ["node-long",{"v":1,"materials":[]},0]',
-    'Tent-Node-Record: ["node-malformed",{"v":1,"materials":',
-    trailer("node-schema", { v: 1, materials: [{ identity: "material", version: "bad" }] }),
-    trailer("node-good", latest),
-    trailer("node-duplicate", { v: 3, materials: [] }),
-    trailer("node-duplicate", latest),
-    trailer("node-finalbad", latest),
-    trailer("node-finalbad", { v: 7, materials: [] }),
-  ]);
-  const reader = new GitDocumentHistory(system);
-  const records = await reader.nodeRecords();
-  for (const id of [...badIds, "node-finalbad"]) assert.equal(records[id], null, id);
-  assert.deepEqual(records["node-good"], latest);
-  assert.deepEqual(records["node-duplicate"], latest);
-  assert.deepEqual(await new GitDocumentHistory(system).nodeRecords(), records);
-});
-
-for (const hasResource of [false, true]) {
-  test(`old independent output ${hasResource ? "with readable resource" : "without materials"} keeps unknown comparison bases until confirm`, async (t) => {
-    const { workspace, system, adapter, env, commitTrailers } = await fixture(t);
-    const material = path.join(workspace, "material.txt");
-    if (hasResource) await fs.writeFile(material, "readable bytes");
-    const output = await createNode(env, {
-      parentPath: "",
-      name: "Output",
-      type: "output",
-      tags: ["asset"],
-      body: "original output",
-      ...(hasResource ? { resource: pathToFileURL(material).href } : {}),
-    });
-    const other = await createNode(env, { parentPath: "", name: "Other", type: "prompt" });
-    const otherRecord = (await adapter.history.nodeRecords())[other];
-    await commitTrailers([trailer(output, { materials: [] })]);
-    const assertUnknown = async () => {
-      const fresh = new NodeFs(system);
-      assert.equal((await fresh.history.nodeRecords())[output], null);
-      const inspection = await inspectNodeSync(fresh, output);
-      assert.equal(inspection.state, "unanchored");
-      assert.equal(inspection.behind, undefined);
-      assert.ok(inspection.materials.some((material) => material.state === "unavailable"));
-      assert.deepEqual((await fresh.history.nodeRecords())[other], otherRecord);
-    };
-    await assertUnknown();
-    let current = await readNodeForEdit(adapter, output);
-    await writeNodeDocument(adapter, output, {
-      baseEtag: current.etag,
-      frontmatter: { title: "metadata edit" },
-    });
-    await assertUnknown();
-    current = await readNodeForEdit(adapter, output);
-    await writeNodesBatch(env, {
-      items: [
-        {
-          op: "update",
-          nodeId: output,
-          baseEtag: current.etag,
-          frontmatter: { title: "batch metadata" },
-        },
-      ],
-    });
-    await assertUnknown();
-    await renameNode(env, output, "Renamed Output");
-    await assertUnknown();
-    await confirmNodeSync(adapter, output, {
-      baseEtag: (await readNodeForEdit(adapter, output)).etag,
-    });
-    const fresh = new NodeFs(system);
-    assert.equal((await inspectNodeSync(fresh, output)).state, "synced");
-    const record = (await fresh.history.nodeRecords())[output]!;
-    assert.equal(record.v, 1);
-    assert.equal(record.materials.length, hasResource ? 1 : 0);
-    if (hasResource) assert.match(record.materials[0]!.version!, /^[a-f0-9]{64}$/);
-    assert.deepEqual((await fresh.history.nodeRecords())[other], otherRecord);
-  });
-}
-
-test("confirm without baseline preserves unknown comparison until missing local material becomes readable", async (t) => {
-  const { workspace, system, adapter, env, commitTrailers } = await fixture(t);
-  const material = path.join(workspace, "missing-material.txt");
-  const output = await createNode(env, {
-    parentPath: "",
-    name: "Missing Material Output",
-    type: "output",
-    tags: ["asset"],
-    resource: pathToFileURL(material).href,
-  });
-  await commitTrailers([trailer(output, { v: 1, materials: "damaged" })]);
-  assert.equal((await inspectNodeSync(new NodeFs(system), output)).state, "unanchored");
-  await confirmNodeSync(adapter, output, {
-    baseEtag: (await readNodeForEdit(adapter, output)).etag,
-  });
-  let fresh = new NodeFs(system);
-  assert.equal((await fresh.history.nodeRecords())[output], null);
-  const unknown = await inspectNodeSync(fresh, output);
-  assert.equal(unknown.behind, undefined);
-  assert.ok(unknown.materials.some((material) => material.state === "unavailable"));
-  assert.ok((await readNodeForEdit(fresh, output)).frontmatter.verified);
-  await fs.writeFile(material, "material is now readable");
-  await confirmNodeSync(adapter, output, {
-    baseEtag: (await readNodeForEdit(adapter, output)).etag,
-  });
-  fresh = new NodeFs(system);
-  assert.equal((await inspectNodeSync(fresh, output)).state, "synced");
-  const record = (await fresh.history.nodeRecords())[output]!;
-  assert.equal(record.v, 1);
-  assert.match(record.materials[0]!.version!, /^[a-f0-9]{64}$/);
-});
-
-test("confirm without baseline keeps remote material neutral while establishing version 1", async (t) => {
-  const { system, adapter, env, commitTrailers } = await fixture(t);
-  const output = await createNode(env, {
-    parentPath: "",
-    name: "Remote Material Output",
-    type: "output",
-    tags: ["evidence"],
-    resource: "https://example.invalid/material.md",
-  });
-  await commitTrailers([trailer(output, { materials: [] })]);
-  assert.equal((await inspectNodeSync(new NodeFs(system), output)).state, "unanchored");
-  await confirmNodeSync(adapter, output, {
-    baseEtag: (await readNodeForEdit(adapter, output)).etag,
-  });
-  const fresh = new NodeFs(system);
-  const record = (await fresh.history.nodeRecords())[output]!;
-  assert.equal(record.v, 1);
-  assert.equal(record.materials.length, 1);
-  assert.equal(record.materials[0]!.version, undefined);
-  const inspection = await inspectNodeSync(fresh, output);
-  assert.equal(inspection.state, "synced");
-  assert.equal(inspection.behind, undefined);
-  assert.equal(inspection.materials[0]!.state, "unanchored");
-});
-
-for (const location of ["overwritten", "merge side", "malformed pair"] as const) {
-  for (const identity of ["C:/node-record-fixture/material.md", "\\\\?\\C:\\repo\\material.md"]) {
-    test(`export rejects a ${identity.startsWith("C:") ? "drive" : "device"} path in ${location} version 1 history`, async (t) => {
-      const { system, adapter, mount, commitTrailers } = await fixture(t);
-      await adapter.history.captureUnlocked([], {
-        operation: "test.record.initial",
-        nodeRecords: { "node-portability": { v: 1, materials: [] } },
-      });
-      if (location === "merge side") await git(system, "checkout", "-b", "side");
-      const declaration = trailer("node-portability", {
-        v: 1,
-        materials: [{ identity, version: "d".repeat(64), fingerprintVersion: 2 }],
-      });
-      await commitTrailers([
-        location === "malformed pair" ? declaration.slice(0, -1) + ",0]" : declaration,
-      ]);
-      if (location === "malformed pair")
-        assert.equal(
-          (await new GitDocumentHistory(system).nodeRecords())["node-portability"],
-          null,
-        );
-      if (location === "merge side") await git(system, "checkout", "main");
-      await commitTrailers([
-        trailer("node-portability", { v: 1, materials: [], extension: "clean" }),
-      ]);
-      if (location === "merge side") await git(system, "merge", "--no-ff", "--no-edit", "side");
-      assert.equal(
-        (await new GitDocumentHistory(system).nodeRecords())["node-portability"]?.extension,
-        "clean",
-      );
-      await assert.rejects(
-        exportGraph(mount, { outputDir: "output/rejected" }),
-        /local machine paths/,
-      );
-      await assert.rejects(fs.stat(path.join(mount.workspaceRoot, "output", "rejected")), {
-        code: "ENOENT",
-      });
-    });
+  const fresh = openTestFs(system);
+  try {
+    assert.deepEqual((await fresh.history.nodeRecords())["node-extended"], record);
+    const values = await fresh.history.nodeRecords();
+    values["node-extended"]!.extension = "caller mutation";
+    assert.deepEqual((await fresh.history.nodeRecords())["node-extended"], record);
+  } finally {
+    await fresh.close();
   }
+});
+
+for (const resource of [undefined, "https://example.invalid/remote.md"]) {
+  test(`unknown imported output stays unanchored through a metadata write and establishes a basis only on confirm (${resource ?? "no material"})`, async (t) => {
+    const { adapter, env, importedRecords } = await fixture(t);
+    const id = await createNode(env, {
+      name: "Output",
+      parentPath: "",
+      type: "output",
+      body: "old output",
+      ...(resource ? { resource } : {}),
+    });
+    await importedRecords({ [id]: null });
+    assert.equal((await inspectNodeSync(adapter, id)).state, "unanchored");
+    await writeNodeDocument(adapter, id, {
+      baseEtag: (await readNodeForEdit(adapter, id)).etag,
+      frontmatter: { title: "metadata" },
+    });
+    assert.equal((await adapter.history.nodeRecords())[id], null);
+    await confirmNodeSync(adapter, id, { baseEtag: (await readNodeForEdit(adapter, id)).etag });
+    assert.equal((await adapter.history.nodeRecords())[id]!.v, 1);
+  });
 }
 
-for (const uri of ["file:///node-record-fixture/private.md", "file://server/share/private.md"]) {
-  test(`portability object audit rejects embedded JSON ${uri} during capture and export`, async (t) => {
-    const { adapter, mount, commitTrailers } = await fixture(t);
-    const record = {
-      v: 1 as const,
-      materials: [
-        {
-          identity: JSON.stringify(["uri", uri]),
-          version: "a".repeat(64),
-          fingerprintVersion: 2 as const,
-        },
-      ],
-    };
+for (const identity of [
+  "C:/private/file.md",
+  "file:///private/file.md",
+  JSON.stringify(["uri", "file://server/share/private.md"]),
+]) {
+  test(`capture rejects local machine paths and export audits imported records (${identity})`, async (t) => {
+    const { workspace, system, adapter, env, importedRecords } = await fixture(t),
+      record = {
+        v: 1 as const,
+        materials: [{ identity, version: "a".repeat(64), fingerprintVersion: 2 as const }],
+      };
     await assert.rejects(
       adapter.history.captureUnlocked([], {
-        operation: "test.record.embedded-uri",
-        nodeRecords: { "node-embedded": record },
+        operation: "test.private",
+        nodeRecords: { "node-private": record },
       }),
       /local machine paths/,
     );
-    await commitTrailers([trailer("node-embedded", record)]);
-    assert.equal((await adapter.history.nodeRecords())["node-embedded"], null);
+    await importedRecords({ "node-private": record });
+    assert.equal((await adapter.history.nodeRecords())["node-private"], null);
+    assert.deepEqual(await adapter.history.unportableNodeRecordIds(), ["node-private"]);
+    const settings = JSON.parse(await adapter.readFile("settings.json"));
     await assert.rejects(
-      exportGraph(mount, { outputDir: "output/rejected" }),
+      exportGraph(
+        { workspaceRoot: workspace, systemRoot: system, workspaceId: settings.workspaceId, env },
+        { outputDir: "output/rejected" },
+      ),
       /local machine paths/,
     );
   });
 }
-
-test("portability object audit rejects a polluted commit after reset and reflog expiry", async (t) => {
-  const { system, adapter, mount, commitTrailers } = await fixture(t);
-  const base = await adapter.history.captureUnlocked([], {
-    operation: "test.record.portable-base",
-    nodeRecords: { "node-dangling": { v: 1, materials: [] } },
-  });
-  const dirty = await commitTrailers([
-    trailer("node-dangling", {
-      v: 1,
-      materials: [
-        {
-          identity: "C:/node-record-fixture/private.md",
-          version: "a".repeat(64),
-          fingerprintVersion: 2,
-        },
-      ],
-    }),
-  ]);
-  await git(system, "reset", "--hard", base.commit!);
-  await git(system, "reflog", "expire", "--expire=now", "--all");
-  assert.equal((await git(system, "cat-file", "-t", dirty)).trim(), "commit");
-  assert.equal(
-    (await git(system, "log", "--all", "--reflog", "--format=%H")).includes(dirty),
-    false,
-  );
-  assert.deepEqual((await new GitDocumentHistory(system).nodeRecords())["node-dangling"], {
-    v: 1,
-    materials: [],
-  });
-  await assert.rejects(exportGraph(mount, { outputDir: "output/rejected" }), /local machine paths/);
-});
-
-const keyPathCases = [
-  {
-    name: "top-level drive",
-    fields: { "C:/node-record-key-fixture/private.md": "ordinary value" },
-  },
-  {
-    name: "nested device",
-    fields: { extension: { "\\\\?\\C:\\record-key\\private.md": "ordinary value" } },
-  },
-  {
-    name: "deep POSIX",
-    fields: {
-      extension: { nested: [{ "/node-record-key-fixture/private.md": "ordinary value" }] },
-    },
-  },
-  {
-    name: "JSON-encoded UNC object",
-    fields: {
-      extension: {
-        [JSON.stringify({ "\\\\server\\share\\private.md": "ordinary value" })]: "ordinary value",
-      },
-    },
-  },
-];
-
-test("portability key audit rejects a version 2 same-HEAD cache with absolute keys", async (t) => {
-  const { system, commitTrailers } = await fixture(t);
-  const bad = {
-    v: 1,
-    materials: [],
-    extension: { "C:/node-record-key-fixture/private.md": "ordinary value" },
-  };
-  const portable = { v: 1, materials: [], extension: { portableKey: "ordinary value" } };
-  const head = await commitTrailers([
-    trailer("node-keycache", bad),
-    trailer("node-portable", portable),
-  ]);
-  const value = { "node-keycache": bad, "node-portable": portable };
-  await fs.writeFile(
-    path.join(system, ".git", "tent-derived-node-records.json"),
-    JSON.stringify({
-      version: 2,
-      head,
-      value,
-      digest: createHash("sha256").update(JSON.stringify(value)).digest("hex"),
-    }),
-  );
-  const records = await new GitDocumentHistory(system).nodeRecords();
-  assert.equal(records["node-keycache"], null);
-  assert.deepEqual(records["node-portable"], portable);
-  assert.equal((await git(system, "rev-parse", "HEAD")).trim(), head);
-});
-
-for (const { name, fields } of keyPathCases) {
-  test(`portability key audit rejects ${name} extension keys`, async (t) => {
-    const { system, adapter, mount, commitTrailers } = await fixture(t);
-    const portable = {
-      v: 1 as const,
-      materials: [],
-      extension: {
-        portableKey: "ordinary value",
-        [JSON.stringify({ portable: true })]: "JSON key",
-      },
-    };
-    const base = await adapter.history.captureUnlocked([], {
-      operation: "test.record.portable-keys",
-      nodeRecords: { "node-portable": portable },
-    });
-    assert.deepEqual((await adapter.history.nodeRecords())["node-portable"], portable);
-    const record = { v: 1 as const, materials: [], ...fields };
-    await t.test("capture rejects and leaves HEAD unchanged", async () => {
-      await assert.rejects(
-        adapter.history.captureUnlocked([], {
-          operation: "test.record.absolute-keys",
-          nodeRecords: { "node-keypath": record },
-        }),
-        /local machine paths/,
-      );
-      assert.equal((await git(system, "rev-parse", "HEAD")).trim(), base.commit);
-    });
-    await t.test("injected history is unreadable and cannot be exported", async () => {
-      await commitTrailers([trailer("node-keypath", record)]);
-      await assert.rejects(
-        exportGraph(mount, { outputDir: "output/key-rejected" }),
-        /local machine paths/,
-      );
-      const reader = new GitDocumentHistory(system);
-      assert.equal((await reader.nodeRecords())["node-keypath"], null);
-      assert.deepEqual((await reader.nodeRecords())["node-portable"], portable);
-      assert.deepEqual(await reader.unportableNodeRecordIds(), ["node-keypath"]);
-      await assert.rejects(fs.stat(path.join(mount.workspaceRoot, "output", "key-rejected")), {
-        code: "ENOENT",
-      });
-    });
-  });
-}
-
-test("portability key audit retains unversioned absolute repository locators as identical Git object bytes", async (t) => {
-  const { workspace, system, adapter, mount, commitTrailers } = await fixture(t);
-  const record = {
-    extension: Object.assign({}, ...keyPathCases.map(({ fields }) => fields)),
-    materials: [
-      {
-        identity: "legacy-material",
-        version: "e".repeat(64),
-        repository: {
-          commonDir: "C:/node-record-fixture/old-repository/.git",
-          path: "material.md",
-          blob: "f".repeat(40),
-        },
-      },
-    ],
-  };
-  const commit = await commitTrailers([trailer("node-legacy", record)]);
-  const object = path.join(".git", "objects", commit.slice(0, 2), commit.slice(2));
-  const before = await fs.readFile(path.join(system, object));
-  const message = await git(system, "cat-file", "commit", commit);
-  assert.equal((await adapter.history.nodeRecords())["node-legacy"], null);
-  await exportGraph(mount, { outputDir: "output/legacy" });
-  const copied = path.join(workspace, "output", "legacy", ".tent");
-  assert.deepEqual(await fs.readFile(path.join(copied, object)), before);
-  assert.deepEqual(await fs.readFile(path.join(system, object)), before);
-  assert.equal(await git(copied, "cat-file", "commit", commit), message);
-  assert.ok(message.includes("C:/node-record-fixture/old-repository/.git"));
-  assert.ok(message.includes("C:/node-record-key-fixture/private.md"));
-});

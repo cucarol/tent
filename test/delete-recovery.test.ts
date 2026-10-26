@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -10,18 +13,18 @@ import { nodeNotePath } from "../src/core/base/paths.js";
 import { DELETE_PENDING_PATH, executeDeleteUnlocked } from "../src/core/store/delete-recovery.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "delete-recovery-"));
   t.after(async () => {
     assert.equal(path.dirname(root), scratch);
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTestFixture(root, { recursive: true, force: true });
   });
-  await scaffoldInWorkspace(new NodeFs(root), {
+  await scaffoldInWorkspace(openTestFs(root), {
     name: "delete",
     nodes: [{ id: "node-remove", name: "remove", type: "prompt", body: "original" }],
   });
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   const env = { fs: adapter, tentName: "delete", clock: { now: () => "2026-09-21T00:00:00.000Z" } };
   await adapter.writeFile("order.json", JSON.stringify({ root: ["node-remove"] }));
   return { adapter, env, root };
@@ -99,7 +102,7 @@ for (const point of [
     await assert.rejects(() => deleteNode(env, "node-remove"), /injected/);
     assert.equal(await adapter.exists(DELETE_PENDING_PATH), true);
     if (point === "before-move") assert.ok((await loadTent(adapter)).byId.has("node-remove"));
-    const restarted = new NodeFs(path.join(root, ".tent"));
+    const restarted = openTestFs(path.join(root, ".tent"));
     await deleteNode({ ...env, fs: restarted }, "node-remove");
     assert.equal(await restarted.exists(DELETE_PENDING_PATH), false);
     assert.equal((await loadTent(restarted)).byId.has("node-remove"), false);

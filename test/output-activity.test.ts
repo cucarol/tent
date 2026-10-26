@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,11 +10,11 @@ import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "output-activity-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const adapter = new NodeFs(root);
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  const adapter = openTestFs(root);
   return {
     adapter,
     write: (fields: Record<string, unknown>) =>

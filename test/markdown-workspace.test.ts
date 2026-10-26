@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -34,11 +37,11 @@ test("extractOutLinks: Markdown and external references", () => {
 });
 
 test("NodeFs binary read/write: exact bytes including NUL and non-UTF8", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const dir = await fs.mkdtemp(path.join(scratch, "tent-bin-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
-  const fsa = new NodeFs(dir);
+  t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
+  const fsa = openTestFs(dir);
   const bytes = new Uint8Array([0x00, 0xff, 0xfe, 0x01, 0x00, 0x80, 0x7f]);
   await fsa.writeBinary("attachments/node-x/raw.bin", bytes);
   const round = await fsa.readBinary("attachments/node-x/raw.bin");

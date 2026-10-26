@@ -1,3 +1,5 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { createHash } from "node:crypto";
@@ -19,7 +21,7 @@ import { testScratchRoot } from "./scratch.js";
 const hash = (raw: string) => createHash("sha256").update(raw).digest("hex");
 async function scratch(t: TestContext) {
   const root = await mkdtemp(path.join(testScratchRoot(), "sync-review-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   return root;
 }
 
@@ -72,7 +74,7 @@ test("review fix: a batch URI confirmation uses final upstream sections and reco
     { id: "node-g", type: "goal", sources: [{ resource }] },
     "goal\n",
   );
-  const adapter = new NodeFs(systemRoot);
+  const adapter = openTestFs(systemRoot);
   await adapter.mkdir("P");
   await adapter.mkdir("G");
   await adapter.writeFile("P/P.md", finalUpstream);
@@ -122,7 +124,7 @@ test("review fix: a batch URI confirmation uses final upstream sections and reco
 
 test("current root Nodes have no parent and independent outputs have no goal", async (t) => {
   const { goalAncestors } = await import("../src/core/graph/node-sync-record.js");
-  const adapter = new NodeFs(await scratch(t));
+  const adapter = openTestFs(await scratch(t));
   for (const [nodePath, raw] of [
     ["Root", "---\nid: node-root\ntype: prompt\n---\ngroup"],
     ["Out", "---\nid: node-out\ntype: output\n---\nresult"],

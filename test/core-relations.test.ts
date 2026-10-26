@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 /**
  * Legacy `relations` frontmatter is preserved as opaque bytes only.
  * It no longer projects as a first-class Node feature.
@@ -16,13 +17,15 @@ import { NodeFs } from "../src/fs/node-fs.js";
 
 async function makeSystemRoot(t: TestContext): Promise<{ systemFs: NodeFs }> {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "tent-core-rel-ws-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const workspaceFs = new NodeFs(workspace);
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const workspaceFs = openTestFs(workspace);
   await scaffoldInWorkspace(workspaceFs, {
     name: "rel-core",
     nodes: [{ name: "Alpha", type: "prompt", body: "# Alpha\n" }],
   });
-  return { systemFs: new NodeFs(path.join(workspace, ".tent")) };
+  return { systemFs: openTestFs(path.join(workspace, ".tent")) };
 }
 
 async function plantLegacyRelations(systemFs: NodeFs, nodePath: string): Promise<unknown[]> {

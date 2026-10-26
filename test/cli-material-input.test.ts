@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -17,17 +19,19 @@ import { git } from "./helpers.js";
 import { buildSnapshot } from "../src/ui-server/snapshot.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "cli-material-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), {
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), {
     name: "CLI materials",
     nodes: [{ id: "node-goal", name: "Goal", type: "goal", body: "Deliver evidence." }],
   });
-  await git(path.join(root, ".tent"), "init");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   // Scaffolded Nodes start uncaptured; record them as Tent-created Nodes are.
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   await adapter.history.captureUnlocked([
     { path: "Goal/Goal.md", raw: await adapter.readFile("Goal/Goal.md") },
   ]);
@@ -52,7 +56,9 @@ async function fixture(t: TestContext) {
 
 test("CLI material paths stay Workspace-rooted from different process working directories", async (t) => {
   const parent = await fs.mkdtemp(path.join(testScratchRoot(), "material-cwd-"));
-  t.after(() => fs.rm(parent, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(parent, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const workspace = path.join(parent, "rich");
   const sibling = path.join(parent, "mapper-run");
   const nested = path.join(workspace, "nested");
@@ -334,7 +340,7 @@ test("Card CLI file sources use the Workspace root while Node sources retain the
   for (const source of shown.sources.slice(4)) {
     assert.equal(source.resource, "../Goal/Goal.md");
     assert.equal(source.version.path, "Goal/Goal.md");
-    assert.match(source.version.commit, /^[a-f0-9]{40}$/);
+    assert.match(source.version.commit, /^[a-f0-9]{64}$/);
   }
   assert.equal(shown.sources[0].path, "docs/req.md");
   assert.equal(shown.sources[4].path, ".tent/Goal/Goal.md");
@@ -466,7 +472,7 @@ test("ordinary link-output confirmation preserves completion time", async (t) =>
     "--name",
     "Linked proof",
   ]);
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   const source = {
     fs: adapter,
     workspace: { id: "confirm-completion", name: "Confirm" },

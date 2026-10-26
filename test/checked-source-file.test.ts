@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,7 +11,9 @@ import { withFileReadScope } from "../src/fs/file-state-cache.js";
 
 test("overlapping path checks share pending ancestry reads but later checks see replacement links", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "checked-source-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const directory = path.join(root, "src");
   const other = path.join(root, "other");
   await fs.mkdir(directory);
@@ -51,7 +54,9 @@ test("overlapping path checks share pending ancestry reads but later checks see 
 
 test("failed path checks do not survive repair", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "checked-repair-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const file = path.join(root, "new.txt");
   const failed = await Promise.allSettled([
     checkedSourceFile(root, file),
@@ -64,7 +69,9 @@ test("failed path checks do not survive repair", async (t) => {
 
 test("final material identity check does not share an earlier in-flight ancestry sample", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "checked-final-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const file = path.join(root, "material.txt");
   await fs.writeFile(file, "old material\n");
   const originalLstat = fs.lstat;
@@ -143,7 +150,9 @@ test("final material identity check does not share an earlier in-flight ancestry
 
 test("warm source checks share one file state and parent resolution only within a request", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "checked-warm-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const directory = path.join(root, "src");
   await fs.mkdir(directory);
   const filenames = ["a.ts", "b.ts"].map((name) => path.join(directory, name));
@@ -211,7 +220,9 @@ test("warm source checks share one file state and parent resolution only within 
 
 test("initial source failures do not remain after a repair in the same request", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "checked-initial-repair-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const file = path.join(root, "new", "a.ts");
   await withFileReadScope(async () => {
     await assert.rejects(initialSourceFile(root, file), { code: "ENOENT" });
@@ -223,7 +234,9 @@ test("initial source failures do not remain after a repair in the same request",
 
 test("a forced content read independently rejects a parent reported as a link after reading", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "checked-parent-swap-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const directory = path.join(root, "src");
   await fs.mkdir(directory);
   const filename = path.join(directory, "a.ts"),

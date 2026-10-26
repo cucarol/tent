@@ -1,3 +1,5 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as fs from "node:fs/promises";
@@ -10,8 +12,8 @@ import { testScratchRoot } from "./scratch.js";
 
 test("retired names are ordinary Nodes and grouping folders stay transparent", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "retired-names-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const adapter = new NodeFs(root);
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  const adapter = openTestFs(root);
   await scaffoldTent(adapter, { name: "names" });
   const env = { fs: adapter, clock: { now: () => "2026-10-04T00:00:00.000Z" }, tentName: "names" };
   for (const name of [
@@ -37,8 +39,8 @@ test("retired names are ordinary Nodes and grouping folders stay transparent", a
 
 test("old snapshot stores produce one diagnostic before scanning copies as live Nodes", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "retired-store-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const adapter = new NodeFs(root);
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  const adapter = openTestFs(root);
   await scaffoldTent(adapter, { name: "legacy" });
   const raw = "---\nid: node-alpha\ntype: prompt\n---\nkept";
   await adapter.writeFile("Alpha/Alpha.md", raw);

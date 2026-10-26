@@ -1,3 +1,6 @@
+import { testScratchRoot } from "./scratch.js";
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -13,12 +16,12 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { MUTATION_LOCK_STALE_MS } from "../src/fs/mutation-lock.js";
 
 async function fixture(t: TestContext) {
-  const scratch = fileURLToPath(new URL("../.scratch/", import.meta.url));
+  const scratch = testScratchRoot();
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "tent-move-recovery-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
   const root = path.join(workspace, ".tent");
-  const fsa = new NodeFs(root);
+  const fsa = openTestFs(root);
   await scaffoldTent(fsa, { name: "recovery" });
   const env = { fs: fsa, clock: { now: () => new Date().toISOString() }, tentName: "recovery" };
   await createNode(env, { parentPath: "", name: "parent", type: "prompt" });

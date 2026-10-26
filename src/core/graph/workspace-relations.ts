@@ -15,7 +15,7 @@ import { parseRoleDocument } from "../store/role-document.js";
 import { parseCardDocument, verifyCardSourceVersions } from "./card-document.js";
 import { isCardId, isRoleId } from "../base/id.js";
 import { CARDS_DIR, ROLES_DIR, nodeNotePath } from "../base/paths.js";
-import type { DocumentVersion } from "../store/git-history.js";
+import type { DocumentVersion } from "../store/history-port.js";
 import { contentEtag } from "../base/etag.js";
 import type { Node } from "../base/types.js";
 

@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as fs from "node:fs/promises";
@@ -6,7 +7,7 @@ import { testScratchRoot } from "./scratch.js";
 
 test("build versions come from package.json while manifest metadata survives", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "version-source-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const manifests = [
     "manifest.json",
     "plugins/codex/tent/.codex-plugin/plugin.json",

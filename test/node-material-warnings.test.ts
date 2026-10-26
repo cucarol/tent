@@ -1,3 +1,6 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -172,18 +175,20 @@ test("advice distinguishes untracked files from unknown observations and other a
 });
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "material-warning-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Warnings" });
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), { name: "Warnings" });
   await git(root, "init", "--quiet");
-  await git(path.join(root, ".tent"), "init", "--quiet");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   await fs.writeFile(path.join(root, ".gitignore"), "report.md\n.tent/\n");
   await fs.writeFile(path.join(root, "report.md"), "Report one\n");
   await fs.writeFile(path.join(root, "tracked.md"), "Tracked rule\n");
   await git(root, "add", "tracked.md");
-  return { root, adapter: new NodeFs(path.join(root, ".tent")) };
+  return { root, adapter: openTestFs(path.join(root, ".tent")) };
 }
 
 test("tracking reads literal index membership and file URIs without changing Git", async (t) => {

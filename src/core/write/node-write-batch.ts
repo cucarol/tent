@@ -1,3 +1,4 @@
+import { hasDocumentHistory } from "../store/history-port.js";
 import { isDeepStrictEqual } from "node:util";
 import * as z from "zod/v4";
 import { readOnlyFs } from "../store/adapter.js";
@@ -427,7 +428,7 @@ async function writeNodesBatchUnlocked(
     }
     for (const node of planned) await check(node, node.raw);
     const captured =
-      fs.history && (await fs.exists(".git"))
+      fs.history && (await hasDocumentHistory(fs))
         ? await fs.history.captureUnlocked(
             planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
             { operation: "node.write-many", nodeRecords },

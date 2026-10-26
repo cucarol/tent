@@ -1,3 +1,4 @@
+import { hasDocumentHistory } from "../store/history-port.js";
 import { isDeepStrictEqual } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { readOnlyFs, withTentMutation, type FsAdapter } from "../store/adapter.js";
@@ -12,7 +13,7 @@ import {
 } from "../base/paths.js";
 import { contentEtag } from "../base/etag.js";
 import { documentLifecycle } from "../base/document-status.js";
-import { documentVersionSchema, type DocumentVersion } from "../store/git-history.js";
+import { documentVersionSchema, type DocumentVersion } from "../store/history-port.js";
 import {
   materialLocator,
   isDirectoryMaterial,
@@ -203,10 +204,7 @@ async function checkUnchanged(fs: FsAdapter, card: CardDocument) {
 }
 async function historyOf(fs: FsAdapter) {
   if (!fs.history || !(await fs.history.available()))
-    throw new CardDocumentError(
-      "UNPUBLISHED",
-      "Card operations require independent Tent Git history",
-    );
+    throw new CardDocumentError("UNPUBLISHED", "Card operations require independent Tent history");
   return fs.history;
 }
 async function roleAvailable(
@@ -246,7 +244,7 @@ function sourceVersion(fs: FsAdapter, owner: string, source: MaterialSource) {
     version.path.startsWith(CARDS_DIR + "/") ||
     !isHistoryDocument(version.path)
   )
-    invalid("A source Git version must address its selected Tent Node or Role");
+    invalid("A source historical version must address its selected Tent Node or Role");
   return version;
 }
 
@@ -283,7 +281,7 @@ export async function verifyCardSourceVersions(
       if (!fs.history)
         throw new CardDocumentError(
           "UNPUBLISHED",
-          "Card operations require independent Tent Git history",
+          "Card operations require independent Tent history",
         );
       retained = await fs.history.readVersions(versions);
     } catch (error) {
@@ -931,7 +929,7 @@ type WatchedCard = {
   result?: string;
   fromPublic?: true;
 };
-/** Wait for published pending input or returned results; idle polls read only Git HEAD. */
+/** Wait for published pending input or returned results; idle polls read only the current retained event. */
 export async function watchCardDocuments(
   fs: FsAdapter,
   roleId: string,
@@ -1015,9 +1013,9 @@ function completedCard(data: Record<string, unknown>): boolean {
   );
 }
 
-/** Routine reads skip Cards completed in Tent Git, regardless of subsequent native edits. */
+/** Routine reads skip Cards completed in Tent history, regardless of subsequent native edits. */
 export async function completedCardPaths(fs: FsAdapter): Promise<ReadonlySet<string>> {
-  if (!fs.history || !(await fs.exists(".git"))) return new Set();
+  if (!fs.history || !(await hasDocumentHistory(fs))) return new Set();
   try {
     return await fs.history.completedCardPaths((file, raw) => {
       try {

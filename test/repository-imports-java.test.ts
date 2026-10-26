@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -327,7 +328,9 @@ test("Java focused extraction requests candidate package declarations and its ow
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "java-imports-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   initializeFixtureRepository(root);
   const files = [
     source("pom.xml", "<project/>"),

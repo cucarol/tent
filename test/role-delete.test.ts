@@ -1,3 +1,6 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import { RoleCardsError } from "../src/core/graph/role-cards.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -23,14 +26,16 @@ import { runRoleCommand, roleHelpText } from "../src/cli/role-commands.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "role-delete-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "roles" });
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), { name: "roles" });
   const systemRoot = path.join(root, ".tent");
-  await git(systemRoot, "init");
-  const adapter = new NodeFs(systemRoot);
+  await initializeFixtureHistory(systemRoot);
+  const adapter = openTestFs(systemRoot);
   const role = await createRoleContext(adapter, {
     roleId: "role-review",
     title: "Review",
@@ -284,7 +289,7 @@ for (const point of [
       assert.equal(await adapter.history.currentCommit(), beforeHead);
       assert.equal(await adapter.exists("temp/delete-pending"), false);
     }
-    const restarted = new NodeFs(systemRoot);
+    const restarted = openTestFs(systemRoot);
     await deleteRole(restarted, role.roleId, { baseEtag: role.etag });
     assert.equal(await restarted.exists(role.path), false);
     assert.equal(await restarted.exists(DELETE_PENDING_PATH), false);
@@ -318,7 +323,7 @@ test("legacy Role recovery rejects changed isolated bytes and a recreated live i
   await fs.writeFile(path.join(systemRoot, DELETE_PENDING_PATH), legacyPlan);
   await fs.mkdir(path.join(systemRoot, "temp"), { recursive: true });
   await fs.rename(path.join(systemRoot, role.path), path.join(systemRoot, "temp/delete-pending"));
-  const restarted = new NodeFs(systemRoot);
+  const restarted = openTestFs(systemRoot);
   await restarted.writeFile("temp/delete-pending", raw + "changed");
   await assert.rejects(
     deleteRole(restarted, role.roleId, { baseEtag: role.etag }),

@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -218,7 +219,9 @@ test("test import issues remain explicit without production importer edges", () 
 
 test("source reader opts into test bytes and preserves default imports and symlink protection", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "test-import-reader-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await fs.mkdir(path.join(root, "tests"));
   await fs.writeFile(path.join(root, "main.ts"), 'import "./value";');
   await fs.writeFile(path.join(root, "value.ts"), "export {};");

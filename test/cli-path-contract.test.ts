@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,12 +16,14 @@ import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "cli-path-contract-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), {
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), {
     name: "CLI path contract",
     nodes: [{ id: "node-goal", name: "Goal", type: "goal", body: "Deliver evidence." }],
   });
-  await git(path.join(root, ".tent"), "init");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   await fs.mkdir(path.join(root, "docs"));
   await fs.writeFile(path.join(root, "docs/req.md"), "# Requirements\nFirst.\n");
   await fs.mkdir(path.join(root, "attachments"), { recursive: true });

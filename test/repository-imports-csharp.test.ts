@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -280,7 +281,9 @@ test("C# visible namespace shadowing is preserved for own and referenced project
 
 test("C# FS collection and narrow structure observations read required context and preserve failures", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "csharp-imports-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   initializeFixtureRepository(root);
   const files = [
     project("app", '<ItemGroup><ProjectReference Include="../api/api.csproj" /></ItemGroup>'),

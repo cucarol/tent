@@ -1,3 +1,5 @@
+import { testScratchRoot } from "./scratch.js";
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -282,10 +284,10 @@ test("docs/skill drift: current Node/Role/Card protocol and canonical type", asy
 });
 
 test("OKF 0.2 validates YAML and reserved documents separately from link integrity", async (t) => {
-  const scratch = path.join(repoRoot, ".scratch");
+  const scratch = testScratchRoot();
   await fs.mkdir(scratch, { recursive: true });
   const dir = await fs.mkdtemp(path.join(scratch, "okf-check-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
   const check = (...args: string[]) => {
     const result = spawnSync(
       process.execPath,
@@ -337,10 +339,10 @@ test("OKF 0.2 validates YAML and reserved documents separately from link integri
 });
 
 test("OKF workspace validation skips runtime files but includes Role and Note documents", async (t) => {
-  const scratch = path.join(repoRoot, ".scratch");
+  const scratch = testScratchRoot();
   await fs.mkdir(scratch, { recursive: true });
   const dir = await fs.mkdtemp(path.join(scratch, "okf-workspace-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
   for (const folder of ["temp", "roles", "notes"])
     await fs.mkdir(path.join(dir, ".tent", folder), { recursive: true });
   await fs.writeFile(path.join(dir, ".tent/temp/trace.md"), "Runtime only");

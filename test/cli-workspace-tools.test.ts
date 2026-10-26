@@ -1,3 +1,7 @@
+import { captureFixtureDocuments } from "./scratch.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
@@ -11,7 +15,7 @@ import { git } from "./helpers.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 test("Node help is offline and does not parse or read requested content", async () => {
-  const globals = { workspace: path.resolve(".scratch/missing-help-workspace") };
+  const globals = { workspace: path.resolve(testScratchRoot(), "missing-help-workspace") };
   for (const [sub, args] of [
     ["help", []],
     ["--help", []],
@@ -34,12 +38,14 @@ test("Node help is offline and does not parse or read requested content", async 
 });
 
 test("CLI validation errors name the command, argument and field instead of issue JSON", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await mkdir(scratch, { recursive: true });
   const root = await mkdtemp(path.join(scratch, "cli-validation-"));
-  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const workspace = path.join(root, "workspace");
-  await scaffoldInWorkspace(new NodeFs(workspace), { name: "Validation" });
+  await scaffoldInWorkspace(openTestFs(workspace), { name: "Validation" });
   const globals = { workspace };
   const search = await runNodeCommand("search", [], globals);
   const batch = await runNodeCommand("write-many", ["--input-json", '{"items":[]}'], globals);
@@ -71,7 +77,7 @@ test("CLI validation errors name the command, argument and field instead of issu
       rejected.stderr,
     );
     assert.ok(rejected.stderr.includes(message), rejected.stderr);
-    assert.equal(await new NodeFs(path.join(workspace, ".tent")).exists("Valid"), false);
+    assert.equal(await openTestFs(path.join(workspace, ".tent")).exists("Valid"), false);
   }
   for (const result of [search, batch, create]) {
     assert.equal(result.exitCode, 1);
@@ -99,18 +105,17 @@ test("CLI validation errors name the command, argument and field instead of issu
 });
 
 test("CLI manages Workspace objects directly and preserves CAS", async () => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await mkdir(scratch, { recursive: true });
   const root = await mkdtemp(path.join(scratch, "cli-workspace-tools-"));
   try {
     const workspace = path.join(root, "workspace");
-    await scaffoldInWorkspace(new NodeFs(workspace), {
+    await scaffoldInWorkspace(openTestFs(workspace), {
       name: "CLI tools",
       nodes: [{ id: "node-fact", name: "Fact", type: "prompt", body: "Original fact" }],
     });
-    await git(path.join(workspace, ".tent"), "init");
-    await git(path.join(workspace, ".tent"), "add", ".");
-    await git(path.join(workspace, ".tent"), "commit", "-m", "retained relation fixture");
+    await initializeFixtureHistory(path.join(workspace, ".tent"));
+    await captureFixtureDocuments(path.join(workspace, ".tent"));
     const globals = { workspace, json: true };
     const result = (value: { exitCode: number; stdout: string; stderr: string }) => {
       assert.equal(value.exitCode, 0, value.stderr);
@@ -159,7 +164,7 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
       ).exitCode,
       1,
     );
-    assert.equal(await new NodeFs(path.join(workspace, ".tent")).exists("Invalid refs"), false);
+    assert.equal(await openTestFs(path.join(workspace, ".tent")).exists("Invalid refs"), false);
     assert.equal((await runNodeCommand("fork", ["node-fact"], globals)).exitCode, 1);
     assert.equal(
       result(await runNodeCommand("search", ["--resource", "refs/example.pdf"], globals)).items
@@ -232,7 +237,7 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
       );
       assert.deepEqual((await readFact()).tags ?? [], tags);
     }
-    await git(path.join(workspace, ".tent"), "init");
+    await initializeFixtureHistory(path.join(workspace, ".tent"));
     const source = { resource: "./refs/example.pdf", title: "Reference document" };
     const input = result(
       await runCardCommand(
@@ -274,7 +279,7 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
     assert.equal(stale.exitCode, 1);
     assert.equal(result(await runRoleCommand("show", [roleId], globals)).etag, after.etag);
   } finally {
-    await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   }
 });
 

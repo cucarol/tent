@@ -1,3 +1,5 @@
+import { testScratchRoot } from "./scratch.js";
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { exec, execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -7,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { after, before, test } from "node:test";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const scratch = path.join(root, ".scratch");
+const scratch = testScratchRoot();
 const run = promisify(execFile);
 let fixture: string;
 let distribution: string;
@@ -17,17 +19,29 @@ before(
     await fs.mkdir(scratch, { recursive: true });
     fixture = await fs.mkdtemp(path.join(scratch, "plugin-packages-"));
     distribution = path.join(fixture, "distribution with spaces");
-    await run(process.execPath, ["scripts/build-plugin.mjs", distribution], {
-      cwd: root,
-      windowsHide: true,
-      timeout: 60_000,
-    });
+    await run(
+      process.execPath,
+      [
+        "scripts/build-plugin.mjs",
+        path.join(root, ".scratch", path.relative(scratch, distribution)),
+      ],
+      {
+        cwd: root,
+        windowsHide: true,
+        timeout: 60_000,
+      },
+    );
   },
   { timeout: 70_000 },
 );
 after(async () => {
   if (fixture)
-    await fs.rm(fixture, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(fixture, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    });
 });
 
 test(
@@ -118,10 +132,17 @@ test("both host packages carry the same common payload and separate native shell
   assert.equal(catalogue.owner.name, "cucarol");
   assert.equal(catalogue.plugins[0].source, "./plugins/tent");
   await assert.rejects(
-    run(process.execPath, ["scripts/build-plugin.mjs", distribution], {
-      cwd: root,
-      windowsHide: true,
-    }),
+    run(
+      process.execPath,
+      [
+        "scripts/build-plugin.mjs",
+        path.join(root, ".scratch", path.relative(scratch, distribution)),
+      ],
+      {
+        cwd: root,
+        windowsHide: true,
+      },
+    ),
     /EEXIST/,
   );
 });
@@ -153,7 +174,10 @@ test(
     );
     await git("--git-dir", remote, "update-ref", "refs/heads/main", main);
     const beforeIndex = await git("diff", "--cached", "--raw");
-    const published = await publishPluginDistribution(distribution, remote);
+    const published = await publishPluginDistribution(
+      path.join(root, ".scratch", path.relative(scratch, distribution)),
+      remote,
+    );
     assert.equal(await git("--git-dir", remote, "rev-list", "--count", "plugin-dist"), "1");
     assert.equal(await git("--git-dir", remote, "rev-parse", "main"), main);
     assert.equal(await git("rev-parse", "HEAD"), head);
@@ -178,7 +202,10 @@ test(
       );
       assert.ok(paths.includes(`${host}/plugins/tent/cli.mjs`));
     }
-    const republished = await publishPluginDistribution(distribution, remote);
+    const republished = await publishPluginDistribution(
+      path.join(root, ".scratch", path.relative(scratch, distribution)),
+      remote,
+    );
     assert.equal(republished.tree, published.tree);
     assert.equal(await git("--git-dir", remote, "rev-list", "--count", "plugin-dist"), "1");
     assert.equal(await git("--git-dir", remote, "rev-parse", "plugin-dist"), republished.commit);

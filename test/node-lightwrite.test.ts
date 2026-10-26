@@ -1,3 +1,7 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -21,11 +25,13 @@ const lockTimeoutMessage =
   /^Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying\.\nNext: tent node get node-note --full\n$/;
 
 async function fixture(t: TestContext, body = "") {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "node-lightwrite-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), {
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), {
     name: "Lightwrite",
     nodes: [
       { id: "node-note", name: "Note", type: "prompt", body },
@@ -33,8 +39,8 @@ async function fixture(t: TestContext, body = "") {
     ],
   });
   const tentRoot = path.join(root, ".tent");
-  await git(tentRoot, "init", "--initial-branch=main");
-  return { root, tentRoot, adapter: new NodeFs(tentRoot), peer: new NodeFs(tentRoot) };
+  await initializeFixtureHistory(tentRoot);
+  return { root, tentRoot, adapter: openTestFs(tentRoot), peer: openTestFs(tentRoot) };
 }
 
 async function readSection(adapter: NodeFs, nodeId: string, heading: string) {
@@ -231,8 +237,8 @@ test("lightweight ordinary saves retain material behind and standard material va
 test("real CLI append times out without changing bytes or history, then one caller retry writes once", async (t) => {
   const { root, tentRoot, adapter } = await fixture(t, "start");
   const before = await readNodeForEdit(adapter, "node-note", { capture: true });
-  const history = await git(tentRoot, "rev-list", "--all");
-  const head = (await git(tentRoot, "rev-parse", "HEAD")).trim();
+  const history = JSON.stringify(await adapter.history.changesInRange());
+  const head = (await historyHead(tentRoot)).trim();
   let acquired!: () => void, release!: () => void;
   const ready = new Promise<void>((resolve) => (acquired = resolve));
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -250,14 +256,14 @@ test("real CLI append times out without changing bytes or history, then one call
     assert.equal(rejected.stdout, "");
     assert.ok(performance.now() - start >= 8_000, "the real CLI keeps its eight-second wait");
     assert.equal(await adapter.readFile("Note/Note.md"), before.raw);
-    assert.equal((await git(tentRoot, "rev-parse", "HEAD")).trim(), head);
-    assert.equal(await git(tentRoot, "rev-list", "--all"), history);
+    assert.equal((await historyHead(tentRoot)).trim(), head);
+    assert.equal(JSON.stringify(await adapter.history.changesInRange()), history);
   } finally {
     release();
     await holder;
   }
   assert.equal(await adapter.readFile("Note/Note.md"), before.raw);
-  assert.equal(await git(tentRoot, "rev-list", "--all"), history);
+  assert.equal(JSON.stringify(await adapter.history.changesInRange()), history);
 
   // A new caller invocation, after the holder releases; the failed action is never retried inside Tent.
   const retried = await cli(root, "node", "append", "node-note", "--body", payload, "--json");
@@ -268,14 +274,14 @@ test("real CLI append times out without changing bytes or history, then one call
   assert.equal(saved.etag, contentEtag(current.raw));
   assert.ok(saved.version);
   assert.equal(await adapter.history.read(saved.version), current.raw);
-  assert.equal(saved.version.commit, (await git(tentRoot, "rev-parse", "HEAD")).trim());
-  assert.equal((await git(tentRoot, "rev-list", "--count", `${head}..HEAD`)).trim(), "1");
+  assert.equal(saved.version.commit, (await historyHead(tentRoot)).trim());
+  assert.equal((await adapter.history.changesInRange({ from: head })).length, 1);
 });
 
 test("real CLI processes queue concurrent append and stdin writes report captured versions", async (t) => {
   const { root, tentRoot, adapter } = await fixture(t, "start");
   await readNodeForEdit(adapter, "node-note", { capture: true });
-  const head = (await git(tentRoot, "rev-parse", "HEAD")).trim();
+  const head = (await historyHead(tentRoot)).trim();
   const payloads = ["process one", "process two"];
   const results = await Promise.all(
     payloads.map((body) => cli(root, "node", "append", "node-note", "--body", body, "--json")),
@@ -304,7 +310,7 @@ test("real CLI processes queue concurrent append and stdin writes report capture
   }
   const body = (await readNodeForEdit(adapter, "node-note")).body;
   for (const payload of payloads) assert.equal(body.split(payload).length, 2);
-  assert.equal((await git(tentRoot, "rev-list", "--count", `${head}..HEAD`)).trim(), "2");
+  assert.equal((await adapter.history.changesInRange({ from: head })).length, 2);
   const appended = await runNodeCommand(
     "append",
     ["node-note", "--heading", "Summary", "--body", "-"],
@@ -374,7 +380,7 @@ test("append reuses a unique section after its nested content and preserves foll
 test("CLI adapter waits before execution but preserves CAS conflicts without retrying the action", async (t) => {
   const { adapter, tentRoot } = await fixture(t, "base");
   const current = await readNodeForEdit(adapter, "node-note");
-  const cliAdapter = new NodeFs(tentRoot, "cli");
+  const cliAdapter = openTestFs(tentRoot, "cli");
   let acquired!: () => void, release!: () => void;
   const ready = new Promise<void>((resolve) => (acquired = resolve));
   const held = new Promise<void>((resolve) => (release = resolve));

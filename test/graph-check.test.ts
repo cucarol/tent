@@ -1,3 +1,6 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,12 +21,12 @@ async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(scratch, "graph-check-"));
   t.after(async () => {
     assert.equal(path.dirname(root), path.resolve(scratch));
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
   const workspace = path.join(root, "workspace");
   const systemRoot = path.join(workspace, ".tent");
   await fs.mkdir(systemRoot, { recursive: true });
-  const adapter = new NodeFs(systemRoot);
+  const adapter = openTestFs(systemRoot);
   const write = (file: string, data: Record<string, unknown>, body = "") =>
     adapter.writeFile(file, serializeFrontmatter({ type: "prompt", ...data }, body));
   const fileExists = async (filename: string, directory = false) => {
@@ -503,7 +506,7 @@ test("section observation failures are errors, not false missing-heading finding
 
 test("Card fragment sources still pin complete Node bytes and survive a missing live section", async (t) => {
   const { workspace, systemRoot, adapter, write, fileExists } = await fixture(t);
-  await git(systemRoot, "init");
+  await initializeFixtureHistory(systemRoot);
   await write(
     "Design/Design.md",
     { id: "node-design" },
@@ -526,7 +529,7 @@ test("Card fragment sources still pin complete Node bytes and survive a missing 
 
 test("retained Card source versions survive live moves and deletion without document or history writes", async (t) => {
   const { root, workspace, systemRoot, adapter, write, fileExists } = await fixture(t);
-  await git(systemRoot, "init");
+  await initializeFixtureHistory(systemRoot);
   await write("Original/Original.md", { id: "node-original" }, "retained source");
   await write("roles/role-a.md", { id: "role-a", type: "role" }, "retained role");
   const card = await createCardDocument(adapter, {
@@ -544,7 +547,7 @@ test("retained Card source versions survive live moves and deletion without docu
     await adapter.remove("roles/role-a.md");
   });
   await adapter.writeFile("node-move.pending.json", "pending repair must stay unchanged");
-  const head = await git(systemRoot, "rev-parse", "HEAD");
+  const head = await historyHead(systemRoot);
   const before = await bytes(root);
   for (const method of [
     "writeFile",
@@ -564,7 +567,7 @@ test("retained Card source versions survive live moves and deletion without docu
     notices: [],
     errors: [],
   });
-  assert.equal(await git(systemRoot, "rev-parse", "HEAD"), head);
+  assert.equal(await historyHead(systemRoot), head);
   assert.deepEqual(await bytes(root), before);
   assert.equal(card.cardId, "card-pinned");
 });
@@ -581,7 +584,7 @@ test("invalid retained versions report their occurrence instead of checking a li
       sources: [
         {
           resource: "../Missing/Missing.md",
-          version: { commit: "a".repeat(40), path: "Other/Other.md" },
+          version: { commit: "a".repeat(64), path: "Other/Other.md" },
         },
       ],
     },

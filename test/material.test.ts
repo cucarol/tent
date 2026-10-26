@@ -1,3 +1,5 @@
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as fs from "node:fs/promises";
@@ -73,7 +75,7 @@ test("standalone material validation names resource and sources in issue paths",
 });
 
 test("material locations use the declaring document and single Workspace", () => {
-  const root = path.resolve(".scratch", "material-resolve");
+  const root = path.resolve(testScratchRoot(), "material-resolve");
   const cases = [
     ["../other.md", "A/other.md"],
     ["file.txt", "A/B/file.txt"],
@@ -176,10 +178,10 @@ test("rewrite handles identity files, attachments, unmoved workspace files and U
 });
 
 test("real Node move and rename preserve resource targets, ordered sources and historical bytes", async () => {
-  const scratch = fileURLToPath(new URL("../.scratch/", import.meta.url));
+  const scratch = testScratchRoot();
   await fs.mkdir(scratch, { recursive: true });
   const fixture = await fs.mkdtemp(path.join(scratch, "material-move-"));
-  const adapter = new NodeFs(path.join(fixture, ".tent"));
+  const adapter = openTestFs(path.join(fixture, ".tent"));
   let n = 0;
   const env = {
     fs: adapter,

@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import fsPromises from "node:fs/promises";
@@ -10,16 +13,16 @@ import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { exportGraph } from "../src/fs/graph-export.js";
 
 test("export validates standard bundle materials and reports external and unresolved occurrences without copying them", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "standard-export-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
-  await scaffoldInWorkspace(new NodeFs(workspace), {
+  t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
+  await scaffoldInWorkspace(openTestFs(workspace), {
     name: "standard export",
     nodes: [{ id: "node-material", name: "Material", type: "prompt" }],
   });
   const systemRoot = path.join(workspace, ".tent"),
-    adapter = new NodeFs(systemRoot);
+    adapter = openTestFs(systemRoot);
   const raw = serializeFrontmatter(
     {
       id: "node-material",
@@ -123,11 +126,13 @@ test("export validates standard bundle materials and reports external and unreso
 });
 
 test("export still rejects malformed native Node, Role and Card frontmatter", async (t) => {
-  const workspace = await fs.mkdtemp(path.join(path.resolve(".scratch"), "export-invalid-native-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
-  await scaffoldInWorkspace(new NodeFs(workspace), { name: "Invalid native" });
+  const workspace = await fs.mkdtemp(
+    path.join(path.resolve(testScratchRoot()), "export-invalid-native-"),
+  );
+  t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
+  await scaffoldInWorkspace(openTestFs(workspace), { name: "Invalid native" });
   const systemRoot = path.join(workspace, ".tent"),
-    adapter = new NodeFs(systemRoot);
+    adapter = openTestFs(systemRoot);
   const mount = {
     workspaceRoot: workspace,
     systemRoot,
@@ -150,18 +155,18 @@ for (const outcome of ["success", "failure"]) {
     `Windows export publication retries sharing errors with ${outcome} and leaves no staging directory`,
     { skip: process.platform !== "win32" },
     async (t) => {
-      const scratch = path.resolve(".scratch");
+      const scratch = path.resolve(testScratchRoot());
       await fs.mkdir(scratch, { recursive: true });
       const workspace = await fs.mkdtemp(path.join(scratch, "export-rename-"));
-      t.after(() => fs.rm(workspace, { recursive: true, force: true }));
-      await scaffoldInWorkspace(new NodeFs(workspace), { name: "rename retry" });
+      t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
+      await scaffoldInWorkspace(openTestFs(workspace), { name: "rename retry" });
       const systemRoot = path.join(workspace, ".tent"),
         destination = path.join(workspace, "output", "bundle"),
         mount = {
           workspaceRoot: workspace,
           systemRoot,
           workspaceId: "ws-export-rename",
-          env: { fs: new NodeFs(systemRoot) },
+          env: { fs: openTestFs(systemRoot) },
         },
         originalRename = fsPromises.rename,
         failure = Object.assign(new Error("export directory occupied"), { code: "EBUSY" });

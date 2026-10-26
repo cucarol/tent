@@ -1,6 +1,6 @@
 import * as z from "zod/v4";
 import type { FsAdapter } from "../store/adapter.js";
-import { documentVersionSchema } from "../store/git-history.js";
+import { documentVersionSchema } from "../store/history-port.js";
 import { isHistoryFile } from "../store/document-history.js";
 
 export const documentDiffSchema = z.strictObject({

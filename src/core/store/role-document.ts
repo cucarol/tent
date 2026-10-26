@@ -5,7 +5,7 @@ import { isRoleId } from "../base/id.js";
 import { roleDocumentPath } from "../base/paths.js";
 
 export type RoleDocument = {
-  version?: import("./git-history.js").DocumentVersion;
+  version?: import("./history-port.js").DocumentVersion;
   path: string;
   roleId: string;
   title?: string;

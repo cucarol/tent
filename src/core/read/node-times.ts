@@ -1,5 +1,6 @@
+import { hasDocumentHistory } from "../store/history-port.js";
 import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
-import type { DocumentVersion, HistoryCommit } from "../store/git-history.js";
+import type { DocumentVersion, HistoryCommit } from "../store/history-port.js";
 import { isNodeId } from "../base/id.js";
 import { nodeNotePath } from "../base/paths.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
@@ -52,7 +53,7 @@ export async function readNodeTimes(
     contentChangedAt: null as string | null,
     recordedAt: recordedAt(parseFrontmatter(raw).data),
   }));
-  if (!fs.history || !(await fs.exists(".git"))) return result;
+  if (!fs.history || !(await hasDocumentHistory(fs))) return result;
   let events: HistoryCommit[];
   try {
     events = await fs.history.changesInRange();

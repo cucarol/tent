@@ -12,13 +12,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            node: 22
-          - os: windows-latest
-            node: 22
-          - os: macos-latest
-            node: 22
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['22.19.0', '24.22.1']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -28,7 +23,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run security:audit
-      - run: npm run check
+      - name: Full check including SQLite storage and six safety cases
+        run: npm run check
       - name: Scan bounded propagation sequences
         if: runner.os == 'Linux'
         run: TENT_PROPAGATION_SEED="$(seq -s, 100 129),$(seq -s, 200 299)" node --import tsx --test test/propagation-sequences.test.ts

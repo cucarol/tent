@@ -8,13 +8,16 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { NodeFs } from "../src/fs/node-fs.js";
+import { openTestFs, openTestService, removeTestFixture } from "./node-fs.js";
 import { startUiServer, type UiServer } from "../src/ui-server/server.js";
 import { cli } from "./helpers.js";
 import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
 
 async function fixture(t: TestContext, idleTimeout?: number) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "ui-changes-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const workspaceRoot = path.join(root, "ws");
   const staticDir = path.join(root, "dist");
   await initializeFixtureWorkspace(workspaceRoot);
@@ -22,7 +25,7 @@ async function fixture(t: TestContext, idleTimeout?: number) {
   const note = path.join(workspaceRoot, ".tent/Main/Main.md");
   await fs.mkdir(path.dirname(note));
   await fs.writeFile(note, "---\nid: node-main\ntype: prompt\n---\nInitial body\n");
-  const server = await startUiServer({ workspaceRoot, staticDir, port: 0, idleTimeout });
+  const server = await openTestService({ workspaceRoot, staticDir, port: 0, idleTimeout });
   t.after(() => server.close());
   return { workspaceRoot, note, server };
 }
@@ -379,11 +382,12 @@ test(
   },
 );
 
-test("a burst waits for the existing mutation lock release and emits one empty hint", async (t) => {
+test("a native burst waits for lock release, coalesces empty hints and leaves later changes observable", async (t) => {
   const { workspaceRoot, note, server } = await fixture(t);
+  const observed = observeWatch(t);
   const live = await stream(t, server);
   await live.wait(1);
-  const tent = new NodeFs(path.join(workspaceRoot, ".tent"));
+  const tent = openTestFs(path.join(workspaceRoot, ".tent"));
   await tent.withLock("mutation.lock", async () => {
     for (let i = 0; i < 20; i++) await fs.appendFile(note, `line ${i}\n`);
     await delay(180);
@@ -391,10 +395,47 @@ test("a burst waits for the existing mutation lock release and emits one empty h
   });
   await live.wait(2);
   await delay(180);
-  assert.deepEqual(live.frames, [": connected", "event: change\ndata: {}"]);
+  const burstHints = live.frames.length - 1;
+  assert.ok(
+    burstHints > 0 && burstHints < 20,
+    `Native notifications did not coalesce: ${burstHints}`,
+  );
+  assert.ok(live.frames.slice(1).every((frame) => frame === "event: change\ndata: {}"));
+  const current = await read(server, "/api/nodes/node-main");
+  assert.equal(current.status, 200);
+  assert.equal(
+    (await current.json()).body,
+    "Initial body\n" + Array.from({ length: 20 }, (_, i) => `line ${i}\n`).join(""),
+  );
   // Releasing the CLI's existing lock is sufficient even if no document event is delivered.
-  await tent.withLock("mutation.lock", async () => delay(100));
-  await live.wait(3);
+  let beforeRelease = 0;
+  await tent.withLock("mutation.lock", async () => {
+    beforeRelease = live.frames.length;
+    await delay(100);
+    assert.equal(live.frames.length, beforeRelease);
+  });
+  await live.wait(beforeRelease + 1);
+  const beforeFile = live.frames.length;
+  await fs.appendFile(note, "independent later edit\n");
+  await live.wait(beforeFile + 1);
+  assert.ok(live.frames.slice(1).every((frame) => frame === "event: change\ndata: {}"));
+  const later = await read(server, "/api/nodes/node-main");
+  assert.equal(later.status, 200);
+  assert.ok((await later.json()).body.endsWith("independent later edit\n"));
+  await live.close();
+  await delay(30);
+  assert.equal(observed.stopped.size, observed.watchers.length);
+  const closedFrames = live.frames.length;
+  await fs.appendFile(note, "after disconnect\n");
+  await delay(180);
+  assert.equal(live.frames.length, closedFrames);
+  t.diagnostic(
+    JSON.stringify({
+      platform: process.platform,
+      nativeBurstHints: burstHints,
+      monitorsClosed: observed.stopped.size,
+    }),
+  );
 });
 
 test("Git caches, temporary files and ordinary Core reads do not create a wakeup loop", async (t) => {

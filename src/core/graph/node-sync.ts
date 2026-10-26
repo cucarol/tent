@@ -1,3 +1,4 @@
+import { hasDocumentHistory } from "../store/history-port.js";
 import type { InvalidNativeNode } from "./node-native-capture.js";
 import { readOnlyFs, withTentMutation, type FsAdapter } from "../store/adapter.js";
 import { isNodeId } from "../base/id.js";
@@ -161,7 +162,7 @@ async function inspectCatalogNodesInScope(
   explicitNodeId?: string,
 ) {
   const records = await retainedNodeRecords(fs);
-  const hasRetainedHistory = !!fs.history && (await fs.exists(".git"));
+  const hasRetainedHistory = !!fs.history && (await hasDocumentHistory(fs));
   // One inspection observes each declaration once. Shared ancestor materials use
   // that same observation; later inspections always start with an empty map.
   const materialReads = new Map<string, ReturnType<typeof observeNodeMaterials>>();
@@ -908,7 +909,7 @@ export function linkNodeOutput(
       const path = `${goal.path}/${name}`,
         raw = await fs.readFile(nodeNotePath(path));
       const version =
-        fs.history && (await fs.exists(".git"))
+        fs.history && (await hasDocumentHistory(fs))
           ? { commit: (await fs.history.currentCommit())!, path: nodeNotePath(path) }
           : undefined;
       return {

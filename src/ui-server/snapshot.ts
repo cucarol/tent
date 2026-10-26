@@ -33,7 +33,7 @@ export type SnapshotSource = {
 
 export async function buildSnapshot(source: SnapshotSource): Promise<Snapshot> {
   const fs = readOnlyFs(source.fs);
-  // Current document scans are independent of the retained Git history read.
+  // Current document scans are independent of the retained history read.
   const cardDocuments = readDocs(CARDS_DIR);
   const [tent, roleDocs, cardDocs, retainedEvents, relations, outputActivity] = await Promise.all([
     loadTent(fs),

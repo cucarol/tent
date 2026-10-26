@@ -1,3 +1,5 @@
+import { testScratchRoot } from "./scratch.js";
+import { removeTestFixture } from "./node-fs.js";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -13,7 +15,7 @@ const repoRoot = path.resolve(here, "..");
 const cliSource = path.join(repoRoot, "src", "cli", "tent.ts");
 const cliBuilt = path.join(repoRoot, "cli.mjs");
 const tsxImport = import.meta.resolve("tsx");
-const scratchRoot = path.join(repoRoot, ".scratch");
+const scratchRoot = testScratchRoot();
 const temporaryRoots: string[] = [];
 async function temporaryDirectory(prefix: string): Promise<string> {
   await fs.mkdir(scratchRoot, { recursive: true });
@@ -24,7 +26,7 @@ async function temporaryDirectory(prefix: string): Promise<string> {
 after(async () => {
   for (const root of temporaryRoots) {
     assert.equal(path.dirname(root), await fs.realpath(scratchRoot));
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTestFixture(root, { recursive: true, force: true });
   }
 });
 const gitIdentity = {
@@ -183,7 +185,7 @@ test("CLI help and version expose only the current surface", async () => {
   const help = await runCliOk(repoRoot, "--help");
   assert.match(help.stdout, /tent node/);
   assert.match(help.stdout, /new <path>/);
-  assert.match(help.stdout, /with its own Git history/);
+  assert.match(help.stdout, /with its own SQLite history/);
   assert.doesNotMatch(help.stdout, /--repair-existing/);
   assert.doesNotMatch(help.stdout, /init-map|approved-digest/);
   assert.doesNotMatch(help.stdout, /skill-install/);
@@ -352,8 +354,8 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
   } finally {
     assert.equal(path.dirname(parent), await fs.realpath(scratchRoot));
     assert.equal(path.dirname(packDir), await fs.realpath(scratchRoot));
-    await fs.rm(parent, { recursive: true, force: true });
-    await fs.rm(packDir, { recursive: true, force: true });
+    await removeTestFixture(parent, { recursive: true, force: true });
+    await removeTestFixture(packDir, { recursive: true, force: true });
   }
 });
 

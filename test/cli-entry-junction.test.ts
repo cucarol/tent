@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 /**
  * Regression: Windows junction / symlink-style CLI entry must autorun main,
  * while importing the module must not auto-run or double-run.
@@ -71,7 +72,7 @@ test("CLI junction/symlink entry autoruns; import does not", async (t) => {
 
   const tmp = await fs.mkdtemp(path.join(testScratchRoot(), "tent-cli-entry-"));
   t.after(async () => {
-    await fs.rm(tmp, { recursive: true, force: true });
+    await removeTestFixture(tmp, { recursive: true, force: true });
   });
 
   const linkedEntry = await tryLinkEntry(tmp);

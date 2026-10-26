@@ -1,3 +1,4 @@
+import { hasDocumentHistory } from "./history-port.js";
 import * as z from "zod/v4";
 import { createHash } from "node:crypto";
 import type { FsAdapter } from "./adapter.js";
@@ -125,7 +126,7 @@ export async function recoverPendingDeleteUnlocked(fs: FsAdapter) {
   }
   // Complete history while the durable delete record still exists, including a retry
   // whose original filesystem move happened in a previous process.
-  if (fs.history && (await fs.exists(".git"))) {
+  if (fs.history && (await hasDocumentHistory(fs))) {
     const paths =
       plan.kind === "role"
         ? [plan.source]

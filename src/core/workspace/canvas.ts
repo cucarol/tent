@@ -1,3 +1,4 @@
+import { hasDocumentHistory } from "../store/history-port.js";
 import * as z from "zod/v4";
 import { withTentMutation, type FsAdapter } from "../store/adapter.js";
 import { contentEtag } from "../base/etag.js";
@@ -88,7 +89,7 @@ export function writeCanvasDocument(fs: FsAdapter, input: { baseEtag: unknown; c
         throw new CanvasError("ETAG_CONFLICT", "Canvas changed; reread before saving", { current });
       if (raw !== before) await fs.writeFile(CANVAS_PATH, raw);
       const version =
-        fs.history && (await fs.exists(".git"))
+        fs.history && (await hasDocumentHistory(fs))
           ? (
               await fs.history.captureUnlocked([{ path: CANVAS_PATH, raw }], {
                 operation: "canvas.write",

@@ -1,3 +1,5 @@
+import { openTestService } from "./node-fs.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -24,9 +26,13 @@ import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "card-order-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  const ownedServers: Array<{ close(): Promise<void> }> = [];
+  t.after(async () => {
+    for (const server of ownedServers) await server.close();
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+  });
   await initializeFixtureWorkspace(root);
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   for (const id of ["role-a", "role-b"])
     await createRoleContext(adapter, { roleId: id, title: id, body: "Work" });
   const create = (id: string, target?: string, returnTo?: string) =>
@@ -39,7 +45,7 @@ async function fixture(t: TestContext) {
     });
   const pending = async (roleId: string, includeOpen = false) =>
     (await watchCardDocuments(adapter, roleId, 0, { includeOpen })).map((item) => item.cardId);
-  return { root, adapter, create, pending };
+  return { root, adapter, create, pending, ownedServers };
 }
 
 test("fractional Card keys retain exact default ties and allow repeated insertion at every boundary", () => {
@@ -212,7 +218,7 @@ test("positions are destination-local and public Cards are opt-in, ordered and c
   );
   const race = await Promise.allSettled([
     takeCardDocument(adapter, open.cardId, "role-a"),
-    takeCardDocument(new NodeFs(path.join(root, ".tent")), open.cardId, "role-b"),
+    takeCardDocument(openTestFs(path.join(root, ".tent")), open.cardId, "role-b"),
   ]);
   assert.equal(race.filter((x) => x.status === "fulfilled").length, 1);
   const winner = (race.find((x) => x.status === "fulfilled") as PromiseFulfilledResult<any>).value
@@ -297,7 +303,7 @@ test("watch emits the role queue, then opted-in public queue, then returns in re
 });
 
 test("CLI and HTTP pass queue placement and expose the same snapshot key", async (t) => {
-  const { root, adapter, create } = await fixture(t);
+  const { root, adapter, create, ownedServers } = await fixture(t);
   const a = await create("card-a", "role-a"),
     b = await create("card-b", "role-a"),
     open = await create("card-open");
@@ -327,8 +333,8 @@ test("CLI and HTTP pass queue placement and expose the same snapshot key", async
     ).exitCode,
     1,
   );
-  const server = await startUiServer({ workspaceRoot: root, staticDir: root, port: 0 });
-  t.after(() => server.close());
+  const server = await openTestService({ workspaceRoot: root, staticDir: root, port: 0 });
+  ownedServers.push(server);
   const url = new URL(server.url),
     headers = {
       Authorization: `Bearer ${url.hash.slice(7)}`,

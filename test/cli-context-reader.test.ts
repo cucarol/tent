@@ -1,3 +1,9 @@
+import { captureFixtureDocuments } from "./scratch.js";
+import { captureReadDocuments } from "../src/core/store/document-history.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { nodeNotePath } from "../src/core/base/paths.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -25,7 +31,7 @@ test("material display preserves directory and prefix selectors without opening 
           { resource: "../../" },
           {
             resource: pathToFileURL(
-              path.resolve(".scratch", "nonexistent-material-display", "src") + path.sep,
+              path.resolve(testScratchRoot(), "nonexistent-material-display", "src") + path.sep,
             ).href,
           },
           { resource: "https://example.com/doc" },
@@ -33,7 +39,7 @@ test("material display preserves directory and prefix selectors without opening 
         ],
       },
       "Owner",
-      path.resolve(".scratch", "nonexistent-material-display"),
+      path.resolve(testScratchRoot(), "nonexistent-material-display"),
     ),
     [
       "output/missing file.md",
@@ -49,7 +55,9 @@ test("material display preserves directory and prefix selectors without opening 
 
 test("node get preserves foreign file URIs when the host cannot map them", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-foreign-material-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await initializeFixtureWorkspace(workspace);
   const resource =
     process.platform === "win32" ? "file:///home/example/report.md" : "file://other-host/report.md";
@@ -60,7 +68,7 @@ test("node get preserves foreign file URIs when the host cannot map them", async
   );
   assert.equal(created.exitCode, 0, created.stderr);
   const nodeId = JSON.parse(created.stdout).node.nodeId;
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const adapter = openTestFs(path.join(workspace, ".tent"));
   const head = await adapter.history.currentCommit();
   for (const flags of [[], ["--full"], ["--view", "raw"], ["--full", "--view", "raw"]]) {
     const read = await runNodeCommand("get", [nodeId, ...flags], { workspace, json: true });
@@ -77,9 +85,11 @@ test("node get preserves foreign file URIs when the host cannot map them", async
 
 test("node get shows decoded own material paths below ETag even with an empty body", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-material-paths-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await initializeFixtureWorkspace(workspace);
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const adapter = openTestFs(path.join(workspace, ".tent"));
   const env = {
     fs: adapter,
     clock: { now: () => "2026-10-22T00:00:00.000Z" },
@@ -123,9 +133,11 @@ test("node get shows decoded own material paths below ETag even with an empty bo
 
 test("complete output CLI reads expose changedSince in JSON and approved text without saving it", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-output-freeze-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await initializeFixtureWorkspace(workspace);
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const adapter = openTestFs(path.join(workspace, ".tent"));
   const env = {
     fs: adapter,
     clock: { now: () => "2026-10-06T00:00:00.000Z" },
@@ -190,22 +202,23 @@ test("complete output CLI reads expose changedSince in JSON and approved text wi
 });
 
 test("CLI exposes bounded live and frozen readers without losing pages, ranges or sources", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "cli-reader-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const workspace = path.join(root, "workspace");
   const body = "😀reader fidelity\n" + "正文".repeat(12000) + "\n[B](../B/B.md)\n";
-  await scaffoldInWorkspace(new NodeFs(workspace), {
+  await scaffoldInWorkspace(openTestFs(workspace), {
     name: "CLI reader",
     nodes: [
       { id: "node-readera", name: "A", type: "prompt", body },
       { id: "node-readerb", name: "B", type: "output", body: "reader peer" },
     ],
   });
-  await git(path.join(workspace, ".tent"), "init");
-  await git(path.join(workspace, ".tent"), "add", ".");
-  await git(path.join(workspace, ".tent"), "commit", "-m", "retained relation fixture");
+  await initializeFixtureHistory(path.join(workspace, ".tent"));
+  await captureFixtureDocuments(path.join(workspace, ".tent"));
   {
     const globals = { workspace, json: true };
     const parse = (result: { exitCode: number; stdout: string; stderr: string }) => {
@@ -266,7 +279,7 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
       "node-readera",
     );
     assert.equal((await runNodeCommand("backlinks", ["node-readerb"], globals)).exitCode, 1);
-    await git(path.join(workspace, ".tent"), "init");
+    await initializeFixtureHistory(path.join(workspace, ".tent"));
     const created = parse(
       await runCardCommand("create", ["--prompt", "reader", "--source", ".tent/A/A.md"], globals),
     );

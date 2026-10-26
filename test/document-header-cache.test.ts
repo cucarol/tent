@@ -1,3 +1,7 @@
+import { captureFixtureDocuments } from "./scratch.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -19,7 +23,9 @@ import { testScratchRoot } from "./scratch.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "header-cache-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   return root;
 }
 
@@ -148,14 +154,13 @@ test("without Tent Git the scope performs no cache writes", async (t) => {
 
 test("warm brief observes same-size native edits and bad headers without changing authority on a hit", async (t) => {
   const root = await fixture(t);
-  await scaffoldInWorkspace(new NodeFs(root), {
+  await scaffoldInWorkspace(openTestFs(root), {
     name: "Cache",
     nodes: [{ id: "node-cachetest", name: "Fact", type: "prompt", body: "old body" }],
   });
   const system = path.join(root, ".tent");
-  await git(system, "init");
-  await git(system, "add", ".");
-  await git(system, "commit", "-m", "fixture");
+  await initializeFixtureHistory(system);
+  await captureFixtureDocuments(system);
   const file = path.join(system, "Fact", "Fact.md");
   const cache = path.join(system, ".git", "tent-material-cache", "document-headers.bin");
   const brief = async () => {
@@ -164,10 +169,10 @@ test("warm brief observes same-size native edits and bad headers without changin
     return result.stdout;
   };
   const first = await brief();
-  const head = await git(system, "rev-parse", "HEAD");
+  const head = await historyHead(system);
   const raw = await fs.readFile(file, "utf8");
   assert.equal(await brief(), first);
-  assert.equal(await git(system, "rev-parse", "HEAD"), head);
+  assert.equal(await historyHead(system), head);
   assert.equal(await fs.readFile(file, "utf8"), raw);
   const stat = await fs.stat(file);
   const edited = raw.replace("prompt", "output").replace("old body", "new body");
@@ -178,13 +183,13 @@ test("warm brief observes same-size native edits and bad headers without changin
   assert.notEqual(after, first);
   assert.equal(JSON.parse(after).roots[0].type, "output");
   assert.equal(await fs.readFile(file, "utf8"), edited);
-  assert.notEqual(await git(system, "rev-parse", "HEAD"), head);
+  assert.notEqual(await historyHead(system), head);
   await fs.rm(cache);
   assert.equal(await brief(), after);
-  const retained = await git(system, "rev-parse", "HEAD");
+  const retained = await historyHead(system);
   await fs.writeFile(file, edited.replace("type: output", "type: [bad"));
   const invalid = JSON.parse(await brief());
   assert.equal(invalid.invalidNodes.length, 1);
   assert.match(invalid.invalidNodes[0].reason, /YAML/);
-  assert.equal(await git(system, "rev-parse", "HEAD"), retained);
+  assert.equal(await historyHead(system), retained);
 });

@@ -1,3 +1,4 @@
+import { hasDocumentHistory } from "../store/history-port.js";
 import * as z from "zod/v4";
 import type { FsAdapter } from "../store/adapter.js";
 import { canonicalJson } from "../base/canonical-digest.js";
@@ -189,7 +190,7 @@ export function nodeSemanticContent(
 export async function retainedNodeRecords(
   fs: FsAdapter,
 ): Promise<Record<string, NodeBasisRecord | null>> {
-  if (!fs.history || !(await fs.exists(".git"))) return {};
+  if (!fs.history || !(await hasDocumentHistory(fs))) return {};
   return fs.history.nodeRecords();
 }
 

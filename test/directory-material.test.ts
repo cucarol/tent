@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -72,7 +74,7 @@ for (const repository of [false, true])
     });
     syncBuiltinESMExports();
     try {
-      const adapter = new NodeFs(path.join(workspace, ".tent"));
+      const adapter = openTestFs(path.join(workspace, ".tent"));
       for (const resource of [
         "../src/",
         "../src/no-current-match-*",
@@ -97,9 +99,9 @@ for (const repository of [false, true])
 
 test("directory and prefix declarations have no baselines or sync details, including ancestor goals", async (t) => {
   const workspace = await fixture(t, true);
-  await scaffoldInWorkspace(new NodeFs(workspace), { name: "Coverage", nodes: [] });
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
-  await git(path.join(workspace, ".tent"), "init", "--quiet");
+  await scaffoldInWorkspace(openTestFs(workspace), { name: "Coverage", nodes: [] });
+  const adapter = openTestFs(path.join(workspace, ".tent"));
+  await initializeFixtureHistory(path.join(workspace, ".tent"));
   const run = async (command: string, args: string[]) => {
     const result = await runNodeCommand(command, args, { cwd: workspace, json: true });
     assert.equal(result.exitCode, 0, result.stderr || result.stdout);
@@ -169,14 +171,14 @@ test("directory and prefix declarations have no baselines or sync details, inclu
 
 test("coverage address checks preserve missing directory and prefix-parent diagnostics", async (t) => {
   const workspace = await fixture(t, true);
-  await scaffoldInWorkspace(new NodeFs(workspace), {
+  await scaffoldInWorkspace(openTestFs(workspace), {
     name: "Checks",
     nodes: [
       { id: "node-dir", name: "Directory", type: "prompt" },
       { id: "node-prefix", name: "Prefix", type: "prompt" },
     ],
   });
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const adapter = openTestFs(path.join(workspace, ".tent"));
   for (const [id, name, resource] of [
     ["node-dir", "Directory", "../../missing/"],
     ["node-prefix", "Prefix", "../../missing/a-*"],
@@ -242,7 +244,7 @@ test("file materials observe live bytes despite clean filters, ident and assume-
   await git(workspace, "commit", "--quiet", "-m", "test: attributes");
   await fs.unlink(path.join(workspace, "src/ident.txt"));
   await git(workspace, "checkout", "--", "src/ident.txt");
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const adapter = openTestFs(path.join(workspace, ".tent"));
   const read = (file: string) => adapter.observeMaterial(`../src/${file}`, "index.md");
   const filtered = await read("data.filter"),
     ident = await read("ident.txt"),
@@ -269,7 +271,9 @@ async function observeMaterialResource(workspace: string, owner: string, resourc
 
 async function fixture(t: TestContext, repository = false) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "directory-material-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await fs.mkdir(path.join(workspace, "src/nested"), { recursive: true });
   await fs.writeFile(path.join(workspace, "src/a.txt"), "first\n");
   await fs.writeFile(path.join(workspace, "src/nested/b.txt"), "second\n");
@@ -281,7 +285,7 @@ async function fixture(t: TestContext, repository = false) {
     await git(workspace, "commit", "--quiet", "-m", "test: directory fixture");
   } else {
     await fs.mkdir(path.join(workspace, ".tent"));
-    await git(path.join(workspace, ".tent"), "init", "--quiet");
+    await initializeFixtureHistory(path.join(workspace, ".tent"));
     // Fixtures must stay in project .scratch, which itself belongs to the outer
     // Git worktree. Hide only that ancestor's Git marker to exercise a genuinely
     // absent discovery boundary; fixture-local repositories remain discoverable.
@@ -339,12 +343,12 @@ test("directory declarations preserve slash, reject fragments and enforce safe s
 
 test("directory markers cannot select Node semantic content, pinned Card files or response evidence", async (t) => {
   const workspace = await fixture(t, true);
-  await scaffoldInWorkspace(new NodeFs(workspace), {
+  await scaffoldInWorkspace(openTestFs(workspace), {
     name: "Directory boundaries",
     nodes: [{ id: "node-main", name: "Main", type: "prompt", body: "fact" }],
   });
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
-  await git(path.join(workspace, ".tent"), "init", "--quiet");
+  const adapter = openTestFs(path.join(workspace, ".tent"));
+  await initializeFixtureHistory(path.join(workspace, ".tent"));
   const catalog = await loadNodeCatalog(adapter);
   assert.notEqual(
     syncMaterialIdentity("/Main/Main.md/", "index.md", catalog.byId),
@@ -400,12 +404,12 @@ test("directory markers cannot select Node semantic content, pinned Card files o
 
 test("CLI Workspace-root directory declarations and link-output retain the root address", async (t) => {
   const workspace = await fixture(t, true);
-  await scaffoldInWorkspace(new NodeFs(workspace), {
+  await scaffoldInWorkspace(openTestFs(workspace), {
     name: "Root",
     nodes: [{ id: "node-goal", name: "Goal", type: "goal", body: "Root output" }],
   });
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
-  await git(path.join(workspace, ".tent"), "init", "--quiet");
+  const adapter = openTestFs(path.join(workspace, ".tent"));
+  await initializeFixtureHistory(path.join(workspace, ".tent"));
   assert.equal(
     (await workspaceMaterialFields({ resource: "/" }, "index.md", workspace)).resource,
     "../",
@@ -523,4 +527,61 @@ test("non-Git escaped patterns, character classes and directory pruning agree wi
     path.join(workspace, ".tent/.git/tent-material-cache"),
   );
   assert.deepEqual(indexed, plain);
+});
+
+test("non-Git Unicode byte wildcards and special globstars retain Git semantics without writing the tool context", async (t) => {
+  const workspace = await fixture(t),
+    cache = path.join(workspace, ".tent/.git/tent-material-cache"),
+    tool = path.join(workspace, ".tent/.git/ignore-context/.git");
+  await fs.writeFile(
+    path.join(workspace, ".gitignore"),
+    "src/x?y.txt\nsrc/É*.txt\nsrc/a**/b.txt\nsrc/**\\/q.txt\nsrc/x\\/**/z.txt\n",
+  );
+  for (const name of [
+    "xéy.txt",
+    "xay.txt",
+    "éclair.txt",
+    "axy/b.txt",
+    "axy/deep/b.txt",
+    "other/q.txt",
+    "x/deep/z.txt",
+    "keep.txt",
+  ]) {
+    const file = path.join(workspace, "src", name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, "input\n");
+  }
+  const state = async () => {
+    const rows = [];
+    for (const item of await fs.readdir(tool, { recursive: true, withFileTypes: true }))
+      if (item.isFile()) {
+        const file = path.join(item.parentPath, item.name);
+        rows.push([
+          path.relative(tool, file),
+          await fs.readFile(file, "hex"),
+          (await fs.stat(file)).mtimeMs,
+        ]);
+      }
+    return rows.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  };
+  const before = await state(),
+    plain = await sourceDirectoryPaths(workspace, path.join(workspace, "src"), cache);
+  assert.ok(
+    plain.includes(path.join(workspace, "src/xéy.txt")),
+    "Git ? matches one UTF8 byte, not one Unicode character",
+  );
+  assert.ok(!plain.includes(path.join(workspace, "src/xay.txt")));
+  assert.deepEqual(
+    await state(),
+    before,
+    "observation must not initialize or write Git tool metadata",
+  );
+  assert.equal(
+    (await git(path.dirname(tool), "rev-list", "--all")).trim(),
+    "",
+    "the context has no history commits",
+  );
+  await git(workspace, "init", "--quiet");
+  const project = await sourceDirectoryPaths(workspace, path.join(workspace, "src"), cache);
+  assert.deepEqual(project, plain);
 });

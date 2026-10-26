@@ -1,3 +1,7 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,16 +13,18 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "cli-decomposition-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(workspace), { name: "CLI decomposition" });
-  await git(path.join(workspace, ".tent"), "init");
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(workspace), { name: "CLI decomposition" });
+  await initializeFixtureHistory(path.join(workspace, ".tent"));
   return {
     workspace,
     globals: { workspace, json: true },
-    adapter: new NodeFs(path.join(workspace, ".tent")),
+    adapter: openTestFs(path.join(workspace, ".tent")),
   };
 }
 
@@ -50,7 +56,7 @@ test("CLI writes a mutually linked batch from stdin and rejects a failed mixed b
     created.results.every((item: { etag: string }) => item.etag && !item.etag.startsWith("read:")),
   );
   const systemRoot = path.join(workspace, ".tent");
-  assert.equal((await git(systemRoot, "rev-list", "--count", "HEAD")).trim(), "1");
+  assert.equal((await adapter.history.changesInRange()).length, 1);
   const check = await runWorkspaceCommand("check", [], globals);
   assert.equal(check.exitCode, 0, check.stderr || check.stdout);
   assert.deepEqual(JSON.parse(check.stdout), { documents: 2, issues: [], notices: [], errors: [] });
@@ -58,7 +64,7 @@ test("CLI writes a mutually linked batch from stdin and rejects a failed mixed b
   const complete = await runNodeCommand("get", [parent.nodeId, "--full"], globals);
   assert.equal(complete.exitCode, 0, complete.stderr);
   const original = await adapter.readFile("Parent/Parent.md");
-  const head = await git(systemRoot, "rev-parse", "HEAD");
+  const head = await historyHead(systemRoot);
   const failed = await runNodeCommand("write-many", ["--input-json", "-"], {
     ...globals,
     stdin: JSON.stringify({
@@ -77,7 +83,7 @@ test("CLI writes a mutually linked batch from stdin and rejects a failed mixed b
   assert.match(failed.stderr, /unknown.*ref/i);
   assert.equal(await adapter.readFile("Parent/Parent.md"), original);
   assert.equal(await adapter.exists("Broken"), false);
-  assert.equal(await git(systemRoot, "rev-parse", "HEAD"), head);
+  assert.equal(await historyHead(systemRoot), head);
   const saved = await runNodeCommand(
     "write-many",
     [
@@ -96,7 +102,7 @@ test("CLI writes a mutually linked batch from stdin and rejects a failed mixed b
     globals,
   );
   assert.equal(saved.exitCode, 0, saved.stderr);
-  assert.equal((await git(systemRoot, "rev-list", "--count", "HEAD")).trim(), "2");
+  assert.equal((await adapter.history.changesInRange()).length, 2);
   assert.notEqual(JSON.parse(saved.stdout).results[0].etag, parent.etag);
 });
 
@@ -105,19 +111,11 @@ test("workspace check reports all three problem kinds as JSON on stdout without 
   const raw =
     "---\nid: node-broken\ntype: prompt\nresource: /../spec/invalid.md\nsources:\n  - resource: ../../missing.md\n  - resource: a discussion\n---\n[Missing](../Gone/Gone.md)\n";
   await adapter.writeFile("Broken/Broken.md", raw);
-  await git(path.join(workspace, ".tent"), "add", "Broken/Broken.md");
-  await git(
-    path.join(workspace, ".tent"),
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.com",
-    "commit",
-    "-m",
-    "fixture",
-  );
-  const head = await git(path.join(workspace, ".tent"), "rev-parse", "HEAD");
-  const status = await git(path.join(workspace, ".tent"), "status", "--porcelain");
+  await adapter.history.captureUnlocked([{ path: "Broken/Broken.md", raw }], {
+    operation: "document.external-capture",
+  });
+  const head = await historyHead(path.join(workspace, ".tent"));
+  const db = await fs.readFile(path.join(workspace, ".tent/.git/history.sqlite"));
   const result = await runWorkspaceCommand("check", [], globals);
   assert.equal(result.exitCode, 1);
   assert.equal(result.stderr, "");
@@ -130,8 +128,8 @@ test("workspace check reports all three problem kinds as JSON on stdout without 
   ]);
   assert.deepEqual(report.errors, []);
   assert.equal(await adapter.readFile("Broken/Broken.md"), raw);
-  assert.equal(await git(path.join(workspace, ".tent"), "rev-parse", "HEAD"), head);
-  assert.equal(await git(path.join(workspace, ".tent"), "status", "--porcelain"), status);
+  assert.equal(await historyHead(path.join(workspace, ".tent")), head);
+  assert.deepEqual(await fs.readFile(path.join(workspace, ".tent/.git/history.sqlite")), db);
   const rejected = await runWorkspaceCommand("check", ["--output", "unused"], globals);
   assert.equal(rejected.exitCode, 1);
   assert.equal(rejected.stdout, "");

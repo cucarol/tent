@@ -1,3 +1,6 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -34,14 +37,16 @@ import { git } from "./helpers.js";
 const createdAt = "2026-10-04T00:00:00.000Z";
 
 async function fixture(t: TestContext) {
-  await fs.mkdir(path.resolve(".scratch"), { recursive: true });
-  const root = await fs.mkdtemp(path.resolve(".scratch/native-provenance-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), {
+  await fs.mkdir(path.resolve(testScratchRoot()), { recursive: true });
+  const root = await fs.mkdtemp(path.resolve(testScratchRoot(), "native-provenance-"));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), {
     name: "Native",
     nodes: [{ id: "node-legacy", name: "Legacy", type: "prompt", body: "## Fact\noriginal\n" }],
   });
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   const env = { fs: adapter, clock: { now: () => createdAt }, tentName: "Native" };
   return { root, adapter, env };
 }
@@ -312,7 +317,7 @@ test("native expiry uses an absolute timezone instant at equality, precedes ahea
 
 test("material-only observation does not regenerate or clear behind, and native metadata cannot cause output drift", async (t) => {
   const { root, adapter, env } = await fixture(t);
-  await git(path.join(root, ".tent"), "init", "--initial-branch=main");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   const material = path.join(root, "input.txt"),
     output = path.join(root, "output.txt");
   await fs.writeFile(material, "v1");

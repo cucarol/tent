@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -16,11 +17,13 @@ import { repositoryFacts } from "../src/core/base/repository-facts.js";
 
 async function fixture(t: TestContext, initializeGit = true) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "workspace-scan-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   if (initializeGit) await git(root, "init", "-b", "main");
   if (initializeGit) await fs.appendFile(path.join(root, ".git/info/exclude"), "\n/.tent/\n");
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Scan" });
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  await scaffoldInWorkspace(openTestFs(root), { name: "Scan" });
+  const adapter = openTestFs(path.join(root, ".tent"));
   const write = async (file: string, text = "text") => {
     await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
     await fs.writeFile(path.join(root, file), text);
@@ -331,7 +334,9 @@ test("scan reports source facts with no writes and never follows tracked source 
   // A junction is available without symlink privilege on Windows. The source reader must
   // stop at that directory, not read another workspace through a tracked file path.
   const other = await fs.mkdtemp(path.join(testScratchRoot(), "scan-source-target-"));
-  t.after(() => fs.rm(other, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(other, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await fs.writeFile(path.join(other, "value.ts"), "export const secret = 'outside';");
   await fs.rename(path.join(root, "src/core"), path.join(root, "src/original-core"));
   await fs.symlink(
@@ -429,7 +434,7 @@ test("scan JSON preserves repository facts and a diagnostic for invalid TypeScri
 test("scan rejects removed history flags and incompatible options before reading workspaces", async () => {
   for (const value of ["1", "0", "-1", "1.5", "NaN", "Infinity", "9007199254740992", ""]) {
     const result = await runWorkspaceCommand("scan", [`--commits=${value}`], {
-      workspace: path.resolve(".scratch/no-workspace"),
+      workspace: path.resolve(testScratchRoot(), "no-workspace"),
     });
     assert.equal(result.exitCode, 1);
     assert.match(result.stderr, /Unknown option '--commits'/);
@@ -440,7 +445,7 @@ test("scan rejects removed history flags and incompatible options before reading
   );
   assert.equal((await runWorkspaceCommand("scan", ["--limit", "2"])).exitCode, 1);
   const help = await runWorkspaceCommand("scan", ["--help"], {
-    workspace: path.resolve(".scratch/no-workspace"),
+    workspace: path.resolve(testScratchRoot(), "no-workspace"),
   });
   assert.equal(help.exitCode, 0);
   assert.match(help.stdout, /workspace scan \[--draft <new-file>\] \[--json\]/);
@@ -462,7 +467,7 @@ test("scan fails explicitly without Workspace Git and reports invalid Node inspe
   const mismatch = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
   assert.equal(mismatch.exitCode, 1);
   assert.equal(JSON.parse(mismatch.stdout).inspectionErrors.length, 2);
-  await new NodeFs(path.join(root, ".tent")).writeFile("order.json", "{");
+  await openTestFs(path.join(root, ".tent")).writeFile("order.json", "{");
   const before = await snapshot(root);
   const brokenOrder = await runWorkspaceCommand("scan", [], { workspace: root });
   assert.equal(brokenOrder.exitCode, 1);

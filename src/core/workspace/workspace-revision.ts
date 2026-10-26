@@ -1,3 +1,4 @@
+import { hasDocumentHistory } from "../store/history-port.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { FsAdapter } from "../store/adapter.js";
@@ -11,7 +12,7 @@ import {
   WORKSPACE_SETTINGS_PATH,
 } from "../base/paths.js";
 
-/** Discover current documents; completed Cards change routine views only through Tent Git. */
+/** Discover current documents; completed Cards change routine views only through Tent history. */
 export async function workspaceDocumentPaths(fs: FsAdapter): Promise<string[]> {
   const files: string[] = [];
   const completed = await completedCardPaths(fs);
@@ -68,7 +69,8 @@ async function readRevisionInScope(fs: FsAdapter): Promise<string> {
       digest.update(JSON.stringify([file, content.size, content.digest]) + "\n");
     }
   }
-  const head = fs.history && (await fs.exists(".git")) ? await fs.history.currentCommit() : null;
+  const head =
+    fs.history && (await hasDocumentHistory(fs)) ? await fs.history.currentCommit() : null;
   digest.update(JSON.stringify({ head }));
   return digest.digest("hex");
 }

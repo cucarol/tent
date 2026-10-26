@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -13,7 +14,9 @@ import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "structure-derived-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const write = async (file: string, content: string | Buffer) => {
     await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
     await fs.writeFile(path.join(root, file), content);

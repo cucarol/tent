@@ -1,3 +1,6 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
@@ -36,11 +39,14 @@ test("goal versions retain link query and anchor semantics while Node paths relo
 async function fixture(t: TestContext) {
   await fs.mkdir(testScratchRoot(), { recursive: true });
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-records-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Records" });
+  t.after(async () => {
+    await adapter.close();
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+  });
+  await scaffoldInWorkspace(openTestFs(root), { name: "Records" });
   const system = path.join(root, ".tent"),
-    adapter = new NodeFs(system);
-  await git(system, "init", "--initial-branch=main");
+    adapter = openTestFs(system);
+  await initializeFixtureHistory(system);
   const env = {
     fs: adapter,
     clock: { now: () => "2026-10-05T00:00:00.000Z" },
@@ -60,14 +66,18 @@ test("manual intent remains ahead after rename", async (t) => {
     "Intent/Intent.md",
     serializeFrontmatter({ id, type: "goal" }, "original intent"),
   );
-  await git(system, "-c", "core.autocrlf=false", "add", "--", "Intent/Intent.md");
-  await git(system, "commit", "-m", "User intent");
+  await adapter.withLock("mutation.lock", async () =>
+    adapter.history.captureUnlocked(
+      [{ path: "Intent/Intent.md", raw: await adapter.readFile("Intent/Intent.md") }],
+      { operation: "document.external-capture" },
+    ),
+  );
   assert.ok((await inspectNodeSync(adapter, id)).ahead);
   await renameNode(env, id, "Renamed Intent");
   assert.ok((await inspectNodeSync(adapter, id)).ahead);
 });
 
-test("Node and material baselines are one commit, read capture retains them, reset rolls both back", async (t) => {
+test("Node and material baselines share one event, read capture retains them and confirmation advances the basis", async (t) => {
   const { adapter, system, env, material, resource } = await fixture(t);
   const id = await createNode(env, {
     parentPath: "",
@@ -80,11 +90,20 @@ test("Node and material baselines are one commit, read capture retains them, res
     head = await adapter.history.currentCommit();
   const record = (await adapter.history.nodeRecords())[id]!;
   assert.equal(record.materials[0]!.version, createHash("sha256").update("v1").digest("hex"));
-  const message = await git(system, "show", "-s", "--format=%B", head!);
-  assert.ok(message.includes(`Tent-Node-Record: ["${id}"`));
-  assert.equal(await git(system, "show", `${head}:${nodeNotePath(initial.path)}`), initial.raw);
-  const tree = await git(system, "ls-tree", "-r", "--name-only", head!);
-  assert.equal(tree.trim(), "Fact/Fact.md");
+  const db = new DatabaseSync(path.join(system, ".git/history.sqlite"));
+  try {
+    const saved = db
+      .prepare("SELECT value FROM records r JOIN events e ON e.seq=r.event WHERE e.id=? AND r.id=?")
+      .get(head!, id);
+    assert.deepEqual(JSON.parse(String(saved!.value)), record);
+  } finally {
+    db.close();
+  }
+  assert.equal(
+    await adapter.history.read({ commit: head!, path: nodeNotePath(initial.path) }),
+    initial.raw,
+  );
+  assert.deepEqual(await adapter.retainedDocumentPaths(), ["Fact/Fact.md"]);
   assert.equal(parseFrontmatter(initial.raw).data.sync, undefined);
   await fs.writeFile(material, "v2");
   // External edits captured by a read never acknowledge changed material bytes.
@@ -96,10 +115,12 @@ test("Node and material baselines are one commit, read capture retains them, res
     baseEtag: (await readNodeForEdit(adapter, id)).etag,
   });
   assert.notDeepEqual((await adapter.history.nodeRecords())[id], record);
-  await git(system, "-c", "core.autocrlf=false", "reset", "--hard", head!);
-  assert.equal(await adapter.readFile(nodeNotePath(initial.path)), initial.raw);
-  assert.deepEqual((await adapter.history.nodeRecords())[id], record);
-  assert.notEqual(await adapter.history.currentCommit(), updated.version!.commit);
+  assert.equal(
+    await adapter.history.read({ commit: head!, path: nodeNotePath(initial.path) }),
+    initial.raw,
+  );
+  assert.notDeepEqual((await adapter.history.nodeRecords())[id], record);
+  assert.equal(await adapter.history.currentCommit(), updated.version!.commit);
 });
 
 test("single save, confirm, creation and new output roll back files and records when capture fails", async (t) => {
@@ -171,7 +192,7 @@ test("material cache survives short-lived processes and invalidates on byte chan
   await fs.utimes(material, old, old);
   const first = await adapter.observeMaterial(resource, "Fact/Fact.md");
   assert.equal(first.cacheHit, false);
-  assert.equal((await new NodeFs(system).observeMaterial(resource, "Fact/Fact.md")).cacheHit, true);
+  assert.equal((await openTestFs(system).observeMaterial(resource, "Fact/Fact.md")).cacheHit, true);
   const script = path.join(root, "observe.mjs");
   await fs.writeFile(
     script,
@@ -192,15 +213,15 @@ test("material cache survives short-lived processes and invalidates on byte chan
   assert.equal(JSON.parse(await child).cacheHit, true);
   await fs.writeFile(material, "v2");
   await fs.utimes(material, old, old);
-  const changed = await new NodeFs(system).observeMaterial(resource, "Fact/Fact.md");
+  const changed = await openTestFs(system).observeMaterial(resource, "Fact/Fact.md");
   assert.equal(changed.cacheHit, false);
   assert.notEqual(changed.observedVersion, first.observedVersion);
-  assert.equal((await new NodeFs(system).observeMaterial(resource, "Fact/Fact.md")).cacheHit, true);
+  assert.equal((await openTestFs(system).observeMaterial(resource, "Fact/Fact.md")).cacheHit, true);
   await fs.writeFile(
     path.join(system, ".git", "tent-material-cache", "file-state.json"),
     "corrupt",
   );
-  const recovered = await new NodeFs(system).observeMaterial(resource, "Fact/Fact.md");
+  const recovered = await openTestFs(system).observeMaterial(resource, "Fact/Fact.md");
   assert.equal(recovered.cacheHit, false);
   assert.equal(recovered.observedVersion, changed.observedVersion);
 });

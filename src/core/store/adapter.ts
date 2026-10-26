@@ -1,9 +1,10 @@
 // Core 通过文件系统接口读写；CLI 使用 NodeFs，测试可以使用内存实现。
 
+import type { DocumentHistory } from "./history-port.js";
 import { MUTATION_LOCK_PATH } from "../base/paths.js";
 import { recoverPendingNodeMoveUnlocked } from "./node-move-recovery.js";
 import { recoverPendingDeleteUnlocked } from "./delete-recovery.js";
-import type { GitDocumentHistory, CaptureMetadata } from "./git-history.js";
+import type { CaptureMetadata } from "./history-port.js";
 
 export interface FsAdapter {
   /** Available for adapters rooted at a Workspace's .tent directory. */
@@ -36,8 +37,8 @@ export interface FsAdapter {
   materialIsTracked?(resource: string, documentPath: string): Promise<boolean | undefined>;
   /** Validated local text for explicit-write advice; never fetch remote materials. */
   readMaterialText?(resource: string, documentPath: string): Promise<string | undefined>;
-  readonly history?: GitDocumentHistory;
-  /** File paths in the independent Tent Git HEAD tree; undefined without Tent Git. */
+  readonly history?: DocumentHistory;
+  /** File paths in the independent retained history tree; undefined without Tent history. */
   retainedDocumentPaths?(): Promise<string[] | undefined>;
   /** Track selected identity-document writes inside the existing mutation lock. */
   withDocumentHistory?<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T>;

@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -74,22 +76,19 @@ for (const writer of ["native save", "locked append"] as const) {
       assert.equal(raw.split("competing save").length, 2);
       assert.equal(raw.split("queued append").length, 2);
       assert.equal(await adapter.history.read(receipt.version), raw);
-      const commits = await promisify(execFile)(
-        "git",
-        ["-C", path.join(workspace, ".tent"), "rev-list", "--count", `${head}..HEAD`],
-        { windowsHide: true },
-      );
-      assert.equal(commits.stdout.trim(), "2");
+      assert.equal((await adapter.history.changesInRange({ from: head! })).length, 2);
     },
   );
 }
 
 async function fixture(t: TestContext) {
-  await fs.mkdir(path.resolve(".scratch"), { recursive: true });
-  const workspace = await fs.mkdtemp(path.resolve(".scratch/native-node-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  await fs.mkdir(path.resolve(testScratchRoot()), { recursive: true });
+  const workspace = await fs.mkdtemp(path.resolve(testScratchRoot(), "native-node-"));
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await initializeFixtureWorkspace(workspace);
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const adapter = openTestFs(path.join(workspace, ".tent"));
   const env = { fs: adapter, clock: { now: () => new Date().toISOString() }, tentName: "Native" };
   await fs.writeFile(path.join(workspace, "input.txt"), "original material");
   const goal = await createNode(env, {
@@ -488,7 +487,7 @@ test("native body saves retain exact bytes and old bases; node get is pure and t
   assert.notEqual(firstHead, beforeHead);
   assert.equal(await adapter.history.read({ commit: firstHead!, path: file }), first);
   assert.deepEqual(
-    (await new NodeFs(path.join(workspace, ".tent")).history.nodeRecords())[output],
+    (await openTestFs(path.join(workspace, ".tent")).history.nodeRecords())[output],
     beforeRecord,
   );
   const second = first + "\nAgent B preserves A and adds a note.";
@@ -500,7 +499,7 @@ test("native body saves retain exact bytes and old bases; node get is pure and t
   assert.equal(await adapter.history.read({ commit: secondHead!, path: file }), second);
   assert.equal(await adapter.history.read({ commit: firstHead!, path: file }), first);
   assert.deepEqual(
-    (await new NodeFs(path.join(workspace, ".tent")).history.nodeRecords())[output],
+    (await openTestFs(path.join(workspace, ".tent")).history.nodeRecords())[output],
     beforeRecord,
   );
   // A complete pure read remains usable when a following command records those exact native bytes.
@@ -520,7 +519,7 @@ test("native body saves retain exact bytes and old bases; node get is pure and t
   assert.ok(nativeWrite);
   assert.equal(await adapter.history.read({ commit: nativeWrite.commit, path: file }), third);
   assert.deepEqual(
-    (await new NodeFs(path.join(workspace, ".tent")).history.nodeRecords())[output],
+    (await openTestFs(path.join(workspace, ".tent")).history.nodeRecords())[output],
     beforeRecord,
   );
   const full = parse(await runNodeCommand("get", [output], options));
@@ -539,7 +538,7 @@ test("valid native metadata retains old material bases and records newly declare
   await adapter.writeFile("需求/需求.md", raw);
   const checked = parse(await runNodeCommand("check", [goal], options));
   assert.ok(checked.behind);
-  const current = (await new NodeFs(path.join(workspace, ".tent")).history.nodeRecords())[goal]!;
+  const current = (await openTestFs(path.join(workspace, ".tent")).history.nodeRecords())[goal]!;
   assert.deepEqual(current.materials[0], previous.materials[0]);
   assert.equal(current.materials.length, 2);
   assert.match(current.materials[1]!.version!, /^[a-f0-9]{64}$/);

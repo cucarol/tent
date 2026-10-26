@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { startUiServer } from "../src/ui-server/server.js";
+import { openTestService, removeTestFixture } from "./node-fs.js";
 import { directoryPath, resolveHref } from "../src/ui/util.js";
 import { localFileAt } from "../src/ui/data/files.js";
 import type { WorkspaceDirectory } from "../src/core/read/workspace-directory.js";
@@ -48,7 +48,7 @@ test("body directory routing preserves the marker, encoding and .tent anchor", (
 test("directory API reads one level in directory-first name order and shares file previews", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "ui-directory-"));
   t.after(async () => {
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
   const workspace = path.join(root, "workspace");
   await initializeFixtureWorkspace(workspace);
@@ -69,7 +69,7 @@ test("directory API reads one level in directory-first name order and shares fil
   await fs.symlink(path.join(directory, ".git"), path.join(directory, "git-alias"), "junction");
   const dist = path.join(root, "ui-dist");
   await fs.mkdir(dist);
-  const server = await startUiServer({ workspaceRoot: workspace, staticDir: dist, port: 0 });
+  const server = await openTestService({ workspaceRoot: workspace, staticDir: dist, port: 0 });
   t.after(() => server.close());
   const token = new URL(server.url).hash.slice("#token=".length);
   const origin = `http://127.0.0.1:${server.port}`;

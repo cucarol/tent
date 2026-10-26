@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import { testScratchRoot } from "./scratch.js";
@@ -20,8 +21,10 @@ import {
 for (const reference of ["stable-id", "definition"] as const) {
   test(`renameNode: preserves resolved ${reference} references with a colliding new name`, async (t) => {
     const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-reference-"));
-    t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-    const fsa = new NodeFs(dir);
+    t.after(() =>
+      removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    );
+    const fsa = openTestFs(dir);
     await scaffoldTent(fsa, { name: "x" });
     const env = envFor(fsa);
     await createNode(env, { parentPath: "", name: "branch-a", type: "prompt" });
@@ -71,8 +74,10 @@ function envFor(fsa: FsAdapter, name = "x") {
 
 test("renameNode: rejects unindexable names without moving nodes and allows nested system basenames", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-reserved-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const parent = await createNode(env, { parentPath: "", name: "parent", type: "prompt" });
@@ -256,8 +261,10 @@ test("rewriteNodeLinks: leaves ambiguous unqualified wiki name unchanged", () =>
 
 test("renameNode: leaf keeps node-, renames folder + identity note", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-leaf-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const id = await createNode(env as any, { parentPath: "", name: "leaf", type: "prompt" });
@@ -276,8 +283,10 @@ test("renameNode: leaf keeps node-, renames folder + identity note", async (t) =
 
 test("renameNode: subtree preserves child relative paths and ids", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-sub-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const parentId = await createNode(env as any, { parentPath: "", name: "parent", type: "prompt" });
@@ -309,8 +318,10 @@ test("renameNode: subtree preserves child relative paths and ids", async (t) => 
 
 test("renameNode: rewrites inbound md links; order stays id-keyed", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-links-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const a = await createNode(env as any, { parentPath: "", name: "alpha", type: "prompt" });
@@ -335,8 +346,8 @@ test("renameNode: rewrites inbound md links; order stays id-keyed", async (t) =>
 
 test("renameNode keeps workspace Markdown links outside .tent", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-outside-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
-  const fsa = new NodeFs(path.join(workspace, ".tent"));
+  t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
+  const fsa = openTestFs(path.join(workspace, ".tent"));
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const alpha = await createNode(env, { parentPath: "", name: "Alpha", type: "prompt" });
@@ -363,8 +374,10 @@ test("renameNode keeps workspace Markdown links outside .tent", async (t) => {
 
 test("renameNode: duplicate display names leave unqualified wiki unchanged", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-dup-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const branchA = await createNode(env as any, {
@@ -419,8 +432,10 @@ test("renameNode: duplicate display names leave unqualified wiki unchanged", asy
 
 test("renameNode: injected write failure restores tree and every note byte-for-byte", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-rollback-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const base = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const base = openTestFs(dir);
   await scaffoldTent(base, { name: "x" });
   const setupEnv = envFor(base);
   const a = await createNode(setupEnv as any, { parentPath: "", name: "alpha", type: "prompt" });
@@ -484,8 +499,10 @@ test("renameNode: injected write failure restores tree and every note byte-for-b
 
 test("renameNode: refuses collision and accepts an ordinary Node rename", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-rename-guard-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const a = await createNode(env as any, { parentPath: "", name: "one", type: "prompt" });

@@ -1,3 +1,5 @@
+import { removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as fs from "node:fs/promises";
@@ -11,10 +13,10 @@ import { materialLocator } from "../src/core/base/material.js";
 import { NodeSectionError } from "../src/core/base/markdown-section.js";
 
 test("material checks observe generic bytes while software/format adapters have no public entry", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "material-boundary-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const materialRoot = path.join(root, "materials");
   await fs.mkdir(materialRoot);
   assert.equal(
@@ -81,10 +83,10 @@ test("material checks observe generic bytes while software/format adapters have 
 });
 
 test("Markdown materials select literal headings, nested sections and Setext through the shared AST", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "material-section-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, "materials"));
   const filename = path.join(root, "materials", "设计.MARKDOWN");
   const section =
@@ -132,10 +134,10 @@ test("Markdown materials select literal headings, nested sections and Setext thr
 });
 
 test("material cache isolates full files and headings while other-section edits leave versions current", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "material-cache-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const filename = path.join(root, "design.md");
   const cacheDir = path.join(root, "cache");
   const a = "## A\n\nA 内容。\n\n";
@@ -166,10 +168,10 @@ test("material cache isolates full files and headings while other-section edits 
 });
 
 test("non-Markdown fragments and absent Markdown fragments retain exact whole-file observation", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "material-whole-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const bytes = Buffer.from([255, 0, 35, 32, 65, 10]);
   for (const name of ["opaque.txt", "design.md"]) {
     const filename = path.join(root, name);

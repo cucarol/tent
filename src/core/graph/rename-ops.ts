@@ -65,8 +65,8 @@ export async function renameNode(
       if (!moved) return;
       const { plan } = moved;
       const cause = message(error).replace(
-        /^Tent files may already be saved, but Git capture failed; reread before retrying: /,
-        "Git capture failed: ",
+        /^Tent files may already be saved, but history capture failed; reread before retrying: /,
+        "history capture failed: ",
       );
       const settled = await env.fs.recoverFileTransaction?.().catch((recovery) => {
         throw new AggregateError(
@@ -76,16 +76,16 @@ export async function renameNode(
       });
       if (settled !== undefined)
         throw new Error(
-          `Node rename to ${plan.newPath} failed; its file transaction was settled against Tent Git publication.${settled.length ? ` External edits retained: ${settled.join(", ")}.` : ""} Cause: ${cause}`,
+          `Node rename to ${plan.newPath} failed; its file transaction was settled against history publication.${settled.length ? ` External edits retained: ${settled.join(", ")}.` : ""} Cause: ${cause}`,
         );
       const published = await renamePublished(env.fs, moved);
       if (published)
         throw new Error(
-          `Node rename to ${plan.newPath} is recorded in Tent Git HEAD and kept on disk, but finishing the Git capture failed. Cause: ${cause}`,
+          `Node rename to ${plan.newPath} is recorded in retained history and kept on disk, but finishing the history capture failed. Cause: ${cause}`,
         );
       if (published === undefined)
         throw new Error(
-          `Node rename to ${plan.newPath} is kept on disk because Tent Git could not show whether it was recorded; run workspace check before the next write. Cause: ${cause}`,
+          `Node rename to ${plan.newPath} is kept on disk because Tent history could not show whether it was recorded; run workspace check before the next write. Cause: ${cause}`,
         );
       try {
         await revertNodeMoveUnlocked(env.fs, plan);
@@ -97,7 +97,7 @@ export async function renameNode(
         );
       }
       throw new Error(
-        `Node rename to ${plan.newPath} was rolled back; disk and Tent Git keep ${plan.oldPath}. Cause: ${cause}`,
+        `Node rename to ${plan.newPath} was rolled back; disk and Tent history keep ${plan.oldPath}. Cause: ${cause}`,
       );
     },
   );
@@ -109,7 +109,7 @@ function message(error: unknown) {
 
 interface CompletedMove {
   plan: PendingMove;
-  /** Tent Git HEAD read right after the move; undefined when it could not be read. */
+  /** retained history read right after the move; undefined when it could not be read. */
   head: string | null | undefined;
 }
 

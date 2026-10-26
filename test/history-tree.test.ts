@@ -5,7 +5,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test from "node:test";
 import type { FsAdapter } from "../src/core/store/adapter.js";
-import { GitDocumentHistory } from "../src/core/store/git-history.js";
+import {
+  SqliteDocumentHistory,
+  sqliteContentFingerprint,
+} from "../src/core/store/sqlite-history.js";
+import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
+import { importGitHistory } from "../src/fs/import-git-history.js";
+import { testScratchRoot } from "./scratch.js";
 import { readHistoryTree } from "../src/core/read/history-query.js";
 import { readDocumentVersion } from "../src/core/read/document-diff.js";
 
@@ -13,13 +19,13 @@ const raw = (id: string, type = "prompt", body = id) =>
   `---\nid: ${id}\ntype: ${type}\n---\n${body}`;
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
-  await fs.mkdir(".scratch", { recursive: true });
-  const root = await fs.mkdtemp(path.resolve(".scratch/history-tree-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true }).trim();
-  git("init", "--quiet");
-  const history = new GitDocumentHistory(root);
+  const root = await fs.mkdtemp(path.join(testScratchRoot(), "history-tree-"));
+  const history = new SqliteDocumentHistory(root);
+  await history.initialize();
+  t.after(async () => {
+    await history.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+  });
   // No live filesystem method is available to this projection.
   const adapter = new Proxy(
     { history },
@@ -29,7 +35,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
         throw new Error(`History must not access live adapter ${String(key)}`);
       },
     },
-  ) as FsAdapter;
+  ) as unknown as FsAdapter;
   const first = (
     await history.captureUnlocked([
       { path: "Parent/Parent.md", raw: raw("node-parent", "goal") },
@@ -47,7 +53,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
       { path: "Later/Later.md", raw: raw("node-later") },
     ])
   ).commit!;
-  return { root, git, history, adapter, first, second };
+  return { root, history, adapter, first, second };
 }
 
 async function bytes(root: string): Promise<Record<string, string>> {
@@ -107,22 +113,74 @@ test("historical tree reads exact identity facts through rename, move, type chan
   assert.deepEqual(await bytes(root), before);
 });
 
-test("historical tree rejects invalid, unreachable and duplicate identities", async (t) => {
-  const { adapter, history, git, second } = await fixture(t);
+test("historical tree accepts only published events, not invalid IDs or unpublished content", async (t) => {
+  const { root, adapter, history, second } = await fixture(t);
   await assert.rejects(readHistoryTree(adapter, "HEAD"));
-  const orphan = git(
+  // SQLite keeps one append-only published event chain. A stored blob is not an event.
+  const unpublished = raw("node-unpublished"),
+    digest = sqliteContentFingerprint(unpublished);
+  const db = new DatabaseSync(path.join(root, ".git/history.sqlite"));
+  try {
+    db.prepare("INSERT INTO blobs(digest,raw) VALUES(?,?)").run(digest, unpublished);
+  } finally {
+    db.close();
+  }
+  await assert.rejects(readHistoryTree(adapter, digest), /Unknown SQLite event/);
+  let unpublishedEvent: string | undefined;
+  await assert.rejects(
+    history.withPublicationObserver(
+      {
+        before: async (id) => {
+          unpublishedEvent = id;
+        },
+        after: async () => {},
+      },
+      () => history.captureUnlocked([{ path: "Duplicate/Duplicate.md", raw: raw("node-parent") }]),
+    ),
+    /Duplicate historical identity/,
+  );
+  assert.ok(unpublishedEvent);
+  await assert.rejects(readHistoryTree(adapter, unpublishedEvent), /Unknown SQLite event/);
+  assert.equal(await history.currentCommit(), second);
+});
+
+test("historical tree rejects duplicate identities retained by a legacy import", async (t) => {
+  const root = await fs.mkdtemp(path.join(testScratchRoot(), "history-tree-import-")),
+    source = path.join(root, "source"),
+    target = path.join(root, "target");
+  await fs.mkdir(source);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", source, ...args], {
+      encoding: "utf8",
+      windowsHide: true,
+    }).trim();
+  git("init", "--quiet", "--initial-branch=main");
+  for (const name of ["One", "Two"]) {
+    await fs.mkdir(path.join(source, name));
+    await fs.writeFile(path.join(source, name, `${name}.md`), raw("node-duplicate"));
+  }
+  git("add", "--all");
+  git(
     "-c",
     "user.name=Test",
     "-c",
     "user.email=test@example.invalid",
-    "commit-tree",
-    `${second}^{tree}`,
+    "commit",
+    "--quiet",
     "-m",
-    "unreachable",
+    "legacy duplicate",
   );
-  await assert.rejects(readHistoryTree(adapter, orphan));
-  const duplicate = (
-    await history.captureUnlocked([{ path: "Duplicate/Duplicate.md", raw: raw("node-parent") }])
-  ).commit!;
-  await assert.rejects(readHistoryTree(adapter, duplicate), /Duplicate historical identity/);
+  const imported = await importGitHistory(source, target);
+  const history = new SqliteDocumentHistory(target);
+  t.after(async () => {
+    await history.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+  });
+  await assert.rejects(
+    readHistoryTree(
+      { history } as unknown as FsAdapter,
+      imported.mapping[git("rev-parse", "HEAD")]!,
+    ),
+    /Duplicate historical identity/,
+  );
 });

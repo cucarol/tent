@@ -1,3 +1,8 @@
+import { captureFixtureDocuments } from "./scratch.js";
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
@@ -12,10 +17,10 @@ import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
   await fs.mkdir(".scratch", { recursive: true });
-  const root = await fs.mkdtemp(path.resolve(".scratch/resource-search-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "resource lookup" });
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const root = await fs.mkdtemp(path.resolve(testScratchRoot(), "resource-search-"));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  await scaffoldInWorkspace(openTestFs(root), { name: "resource lookup" });
+  const adapter = openTestFs(path.join(root, ".tent"));
   const add = async (name: string, fields: Record<string, unknown>, body = "Unneeded body") => {
     await adapter.writeFile(
       `${name}/${name}.md`,
@@ -74,9 +79,8 @@ test("lookup never reads bodies, captures changes or derives a full-document unc
   );
   await add("Moved", { resource: "../../src/a.ts" });
   const systemRoot = path.join(root, ".tent");
-  await git(systemRoot, "init");
-  await git(systemRoot, "add", ".");
-  await git(systemRoot, "commit", "-m", "retained fixtures");
+  await initializeFixtureHistory(systemRoot);
+  await captureFixtureDocuments(systemRoot);
   const head = await adapter.history.currentCommit();
   const initial = await search("../src/a.ts", true);
   const kept = await adapter.readFile("Kept/Kept.md");

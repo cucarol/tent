@@ -234,7 +234,7 @@ async function saveRole(
   const version = await captureDocumentUnlocked(fs, document.path, raw, { operation }).catch(
     (error) => {
       throw new Error(
-        `Role may already be saved, but Git capture failed; reread before retrying: ${String(error)}`,
+        `Role may already be saved, but history capture failed; reread before retrying: ${String(error)}`,
       );
     },
   );

@@ -16,3 +16,4 @@ docs/plans/
 /.worktrees/
 /.scratch/
 /ui-dist/
+/migrate-history.mjs

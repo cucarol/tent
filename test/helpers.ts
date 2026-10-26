@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { testScratchRoot } from "./scratch.js";
@@ -12,22 +13,19 @@ import { withFileMutationLock } from "../src/fs/mutation-lock.js";
 /** Test serialization/CAS under slow Git I/O; production lock deadlines have separate tests. */
 export function extendTestLockWait(t: TestContext, adapter: NodeFs, systemRoot: string): void {
   t.mock.method(adapter, "withLock", <T>(lockPath: string, action: () => Promise<T>) =>
-    withFileMutationLock(
-      path.join(systemRoot, lockPath),
-      async () =>
-        (await adapter.exists(".git")) ? adapter.history.withCaptureScope(action) : action(),
-      {
-        waitMs: 60_000,
-        busyMessage: "Test writer did not release the mutation lock within 60 seconds",
-        acquireFailedMessage: "Cannot acquire the test mutation lock",
-      },
-    ),
+    withFileMutationLock(path.join(systemRoot, lockPath), async () => action(), {
+      waitMs: 60_000,
+      busyMessage: "Test writer did not release the mutation lock within 60 seconds",
+      acquireFailedMessage: "Cannot acquire the test mutation lock",
+    }),
   );
 }
 
 export async function makeTent(t: TestContext): Promise<string> {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const box = (relativePath: string, frontmatter: string, body = "") => {
     const folderName = relativePath.split("/").pop() || relativePath;
     return fs

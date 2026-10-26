@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import fs from "node:fs/promises";
@@ -134,7 +136,7 @@ test("retained structure dependency sets validate their digest in own and ancest
 });
 
 test("unavailable structure confirmation retains known and unknown material bases", async () => {
-  const adapter = new NodeFs(process.cwd());
+  const adapter = openTestFs(process.cwd());
   adapter.observeMaterial = async () => {
     throw new Error("Structure unavailable");
   };
@@ -169,7 +171,7 @@ async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "material-structure-"));
   t.after(async () => {
     assert.equal(path.dirname(root), path.resolve(testScratchRoot()));
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
   await fs.mkdir(path.join(root, "src/core"), { recursive: true });
   await fs.mkdir(path.join(root, "src/other"), { recursive: true });
@@ -181,10 +183,10 @@ async function fixture(t: TestContext) {
   await git(root, "init", "--quiet");
   await git(root, "add", ".");
   await git(root, "commit", "--quiet", "-m", "test: material fixture");
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Materials" });
+  await scaffoldInWorkspace(openTestFs(root), { name: "Materials" });
   const systemRoot = path.join(root, ".tent");
-  await git(systemRoot, "init", "--quiet");
-  const adapter = new NodeFs(systemRoot);
+  await initializeFixtureHistory(systemRoot);
+  const adapter = openTestFs(systemRoot);
   const globals = { cwd: root, json: true };
   const run = async (sub: string, args: string[]) => {
     const result = await runNodeCommand(sub, args, globals);

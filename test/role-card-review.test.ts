@@ -1,3 +1,6 @@
+import { initializeFixtureHistory } from "./scratch.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,16 +9,18 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
 import { createCardDocument, takeCardDocument } from "../src/core/graph/card-document.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import type { DocumentVersion } from "../src/core/store/git-history.js";
+import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "role-card-review-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await git(root, "init");
-  const adapter = new NodeFs(root);
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await initializeFixtureHistory(root);
+  const adapter = openTestFs(root);
   await createRoleContext(adapter, {
     roleId: "role-a",
     title: "Original direction",

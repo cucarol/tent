@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -78,7 +79,9 @@ test("semantic cache preserves live Node identities, source ordering, tracks, pa
 
 test("persisted semantics survive new scopes and reject damaged or obsolete cache bytes", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "semantic-content-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await fs.mkdir(path.join(root, ".git"));
   const file = path.join(root, ".git/tent-material-cache/semantic-content.bin");
   let computed = 0;

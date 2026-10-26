@@ -10,7 +10,7 @@ import { canonicalSha256 } from "../base/canonical-digest.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { buildOkfNodeIndex } from "../base/okf-index.js";
 import { nodeNotePath } from "../base/paths.js";
-import { documentVersionSchema, type DocumentVersion } from "../store/git-history.js";
+import { documentVersionSchema, type DocumentVersion } from "../store/history-port.js";
 import { extractOutLinksDetailed, extractNodeMentions, resolveOutLink } from "../base/links.js";
 import { documentLifecycle } from "../base/document-status.js";
 import type { WorkspaceRelation, DocumentRef } from "./workspace-relations.js";
@@ -220,7 +220,7 @@ export class ContextReader {
     )
       throw new ReaderError(
         "SOURCE_CHANGED",
-        "Requested Git version differs from this reader source",
+        "Requested historical version differs from this reader source",
       );
     if (p.expectedEtag !== undefined && nodeReadRevisionEtag(p.expectedEtag) !== d.etag)
       throw new ReaderError("SOURCE_CHANGED", "Node ETag changed; reread before using offsets");

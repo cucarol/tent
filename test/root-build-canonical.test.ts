@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
@@ -135,6 +136,6 @@ test("root esbuild output is canonical across physical and junction node_modules
     );
   } finally {
     await unlinkFixtureJunction(junctionModules);
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await removeTestFixture(tempRoot, { recursive: true, force: true });
   }
 });

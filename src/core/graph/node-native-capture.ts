@@ -1,3 +1,4 @@
+import { hasDocumentHistory } from "../store/history-port.js";
 import type { FsAdapter } from "../store/adapter.js";
 import { documentHeader, loadNodeCatalog, type NodeCatalog } from "./node-catalog.js";
 import { MUTATION_LOCK_PATH, nodeNotePath } from "../base/paths.js";
@@ -14,7 +15,7 @@ export type InvalidNativeNode = { path: string; nodeId?: string; reason: string 
 export async function captureNativeNodeEdits(
   fs: FsAdapter,
 ): Promise<{ invalidNodes: InvalidNativeNode[]; catalog?: NodeCatalog }> {
-  if (!fs.history || !(await fs.exists(".git"))) return { invalidNodes: [] };
+  if (!fs.history || !(await hasDocumentHistory(fs))) return { invalidNodes: [] };
   const capture = async (
     locked = false,
   ): Promise<{ invalidNodes: InvalidNativeNode[]; catalog: NodeCatalog }> => {

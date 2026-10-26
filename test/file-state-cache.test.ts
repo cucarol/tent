@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -22,7 +24,9 @@ async function age(filename: string) {
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "file-state-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const systemRoot = path.join(root, ".tent");
   await fs.mkdir(path.join(systemRoot, ".git"), { recursive: true });
   await fs.mkdir(path.join(systemRoot, "A"));
@@ -39,7 +43,7 @@ async function fixture(t: TestContext) {
     filename,
     cacheDir,
     cacheFile: path.join(cacheDir, "file-state.json"),
-    adapter: new NodeFs(systemRoot),
+    adapter: openTestFs(systemRoot),
   };
 }
 
@@ -117,7 +121,7 @@ test("header, digest and material caches persist across requests without reading
   );
   io.reset();
   const warm = await readCached(
-    new NodeFs(f.systemRoot),
+    openTestFs(f.systemRoot),
     f.relative,
     f.systemRoot,
     f.filename,
@@ -327,7 +331,7 @@ test("forced scopes bypass persisted values and a parent request's acquired byte
 
 test("single Node sync inspection rechecks material bytes despite a stable persisted fingerprint", async (t) => {
   const f = await fixture(t);
-  await git(f.systemRoot, "init", "--quiet");
+  await initializeFixtureHistory(f.systemRoot);
   const source = path.join(f.root, "source.txt"),
     sourceText = "Material contents\n";
   await fs.writeFile(source, sourceText);
@@ -381,7 +385,7 @@ test("a later read in one request revalidates acquired bytes after a native edit
 
 test("Node sync retries a native Node body edit made during material observation", async (t) => {
   const f = await fixture(t);
-  await git(f.systemRoot, "init", "--quiet");
+  await initializeFixtureHistory(f.systemRoot);
   const source = path.join(f.root, "source.txt");
   await fs.writeFile(source, "Material contents\n");
   const before =

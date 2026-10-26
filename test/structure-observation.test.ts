@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,7 +20,9 @@ import {
 const owner = "index.md";
 async function fixture(t: TestContext, repository = true) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "structure-material-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   async function write(file: string, content: string | Buffer) {
     await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
     await fs.writeFile(path.join(root, file), content);
@@ -96,7 +100,7 @@ test("structure fingerprints contain only the outgoing external dependency set",
     { changedDependencies: [{ target: "src/out/", state: "deleted" }] },
   );
   assert.equal(
-    (await new NodeFs(path.join(root, ".tent")).observeMaterial("../src/core/", owner, "structure"))
+    (await openTestFs(path.join(root, ".tent")).observeMaterial("../src/core/", owner, "structure"))
       .coverage,
     undefined,
   );
@@ -290,8 +294,8 @@ test("non-Git prefix uses Tent Git ignore rules and supports rule-free standalon
   await write("src/core/card-ignored.ts", Buffer.from([0xff]));
   await write("src/core/card-new.ts", 'import "../other/b.js";\n');
   await fs.mkdir(path.join(root, ".tent"));
-  await git(path.join(root, ".tent"), "init", "--quiet", "--initial-branch=main");
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  await initializeFixtureHistory(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   const structure = await adapter.observeMaterial("../src/core/card-*", owner, "structure");
   assert.deepEqual(structure.structureDependencies, ["src/other/", "src/out/"]);
   const content = await adapter.observeMaterial("../src/core/card-*", owner);

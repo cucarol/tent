@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -602,6 +603,6 @@ test("PHP FS collection and narrow structure share Core resolution and preserve 
     await fs.writeFile(path.join(root, "app/main.php"), Buffer.from([0xff]));
     await assert.rejects(observe);
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTestFixture(root, { recursive: true, force: true });
   }
 });

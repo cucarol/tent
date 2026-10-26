@@ -1,3 +1,5 @@
+import { openTestService } from "./node-fs.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -15,15 +17,17 @@ import { testScratchRoot } from "./scratch.js";
 
 test("a Node's materials read as they compare now, changed or deleted without a revision change", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "ui-materials-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await initializeFixtureWorkspace(root);
-  const tent = new NodeFs(path.join(root, ".tent"));
+  const tent = openTestFs(path.join(root, ".tent"));
   await fs.writeFile(path.join(root, "requirements.txt"), "before");
   const goal = await createNode(
     { fs: tent, clock: { now: () => new Date().toISOString() }, tentName: "Materials" },
     { parentPath: "", name: "Goal", type: "goal", resource: "../../requirements.txt" },
   );
-  const server = await startUiServer({ workspaceRoot: root, staticDir: root, port: 0 });
+  const server = await openTestService({ workspaceRoot: root, staticDir: root, port: 0 });
   t.after(() => server.close());
   const url = new URL(server.url);
   const headers = { Authorization: `Bearer ${url.hash.slice("#token=".length)}` };
@@ -51,9 +55,11 @@ test("a Node's materials read as they compare now, changed or deleted without a 
 
 test("output comparison HTTP reads current goal facts without capture or snapshot caching", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "ui-output-compare-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await initializeFixtureWorkspace(root);
-  const tent = new NodeFs(path.join(root, ".tent"));
+  const tent = openTestFs(path.join(root, ".tent"));
   await fs.writeFile(path.join(root, "direction.txt"), "first");
   const env = { fs: tent, clock: { now: () => new Date().toISOString() }, tentName: "Compare" };
   const goal = await createNode(env, {
@@ -63,7 +69,7 @@ test("output comparison HTTP reads current goal facts without capture or snapsho
     resource: "../../direction.txt",
   });
   const output = await createNode(env, { parentPath: "Goal", name: "Result", type: "output" });
-  const server = await startUiServer({ workspaceRoot: root, staticDir: root, port: 0 });
+  const server = await openTestService({ workspaceRoot: root, staticDir: root, port: 0 });
   t.after(() => server.close());
   const url = new URL(server.url),
     endpoint = new URL(`/api/outputs/compare?nodeId=${output}`, url);

@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as fs from "node:fs/promises";
@@ -20,11 +21,16 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "core-ui-"));
   t.after(async () => {
     assert.equal(path.dirname(workspace), path.resolve(testScratchRoot()));
-    await fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(workspace, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    });
   });
   await initializeFixtureWorkspace(workspace);
   const root = path.join(workspace, ".tent");
-  const adapter = new NodeFs(root, "ui");
+  const adapter = openTestFs(root, "ui");
   const env = {
     fs: adapter,
     tentRoot: root,
@@ -54,7 +60,10 @@ test("workspace revision observes exact external bytes, identity paths, registri
     await adapter.writeFile(file!, raw!);
     revisions.push(await readWorkspaceRevision(adapter));
   }
-  await git(root, "commit", "--allow-empty", "-m", "Empty HEAD move");
+  await adapter.history.captureUnlocked(
+    [{ path: "roles/role-event.md", raw: "---\nid: role-event\ntype: role\n---\nretained event" }],
+    { operation: "document.external-capture" },
+  );
   revisions.push(await readWorkspaceRevision(adapter));
   assert.equal(new Set(revisions).size, revisions.length);
   await adapter.writeFile("temp/ignored", "cache");
@@ -137,9 +146,9 @@ test("workspace relations use Markdown occurrences across identities and retaine
     prompt: "[Role](../roles/role-ui.md)",
     sources: [{ resource: "/Alpha/Alpha.md", title: "Original" }],
   });
-  const before = await git(root, "status", "--porcelain");
+  const before = await fs.readFile(path.join(root, ".git/history.sqlite"), "hex");
   const relations = await listWorkspaceRelations(adapter);
-  assert.equal(await git(root, "status", "--porcelain"), before);
+  assert.equal(await fs.readFile(path.join(root, ".git/history.sqlite"), "hex"), before);
   assert.equal(relations.filter((r) => r.from.id === "role-ui" && r.via === "link").length, 2);
   assert.deepEqual(relations.find((r) => r.from.id === id && r.via === "link")!.target, {
     kind: "role",

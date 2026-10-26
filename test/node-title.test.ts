@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -11,11 +14,11 @@ import { scaffoldTent } from "../src/core/store/scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 test("Node names follow filenames; writes synchronize existing titles and retain metadata", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "node-title-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const adapter = new NodeFs(root);
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  const adapter = openTestFs(root);
   await scaffoldTent(adapter, { name: "Title" });
   const env = { fs: adapter, tentName: "Title", clock: { now: () => "2026-10-04T00:00:00.000Z" } };
   const id = await createNode(env, {

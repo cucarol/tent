@@ -25,7 +25,7 @@ import {
 } from "../core/workspace/canvas.js";
 import { readDocumentDiff, readDocumentVersion } from "../core/read/document-diff.js";
 import { parseFrontmatter, serializeFrontmatter } from "../core/base/frontmatter.js";
-import { documentVersionSchema } from "../core/store/git-history.js";
+import { documentVersionSchema } from "../core/store/history-port.js";
 import { readHistoryTree } from "../core/read/history-query.js";
 import { NodeWriteError, writeNodeDocument } from "../core/graph/node-document-write.js";
 import { nodeTrustTier } from "../core/base/node-provenance.js";
@@ -192,10 +192,23 @@ async function startWorkspaceServer(
   options: UiServerOptions,
   activity: () => void,
 ): Promise<UiServer> {
+  const fs = new NodeFs(path.join(path.resolve(options.workspaceRoot), TENT_SYSTEM_DIR), "ui");
+  try {
+    return await createWorkspaceServer(options, activity, fs);
+  } catch (error) {
+    await fs.close();
+    throw error;
+  }
+}
+
+async function createWorkspaceServer(
+  options: UiServerOptions,
+  activity: () => void,
+  fs: NodeFs,
+): Promise<UiServer> {
   const workspaceRoot = path.resolve(options.workspaceRoot);
   const tentRoot = path.join(workspaceRoot, TENT_SYSTEM_DIR);
   const staticDir = path.resolve(options.staticDir);
-  const fs = new NodeFs(tentRoot, "ui");
   const queryFs = fs;
   const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot };
   /** Where a Node lives now, for the writes that take a path. */
@@ -653,9 +666,13 @@ async function startWorkspaceServer(
       const other = await found;
       // Coming back counts as opening it again.
       if (options.workspacesFile) {
-        const { workspaceId: id } = await readWorkspaceSettings(
-          new NodeFs(path.join(root, TENT_SYSTEM_DIR), "ui"),
-        );
+        const adapter = new NodeFs(path.join(root, TENT_SYSTEM_DIR), "ui");
+        let id: string | undefined;
+        try {
+          id = (await readWorkspaceSettings(adapter)).workspaceId;
+        } finally {
+          await adapter.close();
+        }
         if (id)
           await rememberWorkspace(options.workspacesFile, {
             root,
@@ -867,6 +884,7 @@ async function startWorkspaceServer(
     res.end(req.method === "HEAD" ? undefined : await fsp.readFile(target));
   }
 
+  const requests = new Set<Promise<unknown>>();
   const server = createServer((req, res) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "no-referrer");
@@ -899,7 +917,7 @@ async function startWorkspaceServer(
         ? fs.observationScope(() => api(req, res, url))
         : api(req, res, url);
     };
-    handle().catch((error: unknown) => {
+    const request = handle().catch((error: unknown) => {
       const failure = httpError(error);
       if (res.headersSent) return res.destroy();
       if (!isApi) return end(res, failure.status);
@@ -911,6 +929,8 @@ async function startWorkspaceServer(
         },
       });
     });
+    requests.add(request);
+    void request.finally(() => requests.delete(request));
   });
 
   const own = options.port ?? workspacePort(workspaceId);
@@ -946,6 +966,10 @@ async function startWorkspaceServer(
             await other?.close();
           }),
         ]);
+        await Promise.allSettled([...requests]);
+        await queue;
+        await Promise.all([revisionReads.drain(), snapshotReads.drain()]);
+        await fs.close();
         opened.clear();
       })().finally(resolveClosed)),
   };

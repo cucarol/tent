@@ -3,11 +3,11 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { FsAdapter } from "../src/core/store/adapter.js";
 import {
-  GitDocumentHistory,
+  type DocumentHistory,
   type CaptureMetadata,
   type DocumentChange,
   type HistoryCommit,
-} from "../src/core/store/git-history.js";
+} from "../src/core/store/history-port.js";
 import type { NodeBasisRecord } from "../src/core/base/node-basis-record.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { materialLocator } from "../src/core/base/material.js";
@@ -16,7 +16,7 @@ import { materialLocator } from "../src/core/base/material.js";
 export class PropagationMemoryFs implements FsAdapter {
   readonly files = new Map<string, string>();
   readonly directories = new Set(["", ".git"]);
-  readonly history: GitDocumentHistory;
+  readonly history: DocumentHistory;
 
   constructor() {
     const snapshots = new Map<string, Map<string, string>>();
@@ -28,7 +28,36 @@ export class PropagationMemoryFs implements FsAdapter {
     >();
     const head = () => events.at(-1)?.commit ?? null;
     const tree = () => snapshots.get(head() ?? "") ?? new Map<string, string>();
-    const history = new GitDocumentHistory("memory-only");
+    const history = {} as DocumentHistory;
+    history.close = async () => undefined;
+    history.isPublished = async (commit) => snapshots.has(commit);
+    history.withPublicationObserver = async (_observer, action) => action();
+    history.retainedPaths = async () => [...tree().keys()];
+    history.pathsUnder = async (prefix) =>
+      [...tree().keys()].filter((p) => p.startsWith(prefix + "/"));
+    history.documentBlobs = async () =>
+      new Map(
+        [...tree()].map(([p, raw]) => [
+          p,
+          createHash("sha256")
+            .update(`blob ${Buffer.byteLength(raw)}\0`)
+            .update(raw)
+            .digest("hex"),
+        ]),
+      );
+    history.changedRetainedDocuments = async (documents) =>
+      documents.flatMap((d) => {
+        const previousRaw = tree().get(d.path);
+        return previousRaw !== undefined && previousRaw !== d.raw ? [{ ...d, previousRaw }] : [];
+      });
+    history.unportableNodeRecordIds = async () => [];
+    history.completedCardPaths = async (completed) =>
+      new Set([...tree()].filter(([p, r]) => completed(p, r)).map(([p]) => p));
+    history.cardQueueTimes = async () => ({ published: new Map(), returned: new Map() });
+    history.nodeVersions = async (id) => events.filter((e) => e.objectIds.includes(id));
+    history.diff = async () => {
+      throw new Error("Memory fixture does not implement diffs");
+    };
     history.available = async () => true;
     history.currentCommit = async () => head();
     history.nodeRecords = async () => structuredClone(records);
@@ -42,7 +71,7 @@ export class PropagationMemoryFs implements FsAdapter {
         ([id, record]) => !isDeepStrictEqual(records[id], record),
       );
       if (changed.length || recordChanged) {
-        const commit = createHash("sha1")
+        const commit = createHash("sha256")
           .update(String(events.length + 1))
           .digest("hex");
         const snapshot = new Map(previous);

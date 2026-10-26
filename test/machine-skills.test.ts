@@ -1,3 +1,5 @@
+import { testScratchRoot } from "./scratch.js";
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -8,10 +10,10 @@ import { listSkills } from "./fixtures/bundled-skills.js";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 async function fixture(t: { after: (callback: () => Promise<void>) => void }): Promise<string> {
-  const scratch = path.join(repoRoot, ".scratch");
+  const scratch = testScratchRoot();
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "skill-inventory-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   return root;
 }
 

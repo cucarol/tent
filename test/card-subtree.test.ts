@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,22 +9,23 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import type { FsAdapter } from "../src/core/store/adapter.js";
 import { readCardGoalIds, type CardSourceInput } from "../src/core/graph/card-context.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import type { DocumentVersion, GitDocumentHistory } from "../src/core/store/git-history.js";
+import type { DocumentVersion, DocumentHistory } from "../src/core/store/history-port.js";
 import { nodeNotePath } from "../src/core/base/paths.js";
 
 // Real live files and deterministic retained versions keep native changes distinct from pins.
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch/card-sources");
+  const scratch = path.resolve(testScratchRoot(), "card-sources");
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "subtree-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const disk = new NodeFs(root);
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  const disk = openTestFs(root);
   await disk.mkdir(".git");
   const live = new Map<string, string>(),
     blobs = new Map<string, string>();
   let revision = 0,
     head = "";
   const history = {
+    available: async () => true,
     changesInRange: async () => {
       throw new Error("Card source reads must not replay history");
     },
@@ -36,7 +40,7 @@ async function fixture(t: TestContext) {
           : { version, raw, changedSince: false, frontmatter: parseFrontmatter(raw).data };
       });
     },
-  } as unknown as GitDocumentHistory;
+  } as unknown as DocumentHistory;
   const adapter = new Proxy(disk, {
     get(target, key) {
       if (key === "history") return history;
@@ -45,7 +49,7 @@ async function fixture(t: TestContext) {
     },
   }) as FsAdapter;
   async function capture(changes: Array<{ path: string; raw: string | null }>) {
-    head = (++revision).toString(16).padStart(40, "0");
+    head = (++revision).toString(16).padStart(64, "0");
     for (const change of changes) {
       if (change.raw === null) {
         live.delete(change.path);
@@ -167,7 +171,7 @@ test("an unavailable pin diagnoses only its Card and cannot break unrelated sour
   const bad: CardSourceInput = {
     cardId: "card-bad",
     sources: [
-      { resource: "/Root/Root.md", version: { commit: "f".repeat(40), path: "Root/Root.md" } },
+      { resource: "/Root/Root.md", version: { commit: "f".repeat(64), path: "Root/Root.md" } },
     ],
   };
   const results = await readCardGoalIds(f.adapter, [bad, good]);

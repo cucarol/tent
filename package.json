@@ -8,6 +8,7 @@
   },
   "files": [
     "cli.mjs",
+    "migrate-history.mjs",
     "ui-dist/",
     "!ui-dist/snapshot.json",
     "!ui-dist/**/*.map",
@@ -18,6 +19,7 @@
     "docs/upstream/okf-SPEC.md",
     "docs/upstream/okf-LICENSE.md",
     "docs/SPEC.md",
+    "docs/MIGRATION.md",
     "docs/PLUGIN.md",
     "README.md",
     "README.zh-CN.md",

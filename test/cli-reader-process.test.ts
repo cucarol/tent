@@ -1,3 +1,11 @@
+import { captureFixtureDocuments } from "./scratch.js";
+import { removeTestFixture } from "./node-fs.js";
+import { captureReadDocuments } from "../src/core/store/document-history.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { nodeNotePath } from "../src/core/base/paths.js";
+import { openTestFs } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -8,12 +16,12 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 import { cli, git } from "./helpers.js";
 
 test("separate CLI processes continue discovery, live and Git reads with checked cursor addresses", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "reader-process-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const body = "DATA😀\r\n".repeat(2300);
-  await scaffoldInWorkspace(new NodeFs(root), {
+  await scaffoldInWorkspace(openTestFs(root), {
     name: "process reader",
     nodes: [
       { id: "node-alpha", name: "A", type: "prompt", body },
@@ -31,9 +39,8 @@ test("separate CLI processes continue discovery, live and Git reads with checked
       ),
     );
   }
-  await git(tent, "init");
-  await git(tent, "add", ".");
-  await git(tent, "commit", "-m", "retained relation fixture");
+  await initializeFixtureHistory(tent);
+  await captureFixtureDocuments(tent);
   const run = (...args: string[]) => cli(root, "node", ...args, "--workspace", root, "--json");
   const read = async (...args: string[]) => {
     const result = await run(...args);
@@ -57,7 +64,7 @@ test("separate CLI processes continue discovery, live and Git reads with checked
     assert.notDeepEqual(second.items, first.items);
     assert.equal(second.page.hasMore, false);
   }
-  const adapter = new NodeFs(tent);
+  const adapter = openTestFs(tent);
   const raw = await fs.readFile(path.join(tent, "A/A.md"), "utf8");
   const firstVersion = (
     await adapter.history.captureUnlocked([{ path: "A/A.md", raw }], { operation: "test.fixture" })
@@ -85,8 +92,8 @@ test("separate CLI processes continue discovery, live and Git reads with checked
   const current = await read("get", "node-alpha");
   await read("check", "node-alpha");
   const currentVersion = { commit: (await adapter.history.currentCommit())!, path: "A/A.md" };
-  const diff = await readDocumentDiff(new NodeFs(tent), { from: firstVersion, to: currentVersion });
-  assert.equal(diff.text, await new NodeFs(tent).history.diff(firstVersion, currentVersion));
+  const diff = await readDocumentDiff(openTestFs(tent), { from: firstVersion, to: currentVersion });
+  assert.equal(diff.text, await openTestFs(tent).history.diff(firstVersion, currentVersion));
   assert.ok(diff.text.includes("-DATA") && diff.text.includes("+NEW"));
   await reject(
     ["get", "node-beta", "--cursor", current.page.nextCursor],

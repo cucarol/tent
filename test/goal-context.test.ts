@@ -1,3 +1,8 @@
+import { captureFixtureDocuments } from "./scratch.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead, historyRead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -16,12 +21,14 @@ import { runRoleCommand } from "../src/cli/role-commands.js";
 import { git } from "./helpers.js";
 
 test("goal get exposes bounded HEAD context without changing document bytes or capturing neighbours", async (t) => {
-  await fs.mkdir(path.resolve(".scratch"), { recursive: true });
-  const workspace = await fs.mkdtemp(path.resolve(".scratch/goal-context-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(workspace), { name: "Context" });
+  await fs.mkdir(path.resolve(testScratchRoot()), { recursive: true });
+  const workspace = await fs.mkdtemp(path.resolve(testScratchRoot(), "goal-context-"));
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(workspace), { name: "Context" });
   const system = path.join(workspace, ".tent");
-  const adapter = new NodeFs(system);
+  const adapter = openTestFs(system);
   const write = async (folder: string, id: string, type: string, body: string, extra = {}) => {
     await fs.mkdir(path.join(system, folder), { recursive: true });
     await fs.writeFile(
@@ -39,9 +46,8 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
   await write("Scope/Goal/Nested/Result", "node-nestedresult", "output", "nested result");
   await write("Scope/Old", "node-old", "prompt", "old", { status: "deprecated" });
   await write("Unrelated", "node-unrelated", "prompt", "unrelated");
-  await git(system, "init");
-  await git(system, "add", ".");
-  await git(system, "commit", "-m", "fixture");
+  await initializeFixtureHistory(system);
+  await captureFixtureDocuments(system);
   const globals = { workspace, json: true };
   const parse = (result: { exitCode: number; stdout: string; stderr: string }) => {
     assert.equal(result.exitCode, 0, result.stderr);
@@ -70,7 +76,7 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
     ),
   );
   parse(await runCardCommand("take", [created.cardId, "--role", "role-worker"], globals));
-  const before = await git(system, "rev-parse", "HEAD");
+  const before = await historyHead(system);
   await write("Scope/Rule", "node-rule", "prompt", "uncaptured neighbour");
   const context = await readGoalContext(adapter, "node-goal");
   assert.deepEqual(
@@ -144,8 +150,8 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
   assert.equal(frozen.context, undefined);
   assert.ok((await node("node-decision")).context.includes("node-goal"));
   assert.equal(
-    await git(system, "show", "HEAD:Scope/Rule/Rule.md"),
-    await git(system, "show", `${before.trim()}:Scope/Rule/Rule.md`),
+    await historyRead(system, { commit: await historyHead(system), path: "Scope/Rule/Rule.md" }),
+    await historyRead(system, { commit: before, path: "Scope/Rule/Rule.md" }),
   );
   const text = await runNodeCommand("get", ["node-goal", "--view", "summary", "--context"], {
     workspace,
@@ -167,12 +173,7 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
   const uncaptured = await node("node-goal", "--view", "summary");
   assert.equal(uncaptured.context, beforeCrowding.context);
   assert.equal(await adapter.history.currentCommit(), headBeforeCrowding);
-  await git(
-    system,
-    "add",
-    ...Array.from({ length: 30 }, (_, i) => `Scope/${"LongRule".repeat(5)}${i}`),
-  );
-  await git(system, "commit", "-m", "retain crowded context fixture");
+  await captureFixtureDocuments(system);
   const crowded = await node("node-goal", "--view", "summary");
   assert.ok(Buffer.byteLength(JSON.stringify({ context: crowded.context })) <= 1024);
   assert.match(
@@ -206,12 +207,14 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
 });
 
 test("all Node types disclose complete live association categories and incoming Cards keep their pinned identity after moves", async (t) => {
-  await fs.mkdir(path.resolve(".scratch"), { recursive: true });
-  const workspace = await fs.mkdtemp(path.resolve(".scratch/node-associations-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(workspace), { name: "Associations" });
+  await fs.mkdir(path.resolve(testScratchRoot()), { recursive: true });
+  const workspace = await fs.mkdtemp(path.resolve(testScratchRoot(), "node-associations-"));
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(workspace), { name: "Associations" });
   const system = path.join(workspace, ".tent"),
-    adapter = new NodeFs(system);
+    adapter = openTestFs(system);
   const write = async (folder: string, id: string, type: string, body = "", tags?: string[]) => {
     await adapter.writeFile(
       `${folder}/${path.posix.basename(folder)}.md`,
@@ -237,9 +240,8 @@ test("all Node types disclose complete live association categories and incoming 
       "[Subject](../Goal/Subject/Subject.md) and node-subj00",
     ),
   );
-  await git(system, "init");
-  await git(system, "add", ".");
-  await git(system, "commit", "-m", "fixture");
+  await initializeFixtureHistory(system);
+  await captureFixtureDocuments(system);
   const globals = { workspace, json: true };
   const parse = (result: { exitCode: number; stdout: string; stderr: string }) => {
     assert.equal(result.exitCode, 0, result.stderr);
@@ -396,8 +398,7 @@ test("all Node types disclose complete live association categories and incoming 
   );
   assert.equal(uncaptured.context, first.context);
   assert.equal(await adapter.history.currentCommit(), headBeforeCrowding);
-  await git(system, "add", ...Array.from({ length: 45 }, (_, i) => `Goal/Renamed/Extra${i}`));
-  await git(system, "commit", "-m", "retain crowded child fixture");
+  await captureFixtureDocuments(system);
   const crowded = parse(
     await runNodeCommand("get", ["node-subj00", "--view", "summary", "--context"], globals),
   );

@@ -1,3 +1,5 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -20,7 +22,7 @@ const cli = (entry: string, args: string[]) =>
 
 test("CLI embeds its build identity; moved copies ignore adjacent package version", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "cli-build-identity-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const entry = path.join(root, "cli.mjs");
   const [{ options }] = contract.rootBundleOptions(repoRoot);
   await esbuild.build({ ...options, outfile: entry, logLevel: "silent" });
@@ -57,7 +59,7 @@ test("CLI embeds its build identity; moved copies ignore adjacent package versio
 
 test("self-contained plugin runtime has embedded identity without source or package metadata", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "plugin-build-identity-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   await contract.buildPluginRuntime(repoRoot, root);
   const identity = JSON.parse(
     (await cli(path.join(root, "cli.mjs"), ["version", "--json"])).stdout,
@@ -69,7 +71,7 @@ test("self-contained plugin runtime has embedded identity without source or pack
 
 test("source identity has no build time; mismatch is limited to Tent source checkouts", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "source-build-identity-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, "src/cli"), { recursive: true });
   await fs.writeFile(path.join(root, "src/cli/tent.ts"), "source");
   await fs.writeFile(path.join(root, "esbuild.config.mjs"), "build");
@@ -141,7 +143,7 @@ test("source identity has no build time; mismatch is limited to Tent source chec
     (await sourceBuildMismatch(root, identity))!,
     /runtime build differs.*runtime [a-f0-9]{12}, source [a-f0-9]{12}/,
   );
-  await scaffoldInWorkspace(new NodeFs(root), { name: "identity" });
+  await scaffoldInWorkspace(openTestFs(root), { name: "identity" });
   const start = await runHookCommand("start", ["--host", "codex"], {
     packageRoot: repoRoot,
     stdin: JSON.stringify({ hook_event_name: "SessionStart", cwd: root }),

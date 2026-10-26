@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -13,14 +16,17 @@ const cli = path.resolve("src/cli/tent.ts");
 const run = (...args: string[]) =>
   execute(process.execPath, ["--import", "tsx", cli, ...args], {
     windowsHide: true,
-    env: { ...process.env, TENT_SERVICE_DATA_DIR: path.resolve(".scratch/new-no-service") },
+    env: {
+      ...process.env,
+      TENT_SERVICE_DATA_DIR: path.resolve(testScratchRoot(), "new-no-service"),
+    },
   });
 
 test("new rejects retired repair flags before changing an existing Tent", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "new-cli-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
   await fs.mkdir(path.join(workspace, ".tent"));
   await fs.writeFile(path.join(workspace, ".tent/existing.md"), "Keep this context");
   await assert.rejects(run("new", workspace, "--repair-existing"), /Unknown option/);
@@ -30,16 +36,16 @@ test("new rejects retired repair flags before changing an existing Tent", async 
     "Keep this context",
   );
   const { stdout } = await run("--help");
-  assert.match(stdout, /with its own Git history/);
+  assert.match(stdout, /with its own SQLite history/);
   assert.doesNotMatch(stdout, /--repair-existing/);
 });
 
 test("existing Git ignore entries and structural markers remain valid", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "scaffold-contract-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const adapter = new NodeFs(root);
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  const adapter = openTestFs(root);
   const raw = "# user rules\r\n.tent/\r\n";
   await adapter.writeFile(".gitignore", raw);
   await scaffoldInWorkspace(adapter, { name: "preserve project" });
@@ -54,10 +60,10 @@ test("retired agent commands remain unavailable", async () => {
 });
 
 test("new accepts workspace selection by flag or an equivalent positional path", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "new-workspace-option-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   for (const name of ["flag", "both"]) {
     const workspace = path.join(root, name);
     await fs.mkdir(workspace);
@@ -78,10 +84,10 @@ test("new accepts workspace selection by flag or an equivalent positional path",
 });
 
 test("new rejects conflicting workspace selections before creating either Tent", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "new-conflicting-options-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const positional = path.join(root, "positional");
   const flag = path.join(root, "flag");
   await assert.rejects(run("new", positional, "--workspace", flag), /must name the same directory/);
@@ -89,10 +95,10 @@ test("new rejects conflicting workspace selections before creating either Tent",
 });
 
 test("version accepts workspace without requiring or changing a Tent", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "version-workspace-option-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const workspace = path.join(root, "not-created");
   const expected = (await run("--version")).stdout;
   for (const command of ["--version", "version", "-v"]) {

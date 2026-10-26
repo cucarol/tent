@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -24,11 +25,13 @@ import { buildSnapshot } from "../src/ui-server/snapshot.js";
 const empty = () => ({ version: 3, open: [], shut: [], drawings: [] });
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "canvas-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const workspace = path.join(root, "ws");
   await initializeFixtureWorkspace(workspace);
   const systemRoot = path.join(workspace, ".tent");
-  return { root, workspace, systemRoot, adapter: new NodeFs(systemRoot, "ui") };
+  return { root, workspace, systemRoot, adapter: openTestFs(systemRoot, "ui") };
 }
 
 test("canvas missing reads are inert; writes preserve UI fields and unavailable Node references", async (t) => {
@@ -149,12 +152,12 @@ test("canvas uses the workspace lock and detects another writer's saved ETag", a
   const { adapter, systemRoot } = await fixture(t);
   await adapter.withLock(MUTATION_LOCK_PATH, async () => {
     await assert.rejects(
-      writeCanvasDocument(new NodeFs(systemRoot), { baseEtag: null, canvas: empty() }),
+      writeCanvasDocument(openTestFs(systemRoot), { baseEtag: null, canvas: empty() }),
       /mutation lock is still busy/,
     );
     assert.equal(await adapter.exists("canvas.json"), false);
   });
-  const other = new NodeFs(systemRoot);
+  const other = openTestFs(systemRoot);
   const seen = await readCanvasDocument(other);
   const first = await writeCanvasDocument(adapter, { baseEtag: null, canvas: empty() });
   await assert.rejects(writeCanvasDocument(other, { baseEtag: seen.etag, canvas: empty() }), {
@@ -165,7 +168,7 @@ test("canvas uses the workspace lock and detects another writer's saved ETag", a
 
 test("a canvas exactly at 5 MiB saves without initializing Git; one more byte is rejected", async (t) => {
   const { root } = await fixture(t);
-  const adapter = new NodeFs(path.join(root, "without-git"));
+  const adapter = openTestFs(path.join(root, "without-git"));
   const drawing = { id: "d", kind: "text", text: "" };
   const canvas = { ...empty(), drawings: [drawing] };
   drawing.text = "x".repeat(CANVAS_LIMIT - Buffer.byteLength(JSON.stringify(canvas) + "\n"));
@@ -183,7 +186,7 @@ test("a canvas exactly at 5 MiB saves without initializing Git; one more byte is
 
 test("canvas card lists take only Node IDs, which retain their case rules", async (t) => {
   const { root } = await fixture(t);
-  const adapter = new NodeFs(path.join(root, "cards"));
+  const adapter = openTestFs(path.join(root, "cards"));
   for (const id of ["@root", "node-x|box", "node-x|tree", "node-x|BOX", "node-x|tree|extra"]) {
     for (const canvas of [
       { ...empty(), open: [id] },
@@ -206,30 +209,13 @@ test("canvas card lists take only Node IDs, which retain their case rules", asyn
 
 test("external corrupt canvas history retains bytes without Node identity in ranges, snapshots or capture", async (t) => {
   const { adapter, systemRoot } = await fixture(t);
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
-  );
-  const git = async (...args: string[]) =>
-    (
-      await promisify(execFile)(
-        "git",
-        [
-          "-C",
-          systemRoot,
-          "-c",
-          "user.name=Canvas test",
-          "-c",
-          "user.email=canvas@example.invalid",
-          ...args,
-        ],
-        { env, windowsHide: true },
-      )
-    ).stdout.trim();
   const commit = async (file: string, raw: string) => {
     await adapter.writeFile(file, raw);
-    await git("add", "--", file);
-    await git("commit", "-m", "External editor commit");
-    return git("rev-parse", "HEAD");
+    return (
+      await adapter.history.captureUnlocked([{ path: file, raw }], {
+        operation: "document.external-capture",
+      })
+    ).commit!;
   };
   const nodeRaw = "---\nid: node-x\ntype: prompt\n---\nOriginal Node\n";
   const nodeCommit = await commit("n/n.md", nodeRaw);
@@ -277,23 +263,7 @@ test("external corrupt canvas history retains bytes without Node identity in ran
   );
   await assert.rejects(readCanvasDocument(adapter), { code: "INVALID_INPUT" });
 
-  // A cache from the old implementation at this exact HEAD must be rebuilt too.
-  const oldValue = (await adapter.history.changesInRange({ to: changedCommit })).map((event) => ({
-    ...event,
-    changes: event.changes.filter(
-      (change) => (change.after ?? change.before)?.path !== "canvas.json",
-    ),
-  }));
-  await fs.writeFile(
-    path.join(systemRoot, ".git/tent-derived-identity-events.json"),
-    JSON.stringify({
-      version: 3,
-      head: changedCommit,
-      value: oldValue,
-      digest: createHash("sha256").update(JSON.stringify(oldValue)).digest("hex"),
-    }),
-  );
-  const fresh = new NodeFs(systemRoot);
+  const fresh = openTestFs(systemRoot);
   assert.deepEqual((await fresh.history.changesInRange()).at(-1)!.changes, range[0]!.changes);
   const snapshot = await buildSnapshot({
     fs: fresh,
@@ -316,7 +286,7 @@ test("external corrupt canvas history retains bytes without Node identity in ran
     await withTentMutation(fresh, () => fresh.writeFile("canvas.json", raw), {
       operation: "canvas.write",
     });
-    assert.doesNotMatch(await git("log", "-1", "--format=%B"), /^Tent-Object:/m);
+    assert.deepEqual((await fresh.history.changesInRange()).at(-1)!.objectIds, []);
     const events = await fresh.history.changesInRange({ from: changedCommit });
     assert.ok(
       events.every(

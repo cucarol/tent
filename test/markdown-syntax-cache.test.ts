@@ -1,3 +1,7 @@
+import { captureFixtureDocuments } from "./scratch.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -176,7 +180,9 @@ test("cached heading spans preserve literal labels, root scope, nesting, duplica
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "markdown-cache-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await fs.mkdir(path.join(root, ".git"));
   return { root, file: path.join(root, ".git", "tent-material-cache", "markdown-syntax.bin") };
 }
@@ -244,7 +250,7 @@ test("parallel syntax scopes are isolated and absent Tent Git stays read-only", 
 
 test("CLI brief installs syntax reuse around the outer document read scope", async (t) => {
   const { root } = await fixture(t);
-  await scaffoldInWorkspace(new NodeFs(root), {
+  await scaffoldInWorkspace(openTestFs(root), {
     name: "Syntax",
     nodes: [
       { id: "node-abcdef", name: "Fact", type: "prompt", body: "[ref](https://example.com)" },
@@ -259,9 +265,8 @@ test("CLI brief installs syntax reuse around the outer document read scope", asy
       "[ref](https://example.com)\n",
     ),
   );
-  await git(system, "init");
-  await git(system, "add", ".");
-  await git(system, "commit", "-m", "test: syntax fixture");
+  await initializeFixtureHistory(system);
+  await captureFixtureDocuments(system);
   const file = path.join(system, ".git", "tent-material-cache", "markdown-syntax.bin");
   const brief = async () => {
     const result = await runWorkspaceCommand("brief", ["--json"], { workspace: root });
@@ -271,13 +276,13 @@ test("CLI brief installs syntax reuse around the outer document read scope", asy
   const first = await brief();
   const bytes = await fs.readFile(file);
   assert.ok(deserialize(bytes.subarray(32)).entries.size > 0);
-  const head = await git(system, "rev-parse", "HEAD");
+  const head = await historyHead(system);
   const stat = await fs.stat(file);
   assert.equal(await brief(), first);
   assert.deepEqual(await fs.readFile(file), bytes);
   assert.equal((await fs.stat(file)).mtimeMs, stat.mtimeMs);
-  assert.equal(await git(system, "rev-parse", "HEAD"), head);
+  assert.equal(await historyHead(system), head);
   await fs.rm(file);
   assert.equal(await brief(), first);
-  assert.equal(await git(system, "rev-parse", "HEAD"), head);
+  assert.equal(await historyHead(system), head);
 });

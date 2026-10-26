@@ -1,3 +1,6 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,11 +21,13 @@ const RAW_FAILURE = /ENOENT|update-index|Path escapes|Invalid input|"code"|\[\s*
 
 async function fixture(t: TestContext, withGit = true) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-name-rules-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Name rules" });
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), { name: "Name rules" });
   const systemRoot = path.join(root, ".tent");
-  if (withGit) await git(systemRoot, "init");
-  const adapter = new NodeFs(systemRoot);
+  if (withGit) await initializeFixtureHistory(systemRoot);
+  const adapter = openTestFs(systemRoot);
   const env = { fs: adapter, clock: new SystemClock(), tentName: "test", tentRoot: systemRoot };
   const fileExists = async (filename: string) => {
     try {
@@ -172,7 +177,7 @@ test("create, rename and write-many reject superscript COM and LPT device names 
   const created = await runNodeCommand("create", ["Goal", "--type", "goal", "--json"], globals);
   assert.equal(created.exitCode, 0, created.stderr);
   const nodeId = JSON.parse(created.stdout).node.nodeId;
-  const head = async () => (await git(systemRoot, "rev-parse", "HEAD")).trim();
+  const head = async () => (await historyHead(systemRoot)).trim();
   const before = await snapshot(systemRoot);
   const headBefore = await head();
   for (const name of ["COM¹", "LPT³", "COM².txt"]) {
@@ -298,8 +303,7 @@ async function renameWithCaptureFailure(
     (await checkGraph(adapter, root, fileExists)).issues
       .filter((issue) => issue.kind === "node-git-mismatch")
       .map((issue) => `${issue.path} ${"state" in issue ? issue.state : ""}`);
-  const headTree = async () =>
-    (await git(systemRoot, "ls-tree", "-r", "--name-only", "HEAD")).trim().split("\n");
+  const headTree = async () => await adapter.history.retainedPaths();
   return { ...context, parent, before, head, error, mismatches, headTree };
 }
 
@@ -308,7 +312,7 @@ test("a rename whose Git capture fails before HEAD changes is rolled back so dis
     await renameWithCaptureFailure(t, { publish: false });
   assert.match(
     error.message,
-    /file transaction was settled against Tent Git publication[^]*simulated Git failure/,
+    /file transaction was settled against history publication[^]*simulated Git failure/,
   );
   assert.deepEqual(await snapshot(systemRoot), before);
   assert.equal(await adapter.exists(NODE_MOVE_PENDING_PATH), false);
@@ -339,7 +343,7 @@ test("a rename whose capture fails after HEAD records it keeps the new name, eve
     assert.deepEqual(await mismatches(), [], `failRead=${failRead}`);
     assert.match(
       error.message,
-      /^Node rename to Renamed failed; its file transaction was settled against Tent Git publication[^]*simulated Git failure/,
+      /^Node rename to Renamed failed; its file transaction was settled against history publication[^]*simulated Git failure/,
     );
     assert.doesNotMatch(error.message, /rolled back/);
   }
@@ -367,7 +371,7 @@ test("a legacy rename is not reversed when Tent Git HEAD cannot be read after it
   });
   assert.match(
     error.message,
-    /^Node rename to Renamed is kept on disk because Tent Git could not show whether it was recorded/,
+    /^Node rename to Renamed is kept on disk because Tent history could not show whether it was recorded/,
   );
   assert.equal(await adapter.history.currentCommit(), head);
   assert.equal(await adapter.exists("Parent"), false);

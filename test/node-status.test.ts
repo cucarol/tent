@@ -1,3 +1,6 @@
+import { initializeFixtureHistory } from "./scratch.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
@@ -56,18 +59,20 @@ for (const action of ["archive", "restore"] as const) {
     assert.ok(afterCapture);
     assert.match(await adapter.readFile("A/A.md"), /external change after capture/);
     // The explicit preimage is reachable despite the outer failure; current files are not rolled back.
-    await git(root, "fsck", "--no-reflogs");
+    assert.ok((await adapter.history.changesInRange()).length > 0);
   });
 }
 const raw = (id: string, extra = "", body = "fact") =>
   `\uFEFF---\r\nid: ${id}\r\ntype: prompt\r\nextra: {nested: [1, two]} # preserve\r\n${extra}---\r\n${body}`;
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "node-status-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await git(root, "init");
-  const adapter = new NodeFs(root);
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await initializeFixtureHistory(root);
+  const adapter = openTestFs(root);
   const env = { fs: adapter, clock: { now: () => "2026-10-04T00:00:00.000Z" }, tentName: "test" };
   await adapter.writeFile("A/A.md", raw("node-root"));
   await adapter.writeFile("A/B/B.md", raw("node-draft", "status: draft\r\n"));
@@ -142,10 +147,10 @@ test("archive captures only selected preimages and undo restores exact declared 
     parseFrontmatter(changes.changes.find((c) => c.path === "A/B/B.md")!.before!).data.status,
     "draft",
   );
-  assert.ok(!(await git(root, "ls-tree", "-r", "--name-only", "HEAD")).includes("Other/"));
+  assert.ok(!(await adapter.history.retainedPaths()).some((file) => file.startsWith("Other/")));
   const noOp = await archiveNode(env, "node-root");
   assert.equal(noOp.changed, false);
-  assert.equal((await git(root, "rev-parse", "HEAD")).trim(), archived.commit);
+  assert.equal(await adapter.history.currentCommit(), archived.commit);
   await adapter.writeFile("A/New/New.md", raw("node-new"));
   const restored = await restoreNode(env, "node-root", archived.commit);
   assert.equal(restored.changed, true);
@@ -196,7 +201,7 @@ test("archive undo preflights external edits and retained ABA without changing o
     restoreNode(env, "node-root", ordinary.version.commit),
     /pure status archive/,
   );
-  await assert.rejects(restoreNode(env, "node-root", "f".repeat(40)), /Git/);
+  await assert.rejects(restoreNode(env, "node-root", "f".repeat(64)), /history|event|version/i);
 });
 
 test("archive errors report attempted writes and restore the whole unpublished group", async (t) => {

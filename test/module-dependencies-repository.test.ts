@@ -1,3 +1,5 @@
+import { removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import childProcess, { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
@@ -6,12 +8,15 @@ import path from "node:path";
 import test from "node:test";
 import { createModuleDependencyRepositoryReader } from "../src/fs/module-dependencies.js";
 import { extractRepositoryImports } from "../src/core/base/repository-imports.js";
+import { initializeGitIgnoreContext } from "../src/fs/git-ignore-context.js";
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const base = await fs.mkdtemp(path.join(scratch, "module-repository-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(base, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const root = path.join(base, "project");
   await fs.mkdir(root);
   const git = (...args: string[]) =>
@@ -381,13 +386,13 @@ test("non-Git rule-free workspaces have an absent baseline and unsupported ignor
   }
 });
 
-test("non-Git Workspace borrows existing Tent Git ignore interpretation without writing it", async (t) => {
-  const { root, git, write } = await fixture(t);
+test("non-Git Workspace borrows its setup-only Git ignore context without writing it", async (t) => {
+  const { root, write } = await fixture(t);
   await fs.rm(path.join(root, ".git"), { recursive: true });
-  git("init", "--quiet", path.join(root, ".tent"));
+  await initializeGitIgnoreContext(path.join(root, ".tent"));
   await write("ignored/hidden.ts", "export const hidden = 1;\n");
   await write("src/.gitignore", "a.ts\n");
-  const tentGit = path.join(root, ".tent/.git");
+  const tentGit = path.join(root, ".tent/.git/ignore-context/.git");
   const original = fs.lstat;
   const mocked = t.mock.method(fs, "lstat", (...args: Parameters<typeof original>) => {
     const filename = String(args[0]);

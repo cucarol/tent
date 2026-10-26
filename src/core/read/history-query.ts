@@ -3,7 +3,7 @@ import { parseFrontmatter } from "../base/frontmatter.js";
 import { isNodeId } from "../base/id.js";
 import { nodeNotePath, isOperationalPath } from "../base/paths.js";
 import { normalizeOptionalNodeType } from "../base/node-type.js";
-import { documentVersionSchema, type DocumentVersion } from "../store/git-history.js";
+import { documentVersionSchema, type DocumentVersion } from "../store/history-port.js";
 
 export type HistoryTreeNode = {
   id: string;
@@ -56,7 +56,7 @@ export async function readHistoryTree(fs: FsAdapter, commit: string): Promise<Hi
 }
 
 function requireHistory(fs: FsAdapter) {
-  if (!fs.history) throw new Error("Tent Git history is unavailable");
+  if (!fs.history) throw new Error("Tent history is unavailable");
   return fs.history;
 }
 

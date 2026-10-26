@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createNode } from "../src/core/graph/ops.js";
@@ -7,15 +10,15 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
-import { initializeFixtureRepository } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await mkdir(scratch, { recursive: true });
   const root = await mkdtemp(path.join(scratch, "node-create-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Create fixture" });
-  return new NodeFs(path.join(root, ".tent"));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  await scaffoldInWorkspace(openTestFs(root), { name: "Create fixture" });
+  return openTestFs(path.join(root, ".tent"));
 }
 
 for (const failure of ["none", "body", "order"] as const) {
@@ -125,7 +128,7 @@ test("invalid initial references never publish a partial Node", async (t) => {
 for (const state of ["missing", "duplicate", "invalid"] as const) {
   test(`creation by parent ID rejects a ${state} parent without writing`, async (t) => {
     const adapter = await fixture(t);
-    initializeFixtureRepository(path.join(adapter.workspaceRoot!, ".tent"));
+    await initializeFixtureHistory(path.join(adapter.workspaceRoot!, ".tent"));
     const env = { fs: adapter, clock: { now: () => "2026-10-22T00:00:00.000Z" }, tentName: "test" };
     if (state !== "missing") {
       await adapter.writeFile(

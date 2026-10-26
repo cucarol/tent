@@ -1,3 +1,5 @@
+import { testScratchRoot } from "./scratch.js";
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -7,7 +9,7 @@ import { promisify } from "node:util";
 import { test } from "node:test";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const scratch = path.join(root, ".scratch");
+const scratch = testScratchRoot();
 const run = promisify(execFile);
 
 test("retired hook installer always rejects and leaves existing host configuration unchanged", async () => {
@@ -80,6 +82,6 @@ test("retired hook installer always rejects and leaves existing host configurati
   } finally {
     const relative = path.relative(scratch, fixture);
     assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
-    await fs.rm(fixture, { recursive: true, force: true });
+    await removeTestFixture(fixture, { recursive: true, force: true });
   }
 });

@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -8,11 +11,11 @@ import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 test("Node CLI forwards explicit actors through content writes, confirmation and batch inputs", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "cli-provenance-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Actors", nodes: [] });
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  await scaffoldInWorkspace(openTestFs(root), { name: "Actors", nodes: [] });
   const globals = { workspace: root, json: true };
   const run = async (command: string, args: string[], stdin?: string) => {
     const result = await runNodeCommand(command, args, { ...globals, stdin });

@@ -1,3 +1,6 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import fs from "node:fs/promises";
@@ -54,17 +57,19 @@ test("coverage goals use Workspace directories and prefixes, never reference fil
 
 async function fixture(t: TestContext) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "coverage-goals-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await git(workspace, "init", "-b", "main");
   await fs.appendFile(path.join(workspace, ".git/info/exclude"), "\n/.tent/\n");
-  await scaffoldInWorkspace(new NodeFs(workspace), { name: "Coverage" });
+  await scaffoldInWorkspace(openTestFs(workspace), { name: "Coverage" });
   const system = path.join(workspace, ".tent");
-  await git(system, "init", "-b", "main");
+  await initializeFixtureHistory(system);
   await fs.mkdir(path.join(workspace, "src"));
   await fs.mkdir(path.join(workspace, "shared"));
   await fs.writeFile(path.join(workspace, "src/a.ts"), "export const a = 1;\n");
   await fs.writeFile(path.join(workspace, "shared/b.ts"), "export const b = 2;\n");
-  const adapter = new NodeFs(system);
+  const adapter = openTestFs(system);
   const env = {
     fs: adapter,
     clock: { now: () => "2026-10-17T00:00:00.000Z" },
@@ -77,12 +82,18 @@ async function fixture(t: TestContext) {
     });
   const confirm = async (id: string) =>
     confirmNodeSync(adapter, id, { baseEtag: (await readNodeForEdit(adapter, id)).etag });
-  const check = (id: string) => inspectNodeSync(new NodeFs(system), id);
+  const check = (id: string) => inspectNodeSync(openTestFs(system), id);
   return { workspace, system, adapter, env, edit, confirm, check };
 }
 
 test("module conversion previews, preserves identity and children, keeps rules and is idempotent", async (t) => {
   const { workspace, system, adapter, env, check } = await fixture(t);
+  const closedAdapters: NodeFs[] = [],
+    close = NodeFs.prototype.close;
+  t.mock.method(NodeFs.prototype, "close", async function (this: NodeFs) {
+    await close.call(this);
+    closedAdapters.push(this);
+  });
   const body =
     "Rules\n\n[File](../../src/a.ts#part) and [root](/Other/Other.md) and [web](https://example.com/).\n\n[ref][1]\n\n[1]: ../../shared/b.ts\n";
   const id = await createNode(env, {
@@ -100,7 +111,7 @@ test("module conversion previews, preserves identity and children, keeps rules a
   });
   const before = await readNodeForEdit(adapter, id);
   const childBefore = await readNodeForEdit(adapter, childId);
-  const head = await git(system, "rev-parse", "HEAD");
+  const head = await historyHead(system);
   const entry = {
     nodeId: id,
     baseEtag: before.etag,
@@ -114,12 +125,13 @@ test("module conversion previews, preserves identity and children, keeps rules a
   assert.match(entry.rulesBody, /\(\/Other\/Other.md\)/);
   const dry = await convertModuleGoals(workspace, [entry]);
   assert.equal(dry.applied, false);
-  assert.equal(await git(system, "rev-parse", "HEAD"), head);
+  assert.equal(await historyHead(system), head);
   assert.equal((await readNodeForEdit(adapter, id)).raw, before.raw);
   await assert.rejects(
     convertModuleGoals(workspace, [{ ...entry, baseEtag: "stale" }], true),
     /Stale manifest/,
   );
+  assert.equal(closedAdapters.length, 2, "dry-run and rejected manifest release their adapters");
   const applied = await convertModuleGoals(workspace, [entry], true);
   assert.equal(applied.applied, true);
   const after = await readNodeForEdit(adapter, id);
@@ -128,9 +140,13 @@ test("module conversion previews, preserves identity and children, keeps rules a
   assert.deepEqual(after.frontmatter.sources, before.frontmatter.sources);
   assert.equal((await readNodeForEdit(adapter, childId)).raw, childBefore.raw);
   assert.equal((await check(id)).ahead, undefined);
-  const committed = await git(system, "rev-parse", "HEAD");
+  const committed = await historyHead(system);
   assert.equal((await convertModuleGoals(workspace, [entry], true)).applied, false);
-  assert.equal(await git(system, "rev-parse", "HEAD"), committed);
+  assert.equal(await historyHead(system), committed);
+  assert.equal(closedAdapters.length, 4, "apply and idempotent return release their adapters");
+  assert.equal(new Set(closedAdapters).size, 4);
+  for (const closed of closedAdapters)
+    await assert.rejects(closed.readFile("index.md"), /connection is closed/);
 });
 
 test("group goals acquire their own intent basis from the final batch's descendant goals", async (t) => {
@@ -372,9 +388,9 @@ test("coverage goal intent survives ordinary and native saves; confirmation or m
     items: [{ op: "update", nodeId: id, baseEtag: seen.etag, body: "Purpose E\n", confirm: true }],
   });
   assert.equal((await check(id)).ahead, undefined);
-  const head = await git(system, "rev-parse", "HEAD");
+  const head = await historyHead(system);
   await check(id);
-  assert.equal(await git(system, "rev-parse", "HEAD"), head);
+  assert.equal(await historyHead(system), head);
 });
 
 test("type conversion requires explicit intent confirmation and file goals still need outputs", async (t) => {

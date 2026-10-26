@@ -22,7 +22,7 @@ Tent 是项目的上下文图谱：记下你定了什么、做出了什么、哪
 
 ## Tent 记什么
 
-所有内容都在项目根目录的 `.tent/` 里，是一组 Markdown 文件，在 `.tent/.git` 里有自己的 Git 历史。Tent 不改项目里的任何文件：它把 `.tent/` 写进 Git 的本地排除列表（`.git/info/exclude`），不碰你的 `.gitignore`。
+所有内容都在项目根目录的 `.tent/` 里，是一组 Markdown 文件，在 `.tent/.git/history.sqlite` 里有独立的 SQLite 历史。Tent 不改项目里的任何文件：它把 `.tent/` 写进 Git 的本地排除列表（`.git/info/exclude`），不碰你的 `.gitignore`。
 
 - **Node**：一条长期事实。`type` 只能是 `goal`、`prompt` 或 `output`。`tags` 说明内容是什么形式，比如 `decision`、`issue`，不改变任何行为。
 - **Role**：一个持续的工作方向，写明目的和边界。几个会话可以按同一个 Role 干活。
@@ -50,7 +50,7 @@ Tent 是项目的上下文图谱：记下你定了什么、做出了什么、哪
 
 ## 安装
 
-需要 Node.js 22.19+ 和 Git。
+需要 Node.js 22.19+。Git 用于观察项目仓库、沿用的目录忽略规则解释及初始化时的本地 exclude 步骤；SQLite 历史本身不依赖 Git。旧私有 Git 工作区须先在离线副本上做[一次性迁移](docs/MIGRATION.md)。
 
 **Claude Code：**
 

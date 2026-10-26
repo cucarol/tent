@@ -79,7 +79,7 @@ async function main() {
     });
     if (values.help) {
       console.log(
-        "Usage: tent new <workspace-path> | tent new --workspace <workspace-path>\nCreate an empty .tent and independent local Git.",
+        "Usage: tent new <workspace-path> | tent new --workspace <workspace-path>\nCreate an empty .tent and independent local SQLite history.",
       );
       return;
     }
@@ -162,7 +162,7 @@ function helpText(): string {
 Run it inside a Workspace, or name one with --workspace <path>.
 
 Start
-  tent new <path>                    Create an empty Tent in <path>/.tent with its own Git history; --workspace <path> also selects the new root.
+  tent new <path>                    Create an empty Tent in <path>/.tent with its own SQLite history; --workspace <path> also selects the new root.
   tent ui [--port <n>] [--no-open]   Open the map in the browser; Ctrl+C stops it.
 
 Read and record
@@ -202,7 +202,7 @@ async function newTent(target: string): Promise<void> {
   console.log(
     `✓ Created Tent: ${path.join(workspaceRoot, ".tent")}\n` +
       `In-workspace layout: collaboration facts live under <workspace>/.tent/.\n` +
-      `Independent local Git history is initialized in .tent/.git. The Node tree starts empty.`,
+      `Independent SQLite history is initialized in .tent/.git/history.sqlite. The Node tree starts empty.`,
   );
 }
 

@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
 import { readNode, readNodeForEdit, listNodes, searchNodes } from "../src/core/read/node-query.js";
@@ -20,7 +22,7 @@ import { initializeFixtureWorkspace } from "./scratch.js";
 import { renameNode, deleteNode } from "../src/core/graph/ops.js";
 import { withTentMutation } from "../src/core/store/adapter.js";
 import { DELETE_PENDING_PATH } from "../src/core/store/delete-recovery.js";
-import type { DocumentVersion } from "../src/core/store/git-history.js";
+import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { NODE_MOVE_PENDING_PATH } from "../src/core/store/node-move-recovery.js";
 import { contentEtag } from "../src/core/base/etag.js";
@@ -29,14 +31,17 @@ import { NodeWriteError, writeNodeDocument } from "../src/core/graph/node-docume
 import { extendTestLockWait } from "./helpers.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "history-service-"));
   const workspace = path.join(root, "workspace");
   await initializeFixtureWorkspace(workspace);
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(async () => {
+    await adapter.close();
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+  });
   const systemRoot = path.join(workspace, ".tent"),
-    adapter = new NodeFs(systemRoot);
+    adapter = openTestFs(systemRoot);
   const { workspaceId: savedId } = await readWorkspaceSettings(adapter),
     workspaceId = savedId!;
   const mount = {
@@ -48,19 +53,15 @@ async function fixture(t: TestContext) {
       clock: { now: () => new Date().toISOString() },
     },
   };
-  const git = async (...args: string[]) =>
-    (
-      await promisify(execFile)("git", ["-C", mount.systemRoot, ...args], { windowsHide: true })
-    ).stdout.trim();
   // Editor-written files are deliberately outside a Tent mutation.
   await adapter.writeFile("A/A.md", "---\nid: node-alpha\ntype: prompt\n---\nOriginal A\n");
   await adapter.writeFile("B/B.md", "---\nid: node-bravo\ntype: prompt\n---\nUnobserved B\n");
-  return { root, workspace, workspaceId, mount, adapter, git };
+  return { root, workspace, workspaceId, mount, adapter };
 }
 
 for (const kind of ["Node", "Role"] as const) {
   test(`${kind} normalization rejects intervening editor bytes before capture or save`, async (t) => {
-    const { adapter, mount, git } = await fixture(t);
+    const { adapter, mount } = await fixture(t);
     const selected =
       kind === "Node"
         ? { id: "node-alpha", path: "A/A.md" }
@@ -73,7 +74,7 @@ for (const kind of ["Node", "Role"] as const) {
       });
     const original = await adapter.readFile(selected.path);
     await adapter.history.captureUnlocked([{ path: selected.path, raw: original }]);
-    const head = await git("rev-parse", "HEAD");
+    const head = await adapter.history.currentCommit();
     const external = original + "\nUSER EXTERNAL EDIT";
     const header = adapter.readFrontmatter.bind(adapter);
     let peerReads = 0;
@@ -100,7 +101,7 @@ for (const kind of ["Node", "Role"] as const) {
       adapter.readFrontmatter = header;
     }
     assert.equal(await adapter.readFile(selected.path), external);
-    assert.equal(await git("rev-parse", "HEAD"), head);
+    assert.equal(await adapter.history.currentCommit(), head);
     const saved = await send(contentEtag(external));
     assert.ok(saved.version);
     const finalRaw = await adapter.readFile(selected.path);
@@ -109,9 +110,9 @@ for (const kind of ["Node", "Role"] as const) {
   });
 }
 
-test("independent Core writers share CAS, selected reads and exact Git history", async (t) => {
+test("independent Core writers share CAS, selected reads and exact history", async (t) => {
   const { adapter, mount } = await fixture(t);
-  const peer = new NodeFs(mount.systemRoot);
+  const peer = openTestFs(mount.systemRoot);
   extendTestLockWait(t, adapter, mount.systemRoot);
   extendTestLockWait(t, peer, mount.systemRoot);
   const raw = await adapter.readFile("A/A.md"),
@@ -184,7 +185,7 @@ test("public lifecycle commands require an explicit archive commit for undo", as
 
 test("public standard material edits retain exact history and reject invalid source shapes before saving", async (t) => {
   const h = await fixture(t),
-    { workspaceId, adapter, git } = h;
+    { workspaceId, adapter } = h;
   const original = await readNodeForEdit(adapter, "node-alpha");
   const sources = [
     { resource: "../B/B.md", title: "first", custom: [2, 1] },
@@ -226,7 +227,7 @@ test("public standard material edits retain exact history and reject invalid sou
   assert.equal(saved.readBack.resource, "../../src/main.ts");
   const raw = await adapter.readFile("A/A.md");
   assert.equal(await adapter.history!.read(saved.version), raw);
-  const head = await git("rev-parse", "HEAD");
+  const head = await adapter.history.currentCommit();
   for (const frontmatter of [
     { resource: 42 },
     { sources: [{ title: "missing" }] },
@@ -236,13 +237,13 @@ test("public standard material edits retain exact history and reject invalid sou
       writeNodeDocument(adapter, "node-alpha", { baseEtag: saved.etag, frontmatter }),
     );
     assert.equal(await adapter.readFile("A/A.md"), raw);
-    assert.equal(await git("rev-parse", "HEAD"), head);
+    assert.equal(await adapter.history.currentCommit(), head);
   }
   await writeNodeDocument(adapter, "node-alpha", {
     baseEtag: saved.etag,
     frontmatter: { sources },
   });
-  assert.equal(await git("rev-parse", "HEAD"), head);
+  assert.equal(await adapter.history.currentCommit(), head);
   await renameNode(h.mount.env, "node-bravo", "New");
   const next = parseFrontmatter(await adapter.readFile("A/A.md"));
   assert.deepEqual(
@@ -259,38 +260,36 @@ test("public standard material edits retain exact history and reject invalid sou
   assert.equal(historical.node.text, raw);
 });
 
-test("explicit read capture and Core saves retain only selected documents; Git descriptors survive rename and deletion", async (t) => {
+test("explicit read capture and Core saves retain only selected documents; historical descriptors survive rename and deletion", async (t) => {
   const h = await fixture(t),
-    { workspaceId, adapter, git } = h;
+    { workspaceId, adapter } = h;
   await listNodes(adapter, workspaceId, {});
   await readNode(adapter, workspaceId, { nodeId: "node-alpha", ...{ view: "summary" } });
   await searchNodes(adapter, workspaceId, h.workspace, { resource: "../source.txt" });
-  await assert.rejects(git("rev-parse", "--verify", "HEAD"));
+  assert.equal(await adapter.history.currentCommit(), null);
   const uncaptured = await readNodeForEdit(adapter, "node-alpha");
   assert.equal(uncaptured.version, undefined);
-  await assert.rejects(git("rev-parse", "--verify", "HEAD"));
+  assert.equal(await adapter.history.currentCommit(), null);
   const original = await readNodeForEdit(adapter, "node-alpha", { capture: true });
   assert.ok(original.version);
-  assert.equal(await git("ls-tree", "-r", "--name-only", "HEAD"), "A/A.md");
+  assert.equal((await adapter.retainedDocumentPaths())!.join("\n"), "A/A.md");
   assert.equal(await adapter.readFile("A/A.md"), original.raw);
-  await git("add", "B/B.md");
   const unselected = await adapter.readFile("B/B.md");
   const saved = (await writeNodeDocument(adapter, original.nodeId, {
     baseEtag: original.etag,
     body: "Saved A",
   })) as { etag: string; version: DocumentVersion };
   assert.equal(await adapter.history!.read(saved.version), await adapter.readFile("A/A.md"));
-  assert.equal(await git("ls-tree", "-r", "--name-only", "HEAD"), "A/A.md");
-  assert.equal(await git("write-tree"), await git("rev-parse", "HEAD^{tree}"));
+  assert.equal((await adapter.retainedDocumentPaths())!.join("\n"), "A/A.md");
   assert.equal(await adapter.readFile("B/B.md"), unselected);
-  assert.match(await git("status", "--porcelain"), /\?\? B\//);
-  const head = await git("rev-parse", "HEAD");
+  assert.equal((await adapter.retainedDocumentPaths())!.includes("B/B.md"), false);
+  const head = await adapter.history.currentCommit();
   await writeNodeDocument(adapter, original.nodeId, { baseEtag: saved.etag, body: "Saved A" });
   await readNode(adapter, workspaceId, { nodeId: original.nodeId, ...{} });
-  assert.equal(await git("rev-parse", "HEAD"), head);
+  assert.equal(await adapter.history.currentCommit(), head);
   await adapter.writeFile("A/A.md", original.raw.replace("Original A", "Editor A"));
   await readNode(adapter, workspaceId, { nodeId: original.nodeId, ...{ view: "summary" } });
-  assert.equal(await git("rev-parse", "HEAD"), head);
+  assert.equal(await adapter.history.currentCommit(), head);
   const read = await readNode(adapter, workspaceId, {
     nodeId: original.nodeId,
     ...{ view: "raw", capture: true },
@@ -299,11 +298,17 @@ test("explicit read capture and Core saves retain only selected documents; Git d
   assert.match(await adapter.history!.read(read.node.version), /Editor A/);
   const edited = await readNodeForEdit(adapter, original.nodeId);
   await writeNodeDocument(adapter, original.nodeId, { baseEtag: edited.etag, body: "Core save" });
-  assert.match(await git("show", "HEAD:A/A.md"), /Core save/);
+  assert.match(
+    await adapter.history.read({
+      commit: (await adapter.history.currentCommit())!,
+      path: "A/A.md",
+    }),
+    /Core save/,
+  );
   await renameNode(h.mount.env, original.nodeId, "Renamed");
   const renamed = await readNodeForEdit(adapter, original.nodeId, { capture: true });
   assert.ok(renamed.version);
-  assert.equal(await git("ls-tree", "-r", "--name-only", "HEAD"), "Renamed/Renamed.md");
+  assert.equal((await adapter.retainedDocumentPaths())!.join("\n"), "Renamed/Renamed.md");
   const diff = await readDocumentDiff(adapter, {
     from: original.version,
     to: renamed.version,
@@ -311,7 +316,6 @@ test("explicit read capture and Core saves retain only selected documents; Git d
   assert.equal(diff.pathChanged, true);
   assert.match(diff.text, /Core save/);
   await deleteNode(h.mount.env, original.nodeId);
-  await git("gc", "--prune=now");
   const history = await runNodeCommand(
     "get",
     [original.nodeId, "--version-json", JSON.stringify(original.version), "--view", "raw"],
@@ -325,27 +329,27 @@ test("explicit read capture and Core saves retain only selected documents; Git d
   );
 });
 
-test("batch writes share a commit, Role reads capture explicitly, and Git failures never report a successful save", async (t) => {
+test("batch writes share a commit, Role reads capture explicitly, and history failures never report a successful save", async (t) => {
   const h = await fixture(t),
-    { adapter, git } = h;
+    { adapter } = h;
   // New identities in one operation have one history commit.
   await withTentMutation(adapter, async () => {
     await adapter.writeFile("C/C.md", "---\nid: node-charlie\n---\nC");
     await adapter.writeFile("D/D.md", "---\nid: node-delta\n---\nD");
   });
-  assert.equal(await git("rev-list", "--count", "HEAD"), "1");
-  assert.equal(await git("ls-tree", "-r", "--name-only", "HEAD"), "C/C.md\nD/D.md");
+  assert.equal(String((await adapter.history.changesInRange()).length), "1");
+  assert.equal((await adapter.retainedDocumentPaths())!.join("\n"), "C/C.md\nD/D.md");
   const role = await createRoleContext(adapter, { title: "Writer", body: "" });
   const rolePath = `roles/${role.roleId}.md`;
   await adapter.writeFile(
     rolePath,
     `---\ntype: role\nid: ${role.roleId}\ntitle: Writer\n---\nEditor role context`,
   );
-  const head = await git("rev-parse", "HEAD");
+  const head = await adapter.history.currentCommit();
   await listRoleContexts(adapter);
-  assert.equal(await git("rev-parse", "HEAD"), head);
+  assert.equal(await adapter.history.currentCommit(), head);
   await requireRoleDocument(adapter, role.roleId);
-  assert.equal(await git("rev-parse", "HEAD"), head);
+  assert.equal(await adapter.history.currentCommit(), head);
   const roleRead = {
     document: await readRolePage(adapter, role.roleId, { capture: true, view: "raw" }),
   };
@@ -355,7 +359,7 @@ test("batch writes share a commit, Role reads capture explicitly, and Git failur
   const capture = adapter.history!.captureUnlocked.bind(adapter.history);
   adapter.history!.captureUnlocked = async (changes, metadata) => {
     if (changes.some((c) => c.raw?.includes("Capture failure")))
-      throw new Error("injected Git failure");
+      throw new Error("injected history failure");
     return capture(changes, metadata);
   };
   await assert.rejects(
@@ -363,7 +367,7 @@ test("batch writes share a commit, Role reads capture explicitly, and Git failur
       baseEtag: original.etag,
       body: "Capture failure",
     }),
-    /injected Git failure/,
+    /injected history failure/,
   );
   adapter.history!.captureUnlocked = capture;
   assert.equal(await adapter.readFile("A/A.md"), original.raw);
@@ -380,10 +384,10 @@ test("batch writes share a commit, Role reads capture explicitly, and Git failur
   await assert.rejects(deleteNode(h.mount.env, original.nodeId), /interrupted delete/);
   adapter.writeFile = write;
   await withTentMutation(adapter, async () => {});
-  assert.ok((await git("ls-tree", "-r", "--name-only", "HEAD")).includes("A/A.md"));
+  assert.ok((await adapter.retainedDocumentPaths())!.join("\n").includes("A/A.md"));
   assert.equal(await adapter.readFile("A/A.md"), retry.raw);
   await deleteNode(h.mount.env, original.nodeId);
-  assert.ok(!(await git("ls-tree", "-r", "--name-only", "HEAD")).includes("A/A.md"));
+  assert.ok(!(await adapter.retainedDocumentPaths())!.join("\n").includes("A/A.md"));
   assert.equal(await adapter.history!.read(retry.version), retry.raw);
 });
 
@@ -435,11 +439,10 @@ test("material versions are automatic, body-preserving, local and captured with 
   await fs.writeFile(target, "material two");
   await renameNode(h.mount.env, node.nodeId, "Moved");
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
-  const retained = (
-    await promisify(execFile)("git", ["-C", h.mount.systemRoot, "show", "HEAD:Moved/Moved.md"], {
-      windowsHide: true,
-    })
-  ).stdout;
+  const retained = await adapter.history.read({
+    commit: (await adapter.history.currentCommit())!,
+    path: "Moved/Moved.md",
+  });
   assert.equal(parseFrontmatter(retained).data.sync, undefined);
   assert.notEqual(
     (await adapter.history.nodeRecords())[node.nodeId]!.materials[0]!.version,
@@ -456,16 +459,16 @@ test("public rename rejects YAML aliases before changing unknown metadata or mov
     const raw = `---\nid: node-bravo\ntype: prompt\nsources: &items\n  - resource: /A/A.md\n    title: evidence\n${custom}\n---\nOriginal body\n`;
     await h.adapter.writeFile("B/B.md", raw);
     const before = await h.adapter.readFile("A/A.md"),
-      head = await h.git("rev-parse", "HEAD");
+      head = await h.adapter.history.currentCommit();
     await assert.rejects(renameNode(h.mount.env, "node-alpha", "Moved"), /alias/i);
     assert.equal(await h.adapter.readFile("A/A.md"), before);
     assert.equal(await h.adapter.readFile("B/B.md"), raw);
     assert.equal(await h.adapter.exists("Moved"), false);
-    assert.equal(await h.git("rev-parse", "HEAD"), head);
+    assert.equal(await h.adapter.history.currentCommit(), head);
   }
 });
 
-test("preimage Git capture rejects external edits before write, binary write, move or remove", async (t) => {
+test("preimage history capture rejects external edits before write, binary write, move or remove", async (t) => {
   const h = await fixture(t),
     { adapter, workspaceId } = h;
   const capture = adapter.history!.captureUnlocked.bind(adapter.history);
@@ -499,7 +502,7 @@ test("preimage Git capture rejects external edits before write, binary write, mo
             if (operation === "move") await adapter.move("A", "Moved");
             if (operation === "remove") await adapter.remove("A");
           });
-    await assert.rejects(act, /Document changed during Git capture/, operation);
+    await assert.rejects(act, /Document changed during history capture/, operation);
     adapter.history!.captureUnlocked = capture;
     assert.equal(injected, true, operation);
     assert.equal(await adapter.readFile("A/A.md"), edited, operation);
@@ -509,7 +512,7 @@ test("preimage Git capture rejects external edits before write, binary write, mo
 
 test("same-value metadata saves capture exact editor bytes with no document writes", async (t) => {
   const h = await fixture(t),
-    { adapter, workspaceId, git } = h;
+    { adapter, workspaceId } = h;
   const write = adapter.writeFile.bind(adapter);
   let documentWrites = 0;
   adapter.writeFile = async (file, raw) => {
@@ -536,9 +539,9 @@ test("same-value metadata saves capture exact editor bytes with no document writ
     const saved = await send();
     assert.ok(saved.version);
     assert.equal(await adapter.history!.read(saved.version), raw, save.method);
-    const head = await git("rev-parse", "HEAD");
+    const head = await adapter.history.currentCommit();
     await send();
-    assert.equal(await git("rev-parse", "HEAD"), head, save.method);
+    assert.equal(await adapter.history.currentCommit(), head, save.method);
     assert.equal(await adapter.readFile("A/A.md"), raw, save.method);
   }
   assert.equal(documentWrites, 0);

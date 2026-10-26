@@ -15,14 +15,13 @@ export function batchRead<Input, Output>(
   read: (readers: () => Input[]) => Promise<Output | undefined>,
 ) {
   const pending = new Set<Waiting<Input, Output>>();
-  let running = false;
+  let running: Promise<void> | undefined;
   const start = () => {
     if (running || !pending.size) return;
-    running = true;
     const batch = [...pending];
     pending.clear();
     const readers = () => batch.filter((waiter) => waiter.active()).map((waiter) => waiter.input);
-    void Promise.resolve()
+    running = Promise.resolve()
       .then(() => (readers().length ? read(readers) : undefined))
       .then(
         (value) => {
@@ -33,11 +32,11 @@ export function batchRead<Input, Output>(
         },
       )
       .finally(() => {
-        running = false;
+        running = undefined;
         start();
       });
   };
-  return (input: Input, res: ServerResponse): Promise<Output | undefined> => {
+  const request = (input: Input, res: ServerResponse): Promise<Output | undefined> => {
     const socket = res.req.socket;
     if (socket.destroyed || res.destroyed || res.writableEnded) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
@@ -66,4 +65,10 @@ export function batchRead<Input, Output>(
       start();
     });
   };
+  return Object.assign(request, {
+    /** Socket waiters may finish earlier; the owner still waits for Core work. */
+    async drain() {
+      while (running) await running;
+    },
+  });
 }

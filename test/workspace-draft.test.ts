@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -434,7 +436,7 @@ test("an empty repository rejects draft creation without writing a batch", async
 
 test("mixed-case operational names yield a directly writable top-level draft", async (t) => {
   const { root, adapter, write } = await fixture(t);
-  await git(path.join(root, ".tent"), "init", "-b", "main");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   const options = { workspace: root, json: true };
   const role = await runRoleCommand("create", ["--title", "Owner"], options);
   assert.equal(role.exitCode, 0, role.stderr);
@@ -462,11 +464,13 @@ test("mixed-case operational names yield a directly writable top-level draft", a
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "workspace-draft-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await git(root, "init", "-b", "main");
   await fs.appendFile(path.join(root, ".git/info/exclude"), "\n/.tent/\n");
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Draft" });
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  await scaffoldInWorkspace(openTestFs(root), { name: "Draft" });
+  const adapter = openTestFs(path.join(root, ".tent"));
   await fs.mkdir(path.join(root, ".scratch"));
   const write = async (file: string, text = "export const value = 1;") => {
     await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });

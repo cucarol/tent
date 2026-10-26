@@ -32,6 +32,36 @@ function response() {
   };
 }
 
+test("draining waits for Core computation after disconnected HTTP waiters have settled", async () => {
+  const started = gate(),
+    finish = gate();
+  let completed = false;
+  const read = batchRead<string, string[]>(async (readers) => {
+    started.release();
+    await finish.promise;
+    completed = true;
+    return readers();
+  });
+  const client = response(),
+    waiter = read("accepted", client.res);
+  await started.promise;
+  client.disconnect();
+  assert.equal(await waiter, undefined);
+  let drained = false;
+  const draining = read.drain().then(() => {
+    drained = true;
+  });
+  await Promise.resolve();
+  assert.equal(drained, false);
+  assert.equal(completed, false);
+  finish.release();
+  await draining;
+  assert.equal(completed, true);
+  assert.equal(drained, true);
+  assert.equal(client.events.listenerCount("close"), 0);
+  assert.equal(client.socket.listenerCount("close"), 0);
+});
+
 test("late readers share a fresh batch, never the observation already in progress", async () => {
   const firstStarted = gate(),
     firstFinish = gate(),

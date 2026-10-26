@@ -22,7 +22,7 @@ You decide, agents do the work, and Tent keeps the record. It works with Claude 
 
 ## What Tent keeps
 
-Everything lives in `.tent/` at the project root, as Markdown files with their own Git history in `.tent/.git`. Tent changes no project file: it adds `.tent/` to Git's local exclude list (`.git/info/exclude`), not to your `.gitignore`.
+Everything lives in `.tent/` at the project root, as Markdown files with independent SQLite history in `.tent/.git/history.sqlite`. Tent changes no project file: it adds `.tent/` to Git's local exclude list (`.git/info/exclude`), not to your `.gitignore`.
 
 - **Node**: one durable fact. Its `type` is exactly `goal`, `prompt` or `output`. `tags` such as `decision` or `issue` say what form the content takes. They change no behavior.
 - **Role**: a continuing direction of work, with its purpose and boundaries. Several sessions can work as the same Role.
@@ -50,7 +50,7 @@ The web page shows Nodes as cards on one canvas, linked to their parents and to 
 
 ## Install
 
-You need Node.js 22.19+ and Git.
+You need Node.js 22.19+. Git enables project-repository observations, the existing per-directory ignore interpretation and local-exclude initialization step; SQLite history itself does not require Git. Existing private-Git workspaces need the one-shot [migration](docs/MIGRATION.md) on an offline copy.
 
 **Claude Code:**
 

@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import childProcess from "node:child_process";
@@ -19,7 +20,9 @@ import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 
 async function fixture(t: TestContext, nestedWorktree = false) {
   const base = await fs.mkdtemp(path.join(testScratchRoot(), "repository-material-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(base, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const main = path.join(base, "main"),
     worktree = nestedWorktree ? path.join(main, ".worktrees/topic") : path.join(base, "topic");
   await fs.mkdir(main);
@@ -40,7 +43,7 @@ test("missing declared worktree remains unavailable even after merging its mater
   await git(worktree, "add", "assets/result.txt");
   await git(worktree, "commit", "--quiet", "-m", "test: completed material");
   await initializeTentWorkspace(main);
-  const adapter = new NodeFs(path.join(main, ".tent"));
+  const adapter = openTestFs(path.join(main, ".tent"));
   const goal = await createNode(
     { fs: adapter, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Material" },
     { name: "Goal", parentPath: "", type: "goal", body: "Requirement" },
@@ -94,7 +97,7 @@ test("file observation reads declared bytes and sections without repository disc
   await initializeTentWorkspace(main);
   const filename = path.join(main, "assets/report.md");
   await fs.writeFile(filename, "# Result\nselected\n# Other\nignored\n");
-  const adapter = new NodeFs(path.join(main, ".tent"));
+  const adapter = openTestFs(path.join(main, ".tent"));
   const resource = pathToFileURL(filename).href + "#Result";
   const original = childProcess.execFile;
   const mocked = t.mock.method(
@@ -128,7 +131,7 @@ test("file observation reads declared bytes and sections without repository disc
 test("declared file safety and access errors remain authoritative", async (t) => {
   const { main, worktree, base } = await fixture(t);
   await initializeTentWorkspace(main);
-  const adapter = new NodeFs(path.join(main, ".tent"));
+  const adapter = openTestFs(path.join(main, ".tent"));
   const filename = path.join(worktree, "assets/result.txt");
   const resource = pathToFileURL(filename).href;
   const unsafe = path.join(base, "unsafe");
@@ -158,7 +161,7 @@ test("declared file safety and access errors remain authoritative", async (t) =>
 test("committed main deletion stays unavailable with a retained or reused worktree path", async (t) => {
   const { main, worktree } = await fixture(t, true);
   await initializeTentWorkspace(main);
-  const adapter = new NodeFs(path.join(main, ".tent"));
+  const adapter = openTestFs(path.join(main, ".tent"));
   const goal = await createNode(
     { fs: adapter, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Deletion" },
     { name: "Goal", parentPath: "", type: "goal", body: "Requirement" },
@@ -209,7 +212,7 @@ test("committed main deletion stays unavailable with a retained or reused worktr
 test("worktree path warnings preserve creation and the declared live-path observation contract", async (t) => {
   const { main, worktree } = await fixture(t, true);
   await initializeTentWorkspace(main);
-  const adapter = new NodeFs(path.join(main, ".tent"));
+  const adapter = openTestFs(path.join(main, ".tent"));
   const goal = await createNode(
     { fs: adapter, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Live checkout" },
     { name: "Goal", parentPath: "", type: "goal", body: "Requirement" },

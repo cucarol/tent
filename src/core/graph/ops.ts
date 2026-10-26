@@ -19,7 +19,7 @@ import type { OpsEnv } from "./ops-context.js";
 import { ORDER_PATH } from "../base/paths.js";
 import { executeDeleteUnlocked, type DeleteWrite } from "../store/delete-recovery.js";
 import { canonicalDocumentReferences } from "./document-links.js";
-import type { CaptureMetadata } from "../store/git-history.js";
+import type { CaptureMetadata } from "../store/history-port.js";
 import { prepareNodeSyncSave } from "./node-sync-record.js";
 import { prepareNodeProvenanceSave } from "../base/node-provenance.js";
 import { captureDocumentUnlocked } from "../store/document-history.js";

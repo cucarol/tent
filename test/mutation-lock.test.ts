@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import { testScratchRoot } from "./scratch.js";
@@ -16,7 +17,7 @@ async function tempRoot(): Promise<string> {
 
 test("an acquisition waiter runs exactly once after the observed holder releases", async (t) => {
   const dir = await tempRoot();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
   const lockPath = path.join(dir, "mutation.lock");
   let acquired!: () => void, release!: () => void, observed!: () => void;
   const ready = new Promise<void>((resolve) => (acquired = resolve));
@@ -62,7 +63,7 @@ test("an acquisition waiter runs exactly once after the observed holder releases
 
 test("bounded acquisition waiting never executes a timed-out action or retries action failures", async (t) => {
   const dir = await tempRoot();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
   const lockPath = path.join(dir, "mutation.lock");
   const options = { busyMessage: "busy", acquireFailedMessage: "failed", waitMs: 100 };
   let acquired!: () => void,
@@ -113,7 +114,9 @@ test("bounded acquisition waiting never executes a timed-out action or retries a
 
 test("mutation lock rejects a concurrent holder and releases for the next", async (t) => {
   const dir = await tempRoot();
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const lockPath = path.join(dir, "mutation.lock");
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
@@ -150,7 +153,9 @@ test("mutation lock rejects a concurrent holder and releases for the next", asyn
 
 test("mutation lock release is ownership-safe", async (t) => {
   const dir = await tempRoot();
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const lockPath = path.join(dir, "mutation.lock");
   await fs.writeFile(
     lockPath,
@@ -164,7 +169,9 @@ test("mutation lock release is ownership-safe", async (t) => {
 
 test("live process blocks age-only reclaim", async (t) => {
   const dir = await tempRoot();
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const lockPath = path.join(dir, "mutation.lock");
   await fs.writeFile(
     lockPath,
@@ -183,7 +190,9 @@ test("live process blocks age-only reclaim", async (t) => {
 
 test("dead process permits stale reclaim", async (t) => {
   const dir = await tempRoot();
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const lockPath = path.join(dir, "mutation.lock");
   await fs.writeFile(
     lockPath,
@@ -203,7 +212,7 @@ test("dead process permits stale reclaim", async (t) => {
 
 test("fresh dead owner permits restart recovery while a fresh unknown owner remains busy", async (t) => {
   const dir = await tempRoot();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
   const lockPath = path.join(dir, "mutation.lock");
   await fs.writeFile(
     lockPath,

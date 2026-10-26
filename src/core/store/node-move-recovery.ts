@@ -195,7 +195,7 @@ export async function executeNodeMoveUnlocked(
   return plan;
 }
 
-/** Undo a completed move whose Git capture failed; the caller holds the lock outside history tracking. */
+/** Undo a completed move whose history capture failed; the caller holds the lock outside history tracking. */
 export async function revertNodeMoveUnlocked(fs: FsAdapter, plan: PendingMove): Promise<void> {
   if (await fs.exists(NODE_MOVE_PENDING_PATH)) throw conflict("unfinished operation");
   await fs.writeFile(NODE_MOVE_PENDING_PATH, JSON.stringify(validatePlan(plan)) + "\n");

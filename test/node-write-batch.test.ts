@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -17,17 +19,24 @@ import {
 import { createNode } from "../src/core/graph/ops.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { testScratchRoot } from "./scratch.js";
+import { initializeFixtureHistory, testScratchRoot } from "./scratch.js";
 
 async function fixture(t: TestContext) {
   const workspace = await mkdtemp(path.join(testScratchRoot(), "node-write-batch-"));
-  t.after(() => rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(workspace), { name: "Batch" });
-  const root = path.join(workspace, ".tent"),
-    fs = new NodeFs(root);
-  await promisify(execFile)("git", ["-C", root, "init", "--initial-branch=main"], {
-    windowsHide: true,
+  t.after(async () => {
+    await fs.close();
+    await removeTestFixture(workspace, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    });
   });
+  await scaffoldInWorkspace(openTestFs(workspace), { name: "Batch" });
+  const root = path.join(workspace, ".tent"),
+    fs = openTestFs(root);
+  await initializeFixtureHistory(root);
+
   const env = { fs, clock: { now: () => "2026-10-04T00:00:00.000Z" }, tentName: "Batch" };
   const id = await createNode(env, {
     name: "Existing",
@@ -208,7 +217,7 @@ for (const failure of [
   });
 }
 
-for (const failure of ["document", "order", "capture", "git-lock"] as const) {
+for (const failure of ["document", "order", "capture", "sqlite-busy"] as const) {
   test(`batch restores exact preimages on ${failure} failure`, async (t) => {
     const { env, fs, root, existing } = await fixture(t);
     const initialOrder = await fs.readFile("order.json"),
@@ -230,28 +239,34 @@ for (const failure of ["document", "order", "capture", "git-lock"] as const) {
       fs.history.captureUnlocked = async () => {
         throw new Error("injected capture failure");
       };
-    if (failure === "git-lock") {
-      const head = (await readFile(path.join(root, ".git/HEAD"), "utf8")).trim();
-      const ref = head.startsWith("ref: ") ? head.slice(5) : "HEAD";
-      await mkdir(path.dirname(path.join(root, ".git", ref)), { recursive: true });
-      await writeFile(path.join(root, ".git", `${ref}.lock`), "locked");
+    let blocker: DatabaseSync | undefined;
+    if (failure === "sqlite-busy") {
+      blocker = new DatabaseSync(path.join(root, ".git/history.sqlite"));
+      blocker.exec("BEGIN IMMEDIATE");
     }
-    await assert.rejects(
-      writeNodesBatch(env, {
-        items: [
-          {
-            op: "update",
-            nodeId: existing.nodeId,
-            baseEtag: existing.etag,
-            body: "next",
-            confirm: true,
-          },
-          { op: "create", ref: "child", parent: "@new", name: "Child", type: "output" },
-          { op: "create", ref: "new", parent: null, name: "New", type: "goal" },
-        ],
-      }),
-      /failure|HEAD changed/,
-    );
+    try {
+      await assert.rejects(
+        writeNodesBatch(env, {
+          items: [
+            {
+              op: "update",
+              nodeId: existing.nodeId,
+              baseEtag: existing.etag,
+              body: "next",
+              confirm: true,
+            },
+            { op: "create", ref: "child", parent: "@new", name: "Child", type: "output" },
+            { op: "create", ref: "new", parent: null, name: "New", type: "goal" },
+          ],
+        }),
+        /failure|locked/,
+      );
+    } finally {
+      if (blocker) {
+        blocker.exec("ROLLBACK");
+        blocker.close();
+      }
+    }
     assert.equal(await fs.readFile("Existing/Existing.md"), existing.raw);
     assert.equal(await fs.readFile("order.json"), initialOrder);
     assert.equal(await fs.exists("New"), false);

@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import { testScratchRoot } from "./scratch.js";
@@ -28,8 +29,8 @@ function envFor(fsa: FsAdapter, name = "x") {
 
 test("moveNode preserves the directory stem when title differs from its filename", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-title-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
-  const fsa = new NodeFs(dir);
+  t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const parent = await createNode(env, { parentPath: "", name: "parent", type: "goal" });
@@ -76,8 +77,10 @@ test("moveNode preserves the directory stem when title differs from its filename
 
 test("moveNode: keep system basenames nested and preserve rejected moves", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-reserved-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const parent = await createNode(env, { parentPath: "", name: "parent", type: "prompt" });
@@ -105,8 +108,10 @@ test("moveNode: keep system basenames nested and preserve rejected moves", async
 
 test("moveNode: reparent keeps node-, moves subtree, rewrites path links", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-reparent-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const parentId = await createNode(env as any, { parentPath: "", name: "parent", type: "prompt" });
@@ -148,8 +153,10 @@ test("moveNode: reparent keeps node-, moves subtree, rewrites path links", async
 test("moveNode: depth-changing reparent restyles ./ and ../ inside moved subtree", async (t) => {
   // Reviewer probe: parent/child → dest/nest/child must not corrupt relatives.
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-depth-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   await createNode(env as any, { parentPath: "", name: "parent", type: "prompt" });
@@ -209,8 +216,10 @@ test("moveNode: depth-changing reparent restyles ./ and ../ inside moved subtree
 
 test("moveNode: reparent to root restyles outbound relative to unmoved peer", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-root-rel-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   await createNode(env as any, { parentPath: "", name: "parent", type: "prompt" });
@@ -248,8 +257,8 @@ test("moveNode: reparent to root restyles outbound relative to unmoved peer", as
 
 test("moveNode restyles a moved declaration to the same workspace file", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-outside-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
-  const fsa = new NodeFs(path.join(workspace, ".tent"));
+  t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
+  const fsa = openTestFs(path.join(workspace, ".tent"));
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const beta = await createNode(env, { parentPath: "", name: "Beta", type: "prompt" });
@@ -309,8 +318,10 @@ test("rewriteNodeLinks: restyleFromNotePath fixes relatives when source moves", 
 
 test("moveNode: same-parent reorder is order-only (no link rewrite)", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-reorder-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const a = await createNode(env as any, { parentPath: "", name: "alpha", type: "prompt" });
@@ -340,8 +351,10 @@ test("moveNode: same-parent reorder is order-only (no link rewrite)", async (t) 
 
 test("moveNode: refuses cycles but preserves local deprecated status during a move", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-guard-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
   const parent = await createNode(env as any, { parentPath: "", name: "p", type: "prompt" });
@@ -363,8 +376,10 @@ test("moveNode: refuses cycles but preserves local deprecated status during a mo
 
 test("moveNode: injected write failure restores tree and note bytes", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-rollback-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const base = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const base = openTestFs(dir);
   await scaffoldTent(base, { name: "x" });
   const setupEnv = envFor(base);
   const a = await createNode(setupEnv as any, { parentPath: "", name: "alpha", type: "prompt" });
@@ -403,8 +418,10 @@ test("moveNode: injected write failure restores tree and note bytes", async (t) 
 
 test("attachments is an ordinary indexed Node name through move, place and rename", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-ordinary-name-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   const bytes = new Uint8Array([0, 255, 128, 1]);
   await fsa.writeBinary("attachments/legacy.bin", bytes);
   await scaffoldTent(fsa, { name: "ordinary directory" });

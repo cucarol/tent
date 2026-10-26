@@ -1,3 +1,7 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -178,12 +182,14 @@ test("brief limits each waiting list independently and retains totals, read comm
 });
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "context-phase1-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Context" });
-  await git(path.join(root, ".tent"), "init");
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), { name: "Context" });
+  await initializeFixtureHistory(path.join(root, ".tent"));
   const options = { workspace: root, json: true };
   const node = async (sub: string, args: string[], stdin?: unknown) => {
     const result = await runNodeCommand(sub, args, {
@@ -255,7 +261,7 @@ test("drift keeps oversized material findings readable and points to the complet
 
 test("brief ignores retained session logs and has no unrecorded-file section", async (t) => {
   const f = await fixture(t);
-  const adapter = new NodeFs(path.join(f.root, ".tent"));
+  const adapter = openTestFs(path.join(f.root, ".tent"));
   const legacy = `temp/observations/${"a".repeat(64)}.jsonl`;
   await adapter.writeFile(legacy, "invalid old session log\n");
   const read = NodeFs.prototype.readFile;
@@ -294,7 +300,7 @@ test("brief exposes root identities without drift or another catalog scan", asyn
     ],
   });
   await f.node("archive", [created.results[3].nodeId]);
-  const adapter = new NodeFs(path.join(f.root, ".tent"));
+  const adapter = openTestFs(path.join(f.root, ".tent"));
   const catalog = await loadNodeCatalog(adapter);
   const observed = new Proxy(adapter, {
     get(target, key) {
@@ -359,7 +365,7 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   assert.equal(linked.path, ".tent/Requirement/Implementation/Implementation.md");
   assert.equal((await f.node("check", [id])).state, "synced");
   await fs.writeFile(path.join(f.root, "requirement.md"), "Requirement version two");
-  const headBefore = await git(path.join(f.root, ".tent"), "rev-parse", "HEAD");
+  const headBefore = await historyHead(path.join(f.root, ".tent"));
   let brief = await f.workspace("brief");
   assert.equal(brief.value.counts.behind, 1);
   assert.deepEqual(brief.value.behind, []);
@@ -378,7 +384,7 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
     false,
   );
   assert.equal(
-    await git(path.join(f.root, ".tent"), "rev-parse", "HEAD"),
+    await historyHead(path.join(f.root, ".tent")),
     headBefore,
     "read-only commands must not capture a new version",
   );
@@ -544,13 +550,13 @@ test("brief keeps Card delivery independent of goal outputs and only warns for c
   const file = path.join(f.root, ".tent", "Spec", "Spec.md");
   const original = await fs.readFile(file, "utf8");
   await fs.writeFile(file, original.replace("Original requirement", "Changed requirement"));
-  const head = await git(path.join(f.root, ".tent"), "rev-parse", "HEAD");
+  const head = await historyHead(path.join(f.root, ".tent"));
   const brief = await f.workspace("brief");
   assert.equal(brief.value.changedCardSources[0].cardId, published.cardId);
   assert.equal(brief.value.changedCardSources[0].nodeId, source.node.nodeId);
   assert.equal(brief.value.changedCardSources[0].state, "changed");
   assert.notEqual(
-    await git(path.join(f.root, ".tent"), "rev-parse", "HEAD"),
+    await historyHead(path.join(f.root, ".tent")),
     head,
     "brief records the preceding native source edit",
   );
@@ -642,7 +648,7 @@ test("brief reports only drift counts and a qualified entry while bounding other
         nodeId: `node-${i}`,
         resource: `/Source${i}/Source${i}.md`,
         state: "changed" as const,
-        publishedVersion: { commit: "a".repeat(40), path: `Source${i}/Source${i}.md` },
+        publishedVersion: { commit: "a".repeat(64), path: `Source${i}/Source${i}.md` },
         path: `${"完整的来源目录".repeat(100)}/${i}.md`,
         reason: "来源材料变化".repeat(100),
       })),
@@ -761,7 +767,7 @@ test("CLI discovery text and JSON stay byte-identical when the clock advances on
   );
   assert.equal(card.exitCode, 0, card.stderr);
   assert.ok((await f.node("check", [id])).ahead);
-  const head = await git(path.join(f.root, ".tent"), "rev-parse", "HEAD");
+  const head = await historyHead(path.join(f.root, ".tent"));
   t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-07T04:00:59Z") });
   const readAll = async () => {
     const outputs: Record<string, string> = {};
@@ -802,7 +808,7 @@ test("CLI discovery text and JSON stay byte-identical when the clock advances on
   t.mock.timers.tick(1000);
   const after = await readAll();
   for (const name of Object.keys(before)) assert.equal(after[name], before[name], name);
-  assert.equal(await git(path.join(f.root, ".tent"), "rev-parse", "HEAD"), head);
+  assert.equal(await historyHead(path.join(f.root, ".tent")), head);
 });
 
 test("brief counts a dual-status goal while drift lists both findings and leaves neutral output quiet", () => {

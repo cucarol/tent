@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as fs from "node:fs/promises";
@@ -15,13 +18,13 @@ const raw = (id: string, body: string, extra = "") =>
   `\uFEFF---\r\nid: ${id}\r\ntype: prompt\r\n${extra}---\r\n${body}`;
 
 test("public discovery uses only headers, omits edit tokens and keeps metadata paging separate from body versions", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "node-discovery-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const workspace = path.join(root, "workspace");
   await initializeFixtureWorkspace(workspace);
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const adapter = openTestFs(path.join(workspace, ".tent"));
   const original = raw("node-alpha", "A".repeat(128 * 1024), "tags: [offline, PDF]\r\n");
   await adapter.writeFile("A/A.md", original);
   await adapter.writeFile("A/Child/Child.md", raw("node-child", "Child"));

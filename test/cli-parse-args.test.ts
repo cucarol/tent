@@ -1,3 +1,7 @@
+import { testScratchRoot } from "./scratch.js";
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -10,12 +14,12 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 import { git } from "./helpers.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
-const scratch = fileURLToPath(new URL("../.scratch/", import.meta.url));
+const scratch = testScratchRoot();
 
 test("Card and Node reject invalid option syntax without workspace discovery", async (t) => {
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "tent-cli-args-invalid-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const dataDir = path.join(root, "absent");
   for (const [run, flag] of [
     [runCardCommand, "prompt"],
@@ -43,11 +47,11 @@ test("Card and Node reject invalid option syntax without workspace discovery", a
 test("full CLI preserves text, stdin, repeated options and terminators through direct CLI", async (t) => {
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "tent-cli-args-real-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const workspace = path.join(root, "workspace");
   const dataDir = path.join(root, "service");
-  await scaffoldInWorkspace(new NodeFs(workspace), { name: "CLI arguments" });
-  await git(path.join(workspace, ".tent"), "init");
+  await scaffoldInWorkspace(openTestFs(workspace), { name: "CLI arguments" });
+  await initializeFixtureHistory(path.join(workspace, ".tent"));
   const entry = fileURLToPath(new URL("../src/cli/tent.ts", import.meta.url));
   const env = Object.fromEntries(
     Object.entries(process.env).filter(

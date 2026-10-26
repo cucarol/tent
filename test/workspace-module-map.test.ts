@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -21,11 +22,13 @@ const structure = (resource: string) => ({ sources: [{ resource, track: "structu
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "module-map-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await git(root, "init", "-b", "main");
   await fs.appendFile(path.join(root, ".git/info/exclude"), "\n/.tent/\n");
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Map" });
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  await scaffoldInWorkspace(openTestFs(root), { name: "Map" });
+  const adapter = openTestFs(path.join(root, ".tent"));
   const write = async (file: string, body: string) => {
     await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
     await fs.writeFile(path.join(root, file), body);
@@ -423,7 +426,9 @@ test("module history refuses missing partial-clone trees without fetching or wri
   await git(root, "commit", "-m", "source");
   await git(root, "config", "uploadpack.allowFilter", "true");
   const partial = await fs.mkdtemp(path.join(testScratchRoot(), "scan-partial-"));
-  t.after(() => fs.rm(partial, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(partial, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await git(
     root,
     "clone",

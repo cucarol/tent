@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -39,12 +41,14 @@ const event = (files: string[] = []): SessionObservationEvent => ({
 });
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "stop-review-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "review" });
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), { name: "review" });
+  const adapter = openTestFs(path.join(root, ".tent"));
   const node = async (nodePath: string, id: string, resource: string, track = true, extra = "") => {
     const name = nodePath.split("/").pop()!;
     await fs.mkdir(path.join(root, ".tent", nodePath), { recursive: true });
@@ -63,7 +67,7 @@ async function fixture(t: TestContext) {
 }
 
 test("shared structure coverage validates prefixes and directory/path boundaries", () => {
-  const root = path.resolve(".scratch", "coverage");
+  const root = path.resolve(testScratchRoot(), "coverage");
   const owner = "Module/Module.md";
   const directory = structureMaterialCoverage("../../src/core/", owner, root)!;
   assert.deepEqual(directory, { kind: "directory", prefix: "src/core/" });

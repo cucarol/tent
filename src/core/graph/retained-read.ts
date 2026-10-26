@@ -1,3 +1,4 @@
+import { hasDocumentHistory } from "../store/history-port.js";
 import { createHash } from "node:crypto";
 import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
 import { isHistoryDocument } from "../store/document-history.js";
@@ -7,7 +8,7 @@ import { CANVAS_PATH, isOperationalPath, SYSTEM_REGISTRY_FILES } from "../base/p
 /** One read's exact byte comparison; no capture, baseline update or cache write. */
 export async function uncapturedChecker(fs: FsAdapter) {
   const blobs =
-    fs.history && (await fs.exists(".git"))
+    fs.history && (await hasDocumentHistory(fs))
       ? await fs.history.documentBlobs()
       : new Map<string, string>();
   return (path: string, raw: string): boolean => {
@@ -25,7 +26,8 @@ export async function uncapturedChecker(fs: FsAdapter) {
 
 /** Document-derived state uses HEAD; external material observations remain live. */
 export async function retainedDocumentFs(fs: FsAdapter): Promise<FsAdapter> {
-  const head = fs.history && (await fs.exists(".git")) ? await fs.history.currentCommit() : null;
+  const head =
+    fs.history && (await hasDocumentHistory(fs)) ? await fs.history.currentCommit() : null;
   const documents = new Map(
     head
       ? [...(await fs.history!.readDirectory(head))].filter(([path]) => isHistoryDocument(path))

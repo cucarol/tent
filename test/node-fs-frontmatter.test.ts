@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import fsPromises from "node:fs/promises";
@@ -12,11 +13,11 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";
 
 test("NodeFs reads the exact frontmatter prefix across UTF-8 and fence boundaries", async () => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "node-fm-"));
   try {
-    const adapter = new NodeFs(root);
+    const adapter = openTestFs(root);
     const cases = [
       [
         "bom.md",
@@ -44,18 +45,18 @@ test("NodeFs reads the exact frontmatter prefix across UTF-8 and fence boundarie
     assert.throws(() => parseFrontmatter(cases[5][1]), /unterminated frontmatter fence/);
     await assert.rejects(adapter.readFrontmatter("../outside.md"), /Path escapes Tent root/);
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTestFixture(root, { recursive: true, force: true });
   }
 });
 
 test("NodeFs stops reading after the closing fence or a missing opening", async () => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "node-fm-bounded-"));
   const originalOpen = fsPromises.open;
   let readBytes = 0;
   try {
-    const adapter = new NodeFs(root);
+    const adapter = openTestFs(root);
     const frontmatter = "---\nid: node-large\n---\n";
     await fs.writeFile(path.join(root, "front.md"), frontmatter + "x".repeat(4_000_000));
     await fs.writeFile(path.join(root, "plain.md"), "# Body\n" + "x".repeat(4_000_000));
@@ -83,13 +84,15 @@ test("NodeFs stops reading after the closing fence or a missing opening", async 
   } finally {
     fsPromises.open = originalOpen;
     syncBuiltinESMExports();
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTestFixture(root, { recursive: true, force: true });
   }
 });
 
 test("a swapped directory cannot persist another handle's header under the restored file identity", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-header-identity-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const systemRoot = path.join(root, ".tent");
   await fs.mkdir(path.join(systemRoot, ".git"), { recursive: true });
   const original = path.join(systemRoot, "A"),
@@ -130,9 +133,11 @@ test("a swapped directory cannot persist another handle's header under the resto
   syncBuiltinESMExports();
   let failure: unknown;
   try {
-    await new NodeFs(systemRoot).readFrontmatter("A/A.md").catch((error) => {
-      failure = error;
-    });
+    await openTestFs(systemRoot)
+      .readFrontmatter("A/A.md")
+      .catch((error) => {
+        failure = error;
+      });
   } finally {
     mocked.mock.restore();
     syncBuiltinESMExports();
@@ -145,11 +150,11 @@ test("a swapped directory cannot persist another handle's header under the resto
     "the original leaf state genuinely remains unchanged",
   );
   assert.equal(
-    await new NodeFs(systemRoot).readFrontmatter("A/A.md"),
+    await openTestFs(systemRoot).readFrontmatter("A/A.md"),
     header,
     "an independent request must never reuse the other file's header",
   );
-  const current = (await loadNodeCatalog(new NodeFs(systemRoot))).byPath.get("A");
+  const current = (await loadNodeCatalog(openTestFs(systemRoot))).byPath.get("A");
   assert.equal(current?.nodeId, "node-original");
   assert.equal(current?.type, "prompt");
   assert.ok(failure instanceof ReaderError);

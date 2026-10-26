@@ -1,3 +1,6 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
@@ -12,17 +15,19 @@ import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "everyday-workflow-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const workspace = path.join(root, "graph");
-  await scaffoldInWorkspace(new NodeFs(workspace), {
+  await scaffoldInWorkspace(openTestFs(workspace), {
     name: "context",
     nodes: [{ id: "node-rule", name: "Import", type: "prompt", body: "Confirmed rule" }],
   });
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
-  await git(path.join(workspace, ".tent"), "init");
+  const adapter = openTestFs(path.join(workspace, ".tent"));
+  await initializeFixtureHistory(path.join(workspace, ".tent"));
   const { workspaceId: savedId } = await readWorkspaceSettings(adapter),
     workspaceId = savedId!;
   const globals = { workspace, cwd: root, env: {}, json: true },

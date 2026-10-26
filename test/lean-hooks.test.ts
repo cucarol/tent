@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,11 +16,13 @@ import { ANSWER_REVIEW, TOOL_REVIEW_ACTION } from "../src/core/return/tool-turn-
 import { hasStopReviewClaim } from "../src/fs/stop-review-claim.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "tool-hooks-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "hooks" });
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), { name: "hooks" });
   const systemRoot = path.join(root, ".tent");
   await fs.mkdir(path.join(systemRoot, ".git"));
   for (const [name, id, coverage] of [

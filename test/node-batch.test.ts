@@ -1,3 +1,5 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
@@ -13,13 +15,15 @@ import { runNodeCommand } from "../src/cli/node-commands.js";
 
 const raw = (id: string, body: string) => `---\nid: ${id}\ntype: prompt\n---\n${body}`;
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "node-batch-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const workspace = path.join(root, "workspace");
   await initializeFixtureWorkspace(workspace);
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const adapter = openTestFs(path.join(workspace, ".tent"));
   const git = async (...args: string[]) =>
     (
       await promisify(execFile)("git", ["-C", path.join(workspace, ".tent"), ...args], {
@@ -79,7 +83,7 @@ test("prepared batch returns each selected body without capturing", async (t) =>
   );
   assert.ok("text" in ordinary.items[1]!);
   assert.equal(ordinary.items[1]!.text, body);
-  await assert.rejects(git("rev-parse", "--verify", "HEAD"));
+  assert.equal(await adapter.history.currentCommit(), null);
 });
 
 for (const view of ["body", "raw"] as const) {
@@ -91,7 +95,7 @@ for (const view of ["body", "raw"] as const) {
       { path: "A/A.md", raw: await adapter.readFile("A/A.md") },
       { path: "B/B.md", raw: await adapter.readFile("B/B.md") },
     ]);
-    const beforeHead = await git("rev-parse", "HEAD");
+    const beforeHead = await adapter.history.currentCommit();
     const beforeRecords = await adapter.history.nodeRecords();
     const body = "😀\r\n正文".repeat(8000);
     const document = raw("node-alpha", body);
@@ -177,9 +181,7 @@ for (const view of ["body", "raw"] as const) {
     assert.equal(second.exitCode, 0, second.stderr);
     assert.equal(JSON.parse(second.stdout).items[0].nodeId, "node-bravo");
     assert.deepEqual(await tentFiles(workspace), beforeFiles);
-    const historyIndex = JSON.parse(await adapter.readFile(".git/tent-history-index.json"));
-    assert.equal(historyIndex.head, beforeHead);
-    assert.equal(await git("rev-parse", "HEAD"), beforeHead);
+    assert.equal(await adapter.history.currentCommit(), beforeHead);
     assert.deepEqual(await adapter.history.nodeRecords(), beforeRecords);
 
     // Previously the CLI retained selected bytes and resumed a Git version after edits.
@@ -203,7 +205,7 @@ for (const view of ["body", "raw"] as const) {
       view === "body" ? "Edited after the batch" : edited,
     );
     assert.deepEqual(await tentFiles(workspace), editedFiles);
-    assert.equal(await git("rev-parse", "HEAD"), beforeHead);
+    assert.equal(await adapter.history.currentCommit(), beforeHead);
     assert.deepEqual(await adapter.history.nodeRecords(), beforeRecords);
   });
 }

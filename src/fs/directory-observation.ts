@@ -5,6 +5,7 @@ import { checkedSourceDirectory, initialSourceState } from "./checked-source-fil
 import { withFileReadScope } from "./file-state-cache.js";
 import { directoryRepository } from "./repository-material.js";
 import { isTentWorkspacePath } from "../core/base/material-coverage.js";
+import { GIT_IGNORE_CONTEXT } from "./git-ignore-context.js";
 
 type SourcePathType = "file" | "directory" | "link" | "other";
 /** Listing metadata only; reading source bytes still performs its own safety checks. */
@@ -77,7 +78,7 @@ function names(bytes: Buffer) {
   return bytes.toString("utf8").split("\0").filter(Boolean);
 }
 
-/** Existing Tent Git supplies only the Workspace's per-directory ignore engine. */
+/** Git supplies only the Workspace's existing per-directory ignore interpretation. */
 async function borrowedFiles(root: string, gitDir: string, scopes: readonly string[]) {
   const output = await git(
     root,
@@ -107,7 +108,7 @@ async function borrowedFiles(root: string, gitDir: string, scopes: readonly stri
 }
 
 // A standalone read may traverse a rule-free tree, but cannot approximate Git's
-// ignore language when neither a project repository nor Tent Git is available.
+// ignore language without an initialized tool context or a project repository.
 async function requireNoIgnoreRules(folder: string) {
   const text = await readFile(path.join(folder, ".gitignore"), "utf8").catch(
     (error: NodeJS.ErrnoException) => {
@@ -125,7 +126,9 @@ async function plainFiles(
   cacheDir?: string,
   candidatesOnly = false,
 ): Promise<Array<{ filename: string; directory?: true }>> {
-  const gitDir = cacheDir ? path.dirname(cacheDir) : undefined;
+  const gitDir = cacheDir
+    ? path.join(path.dirname(cacheDir), GIT_IGNORE_CONTEXT, ".git")
+    : undefined;
   if (
     gitDir &&
     (await lstat(path.join(gitDir, "HEAD"))
@@ -136,7 +139,7 @@ async function plainFiles(
       }))
   ) {
     const relative = path.relative(root, directory).split(path.sep).join("/");
-    // The existing Tent repository supplies Git's ignore engine only. A distinct,
+    // The unborn tool context supplies Git's ignore engine only. A distinct,
     // nonexistent index keeps Tent's tracked paths out of the Workspace listing.
     // --exclude-per-directory deliberately excludes Tent info/exclude and global rules.
     return (await borrowedFiles(root, gitDir, [relative]))

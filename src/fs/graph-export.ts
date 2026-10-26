@@ -63,109 +63,114 @@ async function inventory(root: string) {
 
 async function validateMaterial(root: string, workspaceId: string, files: FileEntry[]) {
   const adapter = new NodeFs(root);
-  await liveContextReader(adapter, { kind: "live", workspaceId });
-  const owned = new Set<string>();
-  const directories = new Set<string>();
-  type Origin = { kind: "live" };
-  const externalMaterials: Array<{
-    origin: Origin;
-    documentPath: string;
-    field: string;
-    index?: number;
-    resource: string;
-  }> = [];
-  const unresolvedMaterials: Array<{
-    origin: Origin;
-    documentPath: string;
-    field?: string;
-    index?: number;
-    resource?: string;
-    error?: string;
-  }> = [];
-  const packed = new Map(files.map((file) => [file.path, file.kind]));
-  const collectLinks = (body: string, sourcePath: string) => {
-    const visit = (node: Nodes) => {
-      if (
-        (node.type === "link" || node.type === "image" || node.type === "definition") &&
-        /^https?:\/\//i.test(node.url)
-      ) {
-        externalMaterials.push({
-          origin: { kind: "live" },
+  try {
+    await liveContextReader(adapter, { kind: "live", workspaceId });
+    const owned = new Set<string>();
+    const directories = new Set<string>();
+    type Origin = { kind: "live" };
+    const externalMaterials: Array<{
+      origin: Origin;
+      documentPath: string;
+      field: string;
+      index?: number;
+      resource: string;
+    }> = [];
+    const unresolvedMaterials: Array<{
+      origin: Origin;
+      documentPath: string;
+      field?: string;
+      index?: number;
+      resource?: string;
+      error?: string;
+    }> = [];
+    const packed = new Map(files.map((file) => [file.path, file.kind]));
+    const collectLinks = (body: string, sourcePath: string) => {
+      const visit = (node: Nodes) => {
+        if (
+          (node.type === "link" || node.type === "image" || node.type === "definition") &&
+          /^https?:\/\//i.test(node.url)
+        ) {
+          externalMaterials.push({
+            origin: { kind: "live" },
+            documentPath: sourcePath,
+            field: "body",
+            resource: node.url,
+          });
+        }
+        if ("children" in node) for (const child of node.children) visit(child);
+      };
+      visit(fromMarkdown(body));
+    };
+    const collect = (
+      raw: string,
+      sourcePath: string,
+      origin: Origin,
+      gitSources = new Set<number>(),
+    ) => {
+      const parsed = parseFrontmatter(raw);
+      let occurrences: ReturnType<typeof resolvedMaterialOccurrences> = [];
+      try {
+        occurrences = resolvedMaterialOccurrences(parsed.data, sourcePath);
+      } catch {
+        unresolvedMaterials.push({
+          origin,
           documentPath: sourcePath,
-          field: "body",
-          resource: node.url,
+          error: "Nonstandard material metadata preserved as raw bytes",
         });
       }
-      if ("children" in node) for (const child of node.children) visit(child);
-    };
-    visit(fromMarkdown(body));
-  };
-  const collect = (
-    raw: string,
-    sourcePath: string,
-    origin: Origin,
-    gitSources = new Set<number>(),
-  ) => {
-    const parsed = parseFrontmatter(raw);
-    let occurrences: ReturnType<typeof resolvedMaterialOccurrences> = [];
-    try {
-      occurrences = resolvedMaterialOccurrences(parsed.data, sourcePath);
-    } catch {
-      unresolvedMaterials.push({
-        origin,
-        documentPath: sourcePath,
-        error: "Nonstandard material metadata preserved as raw bytes",
-      });
-    }
-    for (const { locator, error, ...occurrence } of occurrences) {
-      if (
-        occurrence.field === "sources" &&
-        occurrence.index !== undefined &&
-        gitSources.has(occurrence.index)
-      )
-        continue;
-      const declaration = { origin, documentPath: sourcePath, ...occurrence };
-      if (!locator || locator.kind === "unresolved") {
-        unresolvedMaterials.push({ ...declaration, ...(error ? { error } : {}) });
-        continue;
-      }
-      if (locator.kind === "uri" || locator.target === ".." || locator.target.startsWith("../")) {
-        externalMaterials.push(declaration);
-        continue;
-      }
-      const kind = packed.get(locator.target);
-      if (kind === "directory" || locator.target === ".") directories.add(locator.target);
-      else owned.add(locator.target); // Missing declared bundle files fail the same inventory check.
-    }
-    collectLinks(parsed.body, sourcePath);
-  };
-  for (const file of files) {
-    if (file.kind !== "file" || !file.path.endsWith(".md")) continue;
-    // Ordinary files are byte inventory, not Tent declarations, regardless of directory name.
-    if (!isHistoryDocument(file.path) && !/^(?:roles|cards)\/[^/]+\.md$/.test(file.path)) continue;
-    const raw = await adapter.readFile(file.path),
-      data = parseFrontmatter(raw).data,
-      gitSources = new Set<number>();
-    if (/^cards\/[^/]+\.md$/.test(file.path)) {
-      if (data.type === "card" && data.schemaVersion === 3) {
-        const sources = sourcesSchema.parse(data.sources);
-        for (let index = 0; index < sources.length; index++) {
-          const source = sources[index]!;
-          if (source.version === undefined) continue;
-          await verifyCardSourceVersion(adapter, file.path, source);
-          gitSources.add(index);
+      for (const { locator, error, ...occurrence } of occurrences) {
+        if (
+          occurrence.field === "sources" &&
+          occurrence.index !== undefined &&
+          gitSources.has(occurrence.index)
+        )
+          continue;
+        const declaration = { origin, documentPath: sourcePath, ...occurrence };
+        if (!locator || locator.kind === "unresolved") {
+          unresolvedMaterials.push({ ...declaration, ...(error ? { error } : {}) });
+          continue;
         }
-      } else throw new Error(`Unsupported Card document: ${file.path}`);
+        if (locator.kind === "uri" || locator.target === ".." || locator.target.startsWith("../")) {
+          externalMaterials.push(declaration);
+          continue;
+        }
+        const kind = packed.get(locator.target);
+        if (kind === "directory" || locator.target === ".") directories.add(locator.target);
+        else owned.add(locator.target); // Missing declared bundle files fail the same inventory check.
+      }
+      collectLinks(parsed.body, sourcePath);
+    };
+    for (const file of files) {
+      if (file.kind !== "file" || !file.path.endsWith(".md")) continue;
+      // Ordinary files are byte inventory, not Tent declarations, regardless of directory name.
+      if (!isHistoryDocument(file.path) && !/^(?:roles|cards)\/[^/]+\.md$/.test(file.path))
+        continue;
+      const raw = await adapter.readFile(file.path),
+        data = parseFrontmatter(raw).data,
+        gitSources = new Set<number>();
+      if (/^cards\/[^/]+\.md$/.test(file.path)) {
+        if (data.type === "card" && data.schemaVersion === 3) {
+          const sources = sourcesSchema.parse(data.sources);
+          for (let index = 0; index < sources.length; index++) {
+            const source = sources[index]!;
+            if (source.version === undefined) continue;
+            await verifyCardSourceVersion(adapter, file.path, source);
+            gitSources.add(index);
+          }
+        } else throw new Error(`Unsupported Card document: ${file.path}`);
+      }
+      collect(raw, file.path, { kind: "live" }, gitSources);
     }
-    collect(raw, file.path, { kind: "live" }, gitSources);
+    for (const target of owned)
+      if (packed.get(target) !== "file")
+        throw new Error(`Owned material missing from export: ${target}`);
+    for (const target of directories)
+      if (!(await fs.stat(path.join(root, target))).isDirectory())
+        throw new Error(`Owned material directory missing: ${target}`);
+    return { externalNotPacked: externalMaterials, unresolvedMaterials };
+  } finally {
+    await adapter.close();
   }
-  for (const target of owned)
-    if (packed.get(target) !== "file")
-      throw new Error(`Owned material missing from export: ${target}`);
-  for (const target of directories)
-    if (!(await fs.stat(path.join(root, target))).isDirectory())
-      throw new Error(`Owned material directory missing: ${target}`);
-  return { externalNotPacked: externalMaterials, unresolvedMaterials };
 }
 
 /** 普通目录包保留所有持久原文；不携带机器状态，也不改写源图谱。 */
@@ -193,7 +198,7 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const capture = async () => {
-    const unportableRecords = (await mount.env.fs.exists(".git/HEAD"))
+    const unportableRecords = (await mount.env.fs.history?.available())
       ? await mount.env.fs.history?.unportableNodeRecordIds()
       : [];
     if (unportableRecords?.length)
@@ -251,7 +256,7 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
         "machine state, credentials, launch settings, running sessions",
         "locks and temporary files",
         "disposable .tent/.git/tent-material-cache",
-        "disposable Git history indexes",
+        "obsolete history indexes",
         "external project/URL bytes",
       ],
       restore: "Use this directory as the same Workspace; external material bytes are not included",

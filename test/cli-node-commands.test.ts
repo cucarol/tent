@@ -1,3 +1,6 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -15,18 +18,20 @@ import { readNode, listNodes } from "../src/core/read/node-query.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: { after(fn: () => Promise<void>): void }, name: string) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, name));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), {
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), {
     name,
     nodes: [
       { id: "node-parent", name: "Parent", type: "goal", body: "parent" },
       { id: "node-other", name: "Other", type: "prompt", body: "unselected-body" },
     ],
   });
-  const tent = new NodeFs(path.join(root, ".tent"));
+  const tent = openTestFs(path.join(root, ".tent"));
   const parse = (result: { exitCode: number; stdout: string; stderr: string }) => {
     assert.equal(result.exitCode, 0, result.stderr);
     return JSON.parse(result.stdout);
@@ -38,7 +43,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, name: string
 
 test("Node, Role, Card and batch reads use text for body and raw content without a body alias", async (t) => {
   const { root, cli, parse } = await fixture(t, "uniform-reader-text-");
-  await git(path.join(root, ".tent"), "init");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   const globals = { workspace: root, json: true };
   const role = parse(
     await runRoleCommand("create", ["--title", "Reader", "--body", "role body"], globals),
@@ -199,7 +204,7 @@ test("direct Node CLI creates standard materials and uses observed CAS for metad
 
 test("direct selected queries read headers elsewhere, retain selected bytes and never resume pending mutations", async (t) => {
   const { root, tent } = await fixture(t, "direct-query-");
-  await git(path.join(root, ".tent"), "init");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   await tent.writeFile("node-move.pending.json", "broken pending operation");
   const bodyReads: string[] = [];
   const observed = new Proxy(tent, {
@@ -221,18 +226,13 @@ test("direct selected queries read headers elsewhere, retain selected bytes and 
   assert.ok("text" in read);
   assert.equal(read.text, "parent");
   assert.deepEqual(bodyReads, ["Parent/Parent.md"]);
-  assert.deepEqual(
-    (await git(path.join(root, ".tent"), "ls-tree", "-r", "--name-only", "HEAD"))
-      .trim()
-      .split("\n"),
-    ["Parent/Parent.md"],
-  );
+  assert.deepEqual(await tent.history.retainedPaths(), ["Parent/Parent.md"]);
   assert.equal(await tent.readFile("node-move.pending.json"), "broken pending operation");
 });
 
 test("separate direct CLI processes retain Git versions and reject a stale edit without a Service", async (t) => {
   const { root, tent, parse } = await fixture(t, "direct-node-process-");
-  await git(path.join(root, ".tent"), "init");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   const cli = (sub: string, args: string[]) =>
     new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve, reject) => {
       const child = spawn(
@@ -511,7 +511,7 @@ test("link-output creates a plain output and adds only the tags it is given", as
 
 test("removed convenience commands are unavailable and leave document and history unchanged", async (t) => {
   const { root, tent, cli } = await fixture(t, "removed-node-commands-");
-  await git(path.join(root, ".tent"), "init", "--initial-branch=main");
+  await initializeFixtureHistory(path.join(root, ".tent"));
   await cli("create", [
     "Tagged",
     "--id",

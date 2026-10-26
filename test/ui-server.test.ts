@@ -1,3 +1,6 @@
+import { openTestService } from "./node-fs.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import nodeFs from "node:fs";
@@ -41,10 +44,12 @@ type Call = (
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "ui-server-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const workspace = path.join(root, "ws");
   await initializeFixtureWorkspace(workspace);
-  const tent = new NodeFs(path.join(workspace, ".tent"));
+  const tent = openTestFs(path.join(workspace, ".tent"));
   await tent.writeFile(
     "Main/Main.md",
     "---\nid: node-main\ntype: prompt\n---\nSee [other](../Other/Other.md).\n",
@@ -57,7 +62,7 @@ async function fixture(t: TestContext) {
   await fs.mkdir(dist);
   await fs.writeFile(path.join(dist, "index.html"), "<!doctype html><title>Tent</title>");
 
-  const server = await startUiServer({ workspaceRoot: workspace, staticDir: dist, port: 0 });
+  const server = await openTestService({ workspaceRoot: workspace, staticDir: dist, port: 0 });
   t.after(() => server.close());
   const token = new URL(server.url).hash.replace("#token=", "");
   const origin = `http://127.0.0.1:${server.port}`;
@@ -115,8 +120,8 @@ test("history tree endpoint returns retained deleted Nodes and their exact versi
   await tent.history.captureUnlocked([{ path: "Main/Main.md", raw: null }]);
   await tent.remove("Main");
   const root = path.join(workspace, ".tent");
-  const head = await git(root, "rev-parse", "HEAD");
-  const dirty = await git(root, "status", "--porcelain");
+  const head = await tent.history.currentCommit();
+  const retainedBytes = await fs.readFile(path.join(root, ".git/history.sqlite"));
   const route = `/api/history/tree?commit=${first}`;
   assert.equal((await call("GET", route, { token: null })).status, 401);
   assert.equal((await call("GET", "/api/history/tree?commit=HEAD")).status, 422);
@@ -153,15 +158,15 @@ test("history tree endpoint returns retained deleted Nodes and their exact versi
   const missing = encodeURIComponent(`${first}:Missing/Missing.md`);
   assert.notEqual((await call("GET", `/api/nodes/node-main?at=${missing}`)).status, 200);
   assert.equal((await call("GET", "/api/nodes/node-main?at=HEAD:Main/Main.md")).status, 422);
-  assert.equal(await git(root, "rev-parse", "HEAD"), head);
-  assert.equal(await git(root, "status", "--porcelain"), dirty);
+  assert.equal(await tent.history.currentCommit(), head);
+  assert.deepEqual(await fs.readFile(path.join(root, ".git/history.sqlite")), retainedBytes);
 });
 
 test("Node detail endpoints are authenticated pure reads with independent sections", async (t) => {
   const { tent, call, workspace } = await fixture(t);
   const tentRoot = path.join(workspace, ".tent");
-  const head = await git(tentRoot, "rev-parse", "--verify", "HEAD").catch(() => null);
-  const dirty = await git(tentRoot, "status", "--porcelain");
+  const head = await historyHead(tentRoot).catch(() => null);
+  const dirty = await fs.readFile(path.join(tentRoot, ".git/history.sqlite"));
   for (const section of [
     "history",
     "cards",
@@ -188,8 +193,8 @@ test("Node detail endpoints are authenticated pure reads with independent sectio
     "node-other",
   );
   await tent.writeFile("Other/Other.md", "---\nid: node-other\ntype: goal\n---\nThe goal.\n");
-  assert.equal(await git(tentRoot, "rev-parse", "--verify", "HEAD").catch(() => null), head);
-  assert.equal(await git(tentRoot, "status", "--porcelain"), dirty);
+  assert.equal(await historyHead(tentRoot).catch(() => null), head);
+  assert.deepEqual(await fs.readFile(path.join(tentRoot, ".git/history.sqlite")), dirty);
 });
 
 test("invalid stale_after is isolated while map and snapshot keep serving the workspace", async (t) => {
@@ -403,13 +408,13 @@ test("canvas API queues CAS writes and exposes current state, history and securi
   });
   assert.equal(huge.status, 413);
   assert.deepEqual(json(await call("GET", target)), current);
-  const retained = await git(path.join(workspace, ".tent"), "rev-parse", "HEAD");
+  const retained = await tent.history.currentCommit();
   const external = { ...canvas, shut: ["node-other"] };
   await tent.writeFile("canvas.json", JSON.stringify(external));
   const fresh = json<{ etag: string; canvas: unknown }>(await call("GET", target));
   assert.deepEqual(fresh.canvas, external);
   assert.notEqual(fresh.etag, saved.etag);
-  assert.equal(await git(path.join(workspace, ".tent"), "rev-parse", "HEAD"), retained);
+  assert.equal(await tent.history.currentCommit(), retained);
   await tent.writeFile("canvas.json", "broken");
   assert.equal((await call("GET", target)).status, 422);
   assert.equal((await call("PUT", target, { json: { baseEtag: saved.etag, canvas } })).status, 422);
@@ -968,8 +973,8 @@ test("workspace files are served by suffix; paths leaving the workspace are refu
     "../outside/secret.txt",
     "docs/../../outside/secret.txt",
     "docs/out/secret.txt",
-    "docs/git/HEAD",
-    ".tent/.git/HEAD",
+    "docs/git/history.sqlite",
+    ".tent/.git/history.sqlite",
     "/docs/shot.png",
     "C:/Windows/win.ini",
     "docs\\shot.png",
@@ -978,8 +983,10 @@ test("workspace files are served by suffix; paths leaving the workspace are refu
     assert.equal(refused.status, 403, target);
     assert.equal(json<{ error: { code: string } }>(refused).error.code, "FORBIDDEN_PATH");
   }
-  const info = await call("POST", "/api/files/info", { json: { paths: ["docs/git/HEAD"] } });
-  assert.deepEqual(json<{ files: unknown }>(info).files, { "docs/git/HEAD": null });
+  const info = await call("POST", "/api/files/info", {
+    json: { paths: ["docs/git/history.sqlite"] },
+  });
+  assert.deepEqual(json<{ files: unknown }>(info).files, { "docs/git/history.sqlite": null });
   assert.equal((await call("GET", "/api/files?path=")).status, 422);
   assert.equal((await call("GET", "/api/files?path=docs/missing.png")).status, 404);
 });
@@ -1334,7 +1341,7 @@ test("a taken workspace port falls back to a free one and says so", async (t) =>
   );
   t.after(() => holder.close());
 
-  const server = await startUiServer({ workspaceRoot: workspace, staticDir: dist });
+  const server = await openTestService({ workspaceRoot: workspace, staticDir: dist });
   t.after(() => server.close());
   assert.notEqual(server.port, own);
   assert.equal(server.portTaken, own);
@@ -1402,7 +1409,7 @@ test("the list of opened workspaces lives per user, outside any .tent", () => {
 
 test("remembered workspaces come newest first, once each, and at most twelve", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "ui-workspaces-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
   const file = path.join(dir, "nested", "ui-workspaces.json");
   assert.deepEqual(await readWorkspaces(file), []);
   for (let i = 0; i < 14; i++)
@@ -1425,7 +1432,7 @@ test("remembered workspaces come newest first, once each, and at most twelve", a
 
 test("concurrent recent-workspace writes retain every entry", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "ui-workspaces-concurrent-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
   const file = path.join(dir, "ui-workspaces.json");
   await Promise.all(
     Array.from({ length: 8 }, (_, i) =>
@@ -1445,8 +1452,8 @@ test(
     const { workspace, dist } = await fixture(t);
     const other = path.join(path.dirname(workspace), "starting");
     await initializeFixtureWorkspace(other);
-    const { workspaceId } = await readWorkspaceSettings(new NodeFs(path.join(other, ".tent")));
-    const first = await startUiServer({ workspaceRoot: workspace, staticDir: dist, port: 0 });
+    const { workspaceId } = await readWorkspaceSettings(openTestFs(path.join(other, ".tent")));
+    const first = await openTestService({ workspaceRoot: workspace, staticDir: dist, port: 0 });
     t.after(() => first.close());
     let release!: () => void;
     let hit!: () => void;
@@ -1519,7 +1526,7 @@ test("the page can switch to another workspace, served by the same process", asy
   await initializeFixtureWorkspace(gone);
   const file = path.join(root, "state", "ui-workspaces.json");
 
-  const first = await startUiServer({
+  const first = await openTestService({
     workspaceRoot: workspace,
     staticDir: dist,
     port: 0,
@@ -1527,7 +1534,7 @@ test("the page can switch to another workspace, served by the same process", asy
   });
   t.after(() => first.close());
   await rememberWorkspace(file, { root: gone, name: "gone", id: "ws-gone" });
-  await fs.rm(gone, { recursive: true, force: true });
+  await removeTestFixture(gone, { recursive: true, force: true });
   const listed = json<{ workspaces: { name: string; current: boolean }[] }>(
     await ask(first, "GET", "/api/workspaces"),
   );

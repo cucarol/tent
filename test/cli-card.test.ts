@@ -1,3 +1,7 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -102,7 +106,7 @@ test(
     const role = value(await runRoleCommand("create", ["--title", "Watch"], globals));
     const other = value(await runRoleCommand("create", ["--title", "Other"], globals));
     const systemRoot = path.join(root, ".tent");
-    const initialHead = (await git(systemRoot, "rev-parse", "HEAD")).trim();
+    const initialHead = (await historyHead(systemRoot)).trim();
     const beforeWatch = await fileSnapshot(systemRoot);
     const watchBudgetMs = 25000;
     const deadline = performance.now() + watchBudgetMs;
@@ -203,7 +207,7 @@ test(
     const unrelated = value(
       await runCardCommand("create", ["--prompt", "Other work", "--target", other.roleId], globals),
     );
-    const unrelatedHead = (await git(systemRoot, "rev-parse", "HEAD")).trim();
+    const unrelatedHead = (await historyHead(systemRoot)).trim();
     const afterUnrelated = await fileSnapshot(systemRoot);
     await observedIdle(unrelatedHead);
     assert.equal(exited, false, stderr || stdout);
@@ -229,15 +233,15 @@ test(
 );
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "card-cli-"));
   t.after(async () => {
     assert.equal(path.dirname(root), scratch);
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Card CLI" });
-  await git(path.join(root, ".tent"), "init");
+  await scaffoldInWorkspace(openTestFs(root), { name: "Card CLI" });
+  await initializeFixtureHistory(path.join(root, ".tent"));
   return { root, globals: { workspace: root, json: true } };
 }
 function value(result: { exitCode: number; stdout: string; stderr: string }) {
@@ -257,7 +261,7 @@ test("Card list reads live headers and diagnostics without derived progress or c
       globals,
     ),
   );
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   const file = path.join(root, card.path);
   const original = parseFrontmatter(await fs.readFile(file, "utf8"));
   const head = await adapter.history.currentCommit();
@@ -347,7 +351,7 @@ test("deprecated Card show and take expose readable current Node reference files
     await runNodeCommand("create", ["Reference.md", "--type", "prompt", "--body", body], globals),
   ).node;
   value(await runCardCommand("deprecate", [card.cardId, "--base-etag", card.etag], globals));
-  const core = await readCardDocument(new NodeFs(path.join(root, ".tent")), card.cardId);
+  const core = await readCardDocument(openTestFs(path.join(root, ".tent")), card.cardId);
   assert.ok("currentReferences" in core);
   assert.ok("version" in core);
   assert.deepEqual(core.currentReferences, [

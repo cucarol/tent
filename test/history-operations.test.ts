@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as fs from "node:fs/promises";
@@ -12,9 +13,11 @@ import { testScratchRoot } from "./scratch.js";
 
 test("public saves and observed edits retain distinct history operations across locations", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "history-operations-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await initializeFixtureWorkspace(workspace);
-  const adapter = new NodeFs(path.join(workspace, ".tent"), "cli");
+  const adapter = openTestFs(path.join(workspace, ".tent"), "cli");
   const env = {
     fs: adapter,
     tentName: "history",

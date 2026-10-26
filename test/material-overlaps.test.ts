@@ -1,3 +1,5 @@
+import { openTestService } from "./node-fs.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,9 +13,11 @@ import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "material-overlap-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await initializeFixtureWorkspace(root);
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   const node = (name: string, data: Record<string, unknown>) =>
     adapter.writeFile(
       `${name}/${name}.md`,
@@ -129,7 +133,7 @@ test("material overlap HTTP reads are authenticated and fresh without capturing 
   const { root, adapter, node } = await fixture(t);
   await node("a", { resource: "../../src/" });
   await node("b", { resource: "../../src/a.ts" });
-  const server = await startUiServer({ workspaceRoot: root, staticDir: root, port: 0 });
+  const server = await openTestService({ workspaceRoot: root, staticDir: root, port: 0 });
   t.after(() => server.close());
   const url = new URL(server.url);
   const endpoint = new URL("/api/nodes/material-overlaps?nodeId=node-a&nodeId=node-b", url);

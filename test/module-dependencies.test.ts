@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,8 +11,10 @@ import type { RepositorySource } from "../src/core/base/repository-imports.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "module-dependencies-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const adapter = openTestFs(path.join(root, ".tent"));
   await adapter.mkdir("");
   const node = (name: string, prefixes: string[], extra: Record<string, unknown> = {}) =>
     adapter.writeFile(

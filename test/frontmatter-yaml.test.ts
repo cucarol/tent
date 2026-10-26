@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import assert from "node:assert/strict";
@@ -127,11 +130,11 @@ test("special keys remain own data and unsupported JS values cannot be silently 
 });
 
 test("rename and move retain nested metadata and comments through real write paths", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const dir = await fs.mkdtemp(path.join(scratch, "tent-yaml-structure-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
-  const systemFs = new NodeFs(dir);
+  t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
+  const systemFs = openTestFs(dir);
   await scaffoldTent(systemFs, { name: "yaml" });
   const env = { fs: systemFs, clock: { now: () => "2026-09-10T00:00:00Z" }, tentName: "yaml" };
   const target = {
@@ -163,12 +166,12 @@ test("rename and move retain nested metadata and comments through real write pat
 });
 
 test("Core and Docs edits retain unknown YAML and refuse invalid writes without changing disk", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const dir = await fs.mkdtemp(path.join(scratch, "tent-yaml-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
-  const systemFs = new NodeFs(path.join(dir, ".tent"));
-  await scaffoldInWorkspace(new NodeFs(dir), { name: "yaml" });
+  t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
+  const systemFs = openTestFs(path.join(dir, ".tent"));
+  await scaffoldInWorkspace(openTestFs(dir), { name: "yaml" });
   const env = { fs: systemFs, clock: { now: () => "2026-09-10T00:00:00Z" }, tentName: "yaml" };
   const nodeId = await createNode(env, { parentPath: "", name: "Alpha", type: "prompt" });
   const created = { nodeId, path: "Alpha" };

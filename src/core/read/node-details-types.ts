@@ -1,6 +1,6 @@
 import type { DocumentRef } from "../graph/workspace-relations.js";
 import type { CardDocumentState } from "../graph/card-document.js";
-import type { DocumentVersion } from "../store/git-history.js";
+import type { DocumentVersion } from "../store/history-port.js";
 
 export type NodeDetailFile = {
   path: string;

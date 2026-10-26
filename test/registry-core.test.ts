@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { testScratchRoot } from "./scratch.js";
@@ -24,8 +25,10 @@ async function saveTags(fs: NodeFs, nodeId: string, tags: string[]) {
 
 test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS)", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-scaffold-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const fsa = new NodeFs(dir);
+  t.after(() =>
+    removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const fsa = openTestFs(dir);
   await scaffoldTent(fsa, {
     name: "demo",
     nodes: [
@@ -41,8 +44,10 @@ test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS
   assert.equal(parseFrontmatter(await fsa.readFile("out/out.md")).body, "");
 
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "tent-scaffold-workspace-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const workspaceFs = new NodeFs(workspace);
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const workspaceFs = openTestFs(workspace);
   await scaffoldInWorkspace(workspaceFs, {
     name: "workspace",
     nodes: [{ name: "root", type: "goal" }],
@@ -53,8 +58,10 @@ test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS
   assert.equal(await fsa.exists("attachments"), false);
 
   const emptyDir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-scaffold-empty-"));
-  t.after(() => fs.rm(emptyDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  const emptyFs = new NodeFs(emptyDir);
+  t.after(() =>
+    removeTestFixture(emptyDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  const emptyFs = openTestFs(emptyDir);
   await scaffoldTent(emptyFs, { name: "empty" });
   assert.deepEqual((await loadTent(emptyFs)).roots, []);
   assert.equal(await fsa.exists("temp/temp.md"), false);
@@ -77,10 +84,10 @@ test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS
 
   const invalidDir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-scaffold-invalid-"));
   t.after(() =>
-    fs.rm(invalidDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    removeTestFixture(invalidDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
   await assert.rejects(
-    () => scaffoldTent(new NodeFs(invalidDir), { name: "" }),
+    () => scaffoldTent(openTestFs(invalidDir), { name: "" }),
     /Tent name cannot be empty\./,
   );
 });
@@ -234,7 +241,7 @@ workspace: "C:\\\\example\\\\_code\\\\Tent"
 
 test("tags are derived from Node documents and unchanged edits keep the bytes", async (t) => {
   const dir = await makeTent(t);
-  const fsa = new NodeFs(dir);
+  const fsa = openTestFs(dir);
   await fsa.writeFile("tags.json", "{not-json");
   await saveTags(fsa, "node-p1", ["backend-hardening"]);
   await saveTags(fsa, "node-o1", ["backend-hardening"]);
@@ -268,7 +275,7 @@ test("tags are derived from Node documents and unchanged edits keep the bytes", 
 
 test("Node write tags change only the document", async (t) => {
   const dir = await makeTent(t);
-  const fsa = new NodeFs(dir);
+  const fsa = openTestFs(dir);
   await saveTags(fsa, "node-p1", ["from-write"]);
   assert.deepEqual(
     countNodeTags((await loadTent(fsa)).byId.values()).map((item) => item.tag),
@@ -284,7 +291,7 @@ test("Node write tags change only the document", async (t) => {
 
 test("corrupt order registry is backed up and reset to default order", async (t) => {
   const dir = await makeTent(t);
-  const fsa = new NodeFs(dir);
+  const fsa = openTestFs(dir);
   await fs.writeFile(path.join(dir, "order.json"), "{not-json", "utf8");
 
   const warnings = await captureConsoleError(async () => {

@@ -1,3 +1,6 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -19,16 +22,16 @@ import { runRoleCommand } from "../src/cli/role-commands.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "role-context-"));
   t.after(async () => {
     assert.equal(path.dirname(root), scratch);
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
-  await scaffoldInWorkspace(new NodeFs(root), { name: "roles" });
-  const adapter = new NodeFs(path.join(root, ".tent"));
-  await git(path.join(root, ".tent"), "init");
+  await scaffoldInWorkspace(openTestFs(root), { name: "roles" });
+  const adapter = openTestFs(path.join(root, ".tent"));
+  await initializeFixtureHistory(path.join(root, ".tent"));
   return { root, adapter };
 }
 

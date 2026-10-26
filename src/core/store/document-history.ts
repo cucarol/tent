@@ -1,5 +1,6 @@
+import { hasDocumentHistory } from "./history-port.js";
 import type { FsAdapter } from "./adapter.js";
-import type { CaptureMetadata, DocumentVersion } from "./git-history.js";
+import type { CaptureMetadata, DocumentVersion } from "./history-port.js";
 import { isOperationalPath, nodeNotePath, MUTATION_LOCK_PATH, CANVAS_PATH } from "../base/paths.js";
 
 /** Retained files also include the canvas, which has no Node/Role/Card identity. */
@@ -26,11 +27,11 @@ export async function captureDocumentUnlocked(
   if (!isHistoryDocument(path)) throw new Error(`Not a Tent identity document: ${path}`);
   const invalid = fs.invalidNodeEdits?.get(path);
   if (invalid) throw new Error(`Invalid Node ${path}: ${invalid}`);
-  if (!fs.history || !(await fs.exists(".git"))) return undefined;
+  if (!fs.history || !(await hasDocumentHistory(fs))) return undefined;
   return (await fs.history.captureUnlocked([{ path, raw }], metadata)).versions[0];
 }
 
-/** Read capture may write Git only; it does not resume document mutations. */
+/** Read capture may write history only; it does not resume document mutations. */
 export function captureReadDocument(
   fs: FsAdapter,
   path: string,
@@ -53,7 +54,7 @@ export function captureReadDocuments(
       if (!isHistoryDocument(path)) throw new Error(`Not a Tent identity document: ${path}`);
       else if (fs.invalidNodeEdits?.has(path))
         throw new Error(`Invalid Node ${path}: ${fs.invalidNodeEdits.get(path)}`);
-    if (!documents.length || !fs.history || !(await fs.exists(".git"))) return [];
+    if (!documents.length || !fs.history || !(await hasDocumentHistory(fs))) return [];
     return (
       await fs.history.captureUnlocked(documents, { operation: "document.external-capture", entry })
     ).versions;

@@ -1,3 +1,5 @@
+import { openTestService } from "./node-fs.js";
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import http from "node:http";
@@ -8,7 +10,9 @@ import { startUiServer } from "../src/ui-server/server.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "ui-idle-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const workspaceRoot = path.join(root, "one"),
     other = path.join(root, "two"),
     staticDir = path.join(root, "dist");
@@ -57,7 +61,7 @@ test(
   async (t) => {
     const options = await fixture(t);
     t.mock.timers.enable({ apis: ["setTimeout"] });
-    const server = await startUiServer({ ...options, port: 0, idleTimeout: 1 });
+    const server = await openTestService({ ...options, port: 0, idleTimeout: 1 });
     t.after(() => server.close());
     t.mock.timers.tick(900);
     assert.equal((await request(server.url, "/api/canvas", { token: false })).status, 401);
@@ -81,7 +85,7 @@ test(
   async (t) => {
     const options = await fixture(t);
     t.mock.timers.enable({ apis: ["setTimeout"] });
-    const server = await startUiServer({ ...options, port: 0, idleTimeout: 1 });
+    const server = await openTestService({ ...options, port: 0, idleTimeout: 1 });
     t.after(() => server.close());
     let closed = false;
     void server.closed.then(() => {
@@ -113,12 +117,12 @@ test(
   async (t) => {
     const options = await fixture(t);
     t.mock.timers.enable({ apis: ["setTimeout"] });
-    const ordinary = await startUiServer({ ...options, port: 0 });
+    const ordinary = await openTestService({ ...options, port: 0 });
     t.after(() => ordinary.close());
     t.mock.timers.tick(3_600_000);
     assert.equal((await request(ordinary.url, "/api/canvas")).status, 200);
     await ordinary.close();
-    const idle = await startUiServer({ ...options, port: 0, idleTimeout: 1 });
+    const idle = await openTestService({ ...options, port: 0, idleTimeout: 1 });
     await idle.close();
     t.mock.timers.tick(3_600_000);
     await idle.closed;

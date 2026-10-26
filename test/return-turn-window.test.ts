@@ -1,3 +1,5 @@
+import { removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,8 +14,10 @@ import type { SessionObservationEvent } from "../src/core/return/session-observa
 
 async function fixture(t: TestContext) {
   await fs.mkdir(".scratch", { recursive: true });
-  const root = await fs.mkdtemp(path.resolve(".scratch/return-window-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  const root = await fs.mkdtemp(path.resolve(testScratchRoot(), "return-window-"));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const log = path.join(root, "transcript.jsonl");
   return {
     root,

@@ -1,3 +1,5 @@
+import { removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,10 +13,12 @@ import { findPreparedHookWorkspace } from "../src/fs/hook-material-index.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext, id = "node-proof") {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "root-proof-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await git(root, "init", "--quiet");
   await initializeTentWorkspace(root);
   const system = path.join(root, ".tent");

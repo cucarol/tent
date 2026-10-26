@@ -122,7 +122,7 @@ export async function checkGraph(
           kind: "node-git-mismatch",
           path: file,
           state: "disk-only",
-          reason: "Node document exists on disk but not in Tent Git HEAD",
+          reason: "Node document exists on disk but not in retained history",
         });
     for (const file of retained)
       if (!disk.has(file))
@@ -130,7 +130,7 @@ export async function checkGraph(
           kind: "node-git-mismatch",
           path: file,
           state: "git-only",
-          reason: "Tent Git HEAD records this Node document but it is missing on disk",
+          reason: "retained history records this Node document but it is missing on disk",
         });
   }
   const index = buildNodeIndex([...tent.byPath.values()].filter((node) => !node.invalid));
@@ -198,10 +198,10 @@ export async function checkGraph(
   }
   for (const file of completed)
     if (!foundCards.has(file))
-      error(file, "Completed Card retained in Tent Git is missing on disk");
+      error(file, "Completed Card retained in Tent history is missing on disk");
   if (completedDocuments.length && readonlyFs.history)
     for (const changed of await readonlyFs.history.changedRetainedDocuments(completedDocuments))
-      error(changed.path, "Completed Card differs from its retained Tent Git version");
+      error(changed.path, "Completed Card differs from its retained Tent history version");
   const byPath = new Map(documents.map((document) => [document.path, document]));
   const byId = new Map(
     documents.filter((document) => document.valid && document.id).map((d) => [d.id!, d]),

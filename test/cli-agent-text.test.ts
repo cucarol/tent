@@ -1,3 +1,10 @@
+import { captureFixtureDocuments } from "./scratch.js";
+import { captureReadDocuments } from "../src/core/store/document-history.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { nodeNotePath } from "../src/core/base/paths.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { initializeFixtureHistory } from "./scratch.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -31,14 +38,14 @@ const etag = (text: string) => {
 };
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "agent's text-"));
   t.after(async () => {
     assert.equal(path.dirname(root), scratch);
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
-  await scaffoldInWorkspace(new NodeFs(root), {
+  await scaffoldInWorkspace(openTestFs(root), {
     name: "Text",
     nodes: [
       { id: "node-goal", name: "Goal", type: "goal", body: "Goal body\n" },
@@ -54,9 +61,8 @@ async function fixture(t: TestContext) {
       "type: prompt\nresource: ../../peer.txt",
     ),
   );
-  await git(path.join(root, ".tent"), "init");
-  await git(path.join(root, ".tent"), "add", ".");
-  await git(path.join(root, ".tent"), "commit", "-m", "retained relation fixture");
+  await initializeFixtureHistory(path.join(root, ".tent"));
+  await captureFixtureDocuments(path.join(root, ".tent"));
   const globals = { workspace: root };
   const node = (sub: string, args: string[]) => runNodeCommand(sub, args, globals);
   const card = (sub: string, args: string[]) => runCardCommand(sub, args, globals);
@@ -93,7 +99,7 @@ async function fixture(t: TestContext) {
     assert.ok(run, last);
     return ok(await run(sub, words));
   };
-  return { root, node, card, role, workspace, next, adapter: new NodeFs(path.join(root, ".tent")) };
+  return { root, node, card, role, workspace, next, adapter: openTestFs(path.join(root, ".tent")) };
 }
 
 test("text lists/details identify their objects, body reads preserve text, and all relation directions describe endpoints", async (t) => {

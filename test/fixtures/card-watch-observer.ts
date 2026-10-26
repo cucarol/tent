@@ -1,14 +1,14 @@
 import { syncBuiltinESMExports } from "node:module";
 import timers from "node:timers/promises";
 import type { TimerOptions } from "node:timers";
-import { GitDocumentHistory } from "../../src/core/store/git-history.js";
+import { SqliteDocumentHistory } from "../../src/core/store/sqlite-history.js";
 
 // Observe the real CLI's completed Card scan and next idle delay without
 // changing either the committed data or the polling promise/duration.
-const readDirectory = GitDocumentHistory.prototype.readDirectory;
+const readDirectory = SqliteDocumentHistory.prototype.readDirectory;
 let scannedCommit: string | undefined;
 let reportedCommit: string | undefined;
-GitDocumentHistory.prototype.readDirectory = async function (commit, directory) {
+SqliteDocumentHistory.prototype.readDirectory = async function (commit, directory) {
   const result = await readDirectory.call(this, commit, directory);
   if (directory === "cards") scannedCommit = commit;
   return result;

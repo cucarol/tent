@@ -1,3 +1,6 @@
+import { initializeFixtureHistory } from "./scratch.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -24,7 +27,7 @@ import {
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { renameNode } from "../src/core/graph/rename-ops.js";
 import { contentEtag } from "../src/core/base/etag.js";
-import type { DocumentVersion } from "../src/core/store/git-history.js";
+import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { git } from "./helpers.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
@@ -33,15 +36,15 @@ import { linkNodeOutput, confirmNodeSync } from "../src/core/graph/node-sync.js"
 import { readOutputActivity } from "../src/core/graph/card-context.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "card-document-"));
   t.after(async () => {
     assert.equal(path.dirname(root), scratch);
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
-  await git(root, "init");
-  const adapter = new NodeFs(root);
+  await initializeFixtureHistory(root);
+  const adapter = openTestFs(root);
   const node = "\uFEFF---\r\nid: node-main\r\ntype: prompt\r\n---\r\nexact fact\r\n";
   await adapter.writeFile("Main/Main.md", node);
   await adapter.writeFile("Other/Other.md", "---\nid: node-other\ntype: prompt\n---\nnot selected");
@@ -422,13 +425,15 @@ test("automatic output attribution requires the receiving Role and returns the s
 });
 
 test("goal and output material changes preserve explicit Card delivery and output activity", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "card-review-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const workspace = path.join(root, "workspace");
   await initializeFixtureWorkspace(workspace);
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const adapter = openTestFs(path.join(workspace, ".tent"));
   await adapter.writeFile(
     "Goal/Goal.md",
     serializeFrontmatter({ id: "node-goal", type: "goal" }, "Goal"),
@@ -487,14 +492,14 @@ test("goal and output material changes preserve explicit Card delivery and outpu
 });
 
 test("Card source inspection needs no Git when no published Card was received", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "card-nohistory-"));
   t.after(async () => {
     assert.equal(path.dirname(root), scratch);
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTestFixture(root, { recursive: true, force: true });
   });
-  const adapter = new NodeFs(root);
+  const adapter = openTestFs(root);
   await adapter.mkdir("cards");
   assert.deepEqual(await inspectReceivedCardSourceChanges(adapter), { items: [], diagnostics: [] });
   await adapter.writeFile(
@@ -822,9 +827,10 @@ test("filtered Card lists skip history and keep malformed-header diagnostics", a
     prompt: "For another role",
     target: "role-b",
   });
-  t.mock.method(adapter.history, "available", async () => {
-    throw new Error("history must not be queried");
-  });
+  for (const method of ["cardQueueTimes", "firstCommitTimes", "readDirectory"] as const)
+    t.mock.method(adapter.history, method, async () => {
+      throw new Error("history contents must not be queried");
+    });
   assert.deepEqual(
     (await listCardDocuments(adapter, { roleId: "role-a", state: "pending" })).items,
     [],
@@ -1222,7 +1228,7 @@ test("move and take share a lock, and take checks the destination that won", asy
   let settled = false;
   const taking = assert
     .rejects(
-      () => takeCardDocument(new NodeFs(root), card.cardId, "role-a"),
+      () => takeCardDocument(openTestFs(root), card.cardId, "role-a"),
       code("RECEPTION_CONFLICT"),
     )
     .finally(() => {

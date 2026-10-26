@@ -1,3 +1,4 @@
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -233,6 +234,6 @@ test("C/C++ collector and narrow structure use the shared extractor", async () =
     const config = await readRepositorySources(root, ["CMakeLists.txt"]);
     assert.equal(config.files[0]?.content, "project(example)");
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTestFixture(root, { recursive: true, force: true });
   }
 });

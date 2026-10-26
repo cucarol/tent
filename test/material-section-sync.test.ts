@@ -1,3 +1,5 @@
+import { initializeFixtureHistory } from "./scratch.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
@@ -31,11 +33,13 @@ async function nodeSectionDigest(fs: NodeFs, id: string, section: string) {
 
 async function fixture(t: TestContext) {
   const workspace = await mkdtemp(path.join(testScratchRoot(), "material-section-sync-"));
-  t.after(() => rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(workspace), { name: "Sections" });
+  t.after(() =>
+    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(workspace), { name: "Sections" });
   const root = path.join(workspace, ".tent"),
-    fs = new NodeFs(root);
-  await git(root, "init", "--initial-branch=main");
+    fs = openTestFs(root);
+  await initializeFixtureHistory(root);
   const env = { fs, clock: { now: () => "2026-10-05T00:00:00.000Z" }, tentName: "Sections" };
   async function edit(id: string, patch: Parameters<typeof writeNodeDocument>[2]) {
     const current = await readNodeForEdit(fs, id);
@@ -72,7 +76,7 @@ test("resource and sources synchronize only selected Markdown sections and canno
   }
   await writeFile(filename, raw(selected, "其他内容修改，目标不变。\n"));
   for (const id of ids) {
-    assert.equal((await inspectNodeSync(new NodeFs(root), id)).state, "synced");
+    assert.equal((await inspectNodeSync(openTestFs(root), id)).state, "synced");
     await edit(id, { body: "普通 Node 保存。\n" });
     assert.equal((await inspectNodeSync(fs, id)).materials[0]!.recordedVersion, digest(selected));
   }

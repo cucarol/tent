@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -9,15 +12,15 @@ import { listRoleContexts } from "../src/core/read/role-context.js";
 import { listCardDocuments } from "../src/core/graph/card-document.js";
 
 test("Node, Role and Card discovery reads headers without bodies or Git capture", async (t) => {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "direct-status-"));
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
-  await scaffoldInWorkspace(new NodeFs(workspace), {
+  t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
+  await scaffoldInWorkspace(openTestFs(workspace), {
     name: "status",
     nodes: [{ id: "node-fact", name: "Fact", type: "prompt", body: "unread body" }],
   });
-  const adapter = new NodeFs(path.join(workspace, ".tent"));
+  const adapter = openTestFs(path.join(workspace, ".tent"));
   await adapter.writeFile("roles.json", "broken retired registry");
   await adapter.writeFile(
     "roles/role-own.md",

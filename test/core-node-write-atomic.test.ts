@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -16,13 +19,13 @@ import {
 } from "../src/core/graph/node-document-write.js";
 
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "core-node-cas-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "CAS" });
-  const adapter = new NodeFs(path.join(root, ".tent")),
-    peer = new NodeFs(path.join(root, ".tent"));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  await scaffoldInWorkspace(openTestFs(root), { name: "CAS" });
+  const adapter = openTestFs(path.join(root, ".tent")),
+    peer = openTestFs(path.join(root, ".tent"));
   const env = { fs: adapter, clock: { now: () => new Date().toISOString() }, tentName: "CAS" };
   const create = (name: string, body = "") =>
     createNode(env, { parentPath: "", name, type: "prompt", body });

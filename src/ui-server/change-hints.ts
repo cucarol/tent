@@ -163,7 +163,9 @@ export function changeHints(workspaceRoot: string) {
       timer = undefined;
       // CLI writes can span several filesystem events. Its lock release is another wakeup,
       // and this bounded wait also covers platforms that coalesce the release event.
-      if (held) return schedule();
+      // A rename also refreshes nonrecursive monitors. Its asynchronous rescan
+      // schedules this same burst when finished; publishing earlier emits it twice.
+      if (held || scanning) return schedule();
       for (const client of clients) {
         // A slow reader reconnects and rereads; never queue unbounded hints for it.
         if (!client.write("event: change\ndata: {}\n\n")) client.destroy();

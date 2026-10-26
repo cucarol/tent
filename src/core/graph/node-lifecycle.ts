@@ -6,7 +6,7 @@ import { nodeNotePath } from "../store/tree.js";
 import { loadNodeCatalog, readCatalogDocument } from "./node-catalog.js";
 import { isHistoryDocument } from "../store/document-history.js";
 import type { OpsEnv } from "./ops-context.js";
-import type { DocumentVersion } from "../store/git-history.js";
+import type { DocumentVersion } from "../store/history-port.js";
 
 type StatusWrite = { path: string; before: string; after: string };
 type SaveContext = { savedPaths: string[]; beforeCommit?: string };
@@ -28,7 +28,7 @@ function statusRaw(raw: string, status: unknown) {
   return serializeFrontmatter(data, body, keyOrder);
 }
 
-/** Writes have finite before/after images. Files and Git are not one atomic transaction. */
+/** Writes have finite before/after images. Files and SQLite are not one atomic transaction. */
 async function saveStatusWrites(
   fs: FsAdapter,
   writes: StatusWrite[],
@@ -36,7 +36,7 @@ async function saveStatusWrites(
   operation: string,
 ) {
   if (!fs.history || !(await fs.history.available()))
-    throw new Error("Archive operations require Tent Git history");
+    throw new Error("Archive operations require Tent history");
   if (!writes.length)
     return { changed: false, paths: [] as string[], versions: [] as DocumentVersion[] };
   const before = await fs.history.captureUnlocked(
@@ -130,7 +130,7 @@ export function archiveNode(env: OpsEnv, nodeId: string) {
 export function restoreNode(env: OpsEnv, nodeId: string, archiveCommit: string) {
   return lifecycleMutation(env.fs, async (context) => {
     const history = env.fs.history;
-    if (!history) throw new Error("Archive undo requires Tent Git history");
+    if (!history) throw new Error("Archive undo requires Tent history");
     const { changes } = await history.commitChanges(archiveCommit);
     const catalog = await loadNodeCatalog(env.fs),
       root = catalog.byId.get(nodeId);

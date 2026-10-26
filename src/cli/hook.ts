@@ -49,7 +49,12 @@ export async function runHookCommand(
     const workspaceRoot = workspaceRootFromSystemRoot(systemRoot);
     if (!workspaceRoot) throw new Error("Tent requires an in-workspace .tent layout");
     if (sub === "start") {
-      await captureNativeNodeEdits(new NodeFs(systemRoot));
+      const adapter = new NodeFs(systemRoot);
+      try {
+        await captureNativeNodeEdits(adapter);
+      } finally {
+        await adapter.close();
+      }
       await loadStopMaterialIndex(systemRoot, workspaceRoot, discovery.rejectedRootMarkers);
       const command = `node ${JSON.stringify(path.join(options.packageRoot, "cli.mjs"))}`;
       const identity = await readBuildIdentity(options.packageRoot);

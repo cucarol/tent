@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import path from "node:path";
@@ -18,7 +19,7 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 import { git } from "./helpers.js";
 
 const observer = (): FsAdapter =>
-  new NodeFs(path.join(testScratchRoot(), "observation-unit", ".tent"));
+  openTestFs(path.join(testScratchRoot(), "observation-unit", ".tent"));
 
 test("one inspection shares current material across equivalent declarations and refreshes next time", async () => {
   const fs = observer();
@@ -160,8 +161,10 @@ test(
   { timeout: 5000 },
   async (t) => {
     const root = await fs.mkdtemp(path.join(testScratchRoot(), "material-scheduling-"));
-    t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-    const adapter = new NodeFs(path.join(root, ".tent"));
+    t.after(() =>
+      removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    );
+    const adapter = openTestFs(path.join(root, ".tent"));
     for (const name of ["A", "B"])
       await adapter.writeFile(
         `${name}/${name}.md`,
@@ -217,7 +220,7 @@ test("structure inspections keep Git listings constant as materials grow and ref
   const root = await fs.mkdtemp(path.join(scratch, "structure-inspection-"));
   t.after(async () => {
     assert.equal(path.dirname(root), scratch);
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
   const write = async (file: string, text: string) => {
     await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
@@ -227,7 +230,7 @@ test("structure inspections keep Git listings constant as materials grow and ref
   await write("src/shared/api.ts", "export const api = true;\n");
   await write("src/other/api.ts", "export const other = true;\n");
   await git(root, "init", "--quiet");
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Shared inspection" });
+  await scaffoldInWorkspace(openTestFs(root), { name: "Shared inspection" });
   const addMaterial = async (index: number) => {
     await write(`src/module-${index}/file-main.ts`, "export const value = true;\n");
     await write(
@@ -249,7 +252,7 @@ test("structure inspections keep Git listings constant as materials grow and ref
   };
   await addMaterial(0);
   await git(root, "add", ".");
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   const original = childProcess.execFile;
   const listings: string[][] = [];
   const mocked = t.mock.method(childProcess, "execFile", (...args: Parameters<typeof original>) => {
@@ -301,7 +304,9 @@ test("structure inspections keep Git listings constant as materials grow and ref
 
 test("structure listings and nonmembers share types only within the current inspection", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "structure-types-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await fs.mkdir(path.join(root, "src/core"), { recursive: true });
   await fs.mkdir(path.join(root, "src/out"), { recursive: true });
   await fs.mkdir(path.join(root, ".tent"));
@@ -311,7 +316,7 @@ test("structure listings and nonmembers share types only within the current insp
   await fs.writeFile(target, "export const api = true;\n");
   await git(root, "init", "--quiet");
   await git(root, "add", ".");
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   const original = fs.lstat;
   let calls = 0;
   let denied = false;
@@ -352,7 +357,9 @@ test("structure listings and nonmembers share types only within the current insp
 
 test("a listed regular source is still rejected if it becomes a link before content reading", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "structure-type-link-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   await fs.mkdir(path.join(root, "src"));
   await fs.mkdir(path.join(root, ".tent"));
   await fs.writeFile(path.join(root, ".gitignore"), ".tent/\n");
@@ -360,7 +367,7 @@ test("a listed regular source is still rejected if it becomes a link before cont
   await fs.writeFile(target, "export const value = true;\n");
   await git(root, "init", "--quiet");
   await git(root, "add", ".");
-  const adapter = new NodeFs(path.join(root, ".tent"));
+  const adapter = openTestFs(path.join(root, ".tent"));
   const original = fs.lstat;
   let calls = 0;
   const mocked = t.mock.method(fs, "lstat", async (...args: Parameters<typeof original>) => {

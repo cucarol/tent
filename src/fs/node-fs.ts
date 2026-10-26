@@ -1,3 +1,4 @@
+import { hasDocumentHistory, type DocumentHistory } from "../core/store/history-port.js";
 // node:fs 实现的 FsAdapter。给 CLI(skill 调用)和测试用。
 
 import * as fs from "node:fs/promises";
@@ -7,8 +8,8 @@ import { withFileMutationLock } from "./mutation-lock.js";
 import { constants } from "node:fs";
 import { checkedSourceFile, checkedSourceDirectory } from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { execFile } from "node:child_process";
-import { GitDocumentHistory, type CaptureMetadata } from "../core/store/git-history.js";
+import type { CaptureMetadata } from "../core/store/history-port.js";
+import { SqliteDocumentHistory } from "../core/store/sqlite-history.js";
 import { isHistoryDocument, isHistoryFile } from "../core/store/document-history.js";
 import { durableMkdir, durableReplace, syncDirectory } from "./durable-file.js";
 import { observeMaterialResource, readStructureSource } from "./source-observation.js";
@@ -27,7 +28,6 @@ import { materialIsTracked } from "./material-tracking.js";
 import { createHash } from "node:crypto";
 import { documentHeader } from "../core/graph/node-catalog.js";
 import { ReaderError } from "../core/graph/context-reader.js";
-import { HistoryDamageError } from "../core/store/history-damage.js";
 import {
   FileTransaction,
   TRANSACTION_PATH,
@@ -58,7 +58,7 @@ export class NodeFs implements FsAdapter {
   private root: string;
   readonly workspaceRoot: string | undefined;
   invalidNodeEdits?: ReadonlyMap<string, string>;
-  readonly history: GitDocumentHistory;
+  readonly history: DocumentHistory;
   private historyWrites = new AsyncLocalStorage<Map<string, string | null>>();
   private historyPreimages = new AsyncLocalStorage<Map<string, string | null>>();
   private readonly transactionScope = new AsyncLocalStorage<FileTransaction>();
@@ -88,9 +88,9 @@ export class NodeFs implements FsAdapter {
     return this.recoveryConflicts;
   }
 
-  /** Explicit history repair must fix damaged refs before a pending transaction can inspect HEAD. */
-  withHistoryRepair<T>(action: () => Promise<T>): Promise<T> {
-    return this.raw(() => this.withLock("mutation.lock", action));
+  /** The owner closes its adapter after all requests/mutations have finished. */
+  close(): Promise<void> {
+    return this.history.close();
   }
 
   private raw<T>(action: () => Promise<T>): Promise<T> {
@@ -164,6 +164,7 @@ export class NodeFs implements FsAdapter {
       return;
     if (this.opening) return this.opening;
     this.opening = (async () => {
+      await this.history.available();
       const pending = await fs.access(this.abs(TRANSACTION_PATH)).then(
         () => true,
         (error: NodeJS.ErrnoException) => {
@@ -216,10 +217,11 @@ export class NodeFs implements FsAdapter {
   constructor(
     root: string,
     private readonly entry: CaptureMetadata["entry"] = "core",
+    history?: DocumentHistory,
   ) {
     this.root = nodePath.resolve(root);
     this.workspaceRoot = workspaceRootFromSystemRoot(this.root);
-    this.history = new GitDocumentHistory(this.root, entry);
+    this.history = history ?? new SqliteDocumentHistory(this.root, entry);
   }
 
   async observationScope<T>(
@@ -635,35 +637,15 @@ export class NodeFs implements FsAdapter {
     await syncDirectory(nodePath.dirname(this.abs(path)));
   }
 
-  /** List the independent Tent Git HEAD tree without reading blobs or writing caches. */
+  /** Current retained membership; no replay or read-time cache writes. */
   async retainedDocumentPaths(): Promise<string[] | undefined> {
-    if (!(await this.exists(".git"))) return undefined;
-    const head = await this.history.currentCommit();
-    if (!head) return [];
-    const env = Object.fromEntries(
-      Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
-    );
-    const stdout = await new Promise<string>((resolve, reject) =>
-      execFile(
-        "git",
-        [
-          `--git-dir=${nodePath.join(this.root, ".git")}`,
-          "ls-tree",
-          "-r",
-          "--name-only",
-          "-z",
-          head,
-        ],
-        { env, windowsHide: true, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
-        (error, output) => (error ? reject(error) : resolve(output)),
-      ),
-    );
-    return stdout.split("\0").filter(Boolean);
+    if (!(await hasDocumentHistory(this))) return undefined;
+    return this.history.retainedPaths();
   }
 
   async withDocumentHistory<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T> {
-    if (!(await this.exists(".git"))) return action();
-    return this.history.withDeferredIndexMirror(() => this.recordDocumentChanges(action, metadata));
+    if (!(await hasDocumentHistory(this))) return action();
+    return this.recordDocumentChanges(action, metadata);
   }
 
   private async recordDocumentChanges<T>(
@@ -739,13 +721,8 @@ export class NodeFs implements FsAdapter {
             });
           }
         } catch (error) {
-          if (error instanceof HistoryDamageError)
-            throw new HistoryDamageError(
-              `files may already be saved, but Git capture failed; reread before retrying. ${error.message.replace(/^Tent history: /, "")}`,
-              error.chooseHead,
-            );
           throw new Error(
-            `Tent files may already be saved, but Git capture failed; reread before retrying: ${String(error)}`,
+            `Tent files may already be saved, but history capture failed; reread before retrying: ${String(error)}`,
           );
         }
         return result;
@@ -786,7 +763,7 @@ export class NodeFs implements FsAdapter {
         throw error;
       });
       if (current !== raw)
-        throw new Error(`Document changed during Git capture: ${path}; reread before retrying`);
+        throw new Error(`Document changed during history capture: ${path}; reread before retrying`);
     }
     return tracked;
   }
@@ -814,36 +791,34 @@ export class NodeFs implements FsAdapter {
           async () =>
             withoutStructureSnapshot(() =>
               withoutFileReadScope(() =>
-                this.raw(() => this.exists(".git")).then((hasGit) => {
+                this.raw(() => hasDocumentHistory(this)).then((hasGit) => {
                   if (!hasGit || this.transactionBypass.getStore()) return action();
                   const transaction = this.transaction();
                   return this.boundaryReady.run(true, async () => {
                     this.recoveryConflicts = await transaction.recover();
-                    return this.history.withCaptureScope(() =>
-                      this.transactionScope.run(transaction, () =>
-                        this.history.withPublicationObserver(
-                          {
-                            before: (commit) => transaction.beforePublish(commit),
-                            after: () => transaction.finish(),
-                          },
-                          async () => {
+                    return this.transactionScope.run(transaction, () =>
+                      this.history.withPublicationObserver(
+                        {
+                          before: (commit) => transaction.beforePublish(commit),
+                          after: () => transaction.finish(),
+                        },
+                        async () => {
+                          try {
+                            const result = await action();
+                            await transaction.finish();
+                            return result;
+                          } catch (error) {
                             try {
-                              const result = await action();
-                              await transaction.finish();
-                              return result;
-                            } catch (error) {
-                              try {
-                                this.recoveryConflicts = await transaction.recover();
-                              } catch (recovery) {
-                                throw new AggregateError(
-                                  [error, recovery],
-                                  `${String(error)}; transaction recovery also failed: ${String(recovery)}`,
-                                );
-                              }
-                              throw error;
+                              this.recoveryConflicts = await transaction.recover();
+                            } catch (recovery) {
+                              throw new AggregateError(
+                                [error, recovery],
+                                `${String(error)}; transaction recovery also failed: ${String(recovery)}`,
+                              );
                             }
-                          },
-                        ),
+                            throw error;
+                          }
+                        },
                       ),
                     );
                   });
@@ -857,12 +832,7 @@ export class NodeFs implements FsAdapter {
             acquireFailedMessage: "Cannot acquire the Tent mutation lock.",
           },
         );
-      // Checking repository presence must not run read-side recovery here:
-      // only the transport starts before the lock; recovery and HEAD stay inside.
-      return await ((await this.raw(() => this.exists(".git"))) &&
-      !this.transactionBypass.getStore()
-        ? this.history.withReadyPublisher(locked)
-        : locked());
+      return await locked();
     } finally {
       forgetScopedReads();
     }

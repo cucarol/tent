@@ -1,3 +1,4 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -21,11 +22,16 @@ async function fixture(t: TestContext) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "card-completion-"));
   t.after(async () => {
     assert.equal(path.dirname(workspace), path.resolve(testScratchRoot()));
-    await fs.rm(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(workspace, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    });
   });
   await initializeFixtureWorkspace(workspace);
   const root = path.join(workspace, ".tent");
-  const adapter = new NodeFs(root);
+  const adapter = openTestFs(root);
   const cards = [
     ["plain", { state: "consumed" }],
     [
@@ -110,72 +116,36 @@ test("brief validates only unfinished headers and UI revisions skip retained com
   assert.ok(inspected.cards.items.some((item) => item.cardId === "card-new" && item.diagnostic));
 });
 
-test("completion membership updates only changed Card paths and survives a fresh reader and HEAD reset", async (t) => {
-  const { root, adapter } = await fixture(t);
-  const original = [...(await completedCardPaths(adapter))].sort();
-  const before = (await adapter.history.currentCommit())!;
-  const fresh = new NodeFs(root);
-  const read = fresh.history.completedCardPaths.bind(fresh.history);
-  const classified: string[] = [];
-  t.mock.method(
-    fresh.history,
-    "completedCardPaths",
-    (predicate: (file: string, raw: string) => boolean) =>
-      read((file, raw) => {
-        classified.push(file);
-        return predicate(file, raw);
-      }),
-  );
-  t.mock.method(fresh.history, "readDirectory", async () => {
-    throw new Error("An existing completion list must not rescan unchanged Cards");
-  });
+test("completion membership follows immutable SQLite events across long-lived and fresh readers", async (t) => {
+  const { root, adapter } = await fixture(t),
+    original = [...(await completedCardPaths(adapter))].sort();
+  const fresh = openTestFs(root);
   assert.deepEqual([...(await completedCardPaths(fresh))].sort(), original);
-  assert.deepEqual(classified, []);
   await takeCardDocument(adapter, "card-pending");
   assert.ok((await completedCardPaths(fresh)).has("cards/card-pending.md"));
-  assert.deepEqual(classified, ["cards/card-pending.md"]);
-  classified.length = 0;
-  await git(root, "commit", "--allow-empty", "-m", "Unrelated HEAD");
-  assert.ok((await completedCardPaths(fresh)).has("cards/card-pending.md"));
-  assert.deepEqual(classified, []);
-  await git(root, "reset", "--hard", before);
-  assert.deepEqual([...(await completedCardPaths(fresh))].sort(), original);
-  assert.deepEqual(classified, ["cards/card-pending.md"]);
-  classified.length = 0;
+  const old = await adapter.history.currentCommit();
   await adapter.remove("cards/card-plain.md");
   await adapter.history.captureUnlocked([{ path: "cards/card-plain.md", raw: null }], {
     operation: "card.delete",
   });
   assert.ok(!(await completedCardPaths(fresh)).has("cards/card-plain.md"));
-  assert.deepEqual(classified, []);
+  assert.ok((await adapter.history.readDirectory(old!, "cards")).has("cards/card-plain.md"));
+  assert.deepEqual(
+    [...(await completedCardPaths(openTestFs(root)))].sort(),
+    [...(await completedCardPaths(fresh))].sort(),
+  );
 });
 
-test("missing, corrupt and incompatible completion caches rebuild the same retained membership", async (t) => {
-  const { root, adapter, cache } = await fixture(t);
-  const expected = [...(await completedCardPaths(adapter))].sort();
-  const retained = JSON.parse(await fs.readFile(cache, "utf8"));
-  await adapter.writeFile("cards/card-plain.md", "---\nid: [broken\n");
-  for (const value of [
-    undefined,
-    "{broken",
-    JSON.stringify({ ...retained, version: 999 }),
-    JSON.stringify({ ...retained, value: [], digest: "bad" }),
-    JSON.stringify({
-      ...retained,
-      value: ["../outside.md"],
-      digest: createHash("sha256")
-        .update(JSON.stringify(["../outside.md"]))
-        .digest("hex"),
-    }),
-  ]) {
-    if (value === undefined) await fs.unlink(cache);
-    else await fs.writeFile(cache, value);
-    assert.deepEqual([...(await completedCardPaths(new NodeFs(root)))].sort(), expected);
+test("obsolete completion cache files cannot override retained SQLite membership", async (t) => {
+  const { root, adapter, cache } = await fixture(t),
+    expected = [...(await completedCardPaths(adapter))].sort();
+  await fs.mkdir(path.dirname(cache), { recursive: true });
+  for (const raw of ["{broken", JSON.stringify({ version: 999, value: ["../outside.md"] })]) {
+    await fs.writeFile(cache, raw);
+    assert.deepEqual([...(await completedCardPaths(openTestFs(root)))].sort(), expected);
   }
-  await fs.unlink(cache);
-  await fs.mkdir(cache);
-  assert.deepEqual([...(await completedCardPaths(new NodeFs(root)))].sort(), expected);
-  assert.deepEqual([...(await completedCardPaths(new NodeFs(root)))].sort(), expected);
+  await adapter.writeFile("cards/card-plain.md", "---\nid: [broken\n");
+  assert.deepEqual([...(await completedCardPaths(openTestFs(root)))].sort(), expected);
 });
 
 test("explicit Card reads and workspace check still inspect completed native edits", async (t) => {

@@ -1,3 +1,6 @@
+import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { historyHead } from "./scratch.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -58,7 +61,9 @@ async function missingFailureOrder<T>(
 
 test("a missing source directory has the same diagnostic whichever probe fails first", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "missing-order-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
   const directory = path.join(root, "absent");
   const errors = [];
   for (const first of ["realpath", "lstat"] as const) {
@@ -82,10 +87,12 @@ test("a missing source directory has the same diagnostic whichever probe fails f
 
 test("drift cursors survive missing-material probe order but still reject a material repair", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "drift-missing-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
-  await scaffoldInWorkspace(new NodeFs(root), { name: "Drift" });
+  t.after(() =>
+    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+  );
+  await scaffoldInWorkspace(openTestFs(root), { name: "Drift" });
   const system = path.join(root, ".tent");
-  await git(system, "init");
+  await initializeFixtureHistory(system);
   const directory = path.join(root, "materials");
   await fs.mkdir(directory);
   const resource = path.join(directory, "input.md");
@@ -109,8 +116,8 @@ test("drift cursors survive missing-material probe order but still reject a mate
   );
   await fs.writeFile(canvas, '{"version":3,"drawings":[]}\n');
   const before = {
-    head: await git(system, "rev-parse", "HEAD"),
-    status: await git(system, "status", "--porcelain"),
+    head: await historyHead(system),
+    status: await fs.readFile(path.join(system, ".git/history.sqlite"), "hex"),
     role: await fs.readFile(role, "utf8"),
     canvas: await fs.readFile(canvas, "utf8"),
   };
@@ -130,8 +137,8 @@ test("drift cursors survive missing-material probe order but still reject a mate
   assert.notEqual(second.items[0].nodeId, first.items[0].nodeId);
   assert.deepEqual(
     {
-      head: await git(system, "rev-parse", "HEAD"),
-      status: await git(system, "status", "--porcelain"),
+      head: await historyHead(system),
+      status: await fs.readFile(path.join(system, ".git/history.sqlite"), "hex"),
       role: await fs.readFile(role, "utf8"),
       canvas: await fs.readFile(canvas, "utf8"),
     },

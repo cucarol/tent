@@ -1,3 +1,6 @@
+import { removeTestFixture } from "./node-fs.js";
+import { openTestFs } from "./node-fs.js";
+import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
@@ -12,11 +15,11 @@ const source = { kind: "live" as const, workspaceId: "ws-selected" };
 const raw = (id: string, body = "正文", metadata = "") =>
   `\uFEFF---\r\nid: ${id}\r\ntype: prompt\r\n${metadata}---\r\n${body}`;
 async function fixture(t: TestContext) {
-  const scratch = path.resolve(".scratch");
+  const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "selected-reader-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const adapter = new NodeFs(root);
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  const adapter = openTestFs(root);
   return { root, adapter };
 }
 const error = (code: string) => (e: unknown) => e instanceof ReaderError && e.code === code;

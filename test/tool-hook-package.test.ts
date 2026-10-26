@@ -1,3 +1,5 @@
+import { testScratchRoot } from "./scratch.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,10 +15,12 @@ test(
   { timeout: 30000 },
   async (t) => {
     const root = process.cwd();
-    const scratch = path.join(root, ".scratch");
+    const scratch = testScratchRoot();
     await fs.mkdir(scratch, { recursive: true });
     const fixture = await fs.mkdtemp(path.join(scratch, "tool-package-"));
-    t.after(() => fs.rm(fixture, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+    t.after(() =>
+      removeTestFixture(fixture, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    );
     const { buildPluginRuntime } = await import(
       pathToFileURL(path.join(root, "esbuild.config.mjs")).href
     );
@@ -39,7 +43,7 @@ test(
       await validateHostPackage(pkg, host);
       const workspace = path.join(fixture, host, "workspace");
       await fs.mkdir(workspace);
-      await scaffoldInWorkspace(new NodeFs(workspace), { name: "package" });
+      await scaffoldInWorkspace(openTestFs(workspace), { name: "package" });
       const system = path.join(workspace, ".tent");
       await fs.mkdir(path.join(system, ".git"));
       await fs.mkdir(path.join(system, "Module"));
