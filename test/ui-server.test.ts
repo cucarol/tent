@@ -30,6 +30,7 @@ import { readWorkspaceRevision } from "../src/core/workspace/workspace-revision.
 import type { ModuleDependencyResponse } from "../src/core/read/module-dependency-query.js";
 import type { WorkspaceMap } from "../src/core/read/workspace-map.js";
 import { git } from "./helpers.js";
+import type { HistoryTree } from "../src/core/read/history-query.js";
 
 type Reply = { status: number; headers: http.IncomingHttpHeaders; body: string };
 type Call = (
@@ -100,6 +101,62 @@ async function fixture(t: TestContext) {
 
 const json = <T>(reply: Reply) => JSON.parse(reply.body) as T;
 
+test("history tree endpoint returns retained deleted Nodes and their exact version through authenticated pure reads", async (t) => {
+  const { tent, call, workspace } = await fixture(t);
+  const retainedBody = "See [other](../Other/Other.md).\r\n" + "x".repeat(12000) + "🙂\r\nEnd\r\n";
+  const retainedRaw = '\uFEFF---\r\nid: "node-main"\r\ntype: goal\r\n---\r\n' + retainedBody;
+  await tent.writeFile("Main/Main.md", retainedRaw);
+  const first = (
+    await tent.history.captureUnlocked([
+      { path: "Main/Main.md", raw: await tent.readFile("Main/Main.md") },
+      { path: "Other/Other.md", raw: await tent.readFile("Other/Other.md") },
+    ])
+  ).commit!;
+  await tent.history.captureUnlocked([{ path: "Main/Main.md", raw: null }]);
+  await tent.remove("Main");
+  const root = path.join(workspace, ".tent");
+  const head = await git(root, "rev-parse", "HEAD");
+  const dirty = await git(root, "status", "--porcelain");
+  const route = `/api/history/tree?commit=${first}`;
+  assert.equal((await call("GET", route, { token: null })).status, 401);
+  assert.equal((await call("GET", "/api/history/tree?commit=HEAD")).status, 422);
+  const reply = await call("GET", route);
+  assert.equal(reply.status, 200, reply.body);
+  const tree = json<HistoryTree>(reply);
+  assert.equal(tree.commit, first);
+  const node = tree.nodes.find((node) => node.id === "node-main")!;
+  assert.equal(node.name, "Main");
+  const document = await call(
+    "GET",
+    `/api/history/document?at=${encodeURIComponent(`${node.version.commit}:${node.version.path}`)}`,
+  );
+  assert.equal(document.status, 200, document.body);
+  assert.match(json<{ raw: string }>(document).raw, /See \[other\]/);
+  assert.equal(json<{ raw: string }>(document).raw, retainedRaw);
+  const at = encodeURIComponent(`${node.version.commit}:${node.version.path}`);
+  const historicalRoute = `/api/nodes/${node.id}?at=${at}`;
+  assert.equal((await call("GET", historicalRoute, { token: null })).status, 401);
+  const historical = await call("GET", historicalRoute);
+  assert.equal(historical.status, 200, historical.body);
+  assert.equal(historical.headers["cache-control"], "no-store");
+  const text = json<{
+    nodeId: string;
+    text: string;
+    partial: boolean;
+    source: { version: { commit: string; path: string } };
+  }>(historical);
+  assert.equal(text.nodeId, node.id);
+  assert.equal(text.text, retainedBody);
+  assert.equal(text.partial, false);
+  assert.deepEqual(text.source.version, node.version);
+  assert.notEqual((await call("GET", `/api/nodes/node-other?at=${at}`)).status, 200);
+  const missing = encodeURIComponent(`${first}:Missing/Missing.md`);
+  assert.notEqual((await call("GET", `/api/nodes/node-main?at=${missing}`)).status, 200);
+  assert.equal((await call("GET", "/api/nodes/node-main?at=HEAD:Main/Main.md")).status, 422);
+  assert.equal(await git(root, "rev-parse", "HEAD"), head);
+  assert.equal(await git(root, "status", "--porcelain"), dirty);
+});
+
 test("Node detail endpoints are authenticated pure reads with independent sections", async (t) => {
   const { tent, call, workspace } = await fixture(t);
   const tentRoot = path.join(workspace, ".tent");
@@ -135,7 +192,7 @@ test("Node detail endpoints are authenticated pure reads with independent sectio
   assert.equal(await git(tentRoot, "status", "--porcelain"), dirty);
 });
 
-test("invalid stale_after is isolated while map and sync keep serving the workspace", async (t) => {
+test("invalid stale_after is isolated while map and snapshot keep serving the workspace", async (t) => {
   const { tent, call } = await fixture(t);
   await tent.writeFile(
     "Bad/Bad.md",
@@ -151,9 +208,6 @@ test("invalid stale_after is isolated while map and sync keep serving the worksp
     json<WorkspaceMap>(map).nodes.find((node) => node.id === "node-main")!.invalid,
     false,
   );
-  const sync = await call("GET", "/api/sync");
-  assert.equal(sync.status, 200, sync.body);
-  assert.equal(json<{ nodes: Record<string, unknown> }>(sync).nodes["node-bad"], undefined);
   assert.equal((await call("GET", "/api/snapshot")).status, 200);
   await tent.writeFile(
     "Bad/Bad.md",
@@ -164,11 +218,6 @@ test("invalid stale_after is isolated while map and sync keep serving the worksp
   )!;
   assert.equal(repaired.invalid, false);
   assert.equal(repaired.stale, true);
-  const repairedSync = await call("GET", "/api/sync");
-  assert.equal(repairedSync.status, 200, repairedSync.body);
-  assert.ok(
-    json<{ nodes: Record<string, { behind?: unknown }> }>(repairedSync).nodes["node-bad"]?.behind,
-  );
 });
 
 test("map API exposes a header-only skeleton and leaves document details on demand", async (t) => {
@@ -256,12 +305,12 @@ test("concurrent map requests keep their own observed Node headers", async (t) =
 });
 
 test("canvas API queues CAS writes and exposes current state, history and security errors", async (t) => {
-  const { tent, call } = await fixture(t);
+  const { tent, call, workspace } = await fixture(t);
   const target = "/api/canvas";
   const canvas = {
-    version: 2,
-    positions: { "node-absent": [12, -3] },
-    regions: [{ id: "r1", name: "", box: [0, 0, 100, 80] }],
+    version: 3,
+    open: ["node-absent"],
+    shut: [],
     drawings: [{ id: "ink", kind: "pen", points: [[1, 2]], custom: { keep: true } }],
   };
   assert.deepEqual(json(await call("GET", target)), { etag: null, canvas: null });
@@ -329,9 +378,10 @@ test("canvas API queues CAS writes and exposes current state, history and securi
     { canvas },
     { baseEtag: saved.etag, canvas: {} },
     { baseEtag: saved.etag, canvas: { version: 1, forms: {}, positions: {}, drawings: [] } },
+    { baseEtag: saved.etag, canvas: { version: 2, positions: {}, regions: [], drawings: [] } },
     {
       baseEtag: saved.etag,
-      canvas: { ...canvas, regions: [...canvas.regions, ...canvas.regions] },
+      canvas: { ...canvas, regions: [] },
     },
     {
       baseEtag: saved.etag,
@@ -353,6 +403,13 @@ test("canvas API queues CAS writes and exposes current state, history and securi
   });
   assert.equal(huge.status, 413);
   assert.deepEqual(json(await call("GET", target)), current);
+  const retained = await git(path.join(workspace, ".tent"), "rev-parse", "HEAD");
+  const external = { ...canvas, shut: ["node-other"] };
+  await tent.writeFile("canvas.json", JSON.stringify(external));
+  const fresh = json<{ etag: string; canvas: unknown }>(await call("GET", target));
+  assert.deepEqual(fresh.canvas, external);
+  assert.notEqual(fresh.etag, saved.etag);
+  assert.equal(await git(path.join(workspace, ".tent"), "rev-parse", "HEAD"), retained);
   await tent.writeFile("canvas.json", "broken");
   assert.equal((await call("GET", target)).status, 422);
   assert.equal((await call("PUT", target, { json: { baseEtag: saved.etag, canvas } })).status, 422);
@@ -363,7 +420,10 @@ test("canvas API reports a busy workspace lock without writing", async (t) => {
   const { tent, call } = await fixture(t);
   await tent.withLock("mutation.lock", async () => {
     const reply = await call("PUT", "/api/canvas", {
-      json: { baseEtag: null, canvas: { version: 2, positions: {}, regions: [], drawings: [] } },
+      json: {
+        baseEtag: null,
+        canvas: { version: 3, open: [], shut: [], drawings: [] },
+      },
     });
     assert.equal(reply.status, 503);
     assert.equal(json<{ error: { code: string } }>(reply).error.code, "BUSY");
@@ -804,91 +864,6 @@ test("queued snapshot readers observe intervening edits and keep individual cond
     assert.equal(observations, 4);
   } finally {
     NodeFs.prototype.readContentDigest = original;
-  }
-});
-
-test("disconnected sync requests drop queued work and skip inspection after the active revision", async (t) => {
-  const { call, server, workspace } = await fixture(t);
-  const token = new URL(server.url).hash.replace("#token=", "");
-  let arrived!: () => void, disconnected!: () => void, observed!: () => void;
-  let release!: () => void, completed!: () => void;
-  const arrivals = new Promise<void>((resolve) => (arrived = resolve));
-  const closures = new Promise<void>((resolve) => (disconnected = resolve));
-  const firstDigest = new Promise<void>((resolve) => (observed = resolve));
-  const hold = new Promise<void>((resolve) => (release = resolve));
-  const firstScope = new Promise<void>((resolve) => (completed = resolve));
-  const emit = http.Server.prototype.emit;
-  const digest = NodeFs.prototype.readContentDigest;
-  const header = NodeFs.prototype.readFrontmatter;
-  const scope = NodeFs.prototype.observationScope;
-  let requests = 0,
-    closed = 0,
-    digests = 0,
-    inspections = 0,
-    scopeStarted = false;
-  http.Server.prototype.emit = function (event: string | symbol, ...args: unknown[]) {
-    if (event === "request") {
-      const [req] = args as [http.IncomingMessage, http.ServerResponse];
-      if (req.url === "/api/sync" && req.headers.authorization === `Bearer ${token}`) {
-        if (++requests === 3) arrived();
-        req.socket.once("close", () => {
-          if (++closed === 3) disconnected();
-        });
-      }
-    }
-    return Reflect.apply(emit, this, [event, ...args]) as boolean;
-  };
-  NodeFs.prototype.readContentDigest = async function (file) {
-    const value = await digest.call(this, file);
-    if (this.workspaceRoot === workspace && file === "Main/Main.md" && ++digests === 1) {
-      observed();
-      await hold;
-    }
-    return value;
-  };
-  NodeFs.prototype.readFrontmatter = function (file) {
-    if (this.workspaceRoot === workspace && file === "Main/Main.md") inspections++;
-    return header.call(this, file);
-  };
-  NodeFs.prototype.observationScope = function <T>(
-    action: () => Promise<T>,
-    options?: { forceContent?: boolean },
-  ) {
-    const first = this.workspaceRoot === workspace && !scopeStarted;
-    if (first) scopeStarted = true;
-    const result = scope.call(this, action, options) as Promise<T>;
-    return first ? result.finally(completed) : result;
-  };
-  const socket = net.createConnection({ host: "127.0.0.1", port: server.port });
-  try {
-    await new Promise<void>((resolve, reject) => {
-      socket.once("connect", resolve);
-      socket.on("error", reject);
-    });
-    socket.write(
-      Array.from(
-        { length: 3 },
-        () =>
-          `GET /api/sync HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\nAuthorization: Bearer ${token}\r\nConnection: keep-alive\r\n\r\n`,
-      ).join(""),
-    );
-    await Promise.all([arrivals, firstDigest]);
-    socket.destroy();
-    await closures;
-    release();
-    await firstScope;
-    assert.equal(inspections, 0, "disconnected callers must not start the expensive sync phase");
-    const next = await call("GET", "/api/sync");
-    assert.equal(next.status, 200, next.body);
-    assert.equal(digests, 2, "only the first read and the new live request should run");
-    assert.ok(inspections > 0, "a later live request must still inspect current Nodes");
-  } finally {
-    socket.destroy();
-    release();
-    http.Server.prototype.emit = emit;
-    NodeFs.prototype.readContentDigest = digest;
-    NodeFs.prototype.readFrontmatter = header;
-    NodeFs.prototype.observationScope = scope;
   }
 });
 

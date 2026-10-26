@@ -2,6 +2,7 @@ import {
   Fragment,
   Suspense,
   lazy,
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -11,12 +12,15 @@ import {
   type UIEvent,
 } from "react";
 import { useWantDetails } from "../data/details.js";
-import { useNodeSection } from "../data/node-details.js";
+import { LiveRevisionContext, useHeldSection, useNodeSection } from "../data/node-details.js";
+import { handlingFromNodeCards, useHandling } from "../data/handling.js";
+import { HandlingRows } from "../components/Handling.js";
 import { api, ApiError, describe } from "../data/api.js";
 import { cardTitle, primaryOf, type Graph } from "../data/store.js";
 import type {
   CodeFacts,
   SnapshotCard,
+  SnapshotMaterial,
   SnapshotCommit,
   SnapshotNode,
   SnapshotRef,
@@ -28,7 +32,7 @@ import { cardStage, cardStateLabel, resultParts } from "../data/card-state.js";
 import { nodeDrafts as drafts } from "../data/node-drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { FileView } from "./FileView.js";
-import { fileOf, FilesContext, useFileInfo } from "../data/files.js";
+import { fileOf, FilesContext, infoOf, useFileInfoRead } from "../data/files.js";
 import { Tray, Pet, turnPet } from "../components/Pet.js";
 import { Markdown } from "../components/Markdown.js";
 import {
@@ -41,19 +45,22 @@ import {
   RefLink,
   ReviewRow,
   ReadState,
+  RECENT,
 } from "./Details.js";
-import { useFlags } from "../data/flags.js";
 import { CardMenu, NodeMenu, RoleMenu } from "./Manage.js";
 import { Letter, saveState } from "../shell/Dock.js";
 import { beginDrag, useDragState } from "../shell/drag.js";
 import { draftTitle, moodOf, PUBLIC, sourceIds, type Work } from "../shell/work.js";
-import { ago, lineDiff, readStored, shortHash, when, writeStored } from "../util.js";
+import { ago, lineDiff, readStored, resolveHref, shortHash, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
+import type { HistoricalSelection } from "../data/history-tree.js";
+import { historicalGraph, readHistoricalNode } from "../data/history-tree.js";
 
 // The editor loads only when someone starts editing.
 const MarkdownEditor = lazy(() => import("../components/MarkdownEditor.js"));
 
 type Props = {
+  historical?: HistoricalSelection;
   graph: Graph;
   target: SnapshotRef;
   work: Work;
@@ -104,6 +111,10 @@ export function Reader(props: Props) {
   useWantDetails(target.kind !== "node" && !graph.detailed);
   const box = useRef<HTMLElement>(null);
   const narrow = useWidth(box) < NARROW;
+  const historical =
+    target.kind === "node" && props.historical?.node.id === target.id
+      ? props.historical
+      : undefined;
   const node = target.kind === "node" ? graph.nodes.get(target.id) : undefined;
   const role = target.kind === "role" ? graph.roles.get(target.id) : undefined;
   const card = target.kind === "card" ? props.work.card(target.id) : undefined;
@@ -127,19 +138,85 @@ export function Reader(props: Props) {
       aria-label={props.mode === "panel" ? t.sheet.label : t.reader.label}
       onScrollCapture={onScroll}
     >
-      {node && <NodePage {...page} node={node} key={node.id} />}
+      {historical ? (
+        <HistoricalNodePage
+          {...page}
+          historical={historical}
+          key={`${historical.version.commit}:${historical.version.path}`}
+        />
+      ) : (
+        node && <NodePage {...page} node={node} key={node.id} />
+      )}
       {role && <RolePage {...page} role={role} key={role.id} />}
       {card && isDraft(card) && <DraftPage {...page} card={card} key={card.id} />}
       {card && !isDraft(card) && <CardPage {...page} card={card} key={card.id} />}
-      {!node && !role && !card && (
+      {!historical && !node && !role && !card && (
         <>
           <PageTop {...props} crumbs={[]} />
-          <p className="empty pg-missing">
+          <p className="empty pg-missing" role="status">
             {target.kind !== "node" && !graph.detailed ? t.page.reading : t.sheet.notFound}
           </p>
         </>
       )}
     </section>
+  );
+}
+
+/** The same Node page shell, pinned to exact retained bytes, with no live read or write controls. */
+function HistoricalNodePage(props: PageProps & { historical: HistoricalSelection }) {
+  const { node, version } = props.historical;
+  const [document, setDocument] = useState<{ body: string; error?: string } | null>(null);
+  useEffect(() => {
+    let live = true;
+    readHistoricalNode(props.historical, api.historicalNode)
+      .then((document) => live && setDocument(document))
+      .catch((error) => live && setDocument({ body: "", error: describe(error) }));
+    return () => {
+      live = false;
+    };
+  }, [version.commit, version.path, node.id]);
+  // Historical text cannot resolve links or images through today's Node/material state.
+  const graph = historicalGraph(props.graph, null);
+  return (
+    <>
+      <PageTop
+        {...props}
+        roles={undefined}
+        title={node.name}
+        crumbs={[<Crumb key={node.id}>{node.name}</Crumb>]}
+      />
+      <PageBody
+        narrow={props.narrow}
+        head={
+          <Hero
+            title={node.name}
+            eyebrow={
+              <>
+                <b>{node.type || "prompt"}</b>
+                <span className="pill">{shortHash(version.commit)}</span>
+              </>
+            }
+          />
+        }
+        main={
+          <div className="pg-doc">
+            {document?.error ? (
+              <p className="empty">{document.error}</p>
+            ) : document ? (
+              <Markdown
+                body={document.body}
+                fromPath={version.path}
+                graph={graph}
+                onOpen={() => {}}
+                historical
+              />
+            ) : (
+              <p className="empty">{t.page.reading}</p>
+            )}
+          </div>
+        }
+      />
+    </>
   );
 }
 
@@ -210,6 +287,25 @@ function PageTop({
   crumbs: ReactNode[];
   actions?: ReactNode;
 }) {
+  // A deep Node keeps its trail readable: the top, then its parent and itself, the rest behind "…".
+  const [allCrumbs, setAllCrumbs] = useState(false);
+  const trail =
+    crumbs.length > 4 && !allCrumbs
+      ? [
+          crumbs[0],
+          <button
+            key="more"
+            type="button"
+            className="pg-crumb-more"
+            onClick={() => setAllCrumbs(true)}
+            aria-label={t.page.moreCrumbs(crumbs.length - 3)}
+            title={t.page.moreCrumbs(crumbs.length - 3)}
+          >
+            …
+          </button>,
+          ...crumbs.slice(-2),
+        ]
+      : crumbs;
   return (
     <div className="pg-top">
       {mode === "panel" ? (
@@ -230,7 +326,7 @@ function PageTop({
         </div>
       ) : (
         <nav className="pg-crumbs" aria-label={t.bar.where}>
-          {crumbs.map((c, i) => (
+          {trail.map((c, i) => (
             <Fragment key={i}>
               {i > 0 && <span className="sep">/</span>}
               {c}
@@ -686,22 +782,72 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
   } = props;
   const document = useNodeSection(mapNode.id, readNodeDocument);
   const doc = document.data;
+  const revision = useContext(LiveRevisionContext) ?? graph.snapshot.workspace.revision;
+  const pageKey = JSON.stringify([graph.snapshot.workspace.id, revision, mapNode.id]);
+  const countKey = JSON.stringify([graph.snapshot.workspace.id, mapNode.id]);
   // Let the first text arrive before metadata and retained-source scans compete for the disk.
   // A failed body read still permits the other sections to load and retry independently.
   const bodySettled = !!doc || !!document.error;
-  const history = useNodeSection(mapNode.id, api.nodeHistory, bodySettled);
-  const cards = useNodeSection(mapNode.id, api.nodeCards, bodySettled);
-  const outgoing = useNodeSection(mapNode.id, readOutgoing, bodySettled);
+  // Then the size of the file its header names, so the text and that file's line land together: the
+  // service answers in order of work, and behind these scans that small read waited seconds on a large
+  // Workspace. They follow it, a second later at most.
+  const [fileFirst, setFileFirst] = useState<{
+    key: string;
+    doc: typeof doc;
+    path: string | null;
+  } | null>(null);
+  const sectionsGo = bodySettled && fileFirst?.key === pageKey && fileFirst.doc === doc;
+  const history = useNodeSection(mapNode.id, api.nodeHistory, sectionsGo);
+  const cards = useNodeSection(mapNode.id, api.nodeCards, sectionsGo);
+  const outgoing = useNodeSection(mapNode.id, readOutgoing, sectionsGo);
+  // Comparing materials reads each one, so it waits for the body like the other sections, and the
+  // facts already shown stay while a newer revision is compared.
+  const materials = useHeldSection(
+    mapNode.id,
+    useNodeSection(mapNode.id, api.nodeMaterials, sectionsGo),
+  );
   const [incomingOpen, setIncomingOpen] = useState(false);
+  // Who is on it, from the Card list once the page has it, else from the Cards read for this Node, kept
+  // while a newer revision reads them again.
+  const handled = useHandling().get(mapNode.id);
+  const ownCards = useHeldSection(mapNode.id, cards);
+  const handling = graph.detailed ? handled : handlingFromNodeCards(ownCards.data?.items ?? []);
   const incoming = useNodeSection(mapNode.id, readIncoming, incomingOpen && bodySettled);
+  const header = headerMaterials(mapNode.notePath, doc?.frontmatter);
   const node = {
     ...mapNode,
     body: doc?.body ?? "",
     links: outgoing.data?.links ?? [],
-    materials: outgoing.data?.materials ?? [],
+    materials: outgoing.data?.materials ?? header.materials,
   };
-  const flags = useFlags();
-  const files = useFileInfo({ ...graph.snapshot, nodes: [node] }, flags);
+  const fileRead = useFileInfoRead({
+    ...graph.snapshot,
+    workspace: { ...graph.snapshot.workspace, revision },
+    nodes: [node],
+  });
+  const files = fileRead.files;
+  // Known header materials hold their row before the text. Uncertain declarations wait for relations
+  // too, with the same one-second cap so a failed or slow read cannot hold the text indefinitely.
+  const ownFile = fileOf(node);
+  const ownPath = ownFile?.kind === "file" ? ownFile.path : null;
+  const [timeout, setTimeoutRead] = useState<{ key: string; doc: typeof doc } | null>(null);
+  const waited = timeout?.key === pageKey && timeout.doc === doc;
+  useEffect(() => {
+    if (!doc) return;
+    const timer = setTimeout(() => setTimeoutRead({ key: pageKey, doc }), 1000);
+    return () => clearTimeout(timer);
+  }, [pageKey, doc]);
+  const fileKnown =
+    ownFile?.kind !== "file" ||
+    (fileRead.current && infoOf(files, ownFile.path) !== undefined) ||
+    waited;
+  useEffect(() => {
+    if (bodySettled && fileKnown) setFileFirst({ key: pageKey, doc, path: ownPath });
+  }, [bodySettled, fileKnown, pageKey, doc, ownPath]);
+  const fileShown = sectionsGo && fileFirst.path === ownPath;
+  const aboveKnown =
+    waited ||
+    ((fileKnown || fileShown) && (!header.pending || !!outgoing.data || !!outgoing.error));
   const panel = props.mode === "panel";
   const kept = drafts.get(node.id);
   const [editing, setEditing] = useState(() => startEditing || !!kept?.editing);
@@ -822,6 +968,28 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
   const openCard = work.openDraft ? graph.cards.get(work.openDraft) : undefined;
   const at = work.openDraft ? sourceIds(graph, openCard, work.draft).indexOf(node.id) : -1;
   const carried = cards.data?.items ?? [];
+  // How many Cards and versions there are, once read this session or once the snapshot is in: their places
+  // are held at that height. Unknown, the two sections under the text wait for both reads and come together.
+  if (cards.data && history.data)
+    seenCounts.set(countKey, {
+      revision,
+      cards: carried.length,
+      versions: history.data.items.length,
+    });
+  const seen = seenCounts.get(countKey);
+  const inSnapshot =
+    graph.detailed && graph.snapshot.workspace.revision === revision
+      ? graph.nodes.get(node.id)
+      : undefined;
+  const known =
+    (seen?.revision === revision ? seen : undefined) ??
+    (inSnapshot && {
+      cards: graph.snapshot.cards.filter((c) => c.sources.some((x) => x.id === node.id)).length,
+      versions: inSnapshot.history.length,
+    });
+  const knownCards = known?.cards ?? 0;
+  const knownVersions = Math.min(known?.versions ?? 0, RECENT);
+  const under = !!known || ((!!cards.data || !!cards.error) && (!!history.data || !!history.error));
   const actions = editing ? (
     <>
       <span className="muted pg-hint">{t.reader.baseVersion}</span>
@@ -891,10 +1059,12 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
   );
   // Under the text at every width; successful empty reads leave no section.
   const carriedSection =
-    cards.data && !carried.length && !cards.data.diagnostics.length ? null : (
+    !under ||
+    (cards.data && !carried.length && !cards.data.diagnostics.length) ||
+    (!cards.data && !cards.error && !knownCards) ? null : (
       <Section title={cards.data ? t.page.carried(carried.length) : t.page.carriedHead}>
         {!cards.data ? (
-          <ReadState section={cards} />
+          <ReadState section={cards} rows={Math.min(knownCards, narrow ? 3 : 6)} kind="card" />
         ) : (
           <More count={carried.length} shown={narrow ? 3 : 6}>
             {(n) =>
@@ -936,8 +1106,12 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
               eyebrow={
                 <>
                   <b className={`p-${p}`}>{p}</b>
-                  {node.status !== "stable" && (
-                    <span className="pill">{t.node.status(node.status)}</span>
+                  {node.status === "draft" ? (
+                    <span className="eyebrow-note">{t.node.undecided}</span>
+                  ) : (
+                    node.status !== "stable" && (
+                      <span className="pill">{t.node.status(node.status)}</span>
+                    )
                   )}
                   {state.recent && <span className="pill pill-recent">{t.node.recent}</span>}
                   {state.drift && <span className="pill pill-drift">{t.node.drift}</span>}
@@ -951,6 +1125,12 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
               title={node.name}
             />
             {node.description && <p className="page-lede">{node.description}</p>}
+            {!!handling?.length && (
+              <section className="pg-handling">
+                <h3>{t.page.handlingHead}</h3>
+                <HandlingRows graph={graph} list={handling} onOpen={onOpen} />
+              </section>
+            )}
             {draft !== null && !editing && draft !== node.body && (
               <div className="banner">
                 {t.reader.unsaved}
@@ -1015,13 +1195,16 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
                   <FileView node={node} onToast={onToast} />
                 </FilesContext.Provider>
                 {!!document.error && body.trim() && <ReadState section={document} />}
-                {body.trim() ? (
+                {doc && !aboveKnown && !document.error ? (
+                  <p className="empty">{t.page.reading}</p>
+                ) : body.trim() ? (
                   <Markdown
                     body={body}
                     fromPath={node.notePath}
                     graph={graph}
                     relations={outgoing.data}
                     onOpen={onOpen}
+                    onToast={onToast}
                   />
                 ) : !doc ? (
                   <ReadState section={document} />
@@ -1043,9 +1226,11 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
               incoming,
               incomingOpen,
               onIncoming: () => setIncomingOpen(true),
+              materials,
+              materialsDeclared: header.materials.length,
             }}
           >
-            <ReviewRow doc={doc} flag={flags[node.id]} node={node} />
+            <ReviewRow doc={doc} node={node} />
             <PropRow label="id">
               <CopyId id={node.id} onToast={onToast} />
             </PropRow>
@@ -1058,23 +1243,100 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
           </>
         }
         tail={
-          <Section title={t.page.versions} count={history.data?.items.length}>
-            <ReadState section={history} />
-            {/* Keep this Node's expansion state while a replacement read is pending or failed. */}
-            <div hidden={!history.data}>
-              <History
-                key={node.id}
-                id={node.id}
-                path={node.notePath}
-                items={history.data?.items ?? []}
-              />
-            </div>
-          </Section>
+          under && (
+            <Section title={t.page.versions} count={history.data?.items.length}>
+              <ReadState section={history} rows={knownVersions} kind="version" />
+              {/* Keep this Node's expansion state while a replacement read is pending or failed. */}
+              <div hidden={!history.data}>
+                <History
+                  key={node.id}
+                  id={node.id}
+                  path={node.notePath}
+                  items={history.data?.items ?? []}
+                />
+              </div>
+            </Section>
+          )
         }
       />
     </>
   );
 }
+
+/**
+ * A provisional display for unambiguous Workspace files and addresses. Tent documents and unsupported
+ * addresses wait for Core's relations, which alone decide document identity and invalid declarations.
+ */
+export function headerMaterials(notePath: string, front: Record<string, unknown> | undefined) {
+  let pending = false;
+  const entry = (
+    raw: unknown,
+    field: "resource" | "sources",
+    index?: number,
+  ): SnapshotMaterial[] => {
+    const value =
+      field === "resource"
+        ? raw
+        : raw && typeof raw === "object" && "resource" in raw
+          ? raw.resource
+          : undefined;
+    if (typeof value !== "string" || !value.trim()) {
+      pending = true;
+      return [];
+    }
+    const resource = value.trim();
+    if (resource.includes("\0")) {
+      pending = true;
+      return [];
+    }
+    // Core treats bare sources as descriptions, even when they look like files or ids.
+    if (
+      field === "sources" &&
+      !/^(?:\.{1,2}\/|\/)/.test(resource) &&
+      !(/^[a-z][a-z\d+.-]*:\S/i.test(resource) && !/\s/.test(resource))
+    )
+      return [{ kind: "text", resource: value, field, index }];
+    try {
+      if (/^[a-z][a-z\d+.-]*:/i.test(resource) && !/^[a-z]:[\\/]/i.test(resource)) {
+        const uri = new URL(resource);
+        // file: addresses can select directories or prefixes; let Core validate them.
+        if (uri.protocol !== "file:")
+          return [{ kind: "uri", resource: value, uri: uri.href, field, index }];
+      } else {
+        const clean = decodeURIComponent(resource.split(/[?#]/)[0]!);
+        const file = resolveHref(notePath, resource).file;
+        if (
+          file &&
+          file !== ".tent" &&
+          file !== ".." &&
+          !file.startsWith("../") &&
+          !resource.includes("\\") &&
+          !clean.includes("\\") &&
+          !clean.includes("\0") &&
+          !resource.startsWith("//") &&
+          !clean.startsWith("//") &&
+          !clean.includes("*") &&
+          (!clean.endsWith("/") || (resource.endsWith("/") && !/[?#]/.test(resource)))
+        )
+          return [{ kind: "file", resource: value, workspacePath: file, field, index }];
+      }
+    } catch {
+      // Malformed declarations stay with the checked relation read, never a guessed file tab.
+    }
+    pending = true;
+    return [];
+  };
+  const sources = Array.isArray(front?.sources) ? front.sources : [];
+  if (front?.sources !== undefined && !Array.isArray(front.sources)) pending = true;
+  const materials = [
+    ...(front?.resource === undefined ? [] : entry(front.resource, "resource")),
+    ...sources.flatMap((s: unknown, i: number) => entry(s, "sources", i)),
+  ];
+  return { materials, pending };
+}
+
+/** Counts from this Workspace revision hold each Node's sections when it opens again. */
+const seenCounts = new Map<string, { revision: string; cards: number; versions: number }>();
 
 /** A Role's text often opens with a sentence of what it is for; that becomes the lede. */
 function splitLede(body: string): [string, string] {
@@ -1177,7 +1439,13 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
         main={
           <>
             <div className="pg-doc">
-              <Markdown body={rest} fromPath={role.path} graph={graph} onOpen={onOpen} />
+              <Markdown
+                body={rest}
+                fromPath={role.path}
+                graph={graph}
+                onOpen={onOpen}
+                onToast={onToast}
+              />
             </div>
             <Section title={t.page.here} count={here.length}>
               <div className="letters" data-drop={`lane:${role.id}`}>
@@ -1395,7 +1663,13 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
             <Section title={t.page.what}>
               <div className="pg-doc">
                 {body.trim() ? (
-                  <Markdown body={body} fromPath={card.path} graph={graph} onOpen={onOpen} />
+                  <Markdown
+                    body={body}
+                    fromPath={card.path}
+                    graph={graph}
+                    onOpen={onOpen}
+                    onToast={onToast}
+                  />
                 ) : (
                   <p className="empty">{t.card.noText}</p>
                 )}

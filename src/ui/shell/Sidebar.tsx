@@ -1,10 +1,18 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { api, ApiError, describe, type KnownWorkspace } from "../data/api.js";
 import { primaryOf, type Graph } from "../data/store.js";
 import type { SnapshotNode, SnapshotRef } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
 import { hasUnsavedNodeDrafts } from "../data/node-drafts.js";
-import { FileMark, Icon, TypeTile } from "../components/Glyph.js";
+import { FileMark, Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { Tray, Pet } from "../components/Pet.js";
 import { t, type Lang } from "../i18n.js";
 import { ago, pathTail, when } from "../util.js";
@@ -12,6 +20,13 @@ import { beginDrag, useDragState } from "./drag.js";
 import { carried, PUBLIC, sourceIds, type Work } from "./work.js";
 import { ContextMenu, useNodeActions } from "../panel/Manage.js";
 import { useWantDetails } from "../data/details.js";
+import {
+  TREE_ROW_HEIGHT,
+  treeKeyTarget,
+  treeRows,
+  treeScrollTop,
+  treeWindow,
+} from "./tree-window.js";
 
 export type ThemePref = "light" | "dark" | "system";
 
@@ -42,6 +57,11 @@ type Props = {
   onMarkAllSeen: () => void;
   /** The robot the pointer rests on in the dock; the tree marks what its Cards carry. */
   hotLane: string | null;
+  /** The robot clicked to keep it lit; the tree's top line offers to let it go. */
+  pinnedLane: string | null;
+  onUnpin: () => void;
+  /** A page covers the map: the row preview stays shut. */
+  reading: boolean;
   onToast: (text: string) => void;
 };
 
@@ -58,8 +78,8 @@ export function Sidebar(props: Props) {
   const { hotLane } = props;
   const [peek, setPeek] = useState<{ id: string; top: number } | null>(null);
   useEffect(() => {
-    if (drag) setPeek(null);
-  }, [!!drag]);
+    if (drag || props.reading) setPeek(null);
+  }, [!!drag, props.reading]);
   const edge = (label: string) => (
     <div
       className="side-resize"
@@ -135,15 +155,23 @@ export function Sidebar(props: Props) {
         </button>
       </div>
 
-      <Tree {...props} hotLane={hotLane} onPeek={setPeek} peeking={peek?.id ?? null} />
+      {graph.snapshot.nodes.length ? (
+        <Tree {...props} hotLane={hotLane} onPeek={setPeek} peeking={peek?.id ?? null} />
+      ) : (
+        <p className="side-empty">{t.side.noNodes}</p>
+      )}
 
       <div className="side-foot">
         {settings}
-        <span className="muted" title={latest?.hash}>
-          {t.side.lastCommit(when(latest?.date))}
-        </span>
+        {latest && (
+          <span className="muted" title={latest.hash}>
+            {t.side.lastCommit(when(latest.date))}
+          </span>
+        )}
       </div>
-      {peek && !drag && <Peek graph={graph} work={work} id={peek.id} top={peek.top} />}
+      {peek && !drag && !props.reading && (
+        <Peek graph={graph} work={work} id={peek.id} top={peek.top} />
+      )}
       {edge(t.app.resizeSide)}
     </nav>
   );
@@ -156,12 +184,14 @@ function Tree({
   collapsed,
   work,
   hotLane,
+  pinnedLane,
   peeking,
   onPeek,
   onFold,
   onOpen,
   onLocate,
   onMarkAllSeen,
+  onUnpin,
   onToast,
 }: Props & {
   hotLane: string | null;
@@ -178,13 +208,85 @@ function Tree({
   // Rows whose names hold the filter, with the Nodes they hang from opened to show them.
   const [filter, setFilter] = useState<string | null>(null);
   const q = filter?.trim().toLowerCase() ?? "";
-  const shown = q ? new Set<string>() : null;
-  if (shown)
+  const shown = useMemo(() => {
+    if (!q) return null;
+    const matches = new Set<string>();
     for (const n of graph.snapshot.nodes)
       if (n.name.toLowerCase().includes(q)) {
-        shown.add(n.id);
-        for (const a of graph.ancestors(n.id)) shown.add(a.id);
+        matches.add(n.id);
+        for (const a of graph.ancestors(n.id)) matches.add(a.id);
       }
+    return matches;
+  }, [graph, q]);
+  const outline = useMemo(() => treeRows(graph, collapsed, shown), [graph, collapsed, shown]);
+  const rowIndex = useMemo(() => new Map(outline.map((r, i) => [r.node.id, i])), [outline]);
+  const scroller = useRef<HTMLDivElement>(null);
+  const elements = useRef(new Map<string, HTMLDivElement>());
+  const pendingFocus = useRef<string | null>(null);
+  const pendingReveal = useRef<string | null>(null);
+  const [focused, setFocused] = useState<string | null>(null);
+  const [viewport, setViewport] = useState({ top: 0, height: 0 });
+  const readViewport = useCallback(() => {
+    const box = scroller.current;
+    if (!box) return;
+    const top = box.scrollTop;
+    const height = box.clientHeight;
+    setViewport((v) => (v.top === top && v.height === height ? v : { top, height }));
+  }, []);
+  useLayoutEffect(() => {
+    const box = scroller.current;
+    if (!box) return;
+    readViewport();
+    const observer = new ResizeObserver(readViewport);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [readViewport]);
+  const reveal = (index: number) => {
+    const box = scroller.current;
+    if (!box) return;
+    box.scrollTop = treeScrollTop(index, box.scrollTop, box.clientHeight);
+    readViewport();
+  };
+  const focusRow = (id: string | undefined) => {
+    if (id === undefined) return;
+    const index = rowIndex.get(id);
+    if (index === undefined) return;
+    pendingFocus.current = id;
+    setFocused(id);
+    reveal(index);
+    const element = elements.current.get(id);
+    if (element) {
+      element.focus({ preventScroll: true });
+      pendingFocus.current = null;
+    }
+  };
+  // App opens a selected Node's ancestors. Keep the reveal pending until that outline arrives;
+  // selection scrolls the tree without taking focus away from the map, search or page.
+  useLayoutEffect(() => {
+    pendingReveal.current = selected?.kind === "node" ? selected.id : null;
+  }, [selected?.kind, selected?.id, graph.snapshot.workspace.id]);
+  useLayoutEffect(() => {
+    if (pendingReveal.current !== null) {
+      const index = rowIndex.get(pendingReveal.current);
+      if (index !== undefined) {
+        reveal(index);
+        pendingReveal.current = null;
+      }
+    }
+    if (pendingFocus.current !== null) {
+      const element = elements.current.get(pendingFocus.current);
+      if (element) {
+        element.focus({ preventScroll: true });
+        pendingFocus.current = null;
+      }
+    }
+  });
+  const mounted = treeWindow(
+    outline.length,
+    viewport.top,
+    viewport.height,
+    focused === null ? -1 : (rowIndex.get(focused) ?? -1),
+  );
   const openCard = work.openDraft ? graph.cards.get(work.openDraft) : undefined;
   const inDraft = work.openDraft ? sourceIds(graph, openCard, work.draft) : [];
   // The published Card on the page: its sources in order, and which changed after it was sent.
@@ -220,16 +322,15 @@ function Tree({
     parent: string | null,
     open: boolean | null,
   ) => {
-    const all = [...(e.currentTarget.parentElement?.children ?? [])] as HTMLElement[];
-    const at = all.indexOf(e.currentTarget);
-    const go = (el: HTMLElement | undefined) => el?.focus();
+    const at = rowIndex.get(n.id)!;
+    const go = (key: string) => focusRow(treeKeyTarget(outline, at, key));
     const keys: Record<string, () => void> = {
-      ArrowDown: () => go(all[at + 1]),
-      ArrowUp: () => go(all[at - 1]),
-      Home: () => go(all[0]),
-      End: () => go(all.at(-1)),
-      ArrowRight: () => (open === false ? onFold(n.id, true) : open && go(all[at + 1])),
-      ArrowLeft: () => (open ? onFold(n.id, false) : go(all.find((r) => r.dataset.id === parent))),
+      ArrowDown: () => go("ArrowDown"),
+      ArrowUp: () => go("ArrowUp"),
+      Home: () => go("Home"),
+      End: () => go("End"),
+      ArrowRight: () => (open === false ? onFold(n.id, true) : open && go("ArrowRight")),
+      ArrowLeft: () => (open ? onFold(n.id, false) : go("ArrowLeft")),
       "*": () =>
         graph
           .childrenOf(parent)
@@ -242,11 +343,8 @@ function Tree({
     keys[e.key]();
   };
 
-  const rows: ReactNode[] = [];
-  const walk = (n: SnapshotNode, depth: number, parent: string | null) => {
-    if (shown && !shown.has(n.id)) return;
-    const kids = graph.childrenOf(n.id);
-    const folded = kids.length > 0 && !shown && collapsed.has(n.id);
+  const rows = mounted.map((index) => {
+    const { node: n, depth, parent, folded, children, position, siblings } = outline[index]!;
     const state = graph.states.get(n.id)!;
     const at = inDraft.indexOf(n.id);
     const ref = refs.get(n.id);
@@ -301,17 +399,32 @@ function Tree({
     ]
       .filter(Boolean)
       .join(" ");
-    rows.push(
+    return (
       <div
         key={n.id}
+        ref={(el) => {
+          if (el) elements.current.set(n.id, el);
+          else elements.current.delete(n.id);
+        }}
         className={cls}
-        style={{ "--d": depth } as React.CSSProperties}
+        style={
+          {
+            "--d": depth,
+            position: "absolute",
+            top: index * TREE_ROW_HEIGHT,
+            width: "100%",
+          } as React.CSSProperties
+        }
         role="treeitem"
         tabIndex={0}
         aria-selected={active}
-        aria-expanded={kids.length ? !folded : undefined}
+        aria-expanded={children ? !folded : undefined}
+        aria-level={depth + 1}
+        aria-posinset={position}
+        aria-setsize={siblings}
         data-id={n.id}
         data-drop={`tree:${n.id}`}
+        data-drop-label={n.name}
         data-drop-zones=""
         onClick={() => onOpen({ kind: "node", id: n.id })}
         onContextMenu={(e) => {
@@ -327,7 +440,7 @@ function Tree({
             const r = e.currentTarget.getBoundingClientRect();
             return setActing({ id: n.id, at: { x: r.left + 24, y: r.bottom } });
           }
-          onRowKey(e, n, parent, kids.length ? !folded : null);
+          onRowKey(e, n, parent, children ? !folded : null);
         }}
         onPointerDown={(e) => beginDrag(e, { kind: "node", id: n.id })}
         onPointerEnter={(e) => {
@@ -343,7 +456,7 @@ function Tree({
         {Array.from({ length: depth }, (_, i) => (
           <span key={i} className="guide" style={{ left: 14.5 + i * 14 }} />
         ))}
-        {kids.length > 0 && (
+        {children > 0 && (
           <button
             type="button"
             className="chev"
@@ -356,6 +469,9 @@ function Tree({
             <Icon name="chevron" size={13} />
           </button>
         )}
+        <span className="row-type">
+          <TypeGlyph type={n.type} size={12} />
+        </span>
         <span className="t">{n.name}</span>
         <FileMark node={n} size={12} />
         {state.recent && !marks.length && !active && (
@@ -391,11 +507,9 @@ function Tree({
             <Icon name={at >= 0 ? "check" : "addToCard"} size={14} />
           </button>
         </span>
-      </div>,
+      </div>
     );
-    if (!folded) kids.forEach((k) => walk(k, depth + 1, n.id));
-  };
-  graph.childrenOf(null).forEach((n) => walk(n, 0, null));
+  });
 
   const context = card
     ? t.side.cardSources(refs.size)
@@ -441,7 +555,18 @@ function Tree({
         {context ? (
           <span className="ctx">
             {card && <Icon name="mail" size={12} />}
-            {context}
+            <span className="ctx-text">{context}</span>
+            {!card && pinnedLane !== null && hotLane === pinnedLane && (
+              <button
+                type="button"
+                className="ctx-x"
+                onClick={onUnpin}
+                aria-label={t.side.unpin}
+                title={t.side.unpin}
+              >
+                <Icon name="close" size={12} />
+              </button>
+            )}
           </span>
         ) : (
           fresh > 0 && (
@@ -474,8 +599,23 @@ function Tree({
           }}
         />
       )}
-      <div className="tree-rows">
-        {rows}
+      <div
+        className="tree-rows"
+        ref={scroller}
+        onScroll={() => {
+          clearTimeout(timer.current);
+          onPeek(null);
+          readViewport();
+        }}
+        onFocusCapture={(e) => {
+          const row = (e.target as HTMLElement).closest<HTMLElement>("[data-id]");
+          if (row) setFocused(row.dataset.id ?? null);
+        }}
+        onBlurCapture={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(null);
+        }}
+      >
+        <div style={{ position: "relative", height: outline.length * TREE_ROW_HEIGHT }}>{rows}</div>
         {shown && !shown.size && <p className="tree-none">{t.side.filterNone}</p>}
       </div>
       {acting && graph.nodes.get(acting.id) && (

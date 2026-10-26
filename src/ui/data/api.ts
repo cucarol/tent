@@ -2,13 +2,14 @@
 // The token arrives once in the URL fragment and is kept for this tab only.
 import { t } from "../i18n.js";
 import type { WorkspaceMap } from "../../core/read/workspace-map.js";
+import type { HistoryTree } from "../../core/read/history-query.js";
 import type {
   CardState,
   CodeFacts,
   DocumentVersion,
   OutputComparison,
+  MaterialState,
   Snapshot,
-  SyncFlags,
   NodeHistoryDetails,
   NodeCardsDetails,
   NodeRelationsDetails,
@@ -101,6 +102,31 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
 
 /** Fires after each successful write, so the page refreshes without waiting for the next check. */
 export const changes = new EventTarget();
+
+/** Streaming fetch keeps the same tab token; EventSource cannot send the Authorization header. */
+export async function openChanges(signal: AbortSignal): Promise<Response> {
+  if (!token) throw new ApiError(401, "NO_TOKEN", "No token");
+  let response: Response;
+  try {
+    response = await fetch("/api/changes", {
+      headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
+      signal,
+    });
+  } catch {
+    throw new ApiError(0, "OFFLINE", "The service is not reachable");
+  }
+  // Watching is optional. A service without it remains usable through the normal polling.
+  if (response.ok || response.status === 503) return response;
+  const data = (await response.json().catch(() => null)) as {
+    error?: { code: string; message: string };
+  } | null;
+  throw new ApiError(
+    response.status,
+    data?.error?.code ?? `HTTP_${response.status}`,
+    data?.error?.message ?? response.statusText,
+  );
+}
+
 const wrote = <T>(result: Promise<T>) =>
   result.then((value) => {
     changes.dispatchEvent(new Event("change"));
@@ -177,14 +203,19 @@ export const api = {
       "/api/snapshot",
       revision ? { headers: { "If-None-Match": `"${revision}"` } } : {},
     ),
-  /** Rebuilds at the same revision: Card progress and completions follow materials outside Tent. */
-  freshSnapshot: () => call<Snapshot>("/api/snapshot?fresh=1"),
   revision: () => call<{ revision: string }>("/api/revision"),
   /** The map's canvas file (`.tent/canvas.json`); both null while the file does not exist. */
   canvas: () => call<{ etag: string | null; canvas: unknown }>("/api/canvas"),
   /** Replaces the whole canvas file; a stale ETag is refused with the current file in the details. */
-  saveCanvas: (baseEtag: string | null, canvas: unknown) =>
-    call<{ etag: string }>("/api/canvas", send("PUT", { baseEtag, canvas })),
+  saveCanvas: (baseEtag: string | null, canvas: unknown, leaving = false) => {
+    const init = send("PUT", { baseEtag, canvas });
+    // Small ongoing saves survive reload too, leaving room for a final request
+    // within fetch's 64 KiB keepalive budget. Larger normal saves use regular fetch.
+    return call<{ etag: string }>("/api/canvas", {
+      ...init,
+      keepalive: leaving || new TextEncoder().encode(init.body as string).length <= 32 * 1024,
+    });
+  },
   /** Which Nodes with code directories import which, from the repository's current files. */
   /**
    * When each Node's body or material addresses last changed, and when each output was last recorded or
@@ -201,8 +232,9 @@ export const api = {
     call<OutputComparison[]>(
       `/api/outputs/compare?${ids.map((id) => `nodeId=${encodeURIComponent(id)}`).join("&")}`,
     ),
-  /** Ahead and behind Nodes, computed fresh: material changes do not move the revision. */
-  sync: () => call<{ revision: string; nodes: SyncFlags }>("/api/sync"),
+  /** A Node's own materials as they compare now: material changes do not move the revision. */
+  nodeMaterials: (id: string) =>
+    call<{ materials: MaterialState[] }>(`/api/nodes/${encodeURIComponent(id)}/materials`),
   node: (id: string, capture = false) =>
     call<NodeDocument>(`/api/nodes/${encodeURIComponent(id)}${capture ? "?capture=true" : ""}`),
   nodeHistory: (id: string) =>
@@ -263,6 +295,12 @@ export const api = {
     ),
   document: (version: DocumentVersion) =>
     call<{ raw: string }>(`/api/history/document?at=${at(version)}`),
+  historicalNode: (nodeId: string, version: DocumentVersion) =>
+    call<{ nodeId: string; text: string; partial: boolean }>(
+      `/api/nodes/${encodeURIComponent(nodeId)}?at=${at(version)}`,
+    ),
+  historyTree: (commit: string) =>
+    call<HistoryTree>(`/api/history/tree?commit=${encodeURIComponent(commit)}`),
   workspaces: () => call<{ workspaces: KnownWorkspace[] }>("/api/workspaces"),
   /** Starts or finds the service for another workspace; the page then goes to its address. */
   openWorkspace: (path: string) =>

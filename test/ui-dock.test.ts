@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { carried, deskOf, inQueue, moodOf, placeIn } from "../src/ui/shell/work.js";
+import { carried, deskOf, inQueue, moodOf, placeIn, treeAccepts } from "../src/ui/shell/work.js";
 import type { Graph } from "../src/ui/data/store.js";
 import type { SnapshotCard } from "../src/ui/data/types.js";
 
@@ -15,6 +15,30 @@ const card = (id: string, fields: Partial<SnapshotCard>) =>
     ...fields,
   }) as unknown as SnapshotCard;
 const laneOf = (c: SnapshotCard) => c.receivedBy ?? c.target ?? "";
+
+test("a map selection can move through the sidebar, with the same cycle and no-op checks", () => {
+  const parents = new Map<string, string | null>([
+    ["a", null],
+    ["b", null],
+    ["child", "a"],
+    ["deep", "child"],
+  ]);
+  const graph = {
+    nodes: new Map([...parents].map(([id, parentId]) => [id, { id, parentId }])),
+    ancestors: (id: string) => {
+      const out = [];
+      for (let parent = parents.get(id); parent; parent = parents.get(parent))
+        out.push({ id: parent });
+      return out;
+    },
+  } as unknown as Graph;
+  const item = { kind: "node", id: "a", from: "map" } as const;
+  assert.equal(treeAccepts(graph, item, "b", "inside"), true);
+  assert.equal(treeAccepts(graph, item, "a", "inside"), false);
+  assert.equal(treeAccepts(graph, item, "deep", "inside"), false);
+  assert.equal(treeAccepts(graph, { ...item, id: "child" }, "a", "inside"), false);
+  assert.equal(treeAccepts(graph, { ...item, ids: ["a", "b"] }, "deep", "before"), false);
+});
 
 test("a Card sits on the desk that has to act on it, and leaves every desk once it is done", () => {
   assert.equal(deskOf(card("w", { state: "pending", receivedBy: null }), laneOf), "role-a");

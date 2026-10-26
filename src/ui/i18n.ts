@@ -1,5 +1,4 @@
 import { createElement, Fragment, type ReactNode } from "react";
-import { summarizeBehind, type AheadKind } from "./data/reasons.js";
 
 /**
  * The interface speaks Chinese or English. Workspace content (names, bodies, commit messages) stays as written.
@@ -10,9 +9,6 @@ const STORE_KEY = "tent-lang";
 
 /** Places a React node, such as a link to a Role, inside a sentence. */
 const phrase = (...parts: ReactNode[]) => createElement(Fragment, null, ...parts);
-/** The first two names, then how many there are in all. */
-const list = (names: string[], sep: string, more: (n: number) => string) =>
-  names.slice(0, 2).join(sep) + (names.length > 2 ? more(names.length) : "");
 /** A service message up to its first line break, for a one-line mark. */
 const firstLine = (text: string) => text.split(/\r?\n/, 1)[0]!.trim();
 /** "1 source", "2 sources". */
@@ -54,6 +50,8 @@ const zh = {
     topLevel: "顶层 Node",
     status: (status: string) =>
       status === "deprecated" ? "已归档" : status === "draft" ? "草稿" : status,
+    // A draft Node is not in force yet; said plainly beside its title.
+    undecided: "还没定",
     recent: "上次来之后改过",
     drift: "待接收的 Card 引用了旧版本",
     lastChange: (when: string) => `最近变更 ${when}`,
@@ -66,13 +64,32 @@ const zh = {
     returned: "已交回",
     closed: "已收回",
   },
+  first: {
+    title: "这里还没有图谱",
+    body: "在 Claude Code 或 Codex 里对 Agent 说「给这个项目装上 Tent」。它读完代码会把项目画出来，这里会自己出现，不用刷新。",
+    phrase: "给这个项目装上 Tent",
+    copy: "复制这句话",
+    copied: "已复制",
+    what: "Node、Card、Role 是什么",
+    sep: "：",
+    terms: [
+      ["Node", "项目里要记住的一件事，可以是目标、规则或者结果。"],
+      ["Card", "交给某个 Agent 的一件活。"],
+      ["Role", "长期负责一块工作的 Agent。"],
+    ] as [string, string][],
+  },
   side: {
+    noNodes: "还没有 Node",
+    unpin: "不再亮着",
     nav: "导航",
     expand: "展开侧栏",
     collapse: "收起侧栏",
     search: "搜索",
     newCard: "写 Card",
     tree: "目录",
+    dropInside: (name: string) => `放到 ${name} 下面`,
+    dropBefore: (name: string) => `放到 ${name} 前面`,
+    dropAfter: (name: string) => `放到 ${name} 后面`,
     fold: (name: string) => `展开或收起 ${name}，按住 Alt 连同下级`,
     freshTitle: (n: number) => `${n} 个 Node 在你上次来之后改过`,
     markAllRead: "全部已读",
@@ -126,52 +143,22 @@ const zh = {
         .filter(Boolean)
         .join("；"),
     expandChildren: (name: string, n: number) => `展开 ${name} 的 ${n} 个下级`,
+    foldedTopics: (n: number) => `${n} 个下级`,
     collapseChildren: (name: string) => `收起 ${name} 的下级`,
     expandTitle: (n: number) => `展开 ${n} 个下级`,
     collapseTitle: "收起下级",
+    moreTopics: (n: number) => `还有 ${n} 项`,
+    resultTopics: (n: number) => `${n} 份产出`,
+    topicPath: "主题路径",
+    enterTopic: "进入此主题",
     changedAgo: (ago: string) => `${ago}修改`,
     children: (n: number) => `${n} 个下级`,
     cites: (n: number) => `引用 ${n}`,
     citedBy: (n: number) => `被引用 ${n}`,
-    flagsLabel: "需要处理的 Node",
-    flagStep: "依次选中",
-    flagStepAll: (n: number) => `依次选中 · 全部 ${n} 个，含关掉的类型`,
-    behindCount: (n: number) => `落后 ${n}`,
-    aheadCount: (n: number) => `领先 ${n}`,
-    /** Why a Node is behind, by kind of reason; changed files by name, at most two. */
-    behindWhy: (reasons: string[]) => {
-      const s = summarizeBehind(reasons);
-      const more = (n: number) => ` 等 ${n} 份材料`;
-      const parts = [
-        s.changed.length && `${list(s.changed, "、", more)} 改过`,
-        s.deleted.length && `${list(s.deleted, "、", more)} 已删除`,
-        s.baseline && `${s.baseline} 份材料还没有基线`,
-        s.uncertain && `${s.uncertain} 份材料无法核对`,
-        s.stale !== null && (s.stale ? `内容已在 ${s.stale} 到期` : "内容已到期"),
-        s.other[0],
-      ].filter(Boolean);
-      return `落后：${parts.join("；") || "原因未知"}`;
-    },
-    behindNext: "Agent 复核这些材料并确认后，标记会消失",
     /** A Node whose header could not be read, with the first line of the service's reason when given. */
     invalidWhy: (reason?: string) =>
       reason ? `头部无法读取：${firstLine(reason)}` : "头部无法读取",
     invalidNext: "Agent 修好头部后，标记会消失",
-    /** Why a goal is ahead; `since` is when it last became ahead. */
-    aheadWhy: (since: string | null, kind: AheadKind) =>
-      `领先${since ? `（${since}起）` : ""}：${
-        kind === "intent"
-          ? "它现在的内容还没被确认过，也没有对得上的产出"
-          : kind === "unmatched"
-            ? "已有产出，但都没按现在的内容确认过"
-            : "还没有产出"
-      }`,
-    aheadNext: (kind: AheadKind): string =>
-      kind === "intent"
-        ? "Agent 对照它覆盖的目录复核后确认它，或确认一个仍然成立的产出，标记会消失"
-        : kind === "unmatched"
-          ? "Agent 确认一个仍然成立的产出，或挂上新的产出后，标记会消失"
-          : "它下面挂上产出后，标记会消失",
     commitOnlyOther: "这次只改了 Role、Card 或其他文件",
     /** What a commit did to Nodes, e.g. "新建 1 · 修改 2：A、B 等 3 个". */
     commitSummary: (added: number, changed: number, names: string[]) =>
@@ -193,18 +180,23 @@ const zh = {
     backToNow: "回到现在",
     tools: "图谱工具",
     toggleType: (shown: boolean, type: string) => `${shown ? "隐藏" : "显示"} ${type}`,
-    foldedOutputs: (n: number, behind: number) =>
-      `${n} 个产出${behind ? `，${behind} 个落后` : ""}；点一下展开`,
     foldOutputs: "把产出收成计数",
-    branchSum: (n: number, behind: number) => `${n}${behind ? ` · 落后 ${behind}` : ""}`,
-    /** The one status a card shows. */
-    status: { behind: "落后", ahead: "领先", invalid: "无效", missing: "文件不在" },
+    /** A topic's mark when its header or its own file cannot be read. */
+    status: { invalid: "无效", missing: "文件不在" },
     handedTo: (names: string[]) => `交给 ${names.join("、")}`,
+    /** Who is on a topic now: one line per Card, as on its avatars and on the Node page. */
+    handling: {
+      label: "正在处理的 Card",
+      doing: (who: string, title: string) => `${who} 在做：${title}`,
+      waiting: (who: string, title: string) => `等 ${who} 接：${title}`,
+      waitingPublic: (title: string) => `在公共区等人接：${title}`,
+      more: (n: number) => `+${n}`,
+    },
     /** Zooming out past the minimum folds the tree: how deep it is shown. */
     relCites: "被它引用",
     relCitedBy: "引用它",
     lens: "关系",
-    lensTitle: "关系透镜：把相关的卡片排到两侧（L）",
+    lensTitle: "关系透镜：亮出相关主题，展开隐藏的关系（L）",
     lensNeedsNode: "先选中一个 Node",
     time: "时间",
     timeTitle: "时间回放：看图谱随着提交一步步长出来",
@@ -223,31 +215,14 @@ const zh = {
     keyGoal: "goal：胶囊",
     keyPrompt: "prompt：方卡",
     keyOutput: "output：折了角的页",
-    keyBehind: "落后：它的材料在它写下之后改过",
-    keyAhead: "领先：还没有确认过的产出跟上它",
     keyPin: "在你正在写的草稿里，第几个来源",
     keyTree: "上下级",
-    region: {
-      count: (n: number) => `${n} 张`,
-      name: "区域名字",
-      rename: "点一下改名",
-      dissolve: "解散区域，卡片回到树上",
-      join: "松手加入这个区域",
-      group: "松手围成一个区域",
-      out: (n: number) => `还连着外面 ${n} 张`,
-      outTitle: "把外面直接相连的卡以淡影摆到旁边，点一张才加入",
-      outHead: (n: number) => `直接相连的 ${n} 张 · 点一张加入`,
-      outJoin: "加入这个区域",
-      outAll: "全部加入",
-      outClose: "收起",
-      outMore: (n: number) => `还有 ${n} 张没列出`,
-      line: {
-        parent: "上下级",
-        link: "正文引用",
-        material: (files: string[]) => `共用材料：${files.join("、")}`,
-        code: (n: number) => `代码依赖：${n} 处调用`,
-        card: (titles: string[]) => `Card 带回的结论：${titles.join("、")}`,
-      },
+    relations: {
+      parent: "上下级",
+      link: "正文引用",
+      material: (files: string[]) => `共用材料：${files.join("、")}`,
+      code: (n: number) => `代码依赖：${n} 处调用`,
+      card: (titles: string[]) => `Card 带回的结论：${titles.join("、")}`,
     },
     react: {
       verify: "验证",
@@ -291,8 +266,6 @@ const zh = {
       constrain: {
         head: {
           off: "规则没挂在这个目标上",
-          behind: "规则落后了",
-          unknown: "看不出规则落没落后",
           on: "规则挂在目标上",
         },
         child: "规则挂在目标下面",
@@ -300,11 +273,6 @@ const zh = {
         link: "规则和目标链在一起",
         off: "规则没挂在这个目标上，也没链到它",
         shared: (list: string[]) => `共用材料：${list.join("、")}`,
-        fresh: "规则没有落后",
-        behind: "规则落后了",
-        behindNote: "它的材料在它写下之后改过",
-        gaps: "看不出规则落没落后",
-        gapsNote: "缺基线，或有材料读不到",
       },
       contrast: {
         head: {
@@ -383,10 +351,11 @@ const zh = {
       ["拖空白处", "移动画布"],
       ["Ctrl + 拖", "框选卡片；Shift + 拖加选"],
       ["拖卡片", "移动选中的卡；拖到顶栏右边的机器人身上，写一张 Card"],
-      ["拖到卡上停住", "松手后两张卡围成一个区域"],
-      ["拖进 / 拖出区域", "加入或离开区域；拖区域的标题，整块一起移动"],
+      ["双击主题", "以此为中心；从面包屑返回原视野"],
       ["Shift 点击", "加选或取消一张卡"],
-      ["中键拖 / 空格 + 拖", "在卡片上也能移动画布"],
+      ["中键拖", "在主题上也能移动画布"],
+      ["空格", "展开或收起选中的主题"],
+      ["触控板两指滑动", "平移画布；捏合以指针为中心缩放"],
       ["滚轮", "缩放"],
       ["←→↑↓", "在卡片间移动"],
       ["Enter", "展开阅读"],
@@ -395,13 +364,12 @@ const zh = {
       ["[  ]", "收起 / 展开下级"],
       ["B", "选中这一支：它和全部下级"],
       ["Ctrl A", "选中全部卡片"],
-      ["R", "选中的卡回到原位；Shift R 全部回到原位"],
       ["F", "适应窗口"],
       ["0", "回到 100%"],
       ["+  −", "放大 / 缩小"],
       ["T", "时间回放"],
       ["P", "画笔；画笔里 1–8、0 换工具，Q 锁住工具，H 抓手"],
-      ["Ctrl Z", "撤销；Ctrl Shift Z 重做。手动挪的卡片、区域和画的东西都能撤"],
+      ["Ctrl Z", "撤销；Ctrl Shift Z 重做。开合状态和画的东西都能撤"],
       ["C", "写一张 Card"],
       ["/", "搜索"],
       ["Ctrl \\", "收起 / 打开左栏"],
@@ -456,7 +424,18 @@ const zh = {
     },
     keyInk: "手绘：只是写写画画，不连到任何 Node；箭头搭在卡片上只是跟着它走",
   },
-  lens: { parent: "上级", incoming: "引用了它", children: "下级", outgoing: "它引用的" },
+  lens: {
+    parent: "上级",
+    incoming: "引用了它",
+    children: "下级",
+    outgoing: "它引用的",
+    files: "文件",
+    cards: "Card",
+    hidden: "未在视野内的相关主题",
+    filtered: "此类型已隐藏",
+    reading: "正在读取…",
+    receivedBy: (name: string) => `${name} 接下了它`,
+  },
   rel: {
     parent: "上级",
     topLevel: "顶层",
@@ -465,6 +444,7 @@ const zh = {
     citedBy: "被引用",
     loadIncoming: "展开读取入链",
     noIncoming: "没有入链",
+    noLinks: "没有链接",
     via: (via: string): string =>
       via === "link"
         ? "正文链接"
@@ -476,6 +456,8 @@ const zh = {
     pinnedAt: (hash: string) => ` · 固定在 ${hash}`,
     changedSince: "之后改过",
     materials: "材料",
+    /** A material as Tent finds it now, said as fact after its name. */
+    materialFact: { changed: "在这条写下之后改过", deleted: "已删除", unreadable: "读不到" },
     mainMaterial: "主要材料",
     sourceN: (n: number) => `来源 ${n}`,
     textDescription: " · 文字描述",
@@ -625,8 +607,10 @@ const zh = {
     showAll: (n: number) => `全部 ${n} 张`,
     showLess: "收起",
     toTop: "回到顶部",
+    moreCrumbs: (n: number) => `展开中间 ${n} 层`,
     carried: (n: number) => `带过它的 Card · ${n}`,
     carriedHead: "带过它的 Card",
+    handlingHead: "正在处理它的 Card",
     testedBy: (n: number) => `覆盖它的测试 · ${n}`,
     testedByTip:
       "Tent 看哪些测试文件 import 了它下面的代码；打开时现算，半分钟内来回切换会沿用上次的结果",
@@ -779,8 +763,8 @@ const zh = {
     openTab: "新标签打开",
     copyPath: "复制路径",
     copied: "路径已复制",
-    missing: "文件不在了",
-    missingNote: (path: string) => `${path} 在工作区里找不到：可能被移动或删除了。`,
+    gone: "材料文件不在了",
+    moved: (name: string) => `${name} 不在原来的位置`,
     tooLarge: "文件太大，不在页面里预览。",
     loading: "正在读取文件…",
     failed: "读不出这个文件。",
@@ -831,6 +815,7 @@ const en: Messages = {
     topLevel: "Top-level Node",
     status: (status) =>
       status === "deprecated" ? "Archived" : status === "draft" ? "Draft" : status,
+    undecided: "Not decided yet",
     recent: "Changed since your last visit",
     drift: "A pending Card cites an older version",
     lastChange: (when) => `Last changed ${when}`,
@@ -843,13 +828,32 @@ const en: Messages = {
     returned: "Returned",
     closed: "Collected",
   },
+  first: {
+    title: "No map here yet",
+    body: "In Claude Code or Codex, tell the Agent “Set up Tent for this project”. Once it has read the code it draws the project, and the map appears here on its own, no refresh needed.",
+    phrase: "Set up Tent for this project",
+    copy: "Copy this sentence",
+    copied: "Copied",
+    what: "What are Node, Card and Role",
+    sep: ": ",
+    terms: [
+      ["Node", "One thing the project should remember: a goal, a rule or a result."],
+      ["Card", "A piece of work handed to an Agent."],
+      ["Role", "An Agent that looks after one area of work for the long run."],
+    ],
+  },
   side: {
+    noNodes: "No Nodes yet",
+    unpin: "Stop keeping it lit",
     nav: "Navigation",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
     search: "Search",
     newCard: "Write a Card",
     tree: "Contents",
+    dropInside: (name) => `Move under ${name}`,
+    dropBefore: (name) => `Move before ${name}`,
+    dropAfter: (name) => `Move after ${name}`,
     fold: (name) => `Expand or collapse ${name}; hold Alt for everything under it`,
     freshTitle: (n) => `${count(n, "Node")} changed since your last visit`,
     markAllRead: "Mark all read",
@@ -909,49 +913,21 @@ const en: Messages = {
         .filter(Boolean)
         .join("; "),
     expandChildren: (name, n) => `Expand ${count(n, "child", "children")} of ${name}`,
+    foldedTopics: (n) => count(n, "child", "children"),
     collapseChildren: (name) => `Collapse the children of ${name}`,
     expandTitle: (n) => `Expand ${count(n, "child", "children")}`,
     collapseTitle: "Collapse children",
+    moreTopics: (n) => `${n} more`,
+    resultTopics: (n) => count(n, "output"),
+    topicPath: "Topic path",
+    enterTopic: "Enter topic",
     changedAgo: (ago) => `changed ${ago}`,
     children: (n) => count(n, "child", "children"),
     cites: (n) => `cites ${n}`,
     citedBy: (n) => `cited by ${n}`,
-    flagsLabel: "Nodes that need attention",
-    flagStep: "Select each in turn",
-    flagStepAll: (n) => `Select each in turn · ${n} in all, including switched-off types`,
-    behindCount: (n) => `${n} behind`,
-    aheadCount: (n) => `${n} ahead`,
-    behindWhy: (reasons) => {
-      const s = summarizeBehind(reasons);
-      const more = (n: number) => ` and ${n - 2} more`;
-      const parts = [
-        s.changed.length && `${list(s.changed, ", ", more)} changed`,
-        s.deleted.length && `${list(s.deleted, ", ", more)} deleted`,
-        s.baseline && `${count(s.baseline, "material")} without a baseline yet`,
-        s.uncertain && `${count(s.uncertain, "material")} Tent cannot check`,
-        s.stale !== null && (s.stale ? `content expired on ${s.stale}` : "content expired"),
-        s.other[0],
-      ].filter(Boolean);
-      return `Behind: ${parts.join("; ") || "unknown reason"}`;
-    },
-    behindNext: "The mark clears once an Agent reviews those materials and confirms",
     invalidWhy: (reason) =>
       reason ? `Header unreadable: ${firstLine(reason)}` : "Header unreadable",
     invalidNext: "The mark clears once an Agent fixes the header",
-    aheadWhy: (since, kind) =>
-      `Ahead${since ? ` since ${since}` : ""}: ${
-        kind === "intent"
-          ? "it was not confirmed as it is now, and no output matches it either"
-          : kind === "unmatched"
-            ? "it has outputs, but none was confirmed against it as it is now"
-            : "no output yet"
-      }`,
-    aheadNext: (kind) =>
-      kind === "intent"
-        ? "The mark clears once an Agent reviews it against the directories it covers and confirms it, or confirms an output that still holds"
-        : kind === "unmatched"
-          ? "The mark clears once an Agent confirms an output that still holds, or adds a new one"
-          : "The mark clears once an output is added under it",
     commitOnlyOther: "This commit only changed Roles, Cards or other files",
     commitSummary: (added, changed, names) =>
       `${[added > 0 && `${added} added`, changed > 0 && `${changed} changed`].filter(Boolean).join(" · ")}: ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` and ${names.length - 2} more` : ""}`,
@@ -972,16 +948,20 @@ const en: Messages = {
     backToNow: "Back to now",
     tools: "Map tools",
     toggleType: (shown, type) => `${shown ? "Hide" : "Show"} ${type}`,
-    foldedOutputs: (n, behind) =>
-      `${count(n, "output")}${behind ? `, ${behind} behind` : ""}; click to show`,
     foldOutputs: "Fold the outputs into a count",
-    branchSum: (n, behind) => `${n}${behind ? ` · ${behind} behind` : ""}`,
-    status: { behind: "Behind", ahead: "Ahead", invalid: "Invalid", missing: "File missing" },
+    status: { invalid: "Invalid", missing: "File missing" },
     handedTo: (names) => `Handed to ${names.join(", ")}`,
+    handling: {
+      label: "Cards being handled",
+      doing: (who, title) => `${who} is on it: ${title}`,
+      waiting: (who, title) => `Waiting for ${who}: ${title}`,
+      waitingPublic: (title) => `Waiting in the public area: ${title}`,
+      more: (n) => `+${n}`,
+    },
     relCites: "Cited by it",
     relCitedBy: "Cites it",
     lens: "Lens",
-    lensTitle: "Relation lens: lay related cards out on either side (L)",
+    lensTitle: "Relation lens: highlight related topics and reveal hidden relations (L)",
     lensNeedsNode: "Select a Node first",
     time: "Time",
     timeTitle: "Time replay: watch the map grow commit by commit",
@@ -1000,31 +980,14 @@ const en: Messages = {
     keyGoal: "goal: a capsule",
     keyPrompt: "prompt: a card",
     keyOutput: "output: a page with a folded corner",
-    keyBehind: "Behind: its materials changed after it was written",
-    keyAhead: "Ahead: no confirmed output has caught up with it",
     keyPin: "Its place among the sources of the draft you are writing",
     keyTree: "Parent and child",
-    region: {
-      count: (n) => count(n, "card"),
-      name: "Region name",
-      rename: "Click to rename",
-      dissolve: "Dissolve the region; its cards go back to the tree",
-      join: "Let go to join this region",
-      group: "Let go to form a region",
-      out: (n) => `Linked to ${count(n, "card")} outside`,
-      outTitle: "Bring the directly linked cards alongside, faded; each joins only when clicked",
-      outHead: (n) => `${count(n, "card")} directly linked · click one to add`,
-      outJoin: "Add to this region",
-      outAll: "Add all",
-      outClose: "Close",
-      outMore: (n) => `${n} more not listed`,
-      line: {
-        parent: "Parent and child",
-        link: "Cited in the body",
-        material: (files) => `Shared material: ${files.join(", ")}`,
-        code: (n) => `Code dependency: ${count(n, "import")}`,
-        card: (titles) => `Brought back by a Card: ${titles.join(", ")}`,
-      },
+    relations: {
+      parent: "Parent and child",
+      link: "Cited in the body",
+      material: (files) => `Shared material: ${files.join(", ")}`,
+      code: (n) => `Code dependency: ${count(n, "import")}`,
+      card: (titles) => `Brought back by a Card: ${titles.join(", ")}`,
     },
     react: {
       verify: "Verify",
@@ -1066,12 +1029,10 @@ const en: Messages = {
         facts: "Nothing moved",
       },
       judgeAll:
-        "Whether goals are met or rules contradict is for an Agent: drag the region onto a robot",
+        "Whether goals are met or rules contradict is for an Agent: drag the selected topics onto a robot",
       constrain: {
         head: {
           off: "Rule not on this goal",
-          behind: "Rule is behind",
-          unknown: "Cannot tell if the rule is behind",
           on: "Rule hangs on the goal",
         },
         child: "The rule hangs right under the goal",
@@ -1079,11 +1040,6 @@ const en: Messages = {
         link: "The rule and the goal link to each other",
         off: "The rule is neither under nor linked to this goal",
         shared: (list) => `Shared materials: ${list.join(", ")}`,
-        fresh: "The rule is not behind",
-        behind: "The rule is behind",
-        behindNote: "Its materials changed after it was written",
-        gaps: "Cannot tell if the rule is behind",
-        gapsNote: "No basis kept, or a material cannot be read",
       },
       contrast: {
         head: {
@@ -1158,7 +1114,8 @@ const en: Messages = {
       waiting: "Comparing with the goal…",
       still: "No change found in its own materials",
       changed: (n) => `${count(n, "own material")} changed`,
-      judge: "Whether it still meets the goal is for an Agent: drag the region onto a robot",
+      judge:
+        "Whether it still meets the goal is for an Agent: drag the selected topics onto a robot",
     },
     keysTitle: "Controls",
     shortcuts: [
@@ -1168,10 +1125,11 @@ const en: Messages = {
         "Drag a card",
         "Move the picked cards; drop on a robot at the right of the top bar to write a Card",
       ],
-      ["Hold over a card", "Let go and the two cards form a region"],
-      ["Drag into / out of a region", "Join or leave it; drag a region's title to move it whole"],
+      ["Double-click a topic", "Focus it; use the path to return to the previous view"],
       ["Shift click", "Pick a card, or put it back"],
-      ["Middle drag / Space + drag", "Move the map, over cards too"],
+      ["Middle drag", "Move the map, over topics too"],
+      ["Space", "Open or fold the selected topic"],
+      ["Two-finger scroll", "Pan the map; pinch zooms about the pointer"],
       ["Wheel", "Zoom"],
       ["←→↑↓", "Move between cards"],
       ["Enter", "Read"],
@@ -1180,13 +1138,12 @@ const en: Messages = {
       ["[  ]", "Fold / open the children"],
       ["B", "Pick the branch: the card and all under it"],
       ["Ctrl A", "Pick every card"],
-      ["R", "Put the picked cards back; Shift R puts all back"],
       ["F", "Fit to the window"],
       ["0", "Back to 100%"],
       ["+  −", "Zoom in / out"],
       ["T", "Replay over time"],
       ["P", "Draw; while drawing, 1–8 and 0 pick tools, Q keeps the tool, H is the hand"],
-      ["Ctrl Z", "Undo; Ctrl Shift Z redoes. Covers moved cards, regions and drawings"],
+      ["Ctrl Z", "Undo; Ctrl Shift Z redoes. Covers folds and drawings"],
       ["C", "Write a Card"],
       ["/", "Search"],
       ["Ctrl \\", "Hide / show the sidebar"],
@@ -1241,7 +1198,18 @@ const en: Messages = {
     },
     keyInk: "Drawings: just for looking at, tied to no Node; an arrow on a card only follows it",
   },
-  lens: { parent: "Parent", incoming: "Cited by", children: "Children", outgoing: "Cites" },
+  lens: {
+    parent: "Parent",
+    incoming: "Cited by",
+    children: "Children",
+    outgoing: "Cites",
+    files: "Files",
+    cards: "Card",
+    hidden: "Related topics outside the view",
+    filtered: "This type is hidden",
+    reading: "Reading…",
+    receivedBy: (name) => `Received by ${name}`,
+  },
   rel: {
     parent: "Parent",
     topLevel: "Top level",
@@ -1250,6 +1218,7 @@ const en: Messages = {
     citedBy: "Cited by",
     loadIncoming: "Read incoming links",
     noIncoming: "No incoming links",
+    noLinks: "No links",
     via: (via) =>
       via === "link"
         ? "Text link"
@@ -1261,6 +1230,11 @@ const en: Messages = {
     pinnedAt: (hash) => ` · pinned at ${hash}`,
     changedSince: "Changed since",
     materials: "Materials",
+    materialFact: {
+      changed: "changed since this was written",
+      deleted: "deleted",
+      unreadable: "cannot be read",
+    },
     mainMaterial: "Main material",
     sourceN: (n) => `Source ${n}`,
     textDescription: " · text description",
@@ -1414,8 +1388,10 @@ const en: Messages = {
     showAll: (n) => `All ${n}`,
     showLess: "Show fewer",
     toTop: "Back to top",
+    moreCrumbs: (n: number) => `Show ${n} levels in between`,
     carried: (n) => `Cards that carried it · ${n}`,
     carriedHead: "Cards that carried it",
+    handlingHead: "Cards being handled for it",
     testedBy: (n) => `Tests covering it · ${n}`,
     testedByTip:
       "Test files that import the code under it, worked out by Tent when the page opens and reused for half a minute",
@@ -1572,8 +1548,8 @@ const en: Messages = {
     openTab: "Open in new tab",
     copyPath: "Copy path",
     copied: "Path copied",
-    missing: "File missing",
-    missingNote: (path) => `${path} is not in the workspace: it may have been moved or deleted.`,
+    gone: "The material file is gone",
+    moved: (name) => `${name} is not where it was`,
     tooLarge: "This file is too large to preview here.",
     loading: "Reading the file…",
     failed: "This file could not be read.",

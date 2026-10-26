@@ -1442,6 +1442,7 @@ export class GitDocumentHistory {
     oid(commit);
     if (directory !== undefined) documentPath(directory);
     await this.ensureRepository();
+    await runGit(this.root, ["merge-base", "--is-ancestor", commit, "HEAD"]);
     const entries = (
       await runGit(this.root, [
         "ls-tree",

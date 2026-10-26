@@ -277,15 +277,40 @@ export function mapSnapshot(map: WorkspaceMap): Snapshot {
   };
 }
 
-/** The full snapshot with what only the map carries: each Node's expiry and header diagnosis, and the module lines. */
+/** The current map's topology with the last snapshot's document details while its next read is on the way. */
 export function withMap(full: Snapshot, map: WorkspaceMap): Snapshot {
-  const byId = new Map(map.nodes.map((n) => [n.id, n]));
+  const byId = new Map(full.nodes.map((n) => [n.id, n]));
+  const current = mapSnapshot(map);
+  const previousPaths = new Set(full.nodes.map((n) => n.notePath));
   return {
     ...full,
-    nodes: full.nodes.map((n) => {
-      const m = byId.get(n.id);
-      return m ? { ...n, ...diagnostics(m) } : n;
+    nodes: current.nodes.map((n) => {
+      const previous = byId.get(n.id);
+      if (!previous) return n;
+      return {
+        ...previous,
+        name: n.name,
+        path: n.path,
+        notePath: n.notePath,
+        depth: n.depth,
+        type: n.type,
+        tags: n.tags,
+        status: n.status,
+        archived: n.archived,
+        parentId: n.parentId,
+        childIds: n.childIds,
+        stale: n.stale,
+        outputAt: n.stale ? undefined : previous.outputAt,
+        invalid: n.invalid,
+        invalidReason: n.invalidReason,
+      };
     }),
+    paths: {
+      ...Object.fromEntries(
+        Object.entries(full.paths).filter(([path]) => !previousPaths.has(path)),
+      ),
+      ...current.paths,
+    },
     modules: map.modules,
   };
 }

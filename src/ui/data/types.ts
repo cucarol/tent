@@ -50,16 +50,14 @@ export type SnapshotIncoming = {
 };
 
 /**
- * A Node that needs attention, computed from the real workspace on each request: a goal whose intent
- * has no current output, or, for a goal carried out by the directories it covers, whose own content was
- * not confirmed as it is now either (ahead); or a Node whose materials moved on (behind). The two are independent,
- * so a goal with no output whose materials changed carries both. Every other Node is absent.
+ * One of a Node's own materials as Tent compares it now with when the Node was written (Core
+ * inspectNodeSync): unchanged, changed, not readable now, or with nothing recorded to compare with.
  */
-export type SyncFlag = {
-  ahead?: { since?: string; reasons: string[] };
-  behind?: { reasons: string[] };
+export type MaterialState = {
+  resource: string;
+  state: "current" | "changed" | "unavailable" | "unanchored";
+  reason?: string;
 };
-export type SyncFlags = Record<string, SyncFlag>;
 
 /** One output against every goal above it, nearest first (Core readOutputComparisons). */
 export type OutputComparison = {

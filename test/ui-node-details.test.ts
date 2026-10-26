@@ -5,14 +5,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { sectionObservation, type NodeSection } from "../src/ui/data/node-details.js";
 import { buildGraph } from "../src/ui/data/store.js";
 import { documentRef } from "../src/ui/data/document-links.js";
+import { fileOf } from "../src/ui/data/files.js";
 import type {
   NodeCardSummary,
+  NodeHistoryDetails,
   NodeRelationsDetails,
   Snapshot,
   SnapshotNode,
 } from "../src/ui/data/types.js";
 import { History, NodeProps, ReadState } from "../src/ui/panel/Details.js";
-import { NodeCardLine } from "../src/ui/panel/Reader.js";
+import { headerMaterials, NodeCardLine } from "../src/ui/panel/Reader.js";
+import { resolveDocumentRelations } from "../src/core/graph/workspace-relations.js";
+import type { FsAdapter } from "../src/core/store/adapter.js";
 import { NodeMenu } from "../src/ui/panel/Manage.js";
 import { setLang, t } from "../src/ui/i18n.js";
 
@@ -332,4 +336,126 @@ test("a Node still offers management before the complete impact graph is loaded"
   );
   assert.ok(html.includes(t.manage.more));
   assert.doesNotMatch(html, /ask-list/);
+});
+
+test("provisional header materials agree with Core and preserve source spelling and positions", async () => {
+  for (const notePath of ["Root/Root.md", "Root/Child/Child.md"]) {
+    const front = {
+      resource: notePath === "Root/Root.md" ? "../../out/main.md" : "../../../out/main.md",
+      sources: [
+        { resource: "node-other" },
+        { resource: "role-owner" },
+        { resource: "card-related" },
+        { resource: "out/source.md" },
+        {
+          resource:
+            "   " + (notePath === "Root/Root.md" ? "../../" : "../../../") + "out/a%20b.md  ",
+        },
+        { resource: "https://EXAMPLE.test/a/../b" },
+        { resource: "https://example.test/a b" },
+      ],
+    };
+    const preview = headerMaterials(notePath, front);
+    assert.equal(preview.pending, false);
+    const checked = await resolveDocumentRelations(
+      {} as FsAdapter,
+      [{ ref: { kind: "node", id: node.id }, path: notePath, data: front, body: "", etag: "" }],
+      [],
+      [],
+    );
+    for (const material of preview.materials) {
+      const actual = checked.find((r) => r.via === material.field && r.index === material.index)!;
+      assert.equal(material.resource, actual.raw);
+      assert.equal(
+        material.kind,
+        actual.target.kind === "unresolved" ? "text" : actual.target.kind,
+      );
+      if (actual.target.kind === "file")
+        assert.equal(material.workspacePath, actual.target.workspacePath);
+      if (actual.target.kind === "uri") assert.equal(material.uri, actual.target.uri);
+    }
+    assert.equal(preview.materials.length, checked.length);
+    assert.equal(preview.materials[5]!.workspacePath, "out/a b.md");
+  }
+});
+
+test("Tent identities and uncertain declarations never create provisional file tabs or a materials row", () => {
+  for (const resource of [
+    "/Other/Other.md",
+    "../Other/Other.md",
+    "/roles/role-owner.md",
+    "/cards/card-related.md",
+    "node-other",
+    "C:/outside/file.md",
+    "C:\\outside\\file.md",
+    "//host/file.md",
+    "../../../outside.md",
+    "../../..",
+    "../../out/bad%GG.md",
+    "../../out/file\\name.md",
+    "../../out/*",
+    "../../out/%2F",
+    "../../out/?query",
+    "../../out/?query/",
+    "file:///C:/out/file.md",
+    "https://example.test/\0bad",
+  ]) {
+    const preview = headerMaterials(node.notePath, { resource });
+    assert.deepEqual(preview, { materials: [], pending: true }, resource);
+    const html = renderToStaticMarkup(
+      createElement(NodeProps, {
+        graph,
+        node,
+        onOpen: noop,
+        details: {
+          history: section<NodeHistoryDetails>(),
+          outgoing: section<NodeRelationsDetails>(),
+          incoming: section<NodeRelationsDetails>(),
+          incomingOpen: false,
+          onIncoming: noop,
+          materialsDeclared: preview.materials.length,
+        },
+      }),
+    );
+    assert.ok(
+      html.includes(`<div class="prop is-wide" hidden=""><dt>${t.rel.materials}</dt>`),
+      resource,
+    );
+  }
+  assert.deepEqual(headerMaterials(node.notePath, { sources: ["../../out/file.md"] }), {
+    materials: [],
+    pending: true,
+  });
+});
+
+test("a declared Workspace directory holds its materials row without becoming a file preview", () => {
+  const front = { resource: "../../src/" };
+  const preview = headerMaterials(node.notePath, front);
+  assert.equal(preview.pending, false);
+  assert.deepEqual(preview.materials, [
+    {
+      kind: "file",
+      field: "resource",
+      resource: "../../src/",
+      workspacePath: "src",
+      index: undefined,
+    },
+  ]);
+  assert.equal(fileOf({ ...node, materials: preview.materials }), null);
+  const html = renderToStaticMarkup(
+    createElement(NodeProps, {
+      graph,
+      node,
+      onOpen: noop,
+      details: {
+        history: section<NodeHistoryDetails>(),
+        outgoing: section<NodeRelationsDetails>(),
+        incoming: section<NodeRelationsDetails>(),
+        incomingOpen: false,
+        onIncoming: noop,
+        materialsDeclared: preview.materials.length,
+      },
+    }),
+  );
+  assert.ok(html.includes(`<div class="prop is-wide"><dt>${t.rel.materials}</dt>`));
 });

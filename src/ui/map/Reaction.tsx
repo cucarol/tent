@@ -1,9 +1,7 @@
-// The product a region's cards give: one strip at the foot of the region, opened for every fact.
+// Facts about the selected topics, in a floating strip with expandable detail.
 // Rules: Tent Node "UI-图谱画模块依赖与状态", "画布是投影…三种类型起反应" (反应表) and
 // "验证反应：底部一条，点开看细节" (cuca 2026-10-16/17).
 import { useEffect, useRef, useState } from "react";
-import { ViewportPortal } from "@xyflow/react";
-import type { Region } from "./canvas.js";
 import { t } from "../i18n.js";
 import { ago } from "../util.js";
 import {
@@ -137,14 +135,6 @@ function ConstrainFacts({ r }: { r: Constrain }) {
     <>
       {r.on === "none" ? <Row mark="info" says={x.off} /> : <Row mark="ok" says={x[r.on]} />}
       {r.shared.length > 0 && <Row mark="info" says={x.shared(r.shared)} />}
-      {r.on !== "none" &&
-        (r.rule === "behind" ? (
-          <Row mark="warn" says={x.behind} note={x.behindNote} />
-        ) : r.rule === "gaps" ? (
-          <Row mark="none" says={x.gaps} note={x.gapsNote} />
-        ) : (
-          <Row mark="ok" says={x.fresh} />
-        ))}
     </>
   );
 }
@@ -231,11 +221,11 @@ function Facts({ r, nameOf }: { r: Reaction; nameOf: NameOf }) {
 }
 
 /**
- * One strip for all a region's reactions: a single reaction's verdict, or how many there are and how
+ * One strip for all the selected topics' reactions: a single reaction's verdict, or how many there are and how
  * many moved. Clicking opens every fact above it; a click anywhere else closes it. Pairs that share
  * nothing are only counted.
  */
-export function RegionProduct({ list: all, nameOf }: { list: Reaction[]; nameOf: NameOf }) {
+export function SelectionReaction({ list: all, nameOf }: { list: Reaction[]; nameOf: NameOf }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -312,39 +302,5 @@ export function RegionProduct({ list: all, nameOf }: { list: Reaction[]; nameOf:
         </span>
       </button>
     </div>
-  );
-}
-
-/**
- * Every region's product, over the cards so its facts are never hidden under them: on the middle of the
- * region's lower edge, opening upward.
- */
-export function RegionProducts({
-  regions,
-  reactions,
-  nameOf,
-}: {
-  regions: Region[];
-  reactions: Map<string, Reaction[]>;
-  nameOf: (id: string) => string;
-}) {
-  return (
-    <ViewportPortal>
-      {regions.map((r) => {
-        const list = reactions.get(r.id);
-        if (!list?.some(listed)) return null;
-        return (
-          <div
-            key={r.id}
-            className="react-at"
-            style={{
-              transform: `translate(${r.box[0] + r.box[2] / 2}px, ${r.box[1] + r.box[3]}px)`,
-            }}
-          >
-            <RegionProduct list={list} nameOf={nameOf} />
-          </div>
-        );
-      })}
-    </ViewportPortal>
   );
 }

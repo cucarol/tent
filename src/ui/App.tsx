@@ -9,40 +9,37 @@ import {
   useSyncExternalStore,
   type CSSProperties,
 } from "react";
-import {
-  buildGraph,
-  loadMap,
-  loadSnapshot,
-  mapSnapshot,
-  primaryOf,
-  withMap,
-  type Visits,
-} from "./data/store.js";
-import { detailLoader } from "./data/details.js";
+import { buildGraph, loadMap, mapSnapshot, primaryOf, withMap, type Visits } from "./data/store.js";
+import { workspaceRefresh } from "./data/workspace-refresh.js";
+import { followChangeHints } from "./data/change-hints.js";
 import { NodeDetailsProvider } from "./data/node-details.js";
 import type { WorkspaceMap } from "../core/read/workspace-map.js";
-import { api, ApiError, changes, describe } from "./data/api.js";
+import { api, ApiError, changes, describe, openChanges } from "./data/api.js";
 import type { Snapshot, SnapshotRef } from "./data/types.js";
-import { Icon, TypeGlyph } from "./components/Glyph.js";
+import { Icon } from "./components/Glyph.js";
 import { Pet } from "./components/Pet.js";
 import { Loader } from "./components/Loader.js";
 import { Boundary } from "./components/Boundary.js";
+import { FirstRun } from "./shell/FirstRun.js";
 import { Sidebar, type ThemePref } from "./shell/Sidebar.js";
 import { StageBar } from "./shell/StageBar.js";
 import { Dock } from "./shell/Dock.js";
 import { Reader } from "./panel/Reader.js";
 import { Palette } from "./panel/Overlays.js";
-import { isDraft, loadLocalDrafts, useDraftCards } from "./data/drafts.js";
-import { FlagsContext, mapFlags, snapshotRebuilder, UNREAD, useSyncFlags } from "./data/flags.js";
+import { loadLocalDrafts, useDraftCards } from "./data/drafts.js";
 import { FilesContext, useFileInfo } from "./data/files.js";
-import { useDragState } from "./shell/drag.js";
 import { carried, sourceIds, useWork, type Work } from "./shell/work.js";
+import { HandlingContext, handlingOf } from "./data/handling.js";
+import { readCanvas, type CanvasInitial } from "./map/canvas.js";
 import type { Graph } from "./data/store.js";
+import type { HistoricalSelection } from "./data/history-tree.js";
 import { readStored, writeStored } from "./util.js";
 import { currentLang, setLang, t, type Lang } from "./i18n.js";
 
 type Overlay = { kind: "palette" } | null;
-const MapView = lazy(() => import("./map/MapView.js").then((view) => ({ default: view.MapView })));
+// Fetch and compile the map while its topology is being read, rather than after that read renders.
+const mapView = import("./map/MapView.js").then((view) => ({ default: view.MapView }));
+const MapView = lazy(() => mapView);
 
 const VISITS_KEY = "tent-visits-v1";
 /**
@@ -81,8 +78,14 @@ const startsExpanded = () => new URLSearchParams(location.search).get("mode") ==
 export function App() {
   // The map read draws the first screen; the full snapshot is read only when a view asks for details.
   const [map, setMap] = useState<WorkspaceMap | null>(null);
+  const [initialCanvas, setInitialCanvas] = useState<CanvasInitial | null>(null);
+  const [layoutReady, setLayoutReady] = useState(false);
+  const firstLayout = useCallback(() => setLayoutReady(true), []);
+  // A failed canvas cannot finish layout; let a restored open Dock retain its detail-read recovery.
+  const detailsReady = layoutReady || (initialCanvas !== null && "error" in initialCanvas);
   const [full, setFull] = useState<Snapshot | null>(null);
   const [liveRevision, setLiveRevision] = useState<string | undefined>(undefined);
+  const [factsEpoch, setFactsEpoch] = useState(0);
   const snapshot = useMemo(
     () => (map ? (full ? withMap(full, map) : mapSnapshot(map)) : null),
     [map, full],
@@ -106,9 +109,7 @@ export function App() {
     readStored("tent-theme-pref", "system"),
   );
   const [selected, setSelected] = useState<SnapshotRef | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(
-    () => new Set(readStored<string[]>("tent-collapsed-v1", [])),
-  );
+  const [historical, setHistorical] = useState<HistoricalSelection | undefined>();
   // The tree folds on its own (cuca 2026-10-21); it starts from what the map had folded.
   const [treeFolded, setTreeFolded] = useState<Set<string>>(
     () =>
@@ -140,6 +141,14 @@ export function App() {
     (lane: string) => (graph ? carried(graph, work.laneOf, lane) : new Set<string>()),
     [graph, work.laneOf],
   );
+  // The Cards waiting or being done for each Node: the dock's lanes read back from the Nodes they carry.
+  const handling = useMemo(
+    () =>
+      graph
+        ? handlingOf(graph.snapshot.cards, work.laneOf, (id) => graph.nodes.has(id))
+        : new Map(),
+    [graph, work.laneOf],
+  );
   // The open draft's sources in order, numbered on the map as in the tree.
   const draftIds = useMemo(
     () =>
@@ -149,10 +158,16 @@ export function App() {
   // The first screen: the map read alone.
   useEffect(() => {
     let live = true;
+    const canvas = api
+      .canvas()
+      .then((r): CanvasInitial => ({ file: readCanvas(r.canvas), etag: r.etag }))
+      .catch((error): CanvasInitial => ({ error: describe(error) }));
     loadMap().then(
-      (m) => {
+      async (m) => {
+        const opened = await canvas;
         if (!live) return;
         loadLocalDrafts(m.workspace.id);
+        setInitialCanvas(opened);
         setMap(m);
       },
       (e) => live && setError(e instanceof Error ? e.message : String(e)),
@@ -161,110 +176,80 @@ export function App() {
       live = false;
     };
   }, []);
-  // The rest once a view needs it (see detailLoader). A failed read leaves the map as it is; the next ask,
-  // or focusing the page, tries again.
+  const [lost, setLost] = useState<string | null>(null);
+  const [following, setFollowing] = useState(false);
+  // The first requested details and later refreshes share one snapshot read. Map reads have their own
+  // queue, so slower details never hold back topology received after another hint.
   const loader = useMemo(
     () =>
-      detailLoader(
-        loadSnapshot,
-        (s: Snapshot) => {
+      workspaceRefresh({
+        map: api.map,
+        snapshot: api.snapshot,
+        revision: api.revision,
+        applyMap: (next) => {
+          // A successful fresh observation also wakes selected facts when topology did not change.
+          setFactsEpoch((epoch) => epoch + 1);
+          setMap((current) =>
+            current?.workspace.id === next.workspace.id &&
+            current.workspace.revision === next.workspace.revision
+              ? current
+              : next,
+          );
+        },
+        applySnapshot: (s) => {
           loadLocalDrafts(s.workspace.id);
           setFull(s);
           setVisits(loadVisits(s));
         },
-        (e) => setToast(e instanceof Error ? e.message : String(e)),
-      ),
+        applyRevision: setLiveRevision,
+        recovered: () => setLost(null),
+        failed: (e) => {
+          setLost(describe(e));
+          return e instanceof ApiError && e.status === 401;
+        },
+      }),
     [],
   );
-  const wantDetails = useCallback(() => loader.want(), [loader]);
-  useEffect(() => {
-    const retry = () => loader.retry();
-    window.addEventListener("focus", retry);
-    return () => {
-      window.removeEventListener("focus", retry);
-      loader.stop();
-    };
+  const wantDetails = useCallback(() => {
+    loader.want();
+    setFollowing(true);
   }, [loader]);
+  useEffect(() => () => loader.stop(), [loader]);
 
-  // Follow changes made elsewhere: compare revisions on focus and every few seconds while visible. With
-  // the snapshot in, a new revision brings a new snapshot and map; before it, only the map is read again.
-  // The map's own revision is never compared with the full one.
-  const revision = full?.workspace.revision;
-  // Material comparison starts once the map is drawn; before the snapshot, any read applies.
-  const flags = useSyncFlags(revision ?? null, !!map);
-  const shownFlags = useMemo(
-    () => (flags === UNREAD && snapshot ? mapFlags(snapshot) : flags),
-    [flags, snapshot],
-  );
-  const mapRevision = useRef<string | undefined>(undefined);
-  mapRevision.current = map?.workspace.revision;
+  // Watcher setup waits for the first map layout, including when a deep link asks for details sooner.
+  // Hints only wake Core reads. Focus rereads and revision polling still recover changes when watching
+  // is unavailable. The map's own revision is never compared with the full one.
   const hasMap = !!map;
-  const [lost, setLost] = useState<string | null>(null);
   useEffect(() => {
-    if (!hasMap) return;
-    let stopped = false,
-      busy = false,
-      again = false;
-    // Map only: the revision the last map read was checked against.
-    let seen: string | undefined;
-    const check = async () => {
-      if (stopped || document.hidden) return;
-      // A write that lands during a check is looked at right after it, not at the next tick.
-      if (busy) {
-        again = true;
-        return;
-      }
-      busy = true;
-      try {
-        const now = (await api.revision()).revision;
-        if (stopped) return;
-        setLiveRevision(now);
-        if (revision) {
-          if (now !== revision) {
-            const [fresh, m] = await Promise.all([api.snapshot(revision), api.map()]);
-            if (!stopped) {
-              if (fresh) setFull(fresh);
-              setMap(m);
-            }
-          }
-        } else if (now !== seen) {
-          // The first check reads the map once more: a write between the first map read and this check
-          // would otherwise go unseen.
-          seen = now;
-          const m = await api.map();
-          if (!stopped && m.workspace.revision !== mapRevision.current) setMap(m);
-        }
-        setLost(null);
-      } catch (error) {
-        setLost(describe(error));
-        if (error instanceof ApiError && error.status === 401) stopped = true;
-      } finally {
-        busy = false;
-        if (again) {
-          again = false;
-          void check();
-        }
-      }
+    if (!hasMap || !following) return;
+    const refresh = () => {
+      if (!document.hidden) loader.hint();
     };
-    // Writes made while the snapshot was on its way are caught here. The map alone waits for the timer, so
-    // the first screen is not followed by a second read at once.
-    if (revision) void check();
-    const timer = window.setInterval(check, 5000);
-    window.addEventListener("focus", check);
-    document.addEventListener("visibilitychange", check);
-    changes.addEventListener("change", check);
+    const timer = window.setInterval(() => {
+      if (!document.hidden) loader.poll();
+    }, 5000);
+    // Each connected frame rereads across the subscription gap, including reconnection. Hidden tabs
+    // defer to visibilitychange rather than spending the service's idle time on background reads.
+    const stop = layoutReady
+      ? followChangeHints(openChanges, refresh, (e) => {
+          if (!(e instanceof ApiError && e.status === 401)) return false;
+          setLost(describe(e));
+          loader.stop();
+          return true;
+        })
+      : () => {};
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    changes.addEventListener("change", refresh);
     return () => {
-      stopped = true;
+      stop();
       window.clearInterval(timer);
-      window.removeEventListener("focus", check);
-      document.removeEventListener("visibilitychange", check);
-      changes.removeEventListener("change", check);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      changes.removeEventListener("change", refresh);
     };
-  }, [hasMap, revision]);
-  // Output completion times depend on materials, which change without a new revision.
-  const rebuild = useMemo(() => snapshotRebuilder(setFull), []);
-  const files = useFileInfo(full ? snapshot : null, flags);
-  useEffect(() => rebuild(full, flags), [rebuild, full, flags]);
+  }, [hasMap, following, layoutReady, loader]);
+  const files = useFileInfo(full ? snapshot : null);
   useEffect(() => {
     if (lost) setToast(lost);
   }, [lost]);
@@ -280,23 +265,22 @@ export function App() {
   useEffect(() => writeStored("tent-side-open", sideOpen), [sideOpen]);
   useEffect(() => writeStored("tent-detail-width", detailWidth), [detailWidth]);
   useEffect(() => writeStored("tent-side-width", sideWidth), [sideWidth]);
-  useEffect(() => writeStored("tent-collapsed-v1", [...collapsed]), [collapsed]);
   useEffect(() => writeStored("tent-tree-folded-v1", [...treeFolded]), [treeFolded]);
 
-  // Keep the path to the selected Node open, in the tree and on the map.
+  // Keep the path to the selected Node open in the tree; the map opens its own.
   useEffect(() => {
-    if (!graph || selected?.kind !== "node") return;
+    if (!graph || selected?.kind !== "node" || historical) return;
     const path = graph.ancestors(selected.id).map((a) => a.id);
     const unfold = (c: Set<string>) =>
       path.some((id) => c.has(id)) ? new Set([...c].filter((id) => !path.includes(id))) : c;
-    setCollapsed(unfold);
     setTreeFolded(unfold);
-  }, [graph, selected?.id]);
+  }, [graph, selected?.id, historical]);
 
   const open = useCallback(
-    (ref: SnapshotRef | null) => {
+    (ref: SnapshotRef | null, historical?: HistoricalSelection) => {
       if (ref && ref.kind !== "node") wantDetails();
       setSelected(ref);
+      setHistorical(historical);
       setEditOnExpand(false);
       if (!ref) setExpanded(false);
       try {
@@ -336,17 +320,22 @@ export function App() {
     });
   }, []);
   useEffect(() => {
-    if (selected?.kind !== "node") return;
+    if (selected?.kind !== "node" || historical) return;
     const id = selected.id;
     return () => markSeen([id]);
-  }, [selected?.id, markSeen]);
+  }, [selected?.id, markSeen, historical]);
 
   // Deep links select an object; ?mode=doc opens it expanded, falling back to the first goal.
   useEffect(() => {
     if (!graph || selected) return;
     const id = decodeURIComponent(location.hash.slice(1));
     // A Role or Card named in the link is known once the snapshot is in.
-    if (!graph.detailed && id && !graph.nodes.has(id)) return wantDetails();
+    if (!graph.detailed && id && !graph.nodes.has(id)) {
+      // The id names the page before its slower details arrive, so the Reader can say it is loading.
+      if (id.startsWith("card-")) setSelected({ kind: "card", id });
+      else if (id.startsWith("role-")) setSelected({ kind: "role", id });
+      return wantDetails();
+    }
     // An empty link names nothing, though a Node whose header has no readable id is listed under "".
     const ref: SnapshotRef | null = !id
       ? null
@@ -368,6 +357,7 @@ export function App() {
     if (
       graph &&
       selected &&
+      !historical &&
       (selected.kind === "node" || graph.detailed) &&
       !graph.exists(selected)
     )
@@ -386,6 +376,8 @@ export function App() {
         e.preventDefault();
         setSideOpen((o) => !o);
       } else if (e.key === "Escape" && !typing) {
+        setHoverLane(null);
+        setPinnedLane(null);
         if (overlay) setOverlay(null);
         else if (expanded) setExpanded(false);
         else if (selected) open(null);
@@ -399,7 +391,7 @@ export function App() {
         if (key === "c") {
           e.preventDefault();
           void work.newCard(null);
-        } else if (key === "e" && selected?.kind === "node" && !expanded) {
+        } else if (key === "e" && selected?.kind === "node" && !expanded && !historical) {
           e.preventDefault();
           setEditOnExpand(true);
           setExpanded(true);
@@ -408,7 +400,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [overlay, expanded, selected, open, work]);
+  }, [overlay, expanded, selected, open, work, historical]);
 
   useEffect(() => {
     if (!toast) return;
@@ -525,7 +517,7 @@ export function App() {
         <p>{error}</p>
       </div>
     );
-  if (!graph) return <Loader label={t.app.loading} />;
+  if (!graph || !initialCanvas) return <Loader label={t.app.loading} />;
 
   const switchLang = (next: Lang) => {
     setLang(next);
@@ -546,6 +538,7 @@ export function App() {
   const dock = (
     <Dock
       graph={graph}
+      detailsReady={detailsReady}
       selected={selected}
       work={work}
       draftOnPage={selected?.kind === "card" && selected.id === work.openDraft}
@@ -571,28 +564,11 @@ export function App() {
       return next;
     });
   };
-  /** Fold or unfold a Node's children on the map; folding away the selection selects the folded Node. */
-  const fold = (id: string, expand?: boolean) => {
-    const folding = !(expand ?? collapsed.has(id));
-    setCollapsed((c) => {
-      const next = new Set(c);
-      if (folding) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-    if (
-      folding &&
-      selected?.kind === "node" &&
-      graph.ancestors(selected.id).some((a) => a.id === id)
-    )
-      open({ kind: "node", id });
-  };
-
   return (
     // Views read the messages while rendering; remounting them on a language change redraws every string.
     <NodeDetailsProvider revision={liveRevision} wantDetails={wantDetails}>
-      <FlagsContext.Provider value={shownFlags}>
-        <FilesContext.Provider value={files}>
+      <FilesContext.Provider value={files}>
+        <HandlingContext.Provider value={handling}>
           <div
             key={lang}
             className={`app${sideOpen ? "" : " side-collapsed"}${reading ? " is-reading" : ""}`}
@@ -619,6 +595,9 @@ export function App() {
               onResetWidth={() => setSideWidth(SIDE.initial)}
               onMarkAllSeen={() => markSeen(graph.snapshot.nodes.map((n) => n.id))}
               hotLane={hotLane}
+              pinnedLane={pinnedLane}
+              onUnpin={() => setPinnedLane(null)}
+              reading={reading}
               onToast={showToast}
             />
 
@@ -629,25 +608,25 @@ export function App() {
               <main className="stage" aria-hidden={reading || undefined}>
                 <StageBar
                   graph={graph}
-                  selected={selected}
+                  selected={historical ? null : selected}
                   roles={!reading && dock}
                   onOpen={open}
                 />
-                <div className="stage-body">
+                <div className={`stage-body${graph.snapshot.nodes.length ? "" : " is-empty"}`}>
                   <Boundary label={t.app.map}>
                     <Suspense fallback={<Loader label={t.app.loading} />}>
                       <MapView
                         graph={graph}
-                        flags={shownFlags}
+                        factsEpoch={factsEpoch}
+                        onFirstLayout={firstLayout}
+                        initialCanvas={initialCanvas}
                         selected={selected}
-                        collapsed={collapsed}
                         draft={draftIds}
                         hotLane={hotLane}
                         carriedBy={carriedBy}
                         keys={!reading && !overlay}
                         onNotice={setToast}
                         onSelect={open}
-                        onFold={fold}
                         onExpand={() => {
                           setEditOnExpand(false);
                           setExpanded(true);
@@ -655,6 +634,7 @@ export function App() {
                       />
                     </Suspense>
                   </Boundary>
+                  <FirstRun empty={!graph.snapshot.nodes.length} onToast={showToast} />
                 </div>
               </main>
 
@@ -669,6 +649,7 @@ export function App() {
                   />
                   <Reader
                     mode="panel"
+                    historical={historical}
                     graph={graph}
                     target={selected}
                     startEditing={false}
@@ -709,6 +690,7 @@ export function App() {
               )}
               {reading && (
                 <Reader
+                  historical={historical}
                   roles={dock}
                   graph={graph}
                   target={selected!}
@@ -730,7 +712,6 @@ export function App() {
                 onClose={() => setOverlay(null)}
               />
             )}
-            <DragGhost graph={graph} work={work} />
             {toast && (
               <div className={`toast${toast === t.app.offline ? " has-face" : ""}`} role="status">
                 {toast === t.app.offline && <Pet id="tent" size={28} mood="off" />}
@@ -738,32 +719,8 @@ export function App() {
               </div>
             )}
           </div>
-        </FilesContext.Provider>
-      </FlagsContext.Provider>
+        </HandlingContext.Provider>
+      </FilesContext.Provider>
     </NodeDetailsProvider>
-  );
-}
-
-/** What is being dragged, following the pointer. */
-function DragGhost({ graph, work }: { graph: Graph; work: Work }) {
-  const drag = useDragState();
-  if (!drag) return null;
-  const node = drag.item.kind === "node" ? graph.nodes.get(drag.item.id) : undefined;
-  const card = drag.item.kind === "card" ? graph.cards.get(drag.item.id) : undefined;
-  if (!node && !card) return null;
-  return (
-    <div
-      className={`drag-ghost${card && !isDraft(card) ? " is-pub" : ""}${drag.over ? " is-over" : ""}`}
-      style={{ left: drag.x + 14, top: drag.y + 10 }}
-    >
-      {node && drag.over?.startsWith("lane:") ? (
-        <Icon name="draft" size={14} />
-      ) : node ? (
-        <TypeGlyph type={node.type} size={14} />
-      ) : (
-        <Icon name={isDraft(card!) ? "draft" : "mail"} size={14} />
-      )}
-      <span>{node?.name ?? work.title(card!)}</span>
-    </div>
   );
 }

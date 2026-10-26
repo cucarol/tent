@@ -1,4 +1,4 @@
-// A picture of the map as it stands, cards, regions and drawings as they look, saved as a PNG: for the
+// A picture of the map as it stands, topics and drawings as they look, saved as a PNG: for the
 // person, and for an Agent that reads images, since the canvas file holds only places and words.
 // Rules: Tent Node "UI-图谱画模块依赖与状态", "画笔 v10" and "画笔进图谱：按钮位置" (cuca 2026-10-17).
 
@@ -9,7 +9,9 @@ const LEAVE_OUT = [
   ".react-flow__attribution",
   ".react-flow__minimap",
   ".react-pop",
-  ".outward",
+  ".map-selection-reaction",
+  ".map-focus-path",
+  ".map-focus-menu",
   ".map-marquee",
   ".ink-pick",
 ].join(",");

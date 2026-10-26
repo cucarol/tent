@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { fileInfo, type FileInfo } from "./api.js";
-import type { Snapshot, SnapshotMaterial, SnapshotNode, SyncFlags } from "./types.js";
+import type { Snapshot, SnapshotMaterial, SnapshotNode } from "./types.js";
 
 /**
  * How the page shows a Node's own file: by the suffix of its `resource`, never by its type or tags. A
@@ -86,25 +86,40 @@ export const infoOf = (files: Files, path: string): FileInfo | null | undefined 
   Object.prototype.hasOwnProperty.call(files, path) ? files[path] : undefined;
 
 /**
- * Reads file sizes for the snapshot's files, again when the revision moves and when the flags are
- * reread: a file deleted outside Tent changes no revision, but the flags follow it.
+ * Reads file sizes for the snapshot's files, again when the revision moves and when the page comes back
+ * into view: a file deleted outside Tent changes no revision.
  */
-export function useFileInfo(snapshot: Snapshot | null, flags: SyncFlags): Files {
-  const [files, setFiles] = useState<Files>({});
-  const paths = snapshot ? filePaths(snapshot) : [];
-  const key = paths.join("\n");
+export function useFileInfo(snapshot: Snapshot | null): Files {
+  return useFileInfoRead(snapshot).files;
+}
+
+/** Retains the last display, while identifying whether this observation has returned its own result. */
+export function useFileInfoRead(snapshot: Snapshot | null): { files: Files; current: boolean } {
+  const [read, setRead] = useState<{ key: string; files: Files } | null>(null);
+  const [looked, setLooked] = useState(0);
   useEffect(() => {
-    if (!paths.length) return setFiles({});
+    const again = () => !document.hidden && setLooked((n) => n + 1);
+    window.addEventListener("focus", again);
+    document.addEventListener("visibilitychange", again);
+    return () => {
+      window.removeEventListener("focus", again);
+      document.removeEventListener("visibilitychange", again);
+    };
+  }, []);
+  const paths = snapshot ? filePaths(snapshot) : [];
+  const key = JSON.stringify([paths, snapshot?.workspace.id, snapshot?.workspace.revision, looked]);
+  useEffect(() => {
+    if (!paths.length) return setRead({ key, files: {} });
     let live = true;
     fileInfo(paths).then(
-      (result) => live && setFiles(result.files),
+      (result) => live && setRead({ key, files: result.files }),
       () => {},
     );
     return () => {
       live = false;
     };
-  }, [key, snapshot?.workspace.revision, flags]);
-  return files;
+  }, [key]);
+  return { files: read?.files ?? {}, current: read?.key === key };
 }
 
 /** Larger files are listed, not loaded into the page; the service holds the same limits. */

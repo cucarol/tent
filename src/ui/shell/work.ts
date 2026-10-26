@@ -16,12 +16,24 @@ import {
   type Draft,
 } from "../data/drafts.js";
 import { api, ApiError, describe } from "../data/api.js";
-import { setDropHandler, type Dragged } from "./drag.js";
+import { setDropHandler, mapDropAllowed, type Dragged } from "./drag.js";
 import { readStored, writeStored } from "../util.js";
 import { t } from "../i18n.js";
 
 /** The lanes: "" is the public area, then one per Role. */
 export const PUBLIC = "";
+
+/** Both sidebar and map selections may move only when dropped on the sidebar tree. */
+export function treeAccepts(graph: Graph, item: Dragged, ref: string, zone: string) {
+  if (item.kind !== "node") return false;
+  const parent = zone === "inside" ? ref : (graph.nodes.get(ref)?.parentId ?? null);
+  return (item.ids ?? [item.id]).every(
+    (moving) =>
+      moving !== ref &&
+      !(parent && [parent, ...graph.ancestors(parent).map((a) => a.id)].includes(moving)) &&
+      !(zone === "inside" && graph.nodes.get(moving)?.parentId === ref),
+  );
+}
 
 export type Work = ReturnType<typeof useWork>;
 
@@ -272,8 +284,10 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
   const moveNodes = async (ids: string[], ref: string, zone: "before" | "inside" | "after") => {
     const parent = zone === "inside" ? ref : (graph?.nodes.get(ref)?.parentId ?? null);
     let after: string | undefined = zone === "after" ? ref : undefined;
+    const selected = new Set(ids);
+    const roots = ids.filter((id) => !graph?.ancestors(id).some((a) => selected.has(a.id)));
     try {
-      for (const [i, id] of ids.entries()) {
+      for (const [i, id] of roots.entries()) {
         await api.moveNode(id, {
           parent,
           ...(zone === "before" && i === 0 ? { before: ref } : after ? { after } : {}),
@@ -388,7 +402,12 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
   // Dropping: what each target takes, and what happens.
   setDropHandler({
     accepts: (item: Dragged, target: string) => {
-      if (!graph || (item.kind === "card" && publishing === item.id)) return false;
+      if (
+        !graph ||
+        !mapDropAllowed(item, target) ||
+        (item.kind === "card" && publishing === item.id)
+      )
+        return false;
       const [kind, id = ""] = target.split(/:(.*)/s);
       if (kind === "lane") {
         if (!lanes.includes(id)) return false;
@@ -419,15 +438,8 @@ export function useWork(graph: Graph | null, toast: (text: string) => void) {
       }
       // Onto a row of the tree: the Node moves there, unless that is inside itself or where it already is.
       if (kind === "tree") {
-        if (item.kind !== "node" || item.from === "map") return false;
         const [ref = "", zone] = id.split(":");
-        const parent = zone === "inside" ? ref : (graph.nodes.get(ref)?.parentId ?? null);
-        return (item.ids ?? [item.id]).every(
-          (moving) =>
-            moving !== ref &&
-            !(parent && [parent, ...graph.ancestors(parent).map((a) => a.id)].includes(moving)) &&
-            !(zone === "inside" && graph.nodes.get(moving)?.parentId === ref),
-        );
+        return treeAccepts(graph, item, ref, zone);
       }
       if (kind === "card" && item.kind === "node") {
         if (publishing === id) return false;

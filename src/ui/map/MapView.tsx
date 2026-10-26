@@ -1,4 +1,3 @@
-import { aheadKind, onlyGaps } from "../data/reasons.js";
 import { keepUnchanged, useSteady } from "./stable.js";
 import { DetailsContext, useWantDetails } from "../data/details.js";
 import {
@@ -21,7 +20,6 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
-  useKeyPress,
   useReactFlow,
   useStore,
   type Edge,
@@ -31,9 +29,8 @@ import {
   type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { createPortal } from "react-dom";
 import { primaryOf, type Graph, type Hand, type Primary } from "../data/store.js";
-import type { SnapshotCommit, SnapshotRef, SyncFlag, SyncFlags } from "../data/types.js";
+import type { SnapshotCommit, SnapshotRef } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
 import { FileGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
 import { fileOf, infoOf, previewOf, useFiles } from "../data/files.js";
@@ -42,11 +39,8 @@ import { CardPreview, previewHeight } from "./CardPreview.js";
 import {
   CARD,
   GAP,
-  lensLayout,
   rectOf,
-  treeLayout,
   isResult,
-  flagRuns,
   shownTree,
   type Layout,
   type Placed,
@@ -54,10 +48,13 @@ import {
   type Shown,
 } from "./layout.js";
 import { PUBLIC } from "../shell/work.js";
-import { continueDrag } from "../shell/drag.js";
-import { nearest, refPath, regionPath } from "./geometry.js";
-import { fitZoom, watchSpace } from "./pointer.js";
-import { routeLinks, type Route, type Run } from "./route.js";
+import { handlingOnTopics, handsOf, useHandling, type Handling } from "../data/handling.js";
+import { Hands, HandlingRows } from "../components/Handling.js";
+import { beginDrag } from "../shell/drag.js";
+import { useFloatingPanels } from "./floats.js";
+import { stagedTopics, TOPIC_PHASE_MS, type TopicPhase } from "./motion.js";
+import { nearest, selectionPath } from "./geometry.js";
+import { clearRect, fitViewport, fitZoom, wheelViewport, uncoverViewport } from "./pointer.js";
 import { Timeline } from "./Timeline.js";
 import {
   INK_STYLE,
@@ -77,6 +74,9 @@ import {
 } from "./Ink.js";
 import {
   anchorsOf,
+  attachInk,
+  projectInk,
+  type InkContext,
   copiesOf,
   inkChanges,
   moveBy,
@@ -90,51 +90,39 @@ import {
   type Anchor,
   type Ink,
   type InkSet,
-  type Pt,
   type Sizes,
   aabb,
 } from "./drawings.js";
 import { useCanvas, type Picks } from "./useCanvas.js";
+import { emptyCanvas, withPending, type Fold } from "./canvas.js";
+import { arrange as arrangeMap, CENTRE, TOPIC, type Topic } from "./arrange.js";
+import { selectionLines, type CodeEdge, type SelectionLineKind } from "./relations.js";
 import {
-  boxRect,
-  REGION_PAD,
-  clearOf,
-  clearWithin,
-  standClear,
-  within,
-  cornerOf,
-  fitBox,
-  heldBy,
-  membersOf,
-  newRegionId,
-  placeCards,
-  snapTo,
-  shifted,
-  type Region,
-} from "./canvas.js";
-import {
-  reachOut,
-  regionLines,
-  type CodeEdge,
-  type RegionLine,
-  type RegionLineKind,
-} from "./regions.js";
-import { Outward } from "./Outward.js";
+  beginLens,
+  foldInLens,
+  lensFacts,
+  lensLines,
+  revealInLens,
+  selectionAfterLens,
+  type LensSession,
+} from "./lens.js";
 import { pictureName, pictureOf, saveFile, type Crop } from "./picture.js";
 import {
   comparisonsFor,
   outputsToCompare,
-  listed,
   noTimes,
   reactionsIn,
-  reacts,
   timesFor,
   type Answer,
   type Reaction,
   type TimesAnswer,
 } from "./reactions.js";
-import { RegionProducts } from "./Reaction.js";
-import { api } from "../data/api.js";
+import { SelectionReaction } from "./Reaction.js";
+import { api, describe } from "../data/api.js";
+import { HistoryTrees, historyViewGraph, type HistoricalSelection } from "../data/history-tree.js";
+import { historyLayout } from "./history-layout.js";
+import type { HistoryTree } from "../../core/read/history-query.js";
+
 import { ago, readStored, when, writeStored } from "../util.js";
 import { t } from "../i18n.js";
 const NO_CODE: readonly CodeEdge[] = [];
@@ -148,42 +136,24 @@ const TREE_KEYS = new Set([
   "End",
   "Enter",
   "*",
+  " ",
 ]);
-// At 100% a card shows all it has (cuca 2026-10-21: only sanity bounds); past it a card only grows, and far
-// out the map gathers (see GATHER).
+// Broad zoom bounds; the first level stays readable and distant deeper labels are hidden.
 const ZOOM = { min: 0.04, max: 4 };
 // Views the map picks by itself go no further out than this, however much they hold.
 const FIT_MIN = 0.4;
 // Below this, card names get too small to read at a glance; views the map picks by itself stay above it.
 const READABLE = 0.9;
-// Further out than these, a card shows only its type and name, the name a size and then two sizes larger
-// so it still reads.
-const FAR = [0.7, 0.5];
-/**
- * Further out than `below`, the map gathers: cards keep their place and outline but drop their text, and the
- * Nodes at `depth` and above carry names sized to read at `z`, the far end of the band; a Node at `depth`
- * also counts what is under it. Nothing moves; only what is drawn changes.
- */
-const GATHER = [
-  { below: 0.3, depth: 2, z: 0.2 },
-  { below: 0.2, depth: 1, z: 0.12 },
-  { below: 0.12, depth: 1, z: 0.07 },
-  { below: 0.07, depth: 0, z: 0.04 },
-];
-
 // A selected card this close to an edge, or under a floating panel, is brought further in.
 const COMFORT = 56;
 // Room kept clear around fitted cards; the bottom leaves space for the toolbar.
-const PAD = { top: 40, right: 48, bottom: 84, left: 48 };
-// Matches the card glide in styles.css (cubic-bezier(.215, .61, .355, 1), .42s), so a pinned card holds still.
-const GLIDE = {
-  duration: 420,
-  ease: (t: number) => 1 - (1 - t) ** 3,
-  interpolate: "linear" as const,
-};
+const PAD = { top: 48, right: 48, bottom: 84, left: 48 };
 
 type CardData = {
   graph: Graph;
+  topic: Topic;
+  head: number;
+  branchColor: string;
   id: string;
   h: number;
   w: number;
@@ -198,8 +168,6 @@ type CardData = {
   /** Picked with the box or with Shift / Ctrl, to move together. */
   picked: boolean;
   top: boolean;
-  /** Nodes under it, and how many of them are behind: named on it when the map is zoomed far out. */
-  under: { n: number; behind: number } | null;
   folded: number;
   /** Shown cards hanging from it. */
   kids: number;
@@ -208,94 +176,82 @@ type CardData = {
   pin: number;
   /** Its place among the sources of the Card opened beside the map, and whether it changed since. */
   src: { n: number; changed: boolean } | null;
+  /** The lanes doing or awaited by Cards for it, or for what is folded under it. */
+  hands: { doing: string[]; waiting: string[] } | null;
 };
-type LabelData = { text: string };
 type LinkData = {
   kind: "tree" | "ref";
   dim: boolean;
   hot: boolean;
+  color?: string;
+  weight?: number;
   from: Rect;
   to: Rect;
-  /** A way round the cards, for a reference or a tree line to a card placed by hand; without one a
-   * reference curves straight across and a tree line takes its elbow. */
-  route?: Route;
-  /** How far across the gap a tree line's trunk runs, when it keeps its elbow beside another line. */
-  bend?: number;
+  /** Four control points for the layout's cubic tree curve. */
+  points?: readonly (readonly [number, number])[];
+  /** References share the selected-line route, while tree branches keep their layout geometry. */
+  route?: ReturnType<typeof selectionPath>;
 };
-type RegionLineData = { kind: RegionLineKind; from: Rect; to: Rect; tip: string };
+type SelectionLineData = {
+  kind: SelectionLineKind;
+  from: Rect;
+  to: Rect;
+  tip: string;
+  route: ReturnType<typeof selectionPath>;
+};
 type Peek = { id: string; left: number; top: number; above: boolean };
-/** How long a dragged card waits over another before letting go forms a region. */
-const HOLD = 450;
-/** Room round a stray tree line's ends where cards count as in its way, and how many it goes round. */
-const STRAY_PAD = 120;
-// Screen pixels at the top of the map the title bar and the legend keep; a card stepping aside stays below them.
-const SEEN_TOP = 96;
+/** The Cards listed under a topic's faces while the pointer is on them. */
+type HandsPop = { id: string; left: number; top: number };
+const HANDS_W = 340;
 // Zoom buttons and keys answer at once; an eased step reads as lag.
 const ZOOM_NOW = { duration: 0 };
 // Held while dragging blank space, these draw the box instead of moving the map.
 const BOX_KEYS = ["Control", "Meta", "Shift"];
-// Lines among more cards than this find their way just after the map is drawn; past the crowd, never.
-const STRAY_NOW = 60;
-// Milliseconds of put-off ways found in one go, so the frames between keep coming.
-const LATER_SLICE = 12;
-const STRAY_CROWD = 240;
-/** A tree line's way round cards, kept while the cards round it stay where they were. */
-type Stray = { id: string; key: string; route?: Route };
-
-const same = (a: Rect, b: Rect) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
-
-/** Where across the gap a crowded tree line's trunk may run, halfway first, to keep off other lines. */
-const BENDS = [GAP / 2, GAP / 2 - 15, GAP / 2 + 15];
-/** Room a tree line keeps from cards other than its own two: 4 screen pixels at 45%. */
-const LINE_ROOM = 9;
-/** The elbow LinkEdge draws for a tree line: its trunk's x and the rows it joins. */
-const elbowOf = (from: Rect, to: Rect) => ({
-  sx: from.x + from.w,
-  sy: from.y + (from.head ?? from.h) / 2,
-  mid: from.x + from.w + GAP / 2,
-  tx: to.x,
-  ty: to.y + (to.head ?? to.h) / 2,
-});
-/** Whether a tree line's elbow, as LinkEdge draws it, passes through or close by a card other than its own two. */
-function elbowCrosses(from: Rect, to: Rect, cards: Rect[]) {
-  const { sx, sy, mid, tx, ty } = elbowOf(from, to);
-  const hit = (r: Rect, x1: number, x2: number, y1: number, y2: number) =>
-    r.x - LINE_ROOM < Math.max(x1, x2) &&
-    Math.min(x1, x2) < r.x + r.w + LINE_ROOM &&
-    r.y - LINE_ROOM < Math.max(y1, y2) &&
-    Math.min(y1, y2) < r.y + r.h + LINE_ROOM;
-  return cards.some(
-    (r) =>
-      !same(r, from) &&
-      !same(r, to) &&
-      (hit(r, sx, mid, sy, sy) || hit(r, mid, mid, sy, ty) || hit(r, mid, tx, ty, ty)),
-  );
-}
-
 /** Card controls that act without selecting the card. */
 type Actions = {
-  activeRole: string | null;
-  onRole: (id: string) => void;
   onFold: (id: string) => void;
+  onMore: (id: string) => void;
   /** Opens a card's folded result outputs as children, or folds them again. */
   onOutputs: (id: string) => void;
   /** Opens a preview of the card's file under it, or closes it. */
   onPreview: (id: string) => void;
+  /** Lists the Cards behind a card's faces under them, or lets the list go. */
+  onHands: (id: string | null, faces?: HTMLElement) => void;
 };
 const MapActions = createContext<Actions>({
-  activeRole: null,
-  onRole: () => {},
   onFold: () => {},
+  onMore: () => {},
   onOutputs: () => {},
   onPreview: () => {},
+  onHands: () => {},
 });
-/** Ahead and behind Nodes; every other card stays quiet. */
-const MapFlags = createContext<SyncFlags>({});
 
 const descendants = (kidsOf: Shown["kidsOf"], id: string): number =>
   kidsOf(id).reduce((sum, c) => sum + 1 + descendants(kidsOf, c.id), 0);
 const underIds = (kidsOf: Shown["kidsOf"], id: string): string[] =>
   kidsOf(id).flatMap((c) => [c.id, ...underIds(kidsOf, c.id)]);
+/** Cards with children hidden: past the top level unless opened, and any closed by hand. */
+function closedOf(
+  kidsOf: Shown["kidsOf"],
+  open: readonly string[],
+  shut: readonly string[],
+  focus: string | null = null,
+  defaultDepth = 2,
+) {
+  const opened = new Set(open),
+    shutting = new Set(shut);
+  const out = new Set<string>();
+  const walk = (id: string | null, depth: number) => {
+    for (const c of kidsOf(id)) {
+      if (!kidsOf(c.id).length) continue;
+      if (shutting.has(c.id) || (depth >= defaultDepth && !opened.has(c.id))) out.add(c.id);
+      else walk(c.id, depth + 1);
+    }
+  };
+  if (focus && shutting.has(focus)) out.add(focus);
+  walk(focus, 1);
+  return out;
+}
 const changedAt = (graph: Graph, id: string) => {
   const head = graph.nodes.get(id)?.history[0];
   return head ? graph.commits.get(head)?.date : undefined;
@@ -322,166 +278,158 @@ function Handles() {
   );
 }
 
-/**
- * A card is one line: its type, its name, then what sets it apart. On the left corner, its number in the
- * draft being written; after the name, the new dot and its place in an opened Card; on the right, its tag
- * and the lanes it went to in Cards.
- */
+const BRANCH_COLORS = ["#779987", "#a58dba", "#b28790", "#9b9a72", "#8d9c9a", "#929388"];
+const branchColor = (id: string) => {
+  let hash = 0;
+  for (const ch of id) hash = (hash * 31 + ch.codePointAt(0)!) >>> 0;
+  return BRANCH_COLORS[hash % BRANCH_COLORS.length]!;
+};
 const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
-  const { onFold, onOutputs, onPreview } = useContext(MapActions);
-  const flags = useContext(MapFlags);
-  const flag = flags[data.id];
+  const { onFold, onOutputs, onPreview, onHands } = useContext(MapActions);
   const files = useFiles();
   const n = data.graph.nodes.get(data.id)!;
   const state = data.graph.states.get(data.id)!;
-  const p = primaryOf(n.type);
-  const foldBehind = data.fold?.ids.filter((id) => flags[id]?.behind).length ?? 0;
   const file = fileOf(n);
   const local = file?.kind === "file" ? file : null;
   const missing = !!local && infoOf(files, local.path) === null;
+  const depth = data.topic.depth;
   const open = !!data.preview?.open;
-  const glyph = local && <FileGlyph show={local.show} missing={missing} size={15} kind={p} />;
-  // One status, the most pressing: a broken Node, a missing file, behind, ahead. Behind points down, filled;
-  // ahead points up, open (judge 2026-10-21, node-erpb58).
-  const status = n.invalid
-    ? "invalid"
-    : missing
-      ? "missing"
-      : flag?.behind
-        ? "behind"
-        : flag?.ahead
-          ? "ahead"
-          : null;
-  const card = (
+  return (
     <div
-      className={`mcard t-${p}${local ? " is-file" : ""}${missing ? " is-missing" : ""}${data.top ? " is-top" : ""}${data.folded ? " is-stack" : ""}${data.rel ? " is-rel" : ""}${data.dim ? " is-dim" : ""}${data.selected ? " is-selected" : ""}${data.picked ? " is-picked" : ""}${data.touched ? " is-touched" : ""}${state.deprecated ? " is-deprecated" : ""}${n.invalid ? " is-invalid" : ""}${flag?.ahead ? " is-ahead" : ""}${flag?.behind ? ` is-behind${onlyGaps(flag.behind.reasons) ? " is-gap" : ""}` : ""}`}
+      className={
+        "mind-topic" +
+        (depth === 0 ? " is-centre" : depth === 1 ? " is-first" : " is-deeper") +
+        (data.dim ? " is-dim" : "") +
+        (data.selected ? " is-selected" : "") +
+        (data.picked ? " is-picked" : "") +
+        (state.deprecated ? " is-deprecated" : "") +
+        (data.touched ? " is-touched" : "")
+      }
+      data-depth={depth}
+      data-side={data.topic.side}
       style={
         {
           width: data.w,
-          height: open ? (data.top ? CARD.top : CARD.h) : data.h,
-          "--head": `${data.top ? CARD.top : CARD.h}px`,
+          height: data.h,
+          "--branch": data.branchColor,
+          "--head": data.head + "px",
         } as CSSProperties
       }
     >
       <Handles />
-      {data.pin > 0 && (
-        <span className="mcard-pin" title={t.side.draftSource(data.pin)}>
-          {data.pin}
-        </span>
-      )}
-      <span className="mcard-type">
-        <TypeGlyph type={n.type} size={data.top ? 19 : 17} />
-      </span>
-      <span className="mcard-name">{n.name}</span>
-      {data.under && (
-        // Short on the card, the behind count marked as the legend marks it; spelled out on hover.
-        <span className="mcard-sum" title={t.map.branchSum(data.under.n, data.under.behind)}>
-          {data.under.n}
-          {data.under.behind > 0 && <i className="mcard-sum-behind">{data.under.behind}</i>}
-        </span>
-      )}
-      {state.recent && !status && <i className="new-dot" title={t.node.recent} />}
-      {data.src?.changed && (
-        <span className="mcard-changed" title={t.side.changedSince}>
-          <Icon name="clock" size={12} />
-        </span>
-      )}
-      {data.src && (
-        <span className="num ref" title={t.side.cardSource(data.src.n)}>
-          {data.src.n}
-        </span>
-      )}
-      {data.rel && (
-        <span className="mcard-rel">
-          {data.rel === "cites" ? t.map.relCites : t.map.relCitedBy}
-        </span>
-      )}
-      {local &&
-        (data.preview ? (
-          // The file's mark opens a look at the file under the card, as a note embeds it.
+      <div className="mind-title" style={{ height: data.head }} title={n.name}>
+        {data.pin > 0 && (
+          <span className="mind-pin" title={t.side.draftSource(data.pin)}>
+            {data.pin}
+          </span>
+        )}
+        <TypeGlyph type={n.type} size={depth === 0 ? 20 : 14} />
+        <span className="mind-name">{n.name}</span>
+        {local && (
           <button
             type="button"
-            className={`mcard-file mcard-preview nopan nodrag${open ? " is-open" : ""}`}
+            className="mind-file nopan nodrag"
+            disabled={!data.preview}
+            aria-label={open ? t.map.closePreview : t.map.openPreview}
             onClick={(e) => {
               e.stopPropagation();
               onPreview(data.id);
             }}
-            aria-label={open ? t.map.closePreview : t.map.openPreview}
-            aria-pressed={open}
-            data-tip={open ? t.map.closePreview : t.map.openPreview}
           >
-            {glyph}
-            <span className="mcard-preview-eye">
-              <Icon name={open ? "unpreview" : "preview"} size={13} />
-            </span>
+            <FileGlyph show={local.show} missing={missing} size={14} kind={primaryOf(n.type)} />
           </button>
-        ) : (
-          <span className="mcard-file" title={missing ? t.file.missing : local.path}>
-            {glyph}
+        )}
+        {(n.invalid || missing) && (
+          <span
+            className="mind-error"
+            title={n.invalid ? (n.invalidReason ?? t.map.status.invalid) : t.map.status.missing}
+          >
+            {n.invalid ? t.map.status.invalid : t.map.status.missing}
           </span>
-        ))}
-      {status && (
-        <span className={`mcard-status is-${status}`}>
-          {(status === "behind" || status === "ahead") && <StatusMark kind={status} />}
-          {t.map.status[status]}
-        </span>
-      )}
-      {data.fold && (
-        <button
-          type="button"
-          className={`mcard-outputs nopan nodrag${data.fold.open ? " is-open" : ""}${foldBehind ? " is-behind" : ""}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onOutputs(data.id);
-          }}
-          aria-label={
-            data.fold.open
-              ? t.map.foldOutputs
-              : t.map.foldedOutputs(data.fold.ids.length, foldBehind)
-          }
-          data-tip={
-            data.fold.open
-              ? t.map.foldOutputs
-              : t.map.foldedOutputs(data.fold.ids.length, foldBehind)
-          }
-        >
-          <TypeGlyph type="output" size={11} />
-          {data.fold.ids.length}
-        </button>
-      )}
-      {data.kids > 0 && (
-        <button
-          type="button"
-          className={`mcard-fold nopan nodrag${data.folded ? " is-folded" : ""}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onFold(data.id);
-          }}
-          aria-label={
-            data.folded ? t.map.expandChildren(n.name, data.folded) : t.map.collapseChildren(n.name)
-          }
-          data-tip={data.folded ? t.map.expandTitle(data.folded) : t.map.collapseTitle}
-        >
-          <Icon name={data.folded ? "plus" : "minus"} size={10} />
-        </button>
-      )}
+        )}
+        {data.src && (
+          <span className="num ref" title={t.side.cardSource(data.src.n)}>
+            {data.src.n}
+            {data.src.changed ? "*" : ""}
+          </span>
+        )}
+        {data.fold?.open && (
+          <button
+            type="button"
+            className="mind-control nopan nodrag"
+            aria-label={t.map.foldOutputs}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOutputs(data.id);
+            }}
+          >
+            <TypeGlyph type="output" size={11} />
+            {data.fold.ids.length}
+          </button>
+        )}
+        {data.kids > 0 && (
+          <button
+            type="button"
+            className={"mind-control mind-fold nopan nodrag" + (data.folded ? " is-folded" : "")}
+            aria-label={
+              data.folded
+                ? t.map.expandChildren(n.name, data.folded)
+                : t.map.collapseChildren(n.name)
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              onFold(data.id);
+            }}
+          >
+            {data.folded ? t.map.foldedTopics(data.folded) : <Icon name="minus" size={10} />}
+          </button>
+        )}
+        {data.hands && (
+          // Outside the box: faces arriving with the Cards never move a topic.
+          <span
+            className="mind-hands nopan nodrag"
+            role="button"
+            tabIndex={-1}
+            aria-label={t.map.handling.label}
+            onPointerEnter={(e) => onHands(data.id, e.currentTarget)}
+            onPointerLeave={() => onHands(null)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onHands(data.id, e.currentTarget);
+            }}
+          >
+            <Hands doing={data.hands.doing} waiting={data.hands.waiting} />
+          </span>
+        )}
+      </div>
+      {open && data.preview && <CardPreview file={data.preview.file} graph={data.graph} />}
     </div>
   );
-  // A preview hangs under its card; the card stays the title row that links meet.
-  if (open && data.preview)
-    return (
-      <div className="mstack" style={{ width: data.w, height: data.h }}>
-        {card}
-        <CardPreview file={data.preview.file} graph={data.graph} />
-      </div>
-    );
-  return card;
 });
-
-function LensLabel({ data }: NodeProps<Node<LabelData>>) {
+type SummaryData = { kind: "more" | "outputs"; parent: string; count: number; color: string };
+function SummaryTopic({ data }: NodeProps<Node<SummaryData>>) {
+  const { onOutputs, onMore } = useContext(MapActions);
   return (
-    <div className="lens-label" style={{ width: CARD.w }}>
-      {data.text}
+    <div className="mind-summary" style={{ "--branch": data.color } as CSSProperties}>
+      <Handles />
+      <button
+        className="nopan nodrag"
+        type="button"
+        onClick={() => (data.kind === "outputs" ? onOutputs(data.parent) : onMore(data.parent))}
+      >
+        {data.kind === "outputs" && <TypeGlyph type="output" size={12} />}
+        {data.kind === "outputs" ? t.map.resultTopics(data.count) : t.map.moreTopics(data.count)}
+      </button>
+    </div>
+  );
+}
+function CentreTopic({ data }: NodeProps<Node<{ name: string; w: number; h: number }>>) {
+  return (
+    <div className="mind-topic is-centre" style={{ width: data.w, height: data.h }}>
+      <Handles />
+      <div className="mind-title" title={data.name}>
+        {data.name}
+      </div>
     </div>
   );
 }
@@ -489,7 +437,7 @@ function LensLabel({ data }: NodeProps<Node<LabelData>>) {
 function LinkEdge({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps<Edge<LinkData>>) {
   const state = `${data?.dim ? " is-dim" : ""}${data?.hot ? " is-hot" : ""}`;
   if (data?.kind === "ref") {
-    const { path, arrow } = data.route ?? refPath(data.from, data.to);
+    const { path, arrow } = data.route!;
     return (
       <>
         <BaseEdge id={id} path={path} className={`link link-ref${state}`} />
@@ -497,10 +445,27 @@ function LinkEdge({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps<Ed
       </>
     );
   }
-  if (data?.route)
-    return <BaseEdge id={id} path={data.route.path} className={`link link-tree${state}`} />;
+  if (data?.points)
+    return (
+      <BaseEdge
+        id={id}
+        path={
+          data.points.length === 4
+            ? "M" +
+              data.points[0]!.join(",") +
+              " C" +
+              data.points
+                .slice(1)
+                .map((p) => p.join(","))
+                .join(" ")
+            : rounded(data.points)
+        }
+        style={{ stroke: data.color, strokeWidth: data.weight }}
+        className={`link link-tree${state}`}
+      />
+    );
   // Rounded elbow: siblings share one trunk, like an outline.
-  const mid = sourceX + (data?.bend ?? GAP / 2),
+  const mid = sourceX + GAP / 2,
     r = Math.min(6, Math.abs(targetY - sourceY) / 2),
     dir = Math.sign(targetY - sourceY);
   const path =
@@ -510,10 +475,28 @@ function LinkEdge({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps<Ed
   return <BaseEdge id={id} path={path} className={`link link-tree${state}`} />;
 }
 
-/** A line between two cards in a region; its meaning shows on hover, beside it. */
-function RegionEdge({ id, data }: EdgeProps<Edge<RegionLineData>>) {
+/** A line through right-angled turns, each turn rounded. */
+function rounded(points: readonly (readonly [number, number])[], r = 6) {
+  let d = `M${points[0]![0]},${points[0]![1]}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const [px, py] = points[i - 1]!,
+      [x, y] = points[i]!,
+      [nx, ny] = points[i + 1]!;
+    const k = Math.min(r, Math.hypot(x - px, y - py) / 2, Math.hypot(nx - x, ny - y) / 2);
+    const ax = x - Math.sign(x - px) * k,
+      ay = y - Math.sign(y - py) * k,
+      bx = x + Math.sign(nx - x) * k,
+      by = y + Math.sign(ny - y) * k;
+    d += ` L${ax},${ay} Q${x},${y} ${bx},${by}`;
+  }
+  const [ex, ey] = points.at(-1)!;
+  return `${d} L${ex},${ey}`;
+}
+
+/** A line between two selected topics; its meaning shows on hover, beside it. */
+function SelectionEdge({ id, data }: EdgeProps<Edge<SelectionLineData>>) {
   if (!data) return null;
-  const { path, arrow, label } = regionPath(data.from, data.to, data.kind);
+  const { path, arrow, label } = data.route;
   const arrowed = data.kind === "link" || data.kind === "code" || data.kind === "card";
   return (
     <g className={`rline rline-${data.kind}`} data-line={id}>
@@ -521,125 +504,26 @@ function RegionEdge({ id, data }: EdgeProps<Edge<RegionLineData>>) {
       <path d={path} className="rline-path" />
       {data.kind === "card" && <path d={path} className="rline-inner" />}
       {arrowed && <path d={arrow} className="rline-arrow" />}
-      <text
-        x={label.x}
-        y={label.y}
-        className="rline-label"
-        textAnchor={label.anchor}
-        dominantBaseline="middle"
-      >
-        {data.tip}
-      </text>
+      {label && (
+        <text
+          x={label.x}
+          y={label.y}
+          className="rline-label"
+          textAnchor={label.anchor}
+          dominantBaseline="middle"
+        >
+          {data.tip}
+        </text>
+      )}
+      <title>{data.tip}</title>
     </g>
-  );
-}
-
-/**
- * Regions under the cards: a tinted block with its name, how many cards stand in it and a way to
- * dissolve it. Its edge shows dashed while a card dragged over it would join, and while one is drawn.
- */
-function RegionLayer({
-  regions,
-  members,
-  outside,
-  outward,
-  onOutward,
-  editing,
-  onEdit,
-  onName,
-  onDissolve,
-}: {
-  regions: Region[];
-  members: Map<string, string[]>;
-  /** How many cards outside each region its members are directly related to. */
-  outside: Map<string, number>;
-  /** The region looking one layer out, if any. */
-  outward: string | null;
-  onOutward: (id: string | null) => void;
-  editing: string | null;
-  onEdit: (id: string | null) => void;
-  onName: (id: string, name: string) => void;
-  onDissolve: (id: string) => void;
-}) {
-  // Straight into the viewport, under the cards and lines: the flow's own portal layer sits above them.
-  const host = useStore(
-    (s) => s.domNode?.querySelector<HTMLElement>(".react-flow__viewport") ?? null,
-  );
-  if (!host) return null;
-  return createPortal(
-    <div className="map-regions">
-      {regions.map((r) => {
-        const ids = members.get(r.id) ?? [];
-        return (
-          <div
-            key={r.id}
-            className="map-region"
-            data-region={r.id}
-            style={{ left: r.box[0], top: r.box[1], width: r.box[2], height: r.box[3] }}
-          >
-            <div className="map-region-head nopan">
-              {editing === r.id ? (
-                <input
-                  className="map-region-input"
-                  aria-label={t.map.region.name}
-                  placeholder={t.map.region.name}
-                  defaultValue={r.name}
-                  autoFocus
-                  onFocus={(e) => e.currentTarget.select()}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") e.currentTarget.blur();
-                    if (e.key === "Escape") {
-                      e.stopPropagation();
-                      onEdit(null);
-                    }
-                  }}
-                  onBlur={(e) => {
-                    if (editing === r.id) onName(r.id, e.currentTarget.value.trim());
-                  }}
-                />
-              ) : (
-                <span
-                  className={`map-region-name${r.name ? "" : " is-blank"}`}
-                  title={t.map.region.rename}
-                  onClick={() => onEdit(r.id)}
-                >
-                  {r.name}
-                </span>
-              )}
-              <span className="map-region-count">{t.map.region.count(ids.length)}</span>
-              {(outside.get(r.id) ?? 0) > 0 && (
-                <button
-                  type="button"
-                  className={`map-region-out${outward === r.id ? " is-on" : ""}`}
-                  aria-pressed={outward === r.id}
-                  title={t.map.region.outTitle}
-                  onClick={() => onOutward(outward === r.id ? null : r.id)}
-                >
-                  {t.map.region.out(outside.get(r.id)!)}
-                </button>
-              )}
-              <button
-                type="button"
-                className="icon-btn map-region-dissolve"
-                aria-label={t.map.region.dissolve}
-                title={t.map.region.dissolve}
-                onClick={() => onDissolve(r.id)}
-              >
-                <Icon name="ungroup" size={14} />
-              </button>
-            </div>
-          </div>
-        );
-      })}
-    </div>,
-    host,
   );
 }
 
 /** A hover reads a Node's own file only when it is text or an image this small, so passing over cards stays light. */
 const PEEK_BYTES = 1024 * 1024;
 
-function PeekCard({ graph, peek, flag }: { graph: Graph; peek: Peek; flag?: SyncFlag }) {
+function PeekCard({ graph, peek }: { graph: Graph; peek: Peek }) {
   const files = useFiles();
   const n = graph.nodes.get(peek.id);
   if (!n) return null;
@@ -672,8 +556,7 @@ function PeekCard({ graph, peek, flag }: { graph: Graph; peek: Peek; flag?: Sync
     citedBy > 0 && t.map.citedBy(citedBy),
   ].filter(Boolean);
   // Until the snapshot is in, the map knows no summary; a peek with nothing else to say stays closed.
-  if (!graph.detailed && !n.invalid && !flag?.behind && !flag?.ahead && !file && facts.length === 0)
-    return null;
+  if (!graph.detailed && !n.invalid && !file && facts.length === 0) return null;
   return (
     <div
       className={`panel map-peek${peek.above ? " is-above" : ""}`}
@@ -684,23 +567,6 @@ function PeekCard({ graph, peek, flag }: { graph: Graph; peek: Peek; flag?: Sync
         <div className="map-peek-flag is-invalid">
           <b>{t.map.invalidWhy(n.invalidReason)}</b>
           <span>{t.map.invalidNext}</span>
-        </div>
-      )}
-      {flag?.behind && (
-        <div className="map-peek-flag is-behind">
-          <b>{t.map.behindWhy(flag.behind.reasons)}</b>
-          <span>{t.map.behindNext}</span>
-        </div>
-      )}
-      {flag?.ahead && (
-        <div className="map-peek-flag is-ahead">
-          <b>
-            {t.map.aheadWhy(
-              flag.ahead.since ? ago(flag.ahead.since) : null,
-              aheadKind(flag.ahead.reasons),
-            )}
-          </b>
-          <span>{t.map.aheadNext(aheadKind(flag.ahead.reasons))}</span>
         </div>
       )}
       {n.description && <p>{n.description}</p>}
@@ -751,7 +617,7 @@ function DeskWires({
     const list = from?.closest(".dock")?.getBoundingClientRect();
     const next: string[] = [];
     for (const id of ids) {
-      const card = host.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"] .mcard`);
+      const card = host.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"] .mind-title`);
       if (!card) continue;
       const b = card.getBoundingClientRect();
       // Off screen, or under the open list.
@@ -789,79 +655,11 @@ function DeskWires({
   );
 }
 
-/**
- * How many Nodes are behind or ahead, in the top corner of the map; a Node that is both counts in each.
- * Each count steps through its Nodes in tree order; nothing shows while no Node needs attention.
- */
-/**
- * Behind and ahead counts at the top left. They count and step through only the types switched on; when a
- * type is off, the tip gives the count over all of them.
- */
-function FlagCounts({
-  graph,
-  flags,
-  visible,
-  partial,
-  onSelect,
-}: {
-  graph: Graph;
-  flags: SyncFlags;
-  visible: (id: string) => boolean;
-  partial: boolean;
-  onSelect: (ref: SnapshotRef) => void;
-}) {
-  const step = useRef<Record<keyof SyncFlag, number>>({ behind: 0, ahead: 0 });
-  const kinds = useMemo(() => flagRuns(graph, flags, visible), [graph, flags, visible]);
-  if (!kinds.length) return null;
-  return (
-    <div className="panel map-flags" role="group" aria-label={t.map.flagsLabel}>
-      {kinds.map(({ state, ids, all }) => (
-        <button
-          key={state}
-          type="button"
-          className={`map-flag is-${state}`}
-          aria-disabled={ids.length === 0 || undefined}
-          data-tip-start=""
-          data-tip={partial ? t.map.flagStepAll(all) : t.map.flagStep}
-          onClick={() => {
-            if (!ids.length) return;
-            const i = step.current[state] % ids.length;
-            step.current[state] = i + 1;
-            onSelect({ kind: "node", id: ids[i] });
-          }}
-        >
-          <span className={`mcard-status is-${state}`}>
-            <StatusMark kind={state} />
-          </span>
-          {state === "behind" ? t.map.behindCount(ids.length) : t.map.aheadCount(ids.length)}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** Behind points down, filled; ahead points up, open. */
-function StatusMark({ kind }: { kind: "behind" | "ahead" }) {
-  return (
-    <svg viewBox="0 0 10 9" aria-hidden="true">
-      {kind === "ahead" ? (
-        <path
-          d="M5 1.2 9 8H1z"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinejoin="round"
-        />
-      ) : (
-        <path d="M1 1h8L5 7.8z" fill="currentColor" />
-      )}
-    </svg>
-  );
-}
-
-const nodeTypes = { node: NodeCard, label: LensLabel };
-const edgeTypes = { link: LinkEdge, region: RegionEdge };
+const nodeTypes = { node: NodeCard, centre: CentreTopic, summary: SummaryTopic };
+const edgeTypes = { link: LinkEdge, selection: SelectionEdge };
 const NOTHING: ReadonlySet<string> = new Set();
+const NO_NODES: Node[] = [];
+const NO_EDGES: Edge[] = [];
 const KEYS: Record<string, [number, number]> = {
   ArrowLeft: [-1, 0],
   ArrowRight: [1, 0],
@@ -873,10 +671,11 @@ type Filters = { types: Record<Primary, boolean> };
 
 type MapProps = {
   graph: Graph;
-  /** Ahead and behind Nodes from the real workspace; empty when the service cannot say. */
-  flags: SyncFlags;
+  /** Successful fresh Core map observations, independent of document/topology revision. */
+  factsEpoch: number;
+  onFirstLayout: () => void;
+  initialCanvas: import("./canvas.js").CanvasInitial;
   selected: SnapshotRef | null;
-  collapsed: ReadonlySet<string>;
   /** The draft being written: its sources in order (null for an address outside Tent). */
   draft: (string | null)[];
   /** The robot lit in the dock, and the Nodes the Cards on a robot's desk carry. */
@@ -884,8 +683,8 @@ type MapProps = {
   carriedBy: (lane: string) => ReadonlySet<string>;
   /** Whether arrow keys, Enter and Space drive the map right now. */
   keys: boolean;
-  onSelect: (ref: SnapshotRef | null) => void;
-  onFold: (id: string, expand?: boolean) => void;
+  onSelect: (ref: SnapshotRef | null, historical?: HistoricalSelection) => void;
+
   onExpand: () => void;
   /** A short message for the page to show, such as a save that lost to one made elsewhere. */
   onNotice: (message: string) => void;
@@ -893,26 +692,77 @@ type MapProps = {
 
 export function MapView(props: MapProps) {
   return (
-    <ReactFlowProvider>
+    <ReactFlowProvider key={props.graph.snapshot.workspace.id}>
       <MapContent {...props} />
     </ReactFlowProvider>
   );
 }
 
 function MapContent({
-  graph,
-  flags,
+  graph: currentGraph,
+  factsEpoch,
+  onFirstLayout,
+  initialCanvas,
+
   selected,
-  collapsed,
   draft,
   hotLane,
   carriedBy,
   keys,
-  onSelect,
-  onFold,
+  onSelect: select,
+
   onExpand,
   onNotice,
 }: MapProps) {
+  // null means now; otherwise an index into the retained commits, oldest first.
+  const [time, setTime] = useState<number | null>(null);
+  const [playing, setPlaying] = useState(false);
+  // Historical browsing never borrows or changes the saved current canvas projection.
+  const [pastFolds, setPastFolds] = useState(emptyCanvas);
+  const [pastFocus, setPastFocus] = useState<string | null>(null);
+  const [pastOutputs, setPastOutputs] = useState<ReadonlySet<string>>(() => new Set());
+  const history = useMemo(
+    () => ({ commits: [...currentGraph.snapshot.commits].reverse() }),
+    [currentGraph.snapshot.commits],
+  );
+  const moment = time === null ? null : (history.commits[time] ?? null);
+  const previousMoment = useRef<string | null>(null);
+  useEffect(() => {
+    const commit = moment?.hash ?? null;
+    if (previousMoment.current !== commit) select(null);
+    previousMoment.current = commit;
+  }, [moment?.hash, select]);
+  const reads = useMemo(
+    () => new HistoryTrees(api.historyTree),
+    [currentGraph.snapshot.workspace.id],
+  );
+  const [past, setPast] = useState<{
+    commit: string | null;
+    tree: HistoryTree | null;
+    error?: unknown;
+  }>({ commit: null, tree: null });
+  useEffect(
+    () =>
+      reads.select(moment?.hash ?? null, (tree, error) =>
+        setPast({ commit: moment?.hash ?? null, tree, error }),
+      ),
+    [reads, moment?.hash],
+  );
+  const pastTree = past.commit === moment?.hash ? past.tree : null;
+  const graph = useMemo(
+    () => historyViewGraph(currentGraph, time === null ? null : (moment?.hash ?? ""), pastTree),
+    [time === null, moment?.hash, currentGraph, pastTree],
+  );
+  const onSelect = useCallback(
+    (ref: SnapshotRef | null) => {
+      if (time === null || !ref) return select(ref);
+      const node = ref.kind === "node" ? graph.nodes.get(ref.id) : undefined;
+      if (node && moment && pastTree)
+        select(ref, { node, version: { commit: moment.hash, path: node.notePath } });
+    },
+    [time === null, select, graph, moment, pastTree],
+  );
+  const exists = useCallback((id: string) => graph.nodes.has(id), [graph]);
   const [filters, setFilters] = useState<Filters>(() => {
     const stored = readStored<Partial<Filters>>("tent-map-filters-v2", {});
     return {
@@ -920,18 +770,55 @@ function MapContent({
     };
   });
   const [hover, setHover] = useState<string | null>(null);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  // Hover only previews a card's references once the pointer rests on it; passing over cards changes nothing.
-  const hoverSoon = (id: string | null, delay: number) => {
-    clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => setHover(id), delay);
-  };
-  useEffect(() => () => clearTimeout(hoverTimer.current), []);
   const [peek, setPeek] = useState<Peek | null>(null);
+  const handling = useHandling();
+  const [handsPop, setHandsPop] = useState<HandsPop | null>(null);
+  const handsTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(handsTimer.current), []);
   const [keyOpen, setKeyOpen] = useState(false);
-  const [lens, setLens] = useState(false);
+  const [lens, setLensSession] = useState<LensSession | null>(null);
+  const lensReturn = useRef<Viewport | null>(null);
+  const revealTarget = useRef<string | null>(null);
+  const setLens = useSteady((change: boolean | ((on: boolean) => boolean)) => {
+    const on = typeof change === "function" ? change(!!lens) : change;
+    if (on === !!lens) return;
+    setMotion(null);
+    initialView.current = false;
+    fittingAll.current = false;
+    if (on) {
+      if (selected?.kind !== "node" || !visible(selected.id)) return;
+      setPicked(new Set());
+      setLensOutside(new Set());
+      setLensSession(
+        beginLens({
+          selectedId: selected.id,
+          viewport: flow.getViewport(),
+          open: canvas.open,
+          shut: canvas.shut,
+          focus: storedTreeFocus,
+          outputs: storedOutputs,
+          previews: storedPreviews,
+          anchor: foldAnchor.current,
+        }),
+      );
+    } else {
+      focusMove.current = null;
+      foldAnchor.current = lens!.anchor;
+      lensReturn.current = lens!.viewport;
+      revealTarget.current = null;
+      const nextSelection = selectionAfterLens(lens!, selected, visible);
+      if (nextSelection !== selected) onSelect(nextSelection);
+      setLensSession(null);
+    }
+  });
   const [outside, setOutside] = useState(0);
+  const [lensOutside, setLensOutside] = useState<ReadonlySet<string>>(() => new Set());
   const [ready, setReady] = useState(false);
+  const [treeReady, setTreeReady] = useState(false);
+  useEffect(() => {
+    if (treeReady) onFirstLayout();
+  }, [treeReady, onFirstLayout]);
+  const initialView = useRef(true);
   const box = useRef<HTMLDivElement>(null);
   const range = useRef<HTMLInputElement>(null);
   const flow = useReactFlow();
@@ -946,28 +833,6 @@ function MapContent({
   // The tree with switched-off types taken out: everything below lays out, folds and counts on this.
   const shown = useMemo(() => shownTree(graph, visible), [graph, visible]);
 
-  // Cards fold only by hand. Only a change in what is folded makes a new layout.
-  const foldKey = [...collapsed].sort().join();
-  const folded = useMemo(() => collapsed, [foldKey]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ---------- time ----------
-  // null means now; otherwise an index into the commits, oldest first.
-  const [time, setTime] = useState<number | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const history = useMemo(() => {
-    const born = new Map<string, number>();
-    for (const n of graph.snapshot.nodes) {
-      const first = n.history.at(-1);
-      const date = first ? graph.commits.get(first)?.date : undefined;
-      born.set(n.id, date ? Date.parse(date) : 0);
-    }
-    return { commits: [...graph.snapshot.commits].reverse(), born };
-  }, [graph]);
-  const moment = time === null ? null : (history.commits[time] ?? null);
-  const exists = useCallback(
-    (id: string) => !moment || (history.born.get(id) ?? 0) <= Date.parse(moment.date),
-    [history, moment],
-  );
   const touched = useMemo(
     () => new Set(moment?.files.flatMap((f) => (f.ref?.kind === "node" ? [f.ref.id] : [])) ?? []),
     [moment],
@@ -988,7 +853,16 @@ function MapContent({
   const openTime = () => {
     setLens(false);
     setInkTool(null);
-    if (!graph.detailed) {
+    currentAnchor.current = foldAnchor.current;
+    foldAnchor.current = undefined;
+    fittingAll.current = false;
+    setPicked(new Set());
+    setMotion(null);
+    setHandsPop(null);
+    setPastFolds(emptyCanvas());
+    setPastFocus(null);
+    setPastOutputs(new Set());
+    if (!currentGraph.detailed) {
       want();
       setTimeAsked(true);
       return;
@@ -996,11 +870,15 @@ function MapContent({
     setTime(last);
   };
   useEffect(() => {
-    if (!timeAsked || !graph.detailed) return;
+    if (!timeAsked || !currentGraph.detailed) return;
     setTimeAsked(false);
     setTime(last);
-  }, [timeAsked, graph.detailed, last]);
+  }, [timeAsked, currentGraph.detailed, last]);
   const closeTime = () => {
+    foldAnchor.current = currentAnchor.current;
+    focusMove.current = null;
+    fittingAll.current = false;
+    setMotion(null);
     setPlaying(false);
     setTime(null);
   };
@@ -1034,25 +912,31 @@ function MapContent({
   }, [card, draft]);
   const focus = hotLane === null && selected?.kind === "node" ? selected.id : null;
   const lit = useMemo<ReadonlySet<string> | null>(() => {
+    if (time !== null) return null;
     if (hotLane !== null) return carriedBy(hotLane);
     if (sources) return sources.ids;
     if (selected?.kind === "role")
       return new Set([...carriedBy(selected.id), ...graph.neighbours(selected.id)]);
     if (selected?.kind === "node") return graph.neighbours(selected.id);
     return null;
-  }, [hotLane, carriedBy, sources, selected?.kind, selected?.id, graph]);
-  const pins = useMemo(() => new Map(draft.map((id, i) => [id, i + 1] as const)), [draft]);
-  const lensId = lens && selected?.kind === "node" && visible(selected.id) ? selected.id : null;
-  // The lens lays out what a Node links to and what cites it.
+  }, [hotLane, carriedBy, sources, selected?.kind, selected?.id, graph, time === null]);
+  const pins = useMemo(
+    () => new Map((time === null ? draft : []).map((id, i) => [id, i + 1] as const)),
+    [draft, time === null],
+  );
+  const lensId =
+    time === null && lens && selected?.kind === "node" && visible(selected.id) ? selected.id : null;
+  // Details fill in references, declared materials and Cards after the map topology.
+
   useWantDetails(!!lensId && !graph.detailed);
 
   // ---------- drawing ----------
-  // Drawings keep their own map coordinates, so they show only on the tree, not in the lens or a
-  // moment of the past, where cards stand elsewhere. null: drawing is off.
+  // Drawings stay out of relationship reading and past moments. null: drawing is off.
   const canvas = useCanvas(
     graph.snapshot.workspace.id,
     graph.snapshot.workspace.revision,
     onNotice,
+    initialCanvas,
   );
   const ink = canvas;
   const [inkTool, setInkTool] = useState<InkTool | null>(null);
@@ -1089,23 +973,33 @@ function MapContent({
     );
   }, [ink.ink]);
   useEffect(() => {
-    if (selected?.kind !== "node") setLens(false);
-  }, [selected?.kind]);
+    if (lens && (selected?.kind !== "node" || !visible(selected.id))) setLens(false);
+  }, [lens, selected?.kind, selected?.id, visible, setLens]);
 
-  const [openOutputs, setOpenOutputs] = useState<ReadonlySet<string>>(() => new Set());
+  const [storedOutputs, setStoredOutputs] = useState<ReadonlySet<string>>(() => new Set());
+  const openOutputs = time !== null ? pastOutputs : lens ? lens.outputs : storedOutputs;
+  const setOpenOutputs = useSteady((change: (open: ReadonlySet<string>) => ReadonlySet<string>) => {
+    if (time !== null) setPastOutputs(change);
+    else if (lens) setLensSession({ ...lens, outputs: change(lens.outputs) });
+    else setStoredOutputs(change);
+  });
   // Cards showing a preview of their file: kept in this browser only, like what is folded.
   const files = useFiles();
   const previewKey = `tent-map-previews:${graph.snapshot.workspace.id}`;
-  const [previews, setPreviews] = useState<ReadonlySet<string>>(
+  const [storedPreviews, setStoredPreviews] = useState<ReadonlySet<string>>(
     () => new Set(readStored<string[]>(previewKey, [])),
   );
-  useEffect(() => setPreviews(new Set(readStored<string[]>(previewKey, []))), [previewKey]);
+  const previews = lens ? lens.previews : storedPreviews;
+  const setPreviews = useSteady((change: (open: ReadonlySet<string>) => ReadonlySet<string>) => {
+    if (lens) setLensSession({ ...lens, previews: change(lens.previews) });
+    else setStoredPreviews(change);
+  });
   const previewFile = useCallback(
     (id: string) => {
       const n = graph.nodes.get(id);
-      return n ? previewOf(n, files) : null;
+      return time === null && n ? previewOf(n, files) : null;
     },
-    [graph, files],
+    [graph, files, time === null],
   );
   const grown = useCallback(
     (id: string) => {
@@ -1114,27 +1008,199 @@ function MapContent({
     },
     [previews, previewFile],
   );
-  // Cards moved by hand stay where they were left, in the canvas file; the tree is laid out without them.
-  // Moving cards keeps the view still, where another change of layout pins a card instead.
-  const still = useRef(false);
-  const arrange: typeof canvas.arrange = (change) => {
-    still.current = true;
-    canvas.arrange(change);
-  };
-  // Cards picked with the box or with Shift / Ctrl, which move together.
+  // Cards picked with the box or with Shift / Ctrl.
   const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
-  // Cards placed by hand: the tree closes over where they were. Only which cards, not where, lays it out again.
-  const awayKey = Object.keys(canvas.positions).sort().join(" ");
-  const away = useMemo(() => new Set(awayKey ? awayKey.split(" ") : []), [awayKey]);
-  const tree = useMemo(
-    () => treeLayout(graph, folded, openOutputs, grown, shown.kidsOf, away),
-    [graph, folded, openOutputs, grown, shown, away],
+  const [storedTreeFocus, setTreeFocus] = useState<string | null>(null);
+  const treeFocus = time !== null ? pastFocus : lens ? lens.focus : storedTreeFocus;
+  const focusViews = useRef(new Map<string, Viewport>());
+  const focusMove = useRef<Viewport | "fit" | null>(null);
+  const [focusMenu, setFocusMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [reducedMotion, setReducedMotion] = useState(
+    () =>
+      typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
-  // Nothing stands on anything: hand-placed cards hold their place and the tree makes room round them.
+  useEffect(() => {
+    const query = matchMedia("(prefers-reduced-motion: reduce)");
+    const change = () => setReducedMotion(query.matches);
+    query.addEventListener("change", change);
+    return () => query.removeEventListener("change", change);
+  }, []);
+  const enterFocus = useSteady((id: string | null) => {
+    initialView.current = false;
+    if (id === treeFocus) {
+      setFocusMenu(null);
+      return;
+    }
+    if (!lens && time === null) focusViews.current.set(treeFocus ?? CENTRE, flow.getViewport());
+    focusMove.current =
+      lens || time !== null ? "fit" : (focusViews.current.get(id ?? CENTRE) ?? "fit");
+    foldAnchor.current = undefined;
+    setMotion(null);
+    setFocusMenu(null);
+    setPeek(null);
+    setPicked(new Set());
+    if (time !== null) setPastFocus(id);
+    else if (lens) setLensSession({ ...lens, focus: id });
+    else setTreeFocus(id);
+  });
+  useEffect(() => {
+    if (
+      (time === null || pastTree) &&
+      treeFocus &&
+      (!graph.nodes.has(treeFocus) || !visible(treeFocus))
+    ) {
+      const id = [...graph.ancestors(treeFocus)].reverse().find((n) => visible(n.id))?.id ?? null;
+      if (lens) setLensSession({ ...lens, focus: id });
+      else enterFocus(id);
+    }
+  }, [treeFocus, graph, visible, enterFocus, lens, time === null, pastTree]);
+  const foldAnchor = useRef<{ id: string; at: [number, number] } | undefined>(undefined);
+  const currentAnchor = useRef<typeof foldAnchor.current>(undefined);
+  const arrange = useSteady((change: { folds?: Record<string, Fold | null> }) => {
+    if (time !== null) {
+      setPastFolds((file) =>
+        withPending(file, {
+          folds: new Map(Object.entries(change.folds ?? {})),
+          drawings: new Map(),
+        }),
+      );
+      return;
+    }
+    if (lens) setLensSession(foldInLens(lens, change.folds ?? {}));
+    else canvas.arrange(change);
+  });
+  const opened = time !== null ? pastFolds.open : lens ? lens.open : canvas.open;
+  const shut = time !== null ? pastFolds.shut : lens ? lens.shut : canvas.shut;
+  const [defaultDepth, setDefaultDepth] = useState(2);
+  const topicScale = useStore((s) => Math.max(1, 12 / (14 * s.transform[2])));
+  const distant = useStore((s) => 12 * s.transform[2] < 10);
+  const fittingAll = useRef(false);
+  // Two levels show by default; cards opened past them or closed within them are kept in the canvas file.
+  // Only a change in what is closed makes a new layout.
+  const closedNow = useMemo(
+    () => closedOf(shown.kidsOf, opened, shut, treeFocus, defaultDepth),
+    [shown, opened, shut, treeFocus, defaultDepth],
+  );
+  const foldKey = [...closedNow].sort().join();
+  const folded = useMemo(() => closedNow, [foldKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Quantize the view aspect so small resizes do not repeatedly lay out the tree.
+  const [aspect, setAspect] = useState(1.6);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const take = () =>
+      el.clientHeight > 0 &&
+      setAspect(Math.round((clearWidth() / el.clientHeight) * 10) / 10 || 1.6);
+    take();
+    const watch = new ResizeObserver(take);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // How many topics each branch holds, itself included.
+  const branchCounts = useMemo(() => {
+    const out = new Map<string, number>();
+    const count = (id: string): number => {
+      const n = shown.kidsOf(id).reduce((sum, k) => sum + count(k.id), 1);
+      out.set(id, n);
+      return n;
+    };
+    for (const root of shown.kidsOf(null)) count(root.id);
+    return out;
+  }, [shown]);
+  const textWidth = useMemo(() => {
+    const ctx = document.createElement("canvas").getContext("2d")!;
+    const family = getComputedStyle(document.body).fontFamily;
+    return (text: string, size: number, weight = 400) => {
+      ctx.font = `${weight} ${size}px ${family}`;
+      return ctx.measureText(text).width;
+    };
+  }, []);
+  const measureTopic = useCallback(
+    (id: string, depth: number) => {
+      const n = graph.nodes.get(id);
+      const name = n?.name ?? graph.snapshot.workspace.name;
+      const font = depth === 0 ? 18 * topicScale : depth === 1 ? 14 * topicScale : 12;
+      const letters = textWidth(name, font, depth === 0 ? 650 : depth === 1 ? 600 : 400);
+      const count = branchCounts.get(id);
+      // Match the title's actual flex items, including gaps and the widest fold count.
+      // Reserving that count keeps a clicked title fixed while its children open.
+      const parts = [letters];
+      if (n) parts.push(depth < 2 ? (depth === 0 ? 20 : 14) * topicScale : 14);
+      // The map-first response omits materials. Reserve file/error slots before
+      // its full snapshot arrives, including for a currently unknown resource.
+      if (n) parts.push(18);
+      if (shown.kidsOf(id).length)
+        parts.push(
+          Math.max(17, 4 + textWidth(t.map.foldedTopics(Math.max(0, (count ?? 1) - 1)), 10.5)),
+        );
+      if (openOutputs.has(id)) {
+        const results = shown.kidsOf(id).filter((child) => isResult(graph, child.id)).length;
+        if (results)
+          parts.push(
+            17 + textWidth(String(results), font, depth === 0 ? 650 : depth === 1 ? 600 : 400),
+          );
+      }
+      const source = sources?.order?.get(id);
+      if (source)
+        parts.push(
+          Math.max(17, 8 + textWidth(`${source.n}${source.changed ? "*" : ""}`, 10.5, 700)),
+        );
+      if (n)
+        parts.push(
+          Math.max(textWidth(t.map.status.invalid, 10.5), textWidth(t.map.status.missing, 10.5)),
+        );
+      return {
+        w: Math.ceil(
+          parts.reduce((a, b) => a + b, 0) + (parts.length - 1) * 5 + (depth === 0 ? 30 : 11),
+        ),
+        h: Math.max(
+          depth === 0 ? TOPIC.centre : depth === 1 ? TOPIC.first : TOPIC.deeper,
+          Math.ceil(font + (depth === 0 ? 18 : 8)),
+        ),
+      };
+    },
+    [graph, shown, branchCounts, textWidth, openOutputs, sources, topicScale],
+  );
+  const laid = useMemo(
+    () =>
+      arrangeMap({
+        kidsOf: shown.kidsOf,
+        closed: folded,
+        results: (_id, kids) => kids.filter((c) => isResult(graph, c.id)).map((c) => c.id),
+        openOutputs,
+        open: new Set(opened),
+        focus: treeFocus,
+        anchor: foldAnchor.current,
+        measure: measureTopic,
+        grown,
+        aspect,
+        defaultDepth,
+      }),
+    [
+      graph,
+      shown,
+      folded,
+      openOutputs,
+      grown,
+      aspect,
+      treeFocus,
+      opened,
+      measureTopic,
+      defaultDepth,
+    ],
+  );
+  const previousTree = useRef<{ graph: Graph; layout: typeof laid } | null>(null);
   const base = useMemo(
-    () => standClear(placeCards(tree, canvas.positions), away, shown.upOf),
-    [tree, canvas.positions, away, shown],
+    () =>
+      time !== null && previousTree.current
+        ? historyLayout(previousTree.current, graph, laid)
+        : laid,
+    [laid, graph, time === null],
   );
+  useLayoutEffect(() => {
+    // Empty loading/error frames cannot discard the last known coordinates.
+    if (time === null || pastTree) previousTree.current = { graph, layout: base };
+  }, [graph, base, time === null, pastTree]);
 
   // Node cards a drawn line can hold on to, where they stand. It holds only for the look.
   const cardAnchors = useMemo<Anchor[]>(
@@ -1146,32 +1212,63 @@ function MapContent({
         : [],
     [inkShown, base, visible, exists],
   );
-  const drawn = useMemo(
-    () => settle(ink.ink, anchorsOf(ink.ink, cardAnchors)),
-    [ink.ink, cardAnchors],
+  const inkContext = useMemo<InkContext>(
+    () => ({
+      topics: new Map(
+        [...base.placed.values()]
+          .filter((p) => visible(p.id) && exists(p.id))
+          .map((p) => [p.id, [p.x + p.w / 2, p.y]]),
+      ),
+      existingIds: new Set(graph.nodes.keys()),
+      centre: { id: treeFocus ?? CENTRE, at: [base.centre.x + base.centre.w / 2, base.centre.y] },
+    }),
+    [base, graph, visible, exists, treeFocus],
   );
+  const projected = useMemo(() => projectInk(ink.ink, inkContext), [ink.ink, inkContext]);
+  const drawn = useMemo(
+    () => settle(projected.visible, anchorsOf(projected.visible, cardAnchors)),
+    [projected, cardAnchors],
+  );
+  const projectedAll = useMemo(
+    () => withChanges(projected.all, inkChanges(projected.visible, drawn)),
+    [projected, drawn],
+  );
+  const commitGeometry = (changes: Map<string, Ink | null>, picks?: Picks) => {
+    const attached = new Map(
+      [...changes].map(([id, d]) => [id, d ? attachInk(d, inkContext, inkSizes) : null] as const),
+    );
+    ink.commit((all) => withChanges(all, attached), picks);
+  };
   const inkLive = useRef({ settled: drawn, inkPicked, undo: () => {}, redo: () => {} });
   inkLive.current = { settled: drawn, inkPicked, undo: () => undo(), redo: () => redo() };
   /** A change worked out on the drawings as shown, laid over them as they are when it lands. */
-  const inkChange = (next: Ink[], picks?: Picks) => {
+  const inkChange = (next: Ink[], picks?: Picks, geometry = false) => {
     const changes = inkChanges(inkLive.current.settled, next);
-    if (changes.size) ink.commit((all) => withChanges(all, changes), picks);
+    if (changes.size) {
+      if (geometry) commitGeometry(changes, picks);
+      else ink.commit((all) => withChanges(all, changes), picks);
+    }
   };
   // Undo and redo pick again what was picked on the side they step to.
   const undo = () => {
+    if (lens || time !== null) return;
+
     const back = canvas.undo();
     if (back && inking) setInkPicked(new Set(back));
   };
   const redo = () => {
+    if (lens || time !== null) return;
+
     const back = canvas.redo();
     if (back && inking) setInkPicked(new Set(back));
   };
   // A line end held by a card keeps where it last met it, so it stays there when the card is hidden.
   useEffect(() => {
-    if (!ink.ready || inkPreview) return;
-    const met = inkChanges(ink.ink, drawn);
+    if (time !== null || !treeReady || !ink.ready || inkPreview) return;
+    const met = inkChanges(ink.ink, projectedAll);
     if (met.size) ink.keep(met);
-  }, [drawn]);
+  }, [projectedAll, treeReady, ink.ready, inkPreview, time === null]);
+
   const inkAct = (a: InkAct) => {
     const { settled: all, inkPicked: picked } = inkLive.current;
     const list = all.filter((d) => picked.has(d.id));
@@ -1187,7 +1284,7 @@ function MapContent({
       const z = topLayer(all);
       const made = copiesOf(list, 16, (d) => newId(d.kind)).map((d, i) => ({ ...d, z: z + i }));
       const after = made.map((d) => d.id);
-      inkChange([...all, ...made], { before, after });
+      inkChange([...all, ...made], { before, after }, true);
       setInkPicked(new Set(after));
     } else inkChange(restack(all, picked, a), { before, after: before });
   };
@@ -1214,14 +1311,19 @@ function MapContent({
       !value.trim() &&
       inkLive.current.settled.find((d) => d.id === w.id)?.kind === "text";
     const now = [...inkLive.current.inkPicked];
-    ink.commit((all) => withWords(w.fresh ? [...all, w.fresh] : all, w.id, value), {
-      before: w.before ?? now,
-      after: gone ? now.filter((id) => id !== w.id) : now,
-    });
+    ink.commit(
+      (all) =>
+        withWords(w.fresh ? [...all, attachInk(w.fresh, inkContext, inkSizes)] : all, w.id, value),
+      {
+        before: w.before ?? now,
+        after: gone ? now.filter((id) => id !== w.id) : now,
+      },
+    );
   };
   useEffect(() => {
     if (!inking || !keys) return;
     const onKey = (e: KeyboardEvent) => {
+      if (document.body.classList.contains("is-dragging")) return;
       const el = e.target as HTMLElement;
       if (/INPUT|TEXTAREA|SELECT/.test(el.tagName) || el.isContentEditable) return;
       const { settled: all, inkPicked: picked } = inkLive.current;
@@ -1246,7 +1348,7 @@ function MapContent({
         }));
         inkClip.current = made;
         const after = made.map((d) => d.id);
-        inkChange([...all, ...made], { before: [...picked], after });
+        inkChange([...all, ...made], { before: [...picked], after }, true);
         setInkTool("select");
         setInkPicked(new Set(after));
       } else if (mod && (e.key === "]" || e.key === "}") && list.length)
@@ -1264,6 +1366,7 @@ function MapContent({
         inkChange(
           all.map((d) => (picked.has(d.id) ? loosen(moveBy(d, dx, dy), picked) : d)),
           { before: [...picked], after: [...picked] },
+          true,
         );
       } else if (key === "q") setInkLocked((l) => !l);
       else if (key === "h") setInkTool("hand");
@@ -1292,84 +1395,24 @@ function MapContent({
     return () => watch.disconnect();
   }, [inking]);
 
-  // ---------- regions ----------
-  // Like drawings, regions show on the tree only. A card belongs to the region it was put in and stands in.
-  const regionsShown = inkShown;
-  const [naming, setNaming] = useState<string | null>(null);
-  const members = useMemo(
-    () =>
-      regionsShown
-        ? membersOf(
-            canvas.regions,
-            base,
-            (id) => !!canvas.positions[id] && visible(id) && exists(id),
-          )
-        : new Map<string, string[]>(),
-    [regionsShown, canvas.regions, canvas.positions, base, visible, exists],
-  );
-  const regionOfCard = useMemo(
-    () => new Map([...members].flatMap(([r, ids]) => ids.map((id) => [id, r] as const))),
-    [members],
-  );
-  // Code imports come with the map read. Links, materials and Cards between a region's cards come with the
-  // snapshot, which a region of two or more asks for; until then a region shows its tree and code lines.
+  // ---------- facts among the current selection ----------
+  const members = useMemo(() => {
+    if (time !== null) return new Map<string, string[]>();
+    const ids = [...picked].filter((id) => base.placed.has(id) && visible(id) && exists(id));
+    return new Map(ids.length > 1 ? [["selection", ids]] : []);
+  }, [picked, base, visible, exists, time === null]);
   const code: readonly CodeEdge[] = graph.snapshot.modules?.edges ?? NO_CODE;
-  useWantDetails(!graph.detailed && [...members.values()].some((ids) => ids.length > 1));
-  const lines = useMemo(() => {
-    const out = new Map<string, RegionLine[]>();
-    for (const [rid, ids] of members)
-      if (ids.length > 1) out.set(rid, regionLines(graph, ids, shown.upOf, code));
-    return out;
-  }, [members, graph, shown, code]);
-  const linked = useMemo(
-    () => new Set([...lines].flatMap(([rid, l]) => (l.length ? [rid] : []))),
-    [lines],
+  useWantDetails(time === null && !graph.detailed && members.size > 0);
+  // The faces on topics come from the Card list the dock reads, asked for once the first layout is placed.
+  useWantDetails(time === null && !graph.detailed && treeReady);
+  const lines = useMemo(
+    () =>
+      new Map([...members].map(([id, ids]) => [id, selectionLines(graph, ids, shown.upOf, code)])),
+    [members, graph, shown, code],
   );
-  // One layer out: cards on the map, in no region, that Tent relates directly to a region's cards.
-  const [outward, setOutward] = useState<string | null>(null);
-  const closeOutward = useCallback(() => setOutward(null), []);
   const [picturing, setPicturing] = useState(false);
   const [pictureFailed, setPictureFailed] = useState(false);
-  const reach = useMemo(() => {
-    if (!graph.detailed) return new Map<string, ReturnType<typeof reachOut>>();
-    const free = [...base.placed.keys()].filter(
-      (id) => graph.nodes.has(id) && visible(id) && !regionOfCard.has(id),
-    );
-    return new Map(
-      canvas.regions.map((r) => [
-        r.id,
-        reachOut(graph, members.get(r.id) ?? [], free, shown.upOf, code),
-      ]),
-    );
-  }, [canvas.regions, members, base, graph, visible, regionOfCard, shown, code]);
-  const outCount = useMemo(
-    () => new Map([...reach].map(([rid, m]) => [rid, m.size] as const)),
-    [reach],
-  );
-  const outwardRegion = canvas.regions.find((r) => r.id === outward);
-  /** Cards brought in from outside: stacked under the region's cards, the region grown to hold them. */
-  const joinOut = (r: Region, ids: string[]) => {
-    const here = (members.get(r.id) ?? []).flatMap((m) => {
-      const p = base.placed.get(m);
-      return p ? [rectOf(p).x] : [];
-    });
-    // In line with the cards already there.
-    const x = here.length ? Math.min(...here) : r.box[0] + REGION_PAD.side;
-    let top = r.box[1] + r.box[3] - REGION_PAD.bottom + 16;
-    const positions: Record<string, Pt> = {};
-    const rects: Rect[] = [];
-    for (const id of ids) {
-      const p = base.placed.get(id);
-      if (!p) continue;
-      const q = rectOf(p);
-      positions[id] = [x, top];
-      rects.push({ ...q, x, y: top });
-      top += (q.head ?? q.h) + 16;
-    }
-    if (rects.length)
-      arrange({ positions, regions: { [r.id]: { ...r, box: fitBox(r.box, rects) } } });
-  };
-  // Outputs that meet a goal in a region are compared with it by Core, on demand; material changes
+  // Selected outputs that meet a goal are compared with it by Core, on demand; material changes
   // move no revision, so each sync asks again.
   const [held, setHeld] = useState<Answer | null>(null);
   const [asked, setAsked] = useState({ key: "", ask: 0 });
@@ -1405,12 +1448,12 @@ function MapContent({
     return () => {
       current = false;
     };
-  }, [compareKey, graph.snapshot.workspace.revision, flags]);
+  }, [compareKey, graph.snapshot.workspace.revision, factsEpoch]);
   const compared = useMemo(
     () => comparisonsFor(held, asked, compareKey),
     [held, asked, compareKey],
   );
-  // When the rules and outputs in regions last changed or were recorded, for "对照" and "前后"; they
+  // When the selected rules and outputs last changed or were recorded, for "对照" and "前后"; they
   // move only with commits, so each revision asks again.
   const toTime = useMemo(
     () =>
@@ -1465,10 +1508,9 @@ function MapContent({
     const out = new Map<string, Reaction[]>();
     if (!graph.detailed) return out;
     for (const [rid, ids] of members)
-      if (ids.length > 1)
-        out.set(rid, reactionsIn(graph, flags, compared, ids.filter(visible), timed));
+      if (ids.length > 1) out.set(rid, reactionsIn(graph, compared, ids.filter(visible), timed));
     return out;
-  }, [members, graph, flags, compared, visible, timed]);
+  }, [members, graph, compared, visible, timed]);
   // The selected Node's references, marked on the cards at either end instead of drawn as lines.
   const rel = useMemo(() => {
     const n = focus ? graph.nodes.get(focus) : undefined;
@@ -1482,130 +1524,174 @@ function MapContent({
     out.delete(n.id);
     return out;
   }, [graph, focus]);
-  const lensView = useMemo(
-    () => (lensId ? lensLayout(graph, lensId, visible) : null),
-    [graph, lensId, visible],
+  const facts = useMemo(() => (lensId ? lensFacts(graph, lensId) : null), [graph, lensId]);
+  const relationLines = useMemo(
+    () => (facts ? lensLines(graph, facts, base.placed, code) : [...lines.values()].flat()),
+    [graph, facts, base, code, lines],
   );
-  const view = lensView ?? base;
+  const view = base;
 
-  // When what is folded changes, cards folding away stay for one glide and slide into the card that takes
-  // them in; cards coming out start on that card and slide to their places. `from` is the layout before.
-  const [motion, setMotion] = useState<{ from: Layout; to: Layout; run: boolean } | null>(null);
-  const [laidSeen, setLaidSeen] = useState({ base, foldKey });
+  // Departing topics leave first; survivors clear the space before new topics enter.
+  const [motion, setMotion] = useState<{
+    from: typeof base;
+    to: typeof base;
+    phase: TopicPhase;
+  } | null>(null);
+  const [laidSeen, setLaidSeen] = useState({ base, foldKey, treeFocus });
   if (laidSeen.base !== base) {
-    setLaidSeen({ base, foldKey });
-    if (laidSeen.foldKey !== foldKey && !lensView)
-      setMotion({ from: laidSeen.base, to: base, run: false });
+    setLaidSeen({ base, foldKey, treeFocus });
+    if (
+      treeReady &&
+      time === null &&
+      laidSeen.treeFocus === treeFocus &&
+      (laidSeen.foldKey !== foldKey ||
+        [...base.placed.keys()].some((id) => !laidSeen.base.placed.has(id))) &&
+      !lensId &&
+      !lensReturn.current &&
+      !reducedMotion
+    )
+      setMotion({ from: laidSeen.base, to: base, phase: "leave" });
   }
   useEffect(() => {
     if (!motion) return;
-    if (!motion.run) {
-      // Let the cards coming out be drawn on their parent first, then send them off.
-      const t = setTimeout(() => setMotion((m) => (m === motion ? { ...m, run: true } : m)), 40);
-      return () => clearTimeout(t);
-    }
-    const t = setTimeout(() => setMotion((m) => (m === motion ? null : m)), GLIDE.duration + 80);
-    return () => clearTimeout(t);
+    const timer = setTimeout(
+      () =>
+        setMotion((m) =>
+          m !== motion
+            ? m
+            : m.phase === "leave"
+              ? { ...m, phase: "move" }
+              : m.phase === "move"
+                ? { ...m, phase: "enter" }
+                : null,
+        ),
+      TOPIC_PHASE_MS[motion.phase],
+    );
+    return () => clearTimeout(timer);
   }, [motion]);
-  // Where a card folding away or coming out sits at the far end of its slide: on its nearest shown ancestor.
-  const hostOf = useCallback(
-    (id: string, laid: Layout): Placed | null => {
-      for (let up = shown.upOf(id); up; up = shown.upOf(up)) {
-        const p = laid.placed.get(up);
-        if (p) return p;
-      }
-      return null;
-    },
-    [shown],
-  );
-
   // Cards that did not change keep their objects, so a change to one card draws only that card.
   const unchanged = useMemo(() => keepUnchanged<Node>(), []);
+  // Each Card on the cards that show its Nodes: a folded, summed up or switched-off Node passes its Cards
+  // to the nearest card shown above it, so work under a fold stays in sight.
+  const handsAt = useMemo(
+    () =>
+      time !== null
+        ? new Map<string, Handling[]>()
+        : handlingOnTopics(
+            handling,
+            shown.upOf,
+            (id) =>
+              view.placed.has(id) &&
+              visible(id) &&
+              !(distant && (base.topics.get(id)?.depth ?? 0) >= 2),
+            exists,
+          ),
+    [handling, base, view, shown, visible, exists, distant, time === null],
+  );
   const nodes = useMemo<Node[]>(() => {
+    if (!canvas.ready || !treeReady) return NO_NODES;
     const out: Node[] = [];
-    const moving = motion?.to === base ? motion : null;
-    const leaving = moving
-      ? [...moving.from.placed.keys()].filter((id) => !base.placed.has(id))
-      : [];
-    for (const id of new Set([...base.placed.keys(), ...view.placed.keys(), ...leaving])) {
+    const moving = !reducedMotion && motion?.to === base ? motion : null;
+    const stages = moving ? stagedTopics(moving.from, base, moving.phase) : null;
+    const positions = stages
+      ? [...stages.keys()]
+      : [...new Set([...base.placed.keys(), ...view.placed.keys()])];
+    for (const id of positions) {
       if (!visible(id)) continue;
-      const placed = view.placed.get(id) ?? base.placed.get(id);
-      const at = placed ?? moving!.from.placed.get(id)!;
-      // Folding away: at its host now, fading as it slides there. Coming out: on its host until it runs.
-      const host = !placed
-        ? hostOf(id, base)
-        : moving && !moving.run && !moving.from.placed.has(id)
-          ? (hostOf(id, moving.from) ?? hostOf(id, base))
-          : null;
-      if (!placed && !host) continue;
-      const pos = host ? { x: host.x, y: rectOf(host).y } : { x: at.x, y: rectOf(at).y };
-      const fold = lensView ? undefined : base.folds?.get(id);
+      const stage = stages?.get(id);
+      const at = stage?.at ?? view.placed.get(id) ?? base.placed.get(id)!;
+      const pos = { x: at.x, y: rectOf(at).y };
+      const fold = base.folds?.get(id);
       out.push({
         // Top-left position computed here: an origin offset would wait for measurement and move the card twice.
         id,
         type: "node",
         position: pos,
+        width: at.w,
+        height: at.h,
         draggable: false,
-        // Cards outside the lens, or not yet written at the chosen time, keep their place invisibly.
+        // Topics not yet written at the chosen time keep their place invisibly.
         // Cards take their own drags, so only blank space moves the map.
-        className: host
-          ? "is-tucked nopan"
-          : view.placed.has(id) && exists(id)
-            ? "nopan"
-            : "is-away nopan",
+        className: `${stage && stage.appearance !== "shown" ? `is-${stage.appearance} ` : ""}${view.placed.has(id) && exists(id) ? "nopan" : stage?.appearance === "leaving" ? "nopan" : "is-away nopan"}`,
         data: {
           graph,
+          topic: base.topics.get(id) ?? { depth: 1, side: 1, branch: id },
+          head: at.head ?? at.h,
+          branchColor: branchColor(base.topics.get(id)?.branch ?? id),
           id,
           h: at.h,
           w: at.w,
           preview: (() => {
-            const file = lensView ? null : previewFile(id);
+            const file = previewFile(id);
             return file ? { file, open: previews.has(id) && !!at.head } : null;
           })(),
           top: (at.head ?? at.h) >= CARD.top - 2,
-          under: (() => {
-            const ids = folded.has(id) ? underIds(shown.kidsOf, id) : [];
-            return ids.length
-              ? { n: ids.length, behind: ids.filter((u) => flags[u]?.behind).length }
-              : null;
-          })(),
           fold: fold
             ? { ids: fold, open: false }
-            : !lensView && openOutputs.has(id)
+            : openOutputs.has(id)
               ? {
                   ids: shown.kidsOf(id).flatMap((c) => (isResult(graph, c.id) ? [c.id] : [])),
                   open: true,
                 }
               : null,
-          rel: lensView ? null : (rel.get(id) ?? null),
+          rel: lensId ? null : (rel.get(id) ?? null),
           selected: selected?.id === id,
           picked: picked.has(id),
           touched: touched.has(id),
-          dim: !lensView && !!lit && id !== focus && !lit.has(id),
+          dim: facts ? !facts.ids.has(id) : !!lit && id !== focus && !lit.has(id),
           folded: folded.has(id) ? descendants(shown.kidsOf, id) : 0,
           kids: shown.kidsOf(id).length,
           pin: pins.get(id) ?? 0,
           src: sources?.order?.get(id) ?? null,
+          hands: handsAt.has(id) ? handsOf(handsAt.get(id)!) : null,
         },
       });
     }
-    for (const l of view.labels)
-      out.push({
-        id: l.id,
-        type: "label",
-        position: { x: l.x, y: l.y },
-        draggable: false,
-        selectable: false,
-        data: { text: l.text },
-      });
+    {
+      const outline = moving?.phase === "leave" ? moving.from : base;
+      if (!treeFocus)
+        out.push({
+          id: CENTRE,
+          type: "centre",
+          position: { x: outline.centre.x, y: rectOf(outline.centre).y },
+          width: base.centre.w,
+          height: base.centre.h,
+          draggable: false,
+          selectable: false,
+          data: { name: graph.snapshot.workspace.name, w: base.centre.w, h: base.centre.h },
+        });
+      for (const item of outline.summaries)
+        out.push({
+          id: item.at.id,
+          type: "summary",
+          className:
+            moving &&
+            moving.phase !== "leave" &&
+            !moving.from.summaries.some((s) => s.at.id === item.at.id)
+              ? `is-${moving.phase === "move" ? "waiting" : "entering"}`
+              : undefined,
+          position: { x: item.at.x, y: rectOf(item.at).y },
+          draggable: false,
+          selectable: false,
+          data: {
+            kind: item.kind,
+            parent: item.parent,
+            count: item.count,
+            color: branchColor(item.topic.branch),
+          },
+        });
+    }
     return unchanged(out);
   }, [
+    canvas.ready,
+    treeReady,
     graph,
     base,
     view,
-    lensView,
+    lensId,
+    facts,
     motion,
-    hostOf,
+    reducedMotion,
     openOutputs,
     rel,
     visible,
@@ -1618,21 +1704,57 @@ function MapContent({
     folded,
     pins,
     sources,
-    flags,
     previewFile,
     previews,
     shown,
-    canvas.regions,
+    handsAt,
+    treeFocus,
   ]);
 
-  const strays = useRef(new Map<string, Stray>());
-  const later = useRef<(() => Stray)[]>([]);
-  const [rerouted, setRerouted] = useState(0);
-  const routed = useRef<{ view: typeof view; key: string; routes: Map<string, Route> } | null>(
-    null,
+  const relationObstacles = useMemo(
+    () =>
+      [...view.placed.values()]
+        .filter((p) => graph.nodes.has(p.id) && visible(p.id) && exists(p.id))
+        .map(rectOf),
+    [view, graph, visible, exists],
   );
+  const selectionRoutes = useMemo(() => {
+    const routes = new Map<string, { tip: string; route: ReturnType<typeof selectionPath> }>();
+    for (const l of relationLines) {
+      const a = view.placed.get(l.from),
+        b = view.placed.get(l.to);
+      if (!a || !b) continue;
+      const tip =
+        l.kind === "material"
+          ? t.map.relations.material(l.files ?? [])
+          : l.kind === "code"
+            ? t.map.relations.code(l.imports ?? 0)
+            : l.kind === "card"
+              ? t.map.relations.card(l.cards ?? [])
+              : t.map.relations[l.kind];
+      routes.set(`${l.kind}:${l.from}>${l.to}`, {
+        tip,
+        route: selectionPath(
+          rectOf(a),
+          rectOf(b),
+          l.kind,
+          relationObstacles,
+          1,
+          textWidth(tip, 12.5, 500),
+        ),
+      });
+    }
+    return routes;
+  }, [view, relationObstacles, relationLines, textWidth]);
+
   const unchangedEdges = useMemo(() => keepUnchanged<Edge>(), []);
+  // The layout owns tree lines; selected and hovered facts are drawn independently.
+  const treeLines = useMemo(
+    () => new Map(base.lines.map((l) => [l.id, l.points] as const)),
+    [base],
+  );
   const edges = useMemo<Edge[]>(() => {
+    if (!canvas.ready || !treeReady) return NO_EDGES;
     const out: Edge<LinkData>[] = [];
     const seen = new Set<string>();
     const add = (source: string, target: string, kind: LinkData["kind"]) => {
@@ -1650,11 +1772,13 @@ function MapContent({
         !exists(target)
       )
         return;
-      // The lens shows only the focused Node's own lines. Elsewhere references are marks on the cards, not
-      // lines; the tree keeps its own.
-      if (lensId ? source !== lensId && target !== lensId : kind === "ref") return;
-      const hot = !!lensId || [focus, hover].some((id) => id && (source === id || target === id));
+      const hovered = !!hover && (source === hover || target === hover);
+      // Lens facts use the same dashed arcs as selection facts, over the unchanged tree.
+      if (lensId || ((kind === "ref" || !treeLines.has(key)) && !hovered)) return;
+      const hot =
+        !!lensId || hovered || [focus].some((id) => id && (source === id || target === id));
       seen.add(key);
+      const reference = kind === "ref" || (kind === "tree" && !lensId && !treeLines.has(key));
       out.push({
         id: key,
         source,
@@ -1664,9 +1788,56 @@ function MapContent({
         interactionWidth: 0,
         sourceHandle: "out",
         targetHandle: "in",
-        data: { kind, hot, dim: !lensId && !!lit && !hot, from: rectOf(a), to: rectOf(b) },
+        data: {
+          kind: reference ? "ref" : kind,
+          hot,
+          dim: !lensId && !!lit && !hot,
+          from: rectOf(a),
+          to: rectOf(b),
+          ...(reference
+            ? { route: selectionPath(rectOf(a), rectOf(b), "link", relationObstacles) }
+            : {}),
+          ...(treeLines.has(key) ? { points: treeLines.get(key) } : {}),
+        },
       });
     };
+
+    for (const line of base.lines) {
+      if (
+        (graph.nodes.has(line.source) && !exists(line.source)) ||
+        (graph.nodes.has(line.target) && !exists(line.target))
+      )
+        continue;
+      const target =
+        base.topics.get(line.target) ?? base.summaries.find((s) => s.at.id === line.target)?.topic;
+      const from = base.placed.get(line.source) ?? base.centre;
+      const to =
+        base.placed.get(line.target) ?? base.summaries.find((s) => s.at.id === line.target)?.at;
+      if (!to) continue;
+      seen.add(line.id);
+      out.push({
+        id: line.id,
+        source: line.source,
+        target: line.target,
+        type: "link",
+        focusable: false,
+        interactionWidth: 0,
+        sourceHandle: "out",
+        targetHandle: "in",
+        data: {
+          kind: "tree",
+          hot: false,
+          dim: facts
+            ? !facts.ids.has(line.target) || !facts.ids.has(line.source)
+            : !!lit && !lit.has(line.target),
+          from: rectOf(from),
+          to: rectOf(to),
+          points: line.points,
+          color: branchColor(target?.branch ?? line.target),
+          weight: target?.depth === 1 ? 2.5 : 1.5,
+        },
+      });
+    }
     for (const n of graph.snapshot.nodes) {
       const up = visible(n.id) ? shown.upOf(n.id) : null;
       if (up) add(up, n.id, "tree");
@@ -1677,157 +1848,33 @@ function MapContent({
           add(n.id, l.ref.id, "ref");
       for (const m of n.materials) if (m.kind === "node" && m.id) add(n.id, m.id, "ref");
     }
-    // References find their way round the cards on the map now.
-    const cards = [...view.placed.values()].filter((p) => visible(p.id) && exists(p.id));
-    const refs = out.filter((e) => e.data!.kind === "ref");
-    // A tree line to a card placed by hand, but not from one to what it carries, or one whose elbow would
-    // pass through a card, goes round the cards between its ends, each line on its own and kept while those
-    // cards stay. Among many cards the way is worked out just after the map is drawn, the elbow standing in
-    // meanwhile; past a crowd it keeps the elbow, rather than hold the map up.
-    if (!lensId) {
-      const kept = new Map<string, Stray>();
-      const boxes = cards.map(rectOf);
-      const wait: (() => Stray)[] = [];
-      // Lines a way round should not run down: every tree trunk, and each way as it is found; a card's
-      // own trunk is its lines' to share.
-      const runs: (Run & { by: string })[] = out.flatMap((e) => {
-        if (e.data!.kind !== "tree" || away.has(e.target)) return [];
-        const { mid, sy, ty } = elbowOf(e.data!.from, e.data!.to);
-        return [{ x: mid, y1: sy, y2: ty, by: e.source }];
-      });
-      const ran = (by: string, route?: Route) => {
-        const pts = route?.points ?? [];
-        for (let i = 1; i < pts.length; i++)
-          if (pts[i]!.x === pts[i - 1]!.x)
-            runs.push({ x: pts[i]!.x, y1: pts[i - 1]!.y, y2: pts[i]!.y, by });
-      };
-      for (const e of out) {
-        if (e.data!.kind !== "tree") continue;
-        const { from, to } = e.data!;
-        const stray =
-          away.has(e.target) ||
-          (away.has(e.source) && !base.islands?.get(e.source)?.includes(e.target));
-        if (!stray && !elbowCrosses(from, to, boxes)) continue;
-        // The cards round its ends and round the way it went last; a way that strays past them is found
-        // again with the cards it passed, until it keeps within them.
-        const around = (pts: Route["points"]) => {
-          const xs = [from.x, from.x + from.w, to.x, to.x + to.w, ...pts.map((p) => p.x)],
-            ys = [from.y, from.y + from.h, to.y, to.y + to.h, ...pts.map((p) => p.y)];
-          const x1 = Math.min(...xs) - STRAY_PAD,
-            x2 = Math.max(...xs) + STRAY_PAD,
-            y1 = Math.min(...ys) - STRAY_PAD,
-            y2 = Math.max(...ys) + STRAY_PAD;
-          return boxes.filter((r) => r.x < x2 && r.x + r.w > x1 && r.y < y2 && r.y + r.h > y1);
-        };
-        const keyOf = (near: Rect[]) =>
-          [from, to, ...near].map((r) => `${r.x},${r.y},${r.w},${r.h}`).join(" ");
-        const was = strays.current.get(e.id);
-        const first = around(was?.route?.points ?? []);
-        if (first.length > STRAY_CROWD) {
-          // Past the crowd it keeps its elbow, its trunk moved over off any other line it would run down.
-          const { mid, sy, ty } = elbowOf(from, to);
-          const lo = Math.min(sy, ty),
-            hi = Math.max(sy, ty);
-          const bend = BENDS.find((b) =>
-            runs.every(
-              (r) =>
-                r.by === e.source ||
-                Math.abs(r.x - (mid - GAP / 2 + b)) >= 12 ||
-                Math.max(r.y1, r.y2) <= lo ||
-                Math.min(r.y1, r.y2) >= hi,
-            ),
-          );
-          const b = bend ?? GAP / 2;
-          if (b !== GAP / 2) e.data!.bend = b;
-          runs.push({ x: mid - GAP / 2 + b, y1: sy, y2: ty, by: e.source });
-          continue;
-        }
-        const key = keyOf(first);
-        if (was?.key === key) {
-          kept.set(e.id, was);
-          e.data!.route = was.route;
-          ran(e.source, was.route);
-          continue;
-        }
-        // Each way found joins the lines the next one keeps off, put-off ways included.
-        const find = (): Stray => {
-          const others = runs.filter((r) => r.by !== e.source);
-          const keep = (got: Stray) => (ran(e.source, got.route), got);
-          let near = first;
-          for (let tries = 0; tries < 5; tries++) {
-            // Within one column, round the left side when the right is shut.
-            const found =
-              routeLinks(near, [{ id: e.id, from, to, loop: 1 }], others).get(e.id) ??
-              routeLinks(near, [{ id: e.id, from, to, loop: -1 }], others).get(e.id);
-            // The cards it passed join the ones it went round, so each try sees more, never fewer.
-            const wider = [...new Set([...near, ...around(found?.points ?? [])])];
-            if (wider.length === near.length || wider.length > STRAY_CROWD || tries === 4)
-              return keep({ id: e.id, key: keyOf(around(found?.points ?? [])), route: found });
-            near = wider;
-          }
-          return keep({ id: e.id, key });
-        };
-        if (first.length > STRAY_NOW) {
-          wait.push(find);
-          continue;
-        }
-        const got = find();
-        kept.set(e.id, got);
-        e.data!.route = got.route;
-      }
-      strays.current = kept;
-      later.current = wait;
-    }
-    // Hover and focus only restyle lines, so the same references over the same cards keep their routes.
-    const key = [...cards.map((p) => p.id), "|", ...refs.map((e) => e.id)].join(" ");
-    if (routed.current?.view !== view || routed.current.key !== key)
-      routed.current = {
-        view,
-        key,
-        routes: routeLinks(
-          cards.map(rectOf),
-          refs.map((e) => ({
-            id: e.id,
-            from: e.data!.from,
-            to: e.data!.to,
-            // Within one column a reference goes round on the side free of tree lines: the outer side in the
-            // lens, the left of top-level cards, otherwise the right.
-            loop: (lensId ? e.data!.from.x < 0 : !shown.upOf(e.source)) ? -1 : 1,
-          })),
-        ),
-      };
-    for (const e of refs) e.data!.route = routed.current.routes.get(e.id);
     // Lines that matter now draw last, above the rest.
     const sorted: Edge[] = out.sort((x, y) => Number(x.data!.hot) - Number(y.data!.hot));
-    if (lensId) return unchangedEdges(sorted);
-    for (const l of [...lines.values()].flat()) {
+    for (const l of relationLines) {
       const a = view.placed.get(l.from),
         b = view.placed.get(l.to);
       if (!a || !b) continue;
-      const tip =
-        l.kind === "material"
-          ? t.map.region.line.material(l.files ?? [])
-          : l.kind === "code"
-            ? t.map.region.line.code(l.imports ?? 0)
-            : l.kind === "card"
-              ? t.map.region.line.card(l.cards ?? [])
-              : t.map.region.line[l.kind];
+      const routed = selectionRoutes.get(`${l.kind}:${l.from}>${l.to}`)!;
       sorted.push({
-        id: `region:${l.kind}:${l.from}>${l.to}`,
+        id: `selection:${l.kind}:${l.from}>${l.to}`,
         source: l.from,
         target: l.to,
-        type: "region",
+        type: "selection",
         focusable: false,
         interactionWidth: 0,
         sourceHandle: "out",
         targetHandle: "in",
-        data: { kind: l.kind, from: rectOf(a), to: rectOf(b), tip },
+        data: { kind: l.kind, from: rectOf(a), to: rectOf(b), ...routed },
       });
     }
     return unchangedEdges(sorted);
   }, [
+    canvas.ready,
+    treeReady,
     graph,
     view,
+    base,
+    facts,
     lensId,
     visible,
     shown,
@@ -1835,117 +1882,11 @@ function MapContent({
     focus,
     lit,
     hover,
-    away,
-    base.islands,
-    lines,
-    rerouted,
+    treeLines,
+    relationLines,
+    selectionRoutes,
+    relationObstacles,
   ]);
-  // The ways put off while the map was drawn, found a few at a time between frames and kept for the lines
-  // to take up once all are found.
-  useEffect(() => {
-    const wait = [...later.current];
-    if (!wait.length) return;
-    let t: ReturnType<typeof setTimeout>;
-    const step = () => {
-      const until = performance.now() + LATER_SLICE;
-      while (wait.length && performance.now() < until) {
-        const got = wait.shift()!();
-        strays.current.set(got.id, got);
-      }
-      if (wait.length) t = setTimeout(step, 0);
-      else setRerouted((n) => n + 1);
-    };
-    t = setTimeout(step, 0);
-    return () => clearTimeout(t);
-  }, [edges]);
-
-  // The gathered map's names for every band, laid out only once the map gathers; the zoom only picks which show. A Node at the gathered depth is
-  // named when its branch leaves room for the name before the next one below; a card moved by hand is not
-  // where its branch is, so its branch is measured without it.
-  const layLabels = useCallback(() => {
-    const out: Label[] = [];
-    if (lensId) return out;
-    const on = (id: string) => view.placed.has(id) && visible(id) && exists(id);
-    const branch = new Map<string, string[]>();
-    const under = (id: string): string[] => {
-      let ids = branch.get(id);
-      if (!ids) {
-        ids = shown.kidsOf(id).flatMap((k) => [...(on(k.id) ? [k.id] : []), ...under(k.id)]);
-        branch.set(id, ids);
-      }
-      return ids;
-    };
-    // Its marks count every card it stands for, itself and all under it, drawn or folded away.
-    const counted = new Map<string, { behind: number; ahead: number }>();
-    const count = (id: string): { behind: number; ahead: number } => {
-      let c = counted.get(id);
-      if (!c) {
-        c = { behind: flags[id]?.behind ? 1 : 0, ahead: flags[id]?.ahead ? 1 : 0 };
-        for (const k of shown.kidsOf(id)) {
-          const d = count(k.id);
-          c.behind += d.behind;
-          c.ahead += d.ahead;
-        }
-        counted.set(id, c);
-      }
-      return c;
-    };
-    // Names measured as the band draws them, in map units: wide letters a full size, narrow ones a little over half.
-    const ems = (text: string) =>
-      [...text].reduce((w, c) => w + (c.charCodeAt(0) > 0x2e7f ? 1 : 0.58), 0);
-    GATHER.forEach(({ depth: g, z }, band) => {
-      const taken: Rect[] = [];
-      const want: (Label & { depth: number; box: Rect })[] = [];
-      for (const p of view.placed.values()) {
-        const n = graph.nodes.get(p.id);
-        if (!n || n.depth > g || !on(p.id)) continue;
-        const rect = rectOf(p);
-        const ids = n.depth === g ? under(p.id) : [];
-        const stay = [
-          rect,
-          // Cards placed by hand on their own stand apart; those carried with a card still count.
-          ...ids.filter((u) => !away.has(u)).map((u) => rectOf(view.placed.get(u)!)),
-        ];
-        const top = Math.min(...stay.map((r) => r.y)),
-          bottom = Math.max(...stay.map((r) => r.y + r.h));
-        if (n.depth === g && (bottom - top) * z < 18) continue;
-        const label = {
-          id: p.id,
-          name: n.name,
-          band,
-          x: rect.x,
-          y: n.depth === g ? (top + bottom) / 2 : rect.y + rect.h / 2,
-          under: ids.length,
-          ...count(p.id),
-        };
-        // A mark is its triangle and its count.
-        const mark = (n: number) => (n ? 8 + 13 + 13 * 0.6 * String(n).length : 0);
-        const w =
-          (6 +
-            14 * ems(label.name) +
-            (label.under ? 8 + 13 * 0.6 * String(label.under).length : 0) +
-            mark(label.behind) +
-            mark(label.ahead)) /
-          z;
-        const h = 22 / z;
-        want.push({ ...label, depth: n.depth, box: { x: label.x, y: label.y - h / 2, w, h } });
-      }
-      // Shallower names first, then the ones over more; a name that would cross one already placed is left out.
-      want.sort((a, b) => a.depth - b.depth || b.under - a.under);
-      for (const { depth: _, box, ...label } of want) {
-        if (
-          taken.some(
-            (t) =>
-              box.x < t.x + t.w && t.x < box.x + box.w && box.y < t.y + t.h && t.y < box.y + box.h,
-          )
-        )
-          continue;
-        taken.push(box);
-        out.push(label);
-      }
-    });
-    return out;
-  }, [view, away, graph, visible, exists, shown, flags, lensId]);
 
   // ---------- viewport ----------
   /** Width the map can actually show: on narrow screens the details panel floats over its right side. */
@@ -1959,37 +1900,66 @@ function MapContent({
         : 0;
     return el.clientWidth - over;
   }, []);
+  /** Screen rectangles occupied by persistent floating controls, relative to the map. */
+  const coveredRects = useCallback((): Rect[] => {
+    const el = box.current;
+    if (!el) return [];
+    const outer = el.getBoundingClientRect();
+    return [
+      ...document.querySelectorAll<HTMLElement>(
+        ".stage .roles > .dock, .map > .maptools, .map > .inktools, .map > .ink-style, .map > .timebar, .map > .map-hint, .map > .map-lens, .map > .map-selection-reaction, .map > .map-focus-path",
+      ),
+    ].flatMap((panel) => {
+      const r = panel.getBoundingClientRect();
+      if (!r.width || !r.height) return [];
+      return [
+        { x: r.left - outer.left - 8, y: r.top - outer.top - 8, w: r.width + 16, h: r.height + 16 },
+      ];
+    });
+  }, []);
+  const clearArea = useCallback(
+    (outline: { w: number; h: number }) => {
+      const el = box.current;
+      return clearRect(
+        {
+          x: PAD.left + 1,
+          y: PAD.top,
+          w: Math.max(1, clearWidth() - PAD.left - PAD.right - 2),
+          h: Math.max(1, (el?.clientHeight ?? 0) - PAD.top - PAD.bottom),
+        },
+        coveredRects(),
+        outline,
+      );
+    },
+    [clearWidth, coveredRects],
+  );
   const inView = useCallback(
     (r: Rect, margin = 12) => {
       const el = box.current;
       if (!el) return true;
       const v = flow.getViewport();
+      const painted = {
+        x: r.x * v.zoom + v.x,
+        y: r.y * v.zoom + v.y,
+        w: r.w * v.zoom,
+        h: r.h * v.zoom,
+      };
       return (
         r.x * v.zoom + v.x >= margin &&
         r.y * v.zoom + v.y >= margin &&
         (r.x + r.w) * v.zoom + v.x <= clearWidth() - margin &&
-        (r.y + r.h) * v.zoom + v.y <= el.clientHeight - PAD.bottom + 36 - margin
+        (r.y + r.h) * v.zoom + v.y <= el.clientHeight - PAD.bottom + 36 - margin &&
+        !coveredRects().some(
+          (c) =>
+            painted.x < c.x + c.w &&
+            painted.x + painted.w > c.x &&
+            painted.y < c.y + c.h &&
+            painted.y + painted.h > c.y,
+        )
       );
     },
-    [flow, clearWidth],
+    [flow, clearWidth, coveredRects],
   );
-  /** The part of the map in sight, in map units: clear of the panel, the legend above and the tools below. */
-  const seenArea = (): Rect | null => {
-    const el = box.current;
-    if (!el) return null;
-    const v = flow.getViewport();
-    const left = 16,
-      top = SEEN_TOP,
-      right = clearWidth() - 16,
-      bottom = el.clientHeight - PAD.bottom;
-    if (right <= left || bottom <= top) return null;
-    return {
-      x: (left - v.x) / v.zoom,
-      y: (top - v.y) / v.zoom,
-      w: (right - left) / v.zoom,
-      h: (bottom - top) / v.zoom,
-    };
-  };
   /** Fit map rectangles into the clear area, zooming no further in than `maxZoom` or out than `minZoom`. */
   const fitRects = useCallback(
     (
@@ -2004,68 +1974,217 @@ function MapContent({
         y1 = Math.min(...rects.map((r) => r.y));
       const x2 = Math.max(...rects.map((r) => r.x + r.w)),
         y2 = Math.max(...rects.map((r) => r.y + r.h));
-      const w = clearWidth() - PAD.left - PAD.right,
-        h = el.clientHeight - PAD.top - PAD.bottom;
-      const zoom = fitZoom(x2 - x1, y2 - y1, { w, h }, Math.min(maxZoom, ZOOM.max), minZoom);
+      const area = clearArea({ w: x2 - x1, h: y2 - y1 });
+      const floor = Math.max(ZOOM.min, Math.min(minZoom, area.w / (x2 - x1), area.h / (y2 - y1)));
       void flow.setViewport(
-        {
-          x: PAD.left + w / 2 - ((x1 + x2) / 2) * zoom,
-          y: PAD.top + h / 2 - ((y1 + y2) / 2) * zoom,
-          zoom,
-        },
+        fitViewport(
+          { x: x1, y: y1, w: x2 - x1, h: y2 - y1 },
+          area,
+          Math.min(maxZoom, ZOOM.max),
+          floor,
+        ),
         motion,
       );
     },
-    [flow, clearWidth],
+    [flow, clearArea],
   );
   const viewRects = useCallback(
     (layout: Layout) => [
       ...[...layout.placed.values()].filter((p) => visible(p.id)).map(rectOf),
       ...layout.labels.map((l) => ({ x: l.x, y: l.y, w: CARD.w, h: 20 })),
+      ...(layout === base ? [rectOf(base.centre), ...base.summaries.map((s) => rectOf(s.at))] : []),
     ],
-    [visible],
+    [visible, base],
   );
+  useLayoutEffect(() => {
+    const id = revealTarget.current;
+    if (!lensId || !id) return;
+    revealTarget.current = null;
+    const at = base.placed.get(id);
+    if (!at || !visible(id)) return;
+    fitRects([rectOf(at)], flow.getZoom(), { duration: reducedMotion ? 0 : 180 }, READABLE);
+  }, [base, lensId, visible, fitRects, flow, reducedMotion]);
+  // Restore before paint; the selection effect below also holds this view while the detail panel settles.
+  useLayoutEffect(() => {
+    if (!lens && lensReturn.current) void flow.setViewport(lensReturn.current, { duration: 0 });
+  }, [lens, base, flow]);
 
-  /**
-   * The view the map opens with: everything if it fits at a readable size, else from the top. The fit
-   * button and F ask for everything (`floor` down to the far end), as far out as that takes.
-   */
+  /** Centre the whole visible tree in the area left clear by panels and tools. */
   const overview = useCallback(
-    (motion: { duration: number } = { duration: 400 }, floor = READABLE) => {
+    (motion: { duration: number } = { duration: 400 }, floor = ZOOM.min) => {
       const el = box.current;
-      const rects = [...viewRects(view), ...(regionsShown ? canvas.regions.map(boxRect) : [])];
+      const rects = viewRects(view);
       if (!el || !rects.length) return;
       const x1 = Math.min(...rects.map((r) => r.x)),
         y1 = Math.min(...rects.map((r) => r.y));
       const x2 = Math.max(...rects.map((r) => r.x + r.w)),
         y2 = Math.max(...rects.map((r) => r.y + r.h));
-      const w = clearWidth() - PAD.left - PAD.right,
-        h = el.clientHeight - PAD.top - PAD.bottom;
-      const zoom = Math.min(1, Math.max(Math.min(w / (x2 - x1), h / (y2 - y1)), floor));
+      const area = clearArea({ w: x2 - x1, h: y2 - y1 });
+      const zoom = Math.min(1, Math.max(Math.min(area.w / (x2 - x1), area.h / (y2 - y1)), floor));
       void flow.setViewport(
         {
-          x:
-            (x2 - x1) * zoom <= w
-              ? PAD.left + w / 2 - ((x1 + x2) / 2) * zoom
-              : PAD.left - x1 * zoom,
-          y: (y2 - y1) * zoom <= h ? PAD.top + h / 2 - ((y1 + y2) / 2) * zoom : PAD.top - y1 * zoom,
+          x: area.x + area.w / 2 - ((x1 + x2) / 2) * zoom,
+          y: area.y + area.h / 2 - ((y1 + y2) / 2) * zoom,
           zoom,
         },
         motion,
       );
     },
-    [flow, view, viewRects, clearWidth, regionsShown, canvas.regions],
+    [flow, view, viewRects, clearArea],
   );
+  useLayoutEffect(() => {
+    if (!ready || !focusMove.current) return;
+    const move = focusMove.current;
+    focusMove.current = null;
+    if (move === "fit")
+      fitRects(viewRects(base), 1, { duration: reducedMotion ? 0 : 180 }, READABLE);
+    else void flow.setViewport(move, { duration: reducedMotion ? 0 : 180 });
+  }, [treeFocus, ready, base, flow, fitRects, viewRects, reducedMotion]);
   useEffect(() => {
-    if (ready) overview({ duration: 0 });
-  }, [ready]);
+    if (!focusMenu) return;
+    const close = () => setFocusMenu(null);
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        close();
+      }
+    };
+    addEventListener("pointerdown", close);
+    addEventListener("keydown", esc, true);
+    return () => {
+      removeEventListener("pointerdown", close);
+      removeEventListener("keydown", esc, true);
+    };
+  }, [focusMenu]);
+  useLayoutEffect(() => {
+    if (ready && canvas.ready && initialView.current) {
+      const el = box.current;
+      if (!el) return;
+      const over =
+        selected?.kind === "node"
+          ? graph.ancestors(selected.id).filter((a) => folded.has(a.id))
+          : [];
+      if (over.length) {
+        arrange({ folds: Object.fromEntries(over.map((a) => [a.id, "open"])) });
+        return;
+      }
+      const rects = viewRects(base);
+      const w = Math.max(...rects.map((r) => r.x + r.w)) - Math.min(...rects.map((r) => r.x));
+      const h = Math.max(...rects.map((r) => r.y + r.h)) - Math.min(...rects.map((r) => r.y));
+      const area = clearArea({ w, h });
+      if (defaultDepth > 1 && (w * 0.8 > area.w || h * 0.8 > area.h)) {
+        setDefaultDepth(1);
+        return;
+      }
+      const zoom = Math.max(ZOOM.min, Math.min(1, area.w / w, area.h / h));
+      fitRects(rects, 1, { duration: 0 }, 0.8);
+      // Font compensation can change the bounds once when the first zoom is set.
+      // Show the tree only after its saved folds and final measured bounds agree.
+      if (Math.abs(topicScale - Math.max(1, 12 / (14 * zoom))) < 0.0001) {
+        initialView.current = false;
+        setTreeReady(true);
+      }
+    }
+    if (ready && fittingAll.current) overview({ duration: 0 });
+  }, [
+    ready,
+    canvas.ready,
+    overview,
+    base,
+    viewRects,
+    defaultDepth,
+    clearWidth,
+    clearArea,
+    fitRects,
+    topicScale,
+    graph,
+    selected?.kind,
+    selected?.id,
+    folded,
+    arrange,
+  ]);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || !treeReady) return;
+    const wheel = (e: WheelEvent) => {
+      if ((e.target as Element).closest(".panel, .roles, input, textarea, select")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      initialView.current = false;
+      fittingAll.current = false;
+      setPeek(null);
+      const r = el.getBoundingClientRect();
+      void flow.setViewport(
+        wheelViewport(flow.getViewport(), { x: e.clientX - r.left, y: e.clientY - r.top }, e, ZOOM),
+        { duration: 0 },
+      );
+    };
+    el.addEventListener("wheel", wheel, { passive: false, capture: true });
+    return () => el.removeEventListener("wheel", wheel, true);
+  }, [flow, treeReady]);
   useEffect(() => {
     if (!ready) return;
-    const t = setTimeout(() => overview(), 60);
+    const t = setTimeout(() => {
+      if (!initialView.current) overview();
+    }, 60);
     return () => clearTimeout(t);
   }, [filters.types]);
 
-  // When the map's left edge moves (the sidebar folds or opens), shift the view back so cards stay put on screen.
+  // Keep the selected title inside the remaining map area as either side panel changes size.
+  const keepSelectionVisible = useSteady((moved: number) => {
+    const el = box.current;
+    if (!el) return;
+    const v = { ...flow.getViewport() };
+    v.x -= moved;
+    const p = selected?.kind === "node" ? view.placed.get(selected.id) : undefined;
+    if (p) {
+      const r = rectOf(p);
+      const painted = {
+        x: r.x * v.zoom + v.x,
+        y: r.y * v.zoom + v.y,
+        w: r.w * v.zoom,
+        h: r.h * v.zoom,
+      };
+      if (
+        coveredRects().some(
+          (c) =>
+            painted.x < c.x + c.w &&
+            painted.x + painted.w > c.x &&
+            painted.y < c.y + c.h &&
+            painted.y + painted.h > c.y,
+        )
+      ) {
+        void flow.setViewport(
+          uncoverViewport(
+            v,
+            r,
+            {
+              x: 12,
+              y: 12,
+              w: Math.max(1, clearWidth() - 24),
+              h: Math.max(1, el.clientHeight - PAD.bottom - 24),
+            },
+            coveredRects(),
+          ),
+          { duration: 0 },
+        );
+        return;
+      }
+      const width = clearWidth() - 24,
+        height = el.clientHeight - PAD.bottom - 24;
+      const zoom = Math.min(v.zoom, width / r.w, height / r.h);
+      v.zoom = Math.max(ZOOM.min, zoom);
+      const left = r.x * v.zoom + v.x,
+        right = (r.x + r.w) * v.zoom + v.x;
+      const top = r.y * v.zoom + v.y,
+        bottom = (r.y + r.h) * v.zoom + v.y;
+      v.x += left < 12 ? 12 - left : right > width + 12 ? width + 12 - right : 0;
+      v.y += top < 12 ? 12 - top : bottom > height + 12 ? height + 12 - bottom : 0;
+    }
+    const old = flow.getViewport();
+    if (Math.abs(old.x - v.x) > 0.1 || Math.abs(old.y - v.y) > 0.1 || old.zoom !== v.zoom)
+      void flow.setViewport(v, { duration: 0 });
+  });
   useEffect(() => {
     const el = box.current;
     if (!el) return;
@@ -2074,28 +2193,76 @@ function MapContent({
       const now = el.getBoundingClientRect().left,
         moved = now - left;
       left = now;
-      if (Math.abs(moved) < 1) return;
-      const v = flow.getViewport();
-      void flow.setViewport({ ...v, x: v.x - moved });
+      keepSelectionVisible(moved);
     });
     observer.observe(el);
+    const panel = document.querySelector(".detail");
+    if (panel) observer.observe(panel);
     return () => observer.disconnect();
-  }, [flow]);
+  }, [keepSelectionVisible, selected?.id]);
 
-  // Selecting pans only when the card is out of view; the lens frames its whole neighbourhood.
-  const lensReturn = useRef<{ viewport: Viewport; id: string } | null>(null);
+  // A dock opening or growing changes the usable map, even without a side-panel resize.
+  const uncoverTopics = useSteady(() => {
+    if (!treeReady || initialView.current || document.body.classList.contains("is-dragging"))
+      return;
+    // Opening a floating panel preserves the reader's view. Only the selected topic needs uncovering.
+    if (selected?.kind !== "node" || !view.placed.has(selected.id)) return;
+    const covered = coveredRects();
+    const v = flow.getViewport();
+    const rects = [rectOf(view.placed.get(selected.id)!)];
+    const hidden = rects.some((r) => {
+      const x = r.x * v.zoom + v.x,
+        y = r.y * v.zoom + v.y;
+      return covered.some(
+        (c) => x < c.x + c.w && x + r.w * v.zoom > c.x && y < c.y + c.h && y + r.h * v.zoom > c.y,
+      );
+    });
+    if (hidden) {
+      keepSelectionVisible(0);
+    }
+  });
+  useLayoutEffect(() => {
+    const roles = box.current?.closest(".stage")?.querySelector(".roles");
+    let last = "";
+    let dockGeometry = "";
+    const refresh = () => {
+      const dock = roles?.querySelector(".dock")?.getBoundingClientRect();
+      const nextDock = dock ? `${dock.x},${dock.y},${dock.width},${dock.height}` : "";
+      if (nextDock !== dockGeometry) {
+        // A popup is a reading excursion, not another request to fit the whole graph.
+        fittingAll.current = false;
+        dockGeometry = nextDock;
+      }
+      const next = JSON.stringify(coveredRects());
+      if (next === last) return;
+      last = next;
+      uncoverTopics();
+    };
+    const sizes = new ResizeObserver(refresh);
+    const listen = () => {
+      const dock = roles?.querySelector(".dock");
+      if (dock) sizes.observe(dock);
+      refresh();
+    };
+    const children = new MutationObserver(listen);
+    if (roles) children.observe(roles, { childList: true, subtree: true });
+    listen();
+    return () => {
+      sizes.disconnect();
+      children.disconnect();
+    };
+  }, [coveredRects, uncoverTopics, treeReady, inking, timeOpen, picked.size, lensId]);
+
+  // Selecting pans only when the topic is out of view. Entering the lens keeps the view intact.
   useEffect(() => {
     if (!ready) return;
     // Wait for the details panel to take its width.
     const t = setTimeout(() => {
-      if (lensView) {
-        fitRects(viewRects(lensView), 1, GLIDE);
-        return;
-      }
+      if (lensId) return;
       const back = lensReturn.current;
       lensReturn.current = null;
-      if (back && (!selected || back.id === selected.id)) {
-        void flow.setViewport(back.viewport, { duration: 400 });
+      if (back) {
+        void flow.setViewport(back, { duration: 0 });
         return;
       }
       if ((selected?.kind === "role" || selected?.kind === "card") && lit) {
@@ -2144,79 +2311,47 @@ function MapContent({
       }
     }, 140);
     return () => clearTimeout(t);
-  }, [selected?.id, ready, lensId]);
+  }, [selected?.id, ready, lensId, !!lens]);
 
   // Related cards outside the view get a way to bring them in.
   const related = useMemo(() => {
-    if (!lit || lensView) return [];
+    if (!lit || lensId) return [];
     const ids = focus ? [focus, ...lit] : [...lit];
     return ids.flatMap((id) => {
       const p = base.placed.get(id);
       return p && visible(id) ? [rectOf(p)] : [];
     });
-  }, [focus, lit, lensView, base, visible]);
-  const countOutside = useCallback(
-    () => setOutside(related.filter((r) => !inView(r)).length),
-    [related, inView],
-  );
+  }, [focus, lit, lensId, base, visible]);
+  const countOutside = useCallback(() => {
+    setOutside(related.filter((r) => !inView(r)).length);
+    const ids = [...(facts?.ids ?? [])].filter((id) => {
+      const at = base.placed.get(id);
+      return id !== lensId && at && !inView(rectOf(at));
+    });
+    setLensOutside((old) =>
+      old.size === ids.length && ids.every((id) => old.has(id)) ? old : new Set(ids),
+    );
+  }, [related, inView, facts, base, lensId]);
   useEffect(() => {
     const t = setTimeout(countOutside, 600);
     return () => clearTimeout(t);
   }, [countOutside]);
 
-  // When branches fold or unfold, the card you acted on (or the one nearest the middle) stays put on screen.
-  const foldAnchor = useRef<string | null>(null);
-  const prevBase = useRef(base);
-  useEffect(() => {
-    const before = prevBase.current;
-    prevBase.current = base;
-    const el = box.current;
-    let anchor = foldAnchor.current;
-    foldAnchor.current = null;
-    if (still.current) {
-      still.current = false;
-      return;
-    }
-    if (before === base || !ready || lensView || !el) return;
-    const v = flow.getViewport();
-    if (!anchor || !before.placed.has(anchor) || !base.placed.has(anchor)) {
-      const at = { x: el.clientWidth / 2, y: el.clientHeight / 2 };
-      const cx = (at.x - v.x) / v.zoom,
-        cy = (at.y - v.y) / v.zoom;
-      let best = Infinity;
-      for (const p of before.placed.values()) {
-        const d = Math.hypot(p.x + CARD.w / 2 - cx, p.y - cy);
-        if (base.placed.has(p.id) && d < best) {
-          best = d;
-          anchor = p.id;
-        }
-      }
-    }
-    const a = anchor ? before.placed.get(anchor) : undefined,
-      b = anchor ? base.placed.get(anchor) : undefined;
-    if (!a || !b) return;
-    // A card folded from off screen (from the tree outline, or scrolled away) is brought in: keeping it
-    // where it was would leave the view on the space its branch used to fill.
-    if (!inView(rectOf(a))) {
-      fitRects([rectOf(b)], v.zoom, GLIDE, v.zoom);
-      return;
-    }
-    if (a.x === b.x && a.y === b.y) return;
-    void flow.setViewport(
-      { x: v.x - (b.x - a.x) * v.zoom, y: v.y - (b.y - a.y) * v.zoom, zoom: v.zoom },
-      GLIDE,
-    );
-  }, [base]);
-
+  const pinTopic = (id: string) => {
+    initialView.current = false;
+    fittingAll.current = false;
+    const at = base.placed.get(id);
+    foldAnchor.current = at ? { id, at: [at.x, at.y] } : undefined;
+  };
   // Cards glide when the layout changes shape; lines wait until they land. The glide must be on in the
   // same render as the new positions, so it is derived rather than set afterwards.
-  const shape = `${lensId}|${foldKey}`;
+  const shape = view;
   const [settled, setSettled] = useState(shape);
-  const morphing = shape !== settled;
+  const morphing = !reducedMotion && shape !== settled;
   useEffect(() => {
-    const t = setTimeout(() => setSettled(shape), 560);
+    const t = setTimeout(() => setSettled(shape), reducedMotion ? 0 : 180);
     return () => clearTimeout(t);
-  }, [shape]);
+  }, [shape, reducedMotion]);
 
   // A short look at a card's summary once the pointer has rested on it.
   useEffect(() => {
@@ -2266,19 +2401,62 @@ function MapContent({
     return () => clearTimeout(t);
   }, [hover, selected?.id]);
 
+  useFloatingPanels(box, [
+    ...picked,
+    ...(hover ? [hover] : []),
+    ...(selected?.kind === "node" ? [selected.id] : []),
+  ]);
+
+  // ---------- opening and closing ----------
+  /**
+   * Opens a card one level, or closes it; `open` says which, else it turns over. The card stays where it is
+   * on screen. Closing also forgets what was opened under it, so opening it again shows one level.
+   * Closing over the selection selects the closed card.
+   */
+  const fold = (id: string, open?: boolean) => {
+    const opening = open ?? folded.has(id);
+    if (opening !== folded.has(id) || (!opening && !shown.kidsOf(id).length)) return;
+    const top = id === treeFocus || shown.upOf(id) === treeFocus;
+    const folds: Record<string, Fold | null> = {};
+    if (opening) folds[id] = "open";
+    else {
+      folds[id] = top ? "shut" : null;
+      const under = new Set(underIds(shown.kidsOf, id));
+      for (const u of [...opened, ...shut]) if (under.has(u)) folds[u] = null;
+    }
+    pinTopic(id);
+    arrange({ folds });
+    if (
+      !opening &&
+      selected?.kind === "node" &&
+      graph.ancestors(selected.id).some((a) => a.id === id)
+    )
+      onSelect({ kind: "node", id });
+  };
+  // A Node chosen elsewhere, in the tree or a Card, opens the cards over it on the map.
+  useEffect(() => {
+    if (selected?.kind !== "node" || !canvas.ready || !treeReady) return;
+    const over = graph.ancestors(selected.id).filter((a) => folded.has(a.id));
+    if (!over.length) return;
+    pinTopic(selected.id);
+    arrange({
+      folds: Object.fromEntries(over.map((a) => [a.id, "open"])),
+    });
+  }, [selected?.kind, selected?.id, canvas.ready, treeReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ---------- keyboard ----------
   // What the keys act on, current at the moment of the key.
   const live = {
     view,
     selected,
     lensId,
-    collapsed,
+    folded,
+    fold,
     visible,
     shown,
     timeOpen,
     inking,
     picked,
-    positions: canvas.positions,
     overview,
     openTime,
     closeTime,
@@ -2289,21 +2467,12 @@ function MapContent({
   const latest = useRef(live);
   latest.current = live;
   useEffect(() => {
-    if (!keys) return;
+    if (!keys || !treeReady) return;
     const onKey = (e: KeyboardEvent) => {
+      if (document.body.classList.contains("is-dragging")) return;
       const el = e.target as HTMLElement;
-      const {
-        view,
-        selected,
-        lensId,
-        collapsed,
-        visible,
-        shown,
-        timeOpen,
-        inking,
-        picked,
-        positions,
-      } = latest.current;
+      const { view, selected, lensId, folded, fold, visible, shown, timeOpen, inking, picked } =
+        latest.current;
       // While drawing, the keys are the drawing tools'.
       if (inking) return;
       if (e.key === "Escape" && picked.size) {
@@ -2330,6 +2499,7 @@ function MapContent({
       if (el.closest("[role=tree]") && TREE_KEYS.has(e.key)) return;
       if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[zy]$/i.test(e.key)) {
         e.preventDefault();
+        if (lensId) return;
         (e.key.toLowerCase() === "y" || e.shiftKey ? latest.current.redo : latest.current.undo)();
         return;
       }
@@ -2344,27 +2514,28 @@ function MapContent({
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       const act = (f: () => void) => {
         e.preventDefault();
+        initialView.current = false;
+        fittingAll.current = false;
         f();
       };
-      if (key === "l") return node && act(() => setLens((l) => !l));
-      if (key === "f") return act(() => latest.current.overview(undefined, ZOOM.min));
+      if (key === "l") return !timeOpen && node && act(() => setLens((l) => !l));
+      if (key === "f")
+        return act(() => {
+          fittingAll.current = true;
+          latest.current.overview({ duration: 0 }, ZOOM.min);
+        });
+
       if (key === "0") return act(() => void flow.zoomTo(1, ZOOM_NOW));
       if (key === "=" || key === "+") return act(() => void flow.zoomIn(ZOOM_NOW));
       if (key === "-") return act(() => void flow.zoomOut(ZOOM_NOW));
       if (key === "t")
         return act(() => (timeOpen ? latest.current.closeTime() : latest.current.openTime()));
-      if (key === "p") return act(() => setInkTool("select"));
-      if (key === "?") return act(() => setKeyOpen((o) => !o));
-      if (key === "r" && !lensId)
+      if (key === "p") return !timeOpen && act(() => setInkTool("select"));
+      if (key === " " && node && !lensId && !onControl)
         return act(() => {
-          // Back to where the tree puts them: the picked cards, else the selected one; with Shift, all.
-          const back = e.shiftKey ? null : picked.size ? picked : new Set(node ? [node.id] : []);
-          const going = Object.keys(positions).filter((id) => !back || back.has(id));
-          if (going.length)
-            latest.current.arrange({
-              positions: Object.fromEntries(going.map((id) => [id, null])),
-            });
+          if (!e.repeat && shown.kidsOf(node.id).length) fold(node.id);
         });
+      if (key === "?") return act(() => setKeyOpen((o) => !o));
       if (key === "b" && node && !lensId)
         return act(() => {
           const branch = new Set<string>();
@@ -2378,13 +2549,9 @@ function MapContent({
       if ((key === "[" || key === "]") && node && !lensId)
         return act(() => {
           // [ folds the selected card's children, ] opens them.
-          const fold = key === "[";
-          if (
-            fold ? !collapsed.has(node.id) && shown.kidsOf(node.id).length : collapsed.has(node.id)
-          ) {
-            foldAnchor.current = node.id;
-            onFold(node.id, !fold);
-          }
+          const closing = key === "[";
+          if (closing ? !folded.has(node.id) && shown.kidsOf(node.id).length : folded.has(node.id))
+            fold(node.id, !closing);
         });
       if (e.key === "Enter" && !onControl) {
         if (selected) {
@@ -2402,58 +2569,17 @@ function MapContent({
         if (first) onSelect({ kind: "node", id: first.id });
         return;
       }
-      let next: string | null | undefined;
-      if (!lensId && e.key === "ArrowLeft") next = shown.upOf(node.id);
-      if (!lensId && e.key === "ArrowRight") {
-        if (collapsed.has(node.id)) {
-          foldAnchor.current = node.id;
-          onFold(node.id, true);
-          return;
-        }
-        const kids = shown.kidsOf(node.id).flatMap((c) => {
-          const p = view.placed.get(c.id);
-          return p ? [p] : [];
-        });
-        next = kids.sort((a, b) => Math.abs(a.y - here.y) - Math.abs(b.y - here.y))[0]?.id;
-      }
-      next ??= nearest(view, here, dir, visible);
+      const next = nearest(view, here, dir, visible);
       if (next) onSelect({ kind: "node", id: next });
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [keys, graph, onSelect, onFold, onExpand, flow]);
+  }, [keys, treeReady, graph, onSelect, onExpand, flow]);
 
   // ---------- the pointer: dragging empty space picks with a box, dragging a card moves it ----------
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(
     null,
   );
-  // Cards dragged by hand wait, shifted, for the map to draw them where they were dropped.
-  const settling = useRef<HTMLElement[]>([]);
-  useLayoutEffect(() => {
-    const els = settling.current;
-    if (!els.length) return;
-    settling.current = [];
-    // The map draws the new positions a moment after this render; the shift goes as it does.
-    const done = () => els.forEach((el) => (el.style.translate = ""));
-    const watch = new MutationObserver(() => {
-      watch.disconnect();
-      done();
-    });
-    els.forEach((el) => watch.observe(el, { attributes: true, attributeFilter: ["style"] }));
-    const t = setTimeout(() => {
-      watch.disconnect();
-      done();
-    }, 300);
-    return () => clearTimeout(t);
-  }, [base]);
-  // Space held down: the left button moves the map instead.
-  const space = useRef<ReturnType<typeof watchSpace> | null>(null);
-  const spaceDown = useKeyPress("Space");
-  useEffect(() => {
-    const watching = watchSpace(window);
-    space.current = watching;
-    return () => watching.stop();
-  }, []);
   /** Follow a press to its release; `step` hears the distance once it is past a few pixels. */
   const track = (
     e: React.PointerEvent,
@@ -2491,8 +2617,6 @@ function MapContent({
   const cardEl = (id: string) =>
     box.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(id)}"]`) ??
     null;
-  const regionEl = (id: string) =>
-    box.current?.querySelector<HTMLElement>(`.map-region[data-region="${CSS.escape(id)}"]`) ?? null;
   /**
    * The map as it looks, saved as a PNG: the view as it stands, or with cards or drawings picked, the
    * view fitted round them and cut to them, then put back.
@@ -2533,417 +2657,33 @@ function MapContent({
       setPicturing(false);
     }
   };
-  /** The region under a map point: the last drawn wins where regions overlap. */
-  const regionAt = (x: number, y: number) =>
-    regionsShown
-      ? ([...canvas.regions]
-          .reverse()
-          .find(
-            (r) =>
-              x >= r.box[0] &&
-              x <= r.box[0] + r.box[2] &&
-              y >= r.box[1] &&
-              y <= r.box[1] + r.box[3],
-          ) ?? null)
-      : null;
-  /**
-   * Cards let go over a card held long enough: they stack under it, and the two stand in a region,
-   * the one it is in or a new one. A new region takes the spot where the cards are if nothing else is
-   * there, else the free margin left of the tree.
-   */
-  const gather = (onto: string, ids: string[]) => {
-    const at = base.placed.get(onto)!;
-    const head = rectOf(at);
-    let top = head.y + (head.head ?? head.h) + 16;
-    const placed: Record<string, Pt> = {};
-    const rects: Rect[] = [head];
-    for (const id of ids) {
-      const p = base.placed.get(id);
-      if (!p) continue;
-      const r = rectOf(p);
-      placed[id] = [head.x, top];
-      rects.push({ ...r, x: head.x, y: top });
-      top += (r.head ?? r.h) + 16;
-    }
-    const rid = regionOfCard.get(onto);
-    const old = rid ? canvas.regions.find((r) => r.id === rid) : undefined;
-    if (old) {
-      arrange({
-        positions: placed,
-        regions: { [old.id]: { ...old, box: fitBox(old.box, rects) } },
-      });
-      return;
-    }
-    let box = fitBox(null, rects);
-    const taken = (b: Region["box"]) =>
-      [...view.placed.values()].some((p) => {
-        if (p.id === onto || ids.includes(p.id) || !visible(p.id)) return false;
-        const q = rectOf(p);
-        return q.x < b[0] + b[2] && q.x + q.w > b[0] && q.y < b[1] + b[3] && q.y + q.h > b[1];
-      }) ||
-      canvas.regions.some(
-        (r) =>
-          r.box[0] < b[0] + b[2] &&
-          r.box[0] + r.box[2] > b[0] &&
-          r.box[1] < b[1] + b[3] &&
-          r.box[1] + r.box[3] > b[1],
-      );
-    let dx = 0,
-      dy = 0;
-    if (taken(box)) {
-      const left = Math.min(...[...tree.placed.values()].map((p) => p.x));
-      dx = left - 160 - box[2] - box[0];
-      for (let i = 0; i < 40 && taken([box[0] + dx, box[1] + dy, box[2], box[3]]); i++) dy += 80;
-      box = [box[0] + dx, box[1] + dy, box[2], box[3]];
-    }
-    const positions: Record<string, Pt> = { [onto]: cornerOf(at, dx, dy) };
-    for (const [id, [x, y]] of Object.entries(placed)) positions[id] = [x + dx, y + dy];
-    const id = newRegionId();
-    arrange({ positions, regions: { [id]: { id, name: "", box } } });
-    if (!inView(boxRect({ id, name: "", box }))) fitRects([boxRect({ id, name: "", box })], 1);
-  };
-  // Where the robots stand, read once per press: asking the page what is under the pointer on every
-  // move would make it lay out the moving cards each frame.
-  const dock = useRef<DOMRect | null>(null);
-  const overDock = (ev: PointerEvent) => {
-    const r = dock.current;
-    return (
-      !!r &&
-      ev.clientX >= r.left &&
-      ev.clientX <= r.right &&
-      ev.clientY >= r.top &&
-      ev.clientY <= r.bottom
-    );
-  };
   const onPress = (e: React.PointerEvent) => {
+    if (!treeReady) return;
+    initialView.current = false;
+    fittingAll.current = false;
     const el = box.current;
-    dock.current = document.querySelector(".roles")?.getBoundingClientRect() ?? null;
     const target = e.target as HTMLElement;
-    if (e.button !== 0 || !el || inking || lensView || moment || space.current?.held()) return;
+    if (e.button !== 0 || !el || inking || lensId || moment) return;
     if (target.closest("button, a, input, textarea, .panel")) return;
-    const zoom = flow.getZoom();
-    // A region's title moves the region and every card in it.
-    const head = target.closest<HTMLElement>(".map-region-head");
-    if (head) {
-      const rid = head.parentElement!.dataset.region!;
-      const r = canvas.regions.find((g) => g.id === rid);
-      if (!r) return;
-      const ids = members.get(rid) ?? [];
-      const els = [head.parentElement!, ...ids.flatMap((i) => cardEl(i) ?? [])];
-      track(
-        e,
-        (dx, dy, ev) => {
-          // Over the robots, the region's cards go on together as a drag into a Card.
-          if (ids.length && overDock(ev)) {
-            el.classList.remove("is-moving");
-            els.forEach((n) => (n.style.translate = ""));
-            continueDrag(
-              { kind: "node", id: ids[0], ids, from: "map" },
-              { x: ev.clientX, y: ev.clientY },
-            );
-            return false;
-          }
-          el.classList.add("is-moving");
-          setPeek(null);
-          els.forEach((n) => (n.style.translate = `${dx / zoom}px ${dy / zoom}px`));
-        },
-        (moved, ev) => {
-          if (!moved) return;
-          el.classList.remove("is-moving");
-          const dx = (ev.clientX - e.clientX) / zoom,
-            dy = (ev.clientY - e.clientY) / zoom;
-          const [x, y] = cornerOf({ id: rid, x: r.box[0], y: r.box[1], w: 0, h: 0 }, dx, dy);
-          settling.current = els;
-          // Cards hidden by the type switches or a folded branch move with the region too.
-          const held = heldBy(canvas.regions, canvas.positions, base).get(rid) ?? [];
-          arrange({
-            regions: { [rid]: { ...r, box: [x, y, r.box[2], r.box[3]] } },
-            positions: Object.fromEntries(
-              held.map((i) => {
-                const p = base.placed.get(i);
-                return [i, p ? cornerOf(p, dx, dy) : shifted(canvas.positions[i]!, dx, dy)];
-              }),
-            ),
-          });
-        },
-      );
-      return;
-    }
     const card = target.closest<HTMLElement>(".react-flow__node-node");
     if (card) {
       const id = card.dataset.id!;
       const ids = picked.has(id) ? [...picked] : [id];
-      // Placed by hand, each carries the cards laid out under it, short of those placed by hand themselves.
-      const carried: string[] = [];
-      const carry = (i: string) => {
-        if (folded.has(i)) return;
-        for (const { id: c } of shown.kidsOf(i))
-          if (!away.has(c) && !ids.includes(c) && base.placed.has(c) && !carried.includes(c)) {
-            carried.push(c);
-            carry(c);
-          }
-      };
-      ids.forEach(carry);
-      const els = [...ids, ...carried].flatMap((i) => cardEl(i) ?? []);
-      let gone = false;
-      // The card held over, once it has waited long enough; and the region the pointer is over.
-      let over: string | null = null,
-        onto: string | null = null,
-        into: string | null = null;
-      let wait: ReturnType<typeof setTimeout> | undefined;
-      // Cards the dragged ones would react with light up while they move.
-      const glow = regionsShown
-        ? [...view.placed.keys()]
-            .filter(
-              (q) => !ids.includes(q) && visible(q) && ids.some((i) => reacts(graph, flags, i, q)),
-            )
-            .flatMap((q) => cardEl(q) ?? [])
-        : [];
-      const mark = (kind: "join" | "into", id: string | null) => {
-        const was = kind === "join" ? onto : into;
-        if (was === id) return;
-        if (was) (kind === "join" ? cardEl(was) : regionEl(was))?.classList.remove(`is-${kind}`);
-        if (id) (kind === "join" ? cardEl(id) : regionEl(id))?.classList.add(`is-${kind}`);
-        if (kind === "join") onto = id;
-        else into = id;
-      };
-      // While they move, the card under the pointer lines up with the cards near it (Alt lets it go free),
-      // and their lines follow as plain curves; the lines find their way round the cards once they land.
-      const lead = base.placed.get(id);
-      const rest = [...view.placed.values()]
-        .filter(
-          (q) => !ids.includes(q.id) && !carried.includes(q.id) && visible(q.id) && exists(q.id),
-        )
-        .map(rectOf);
-      let snap: [number, number] = [0, 0];
-      const port = el.querySelector<HTMLElement>(".react-flow__viewport");
-      const seen = el.getBoundingClientRect();
-      const top = flow.screenToFlowPosition({ x: seen.left, y: seen.top }),
-        bottom = flow.screenToFlowPosition({ x: seen.right, y: seen.bottom });
-      const guide = (axis: "x" | "y") => {
-        const g = document.createElement("div");
-        g.className = `map-guide is-${axis}`;
-        g.hidden = true;
-        port?.append(g);
-        return g;
-      };
-      const guides = { x: guide("x"), y: guide("y") };
-      const moving = new Set([...ids, ...carried]);
-      const NS = "http://www.w3.org/2000/svg";
-      const sketch = document.createElementNS(NS, "svg");
-      sketch.setAttribute("class", "map-sketch");
-      const linked = edges.flatMap((ed) => {
-        const a = view.placed.get(ed.source),
-          b = view.placed.get(ed.target);
-        if (!a || !b || !(moving.has(ed.source) || moving.has(ed.target))) return [];
-        const line = document.createElementNS(NS, "path");
-        sketch.append(line);
-        return [
-          {
-            ed,
-            a,
-            b,
-            line,
-            real: el.querySelector<SVGElement>(`.react-flow__edge[data-id="${CSS.escape(ed.id)}"]`),
-          },
-        ];
-      });
-      const sketchAt = (mx: number, my: number) => {
-        for (const { ed, a, b, line } of linked) {
-          const sx = a.x + a.w + (moving.has(ed.source) ? mx : 0),
-            sy = a.y + (moving.has(ed.source) ? my : 0),
-            tx = b.x + (moving.has(ed.target) ? mx : 0),
-            ty = b.y + (moving.has(ed.target) ? my : 0);
-          const bend = Math.max(40, Math.abs(tx - sx) / 2);
-          line.setAttribute("d", `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`);
-        }
-      };
-      let sketching = false;
-      const unsketch = () => {
-        sketch.remove();
-        guides.x.remove();
-        guides.y.remove();
-        for (const { real } of linked) if (real) real.style.visibility = "";
-      };
-      const clear = () => {
-        clearTimeout(wait);
-        mark("join", null);
-        mark("into", null);
-        glow.forEach((n) => n.classList.remove("is-react"));
-        unsketch();
-      };
-      track(
+      beginDrag(
         e,
-        (dx, dy, ev) => {
-          el.classList.add("is-moving");
-          setPeek(null);
-          // Over the robots, the cards go on as a drag into a Card instead of moving.
-          if (overDock(ev)) {
-            gone = true;
-            clear();
-            el.classList.remove("is-moving");
-            els.forEach((n) => (n.style.translate = ""));
-            continueDrag(
-              {
-                kind: "node",
-                id,
-                from: "map",
-                ...(ids.length > 1 ? { ids: [id, ...ids.filter((i) => i !== id)] } : {}),
-              },
-              { x: ev.clientX, y: ev.clientY },
-            );
-            return false;
-          }
-          if (!sketching && port) {
-            sketching = true;
-            port.prepend(sketch);
-            for (const { real } of linked) if (real) real.style.visibility = "hidden";
-          }
-          const mx = dx / zoom,
-            my = dy / zoom;
-          snap =
-            lead && !ev.altKey
-              ? snapTo(
-                  { ...rectOf(lead), x: rectOf(lead).x + mx, y: rectOf(lead).y + my },
-                  rest,
-                  8 / zoom,
-                )
-              : [0, 0];
-          const [ax, ay] = snap;
-          if (lead) {
-            const r = rectOf(lead);
-            Object.assign(guides.x.style, {
-              left: `${r.x + mx + ax}px`,
-              top: `${top.y}px`,
-              height: `${bottom.y - top.y}px`,
-              width: `${1 / zoom}px`,
-            });
-            Object.assign(guides.y.style, {
-              top: `${lead.y + my + ay}px`,
-              left: `${top.x}px`,
-              width: `${bottom.x - top.x}px`,
-              height: `${1 / zoom}px`,
-            });
-          }
-          guides.x.hidden = !ax;
-          guides.y.hidden = !ay;
-          els.forEach((n) => (n.style.translate = `${mx + ax}px ${my + ay}px`));
-          sketchAt(mx + ax, my + ay);
-          glow.forEach((n) => n.classList.add("is-react"));
-          if (!regionsShown) return;
-          const p = flow.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
-          const under = [...view.placed.values()].find((q) => {
-            if (ids.includes(q.id) || !visible(q.id) || !exists(q.id)) return false;
-            const r = rectOf(q);
-            return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + (r.head ?? r.h);
-          });
-          if ((under?.id ?? null) !== over) {
-            clearTimeout(wait);
-            mark("join", null);
-            over = under?.id ?? null;
-            if (over) {
-              const held = over;
-              wait = setTimeout(() => mark("join", held), HOLD);
-            }
-          }
-          mark("into", onto ? null : (regionAt(p.x, p.y)?.id ?? null));
+        {
+          kind: "node",
+          id,
+          from: "map",
+          ...(ids.length > 1 ? { ids: [id, ...ids.filter((i) => i !== id)] } : {}),
         },
-        (moved, ev) => {
-          const joining = onto,
-            region = into;
-          clear();
-          if (!moved || gone) return;
-          el.classList.remove("is-moving");
-          settling.current = els;
-          if (joining) return gather(joining, ids);
-          const dx = (ev.clientX - e.clientX) / zoom + snap[0],
-            dy = (ev.clientY - e.clientY) / zoom + snap[1];
-          const dropped = (cx: number, cy: number) =>
-            ids.flatMap((i) => {
-              const p = base.placed.get(i);
-              return p ? [{ i, at: cornerOf(p, dx + cx, dy + cy), r: rectOf(p) }] : [];
-            });
-          // Let go over other cards, they step aside to the nearest free spot, as the map will stand with
-          // the tree closed over where they were; nothing else moves.
-          const at = dropped(0, 0);
-          const lifted = treeLayout(
-            graph,
-            folded,
-            openOutputs,
-            grown,
-            shown.kidsOf,
-            new Set([...away, ...ids]),
-          );
-          const landed = placeCards(lifted, {
-            ...canvas.positions,
-            ...Object.fromEntries(at.map((d) => [d.i, d.at])),
-          });
-          const after = standClear(
-            landed,
-            new Set([...away].filter((a) => !moving.has(a))),
-            shown.upOf,
-          );
-          const going = [
-            ...at.map(({ at: [x, y], r }) => ({ ...r, x, y })),
-            ...carried.flatMap((c) => {
-              const p = landed.placed.get(c);
-              return p ? [rectOf(p)] : [];
-            }),
-          ];
-          const others = [...after.placed.values()]
-            .filter((q) => !moving.has(q.id) && visible(q.id) && exists(q.id))
-            .map(rectOf);
-          // They step aside within sight when there is room there, else wherever is nearest.
-          const sight = seenArea();
-          const [cx, cy] = (sight && clearWithin(going, others, sight)) ?? clearOf(going, others);
-          // Kept where the map will stand them, so nothing jumps once they land.
-          const put = Object.fromEntries(dropped(cx, cy).map((d) => [d.i, d.at]));
-          const stood = standClear(
-            placeCards(lifted, { ...canvas.positions, ...put }),
-            new Set([...away, ...ids]),
-            shown.upOf,
-            sight ? { ids: new Set(Object.keys(put)), box: sight } : undefined,
-          );
-          const positions: Record<string, Pt> = {};
-          const rects: Rect[] = [];
-          for (const i of Object.keys(put)) {
-            const p = stood.placed.get(i)!;
-            positions[i] = cornerOf(p);
-            rects.push(rectOf(p));
-          }
-          // A card placed by hand that lost cards to the drop re-centres over the rest; it moves instead,
-          // so its topmost card, and everything above the gap, stays where it was.
-          for (const [held, under] of base.islands ?? []) {
-            if (moving.has(held) || !under.some((u) => moving.has(u))) continue;
-            const rest = under.filter((u) => !moving.has(u) && stood.placed.has(u));
-            const first = rest.sort((a, b) => base.placed.get(a)!.y - base.placed.get(b)!.y)[0];
-            const was = first && base.placed.get(first),
-              now = first && stood.placed.get(first),
-              p = stood.placed.get(held);
-            if (was && now && p) positions[held] = cornerOf(p, was.x - now.x, was.y - now.y);
-          }
-          const r = region ? canvas.regions.find((g) => g.id === region) : undefined;
-          // Where they came to rest out of sight, the view follows just far enough to show them.
-          if (sight && !rects.every((q) => within(q, sight))) {
-            const v = flow.getViewport();
-            const x1 = Math.min(...rects.map((q) => q.x)),
-              x2 = Math.max(...rects.map((q) => q.x + q.w)),
-              y1 = Math.min(...rects.map((q) => q.y)),
-              y2 = Math.max(...rects.map((q) => q.y + q.h));
-            const dx =
-                x1 < sight.x ? sight.x - x1 : x2 > sight.x + sight.w ? sight.x + sight.w - x2 : 0,
-              dy =
-                y1 < sight.y ? sight.y - y1 : y2 > sight.y + sight.h ? sight.y + sight.h - y2 : 0;
-            void flow.setViewport(
-              { ...v, x: v.x + dx * v.zoom, y: v.y + dy * v.zoom },
-              { duration: 200 },
-            );
-          }
-          arrange({
-            positions,
-            // Dropped into a region, the cards join it, and it grows to hold them.
-            ...(r ? { regions: { [r.id]: { ...r, box: fitBox(r.box, rects) } } } : {}),
-          });
+        {
+          source: card,
+          originals: ids.flatMap((i) => cardEl(i) ?? []),
+          onLift: () => {
+            setPeek(null);
+            setHandsPop(null);
+          },
         },
       );
       return;
@@ -2984,37 +2724,57 @@ function MapContent({
     );
   };
 
-  const toggleType = (t: Primary) =>
+  const toggleType = (t: Primary) => {
+    foldAnchor.current = undefined;
     setFilters((f) => ({ ...f, types: { ...f.types, [t]: !f.types[t] } }));
+  };
 
   const actions = useMemo<Actions>(
     () => ({
-      activeRole: hotLane ?? (selected?.kind === "role" ? selected.id : null),
-      onRole: (id) => onSelect({ kind: "role", id }),
-      onFold: (id) => {
-        foldAnchor.current = id;
-        onFold(id);
+      onFold: (id) => latest.current.fold(id),
+      onMore: (id) => {
+        pinTopic(id);
+        arrange({ folds: { [id]: "open" } });
       },
       onOutputs: (id) => {
-        foldAnchor.current = id;
+        pinTopic(id);
         setOpenOutputs((open) => {
           const next = new Set(open);
           if (!next.delete(id)) next.add(id);
           return next;
         });
       },
+      onHands: (id, faces) => {
+        clearTimeout(handsTimer.current);
+        // Leaving the faces gives the pointer a moment to reach the list.
+        if (!id || !faces)
+          return void (handsTimer.current = setTimeout(() => setHandsPop(null), 220));
+        const outer = box.current?.getBoundingClientRect();
+        if (!outer) return;
+        const r = faces.getBoundingClientRect();
+        setPeek(null);
+        // Kept inside the map at its widest, under the faces.
+        const left = Math.max(8, Math.min(r.left - outer.left, outer.width - HANDS_W - 8));
+        setHandsPop({ id, left, top: r.bottom - outer.top + 4 });
+      },
       onPreview: (id) => {
-        foldAnchor.current = id;
+        pinTopic(id);
         setPreviews((open) => {
           const next = new Set(open);
           if (!next.delete(id)) next.add(id);
-          writeStored(previewKey, [...next]);
+          if (!lens) writeStored(previewKey, [...next]);
           return next;
         });
       },
     }),
-    [hotLane, selected, onSelect, onFold, previewKey],
+    [hotLane, selected, onSelect, previewKey, base, arrange, lens],
   );
+  const revealRelated = (id: string) => {
+    if (!lens || !visible(id) || !exists(id)) return;
+    foldAnchor.current = undefined;
+    revealTarget.current = id;
+    setLensSession(revealInLens(lens, graph, id, visible));
+  };
   const lensName = lensId ? graph.nodes.get(lensId)?.name : undefined;
   // What a commit did to Nodes.
   const summarize = useCallback(
@@ -3035,8 +2795,9 @@ function MapContent({
   // Handed to every card: steady, so a change elsewhere does not draw every card again.
   const onNodeClick = useSteady((e: React.MouseEvent, node: Node) => {
     if (node.type !== "node") return;
+    initialView.current = false;
     // Shift or Ctrl adds a card to the picked ones, or takes it out.
-    if (e.shiftKey || e.ctrlKey || e.metaKey)
+    if (!lens && (e.shiftKey || e.ctrlKey || e.metaKey))
       return setPicked((old) => {
         const next = new Set(old);
         if (!next.delete(node.id)) next.add(node.id);
@@ -3046,14 +2807,16 @@ function MapContent({
     onSelect({ kind: "node", id: node.id });
   });
   const onNodeMouseEnter = useSteady((_: React.MouseEvent, node: Node) => {
-    if (node.type === "node") hoverSoon(node.id, 150);
+    if (node.type === "node") setHover(node.id);
   });
-  const onNodeMouseLeave = useSteady(() => hoverSoon(null, 100));
+  const onNodeMouseLeave = useSteady(() => setHover(null));
 
   return (
     <div
-      className={`map${lensView ? " is-lens" : ""}${morphing ? " is-morphing" : ""}${timeOpen ? " is-time" : ""}`}
+      className={`map${lensId ? " is-lens" : ""}${morphing || motion ? " is-morphing" : ""}${motion ? ` motion-${motion.phase}` : ""}${timeOpen ? " is-time" : ""}${distant ? " is-distant" : ""}`}
+      style={{ "--topic-scale": topicScale } as CSSProperties}
       ref={box}
+      inert={!treeReady}
       onPointerDownCapture={onPress}
       // The middle button moves the map, not the browser's own scrolling.
       onMouseDown={(e) => e.button === 1 && e.preventDefault()}
@@ -3064,100 +2827,101 @@ function MapContent({
           style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }}
         />
       )}
-      <MapFlags.Provider value={flags}>
-        <MapActions.Provider value={actions}>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            minZoom={ZOOM.min}
-            maxZoom={ZOOM.max}
-            proOptions={{ hideAttribution: true }}
-            nodesConnectable={false}
-            nodesDraggable={false}
-            elementsSelectable={false}
-            nodeClickDistance={5}
-            paneClickDistance={5}
-            disableKeyboardA11y
-            panOnDrag={[0, 1]}
-            selectionKeyCode={BOX_KEYS}
-            panActivationKeyCode="Space"
-            noPanClassName={spaceDown ? "pan-anywhere" : "nopan"}
-            onInit={() => setReady(true)}
-            onMoveStart={() => setPeek(null)}
-            onMoveEnd={countOutside}
-            onNodeClick={onNodeClick}
-            onNodeMouseEnter={onNodeMouseEnter}
-            onNodeMouseLeave={onNodeMouseLeave}
-            onPaneClick={() => {
-              setPicked(new Set());
-              onSelect(null);
-            }}
-          >
-            <GatherLayer lay={layLabels} />
-            {regionsShown && (
-              <RegionLayer
-                regions={canvas.regions}
-                members={members}
-                outside={outCount}
-                outward={outwardRegion ? outward : null}
-                onOutward={setOutward}
-                editing={naming}
-                onEdit={setNaming}
-                onName={(rid, name) => {
-                  setNaming(null);
-                  const r = canvas.regions.find((g) => g.id === rid);
-                  if (r && r.name !== name) arrange({ regions: { [rid]: { ...r, name } } });
-                }}
-                onDissolve={(rid) =>
-                  arrange({
-                    regions: { [rid]: null },
-                    // Hidden members go back to the tree too, not only the cards on screen.
-                    positions: Object.fromEntries(
-                      (heldBy(canvas.regions, canvas.positions, base).get(rid) ?? []).map((i) => [
-                        i,
-                        null,
-                      ]),
-                    ),
-                  })
-                }
-              />
-            )}
-            {inkShown && (
-              <InkLayer
-                ink={inkPreview ?? drawn}
-                picked={inking ? inkPicked : NOTHING}
-                writing={inking ? (inkWriting?.id ?? null) : null}
-                hints={inkHints}
-                framed={inking && inkTool === "select"}
-                onSizes={setInkSizes}
-              />
-            )}
-            {regionsShown &&
-              !inking &&
-              outwardRegion &&
-              (reach.get(outwardRegion.id)?.size ?? 0) > 0 && (
-                <Outward
-                  region={outwardRegion}
-                  reach={reach.get(outwardRegion.id)!}
-                  nameOf={(id) => graph.nodes.get(id)?.name ?? id}
-                  typeOf={(id) => graph.nodes.get(id)?.type ?? ""}
-                  onJoin={(ids) => joinOut(outwardRegion, ids)}
-                  onClose={closeOutward}
-                />
-              )}
-            {regionsShown && !inking && (
-              <RegionProducts
-                regions={canvas.regions}
-                reactions={reactions}
-                nameOf={(id) => graph.nodes.get(id)?.name ?? id}
-              />
-            )}
-          </ReactFlow>
-        </MapActions.Provider>
-      </MapFlags.Provider>
+      <MapActions.Provider value={actions}>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          minZoom={ZOOM.min}
+          maxZoom={ZOOM.max}
+          proOptions={{ hideAttribution: true }}
+          nodesConnectable={false}
+          nodesDraggable={false}
+          elementsSelectable={false}
+          nodeClickDistance={5}
+          paneClickDistance={5}
+          disableKeyboardA11y
+          panOnDrag={[0, 1]}
+          selectionKeyCode={BOX_KEYS}
+          panActivationKeyCode={null}
+          noPanClassName="nopan"
+          onInit={() => setReady(true)}
+          onMoveStart={(event) => {
+            if (event) {
+              initialView.current = false;
+              fittingAll.current = false;
+            }
+            setPeek(null);
+          }}
+          onMoveEnd={countOutside}
+          zoomOnDoubleClick={false}
+          onNodeDoubleClick={(e, node) => {
+            if (node.type === "node") {
+              e.preventDefault();
+              enterFocus(node.id);
+            }
+          }}
+          onNodeContextMenu={(e, node) => {
+            if (node.type !== "node") return;
+            e.preventDefault();
+            const r = box.current!.getBoundingClientRect();
+            setFocusMenu({
+              id: node.id,
+              x: Math.max(8, Math.min(e.clientX - r.left, clearWidth() - 160)),
+              y: Math.max(8, Math.min(e.clientY - r.top, r.height - 80)),
+            });
+          }}
+          onNodeClick={onNodeClick}
+          onNodeMouseEnter={onNodeMouseEnter}
+          onNodeMouseLeave={onNodeMouseLeave}
+          onPaneClick={() => {
+            setPicked(new Set());
+            onSelect(null);
+          }}
+        >
+          {inkShown && treeReady && (
+            <InkLayer
+              ink={inkPreview ?? drawn}
+              picked={inking ? inkPicked : NOTHING}
+              writing={inking ? (inkWriting?.id ?? null) : null}
+              hints={inkHints}
+              framed={inking && inkTool === "select"}
+              onSizes={setInkSizes}
+            />
+          )}
+        </ReactFlow>
+      </MapActions.Provider>
 
+      {treeFocus && !lensId && (
+        <nav className="map-focus-path" aria-label={t.map.topicPath}>
+          <button onClick={() => enterFocus(null)}>{graph.snapshot.workspace.name}</button>
+          {graph.ancestors(treeFocus).map((n) => (
+            <span key={n.id}>
+              {" "}
+              / <button onClick={() => enterFocus(n.id)}>{n.name}</button>
+            </span>
+          ))}
+          <span> / {graph.nodes.get(treeFocus)?.name}</span>
+        </nav>
+      )}
+      {focusMenu && (
+        <div
+          className="map-focus-menu"
+          style={{ left: focusMenu.x, top: focusMenu.y }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <button onClick={() => enterFocus(focusMenu.id)}>{t.map.enterTopic}</button>
+        </div>
+      )}
+      {!inking && !lensId && picked.size > 1 && (
+        <div className="map-selection-reaction">
+          <SelectionReaction
+            list={reactions.get("selection") ?? []}
+            nameOf={(id) => graph.nodes.get(id)?.name ?? id}
+          />
+        </div>
+      )}
       {inking && (
         <InkPad
           tool={inkTool}
@@ -3170,7 +2934,7 @@ function MapContent({
           onPick={setInkPicked}
           onPreview={setInkPreview}
           onHints={setInkHints}
-          onCommit={(changes, picks) => ink.commit((all) => withChanges(all, changes), picks)}
+          onCommit={commitGeometry}
           onWrite={(w) => {
             openWords(w);
             if (inkTool === "text" && !inkLocked) setInkTool("select");
@@ -3209,15 +2973,26 @@ function MapContent({
           onAct={inkAct}
         />
       )}
-      {peek && !inking && <PeekCard graph={graph} peek={peek} flag={flags[peek.id]} />}
-      <FlagCounts
-        graph={graph}
-        flags={flags}
-        visible={visible}
-        partial={!Object.values(filters.types).every(Boolean)}
-        onSelect={onSelect}
-      />
-      {hotLane !== null && lit && <DeskWires lane={hotLane} ids={lit} box={box} />}
+      {time === null && peek && !inking && !handsPop && <PeekCard graph={graph} peek={peek} />}
+      {time === null && handsPop && handsAt.has(handsPop.id) && (
+        <div
+          className="panel map-hands"
+          style={{ left: handsPop.left, top: handsPop.top, maxWidth: HANDS_W }}
+          onPointerEnter={() => clearTimeout(handsTimer.current)}
+          onPointerLeave={() => setHandsPop(null)}
+        >
+          <HandlingRows
+            graph={graph}
+            list={handsAt.get(handsPop.id)!}
+            onOpen={(ref) => {
+              setHandsPop(null);
+              onSelect(ref);
+            }}
+          />
+        </div>
+      )}
+      {time === null && hotLane !== null && lit && <DeskWires lane={hotLane} ids={lit} box={box} />}
+
       {lensName ? (
         <div className="panel map-hint">
           <Icon name="lens" size={14} />
@@ -3230,22 +3005,6 @@ function MapContent({
       ) : picked.size ? (
         <div className="panel map-hint">
           <span className="map-hint-text">{t.map.picked(picked.size)}</span>
-          {[...picked].some((id) => canvas.positions[id]) && (
-            <button
-              type="button"
-              title={t.map.tidyTitle}
-              onClick={() =>
-                arrange({
-                  positions: Object.fromEntries(
-                    [...picked].filter((id) => canvas.positions[id]).map((id) => [id, null]),
-                  ),
-                })
-              }
-            >
-              {t.map.tidy}
-              <kbd>R</kbd>
-            </button>
-          )}
           <button type="button" onClick={() => setPicked(new Set())}>
             {t.map.unpick}
             <kbd>Esc</kbd>
@@ -3261,7 +3020,73 @@ function MapContent({
           </div>
         )
       )}
+      {lensId && facts && (
+        <aside className="panel map-lens" aria-label={t.map.lensOf(lensName ?? "")}>
+          <div className="map-lens-note">{t.lens.hidden}</div>
+          {Object.entries(facts.groups).map(([group, ids]) => {
+            const hidden = ids.filter(
+              (id) => !base.placed.has(id) || lensOutside.has(id) || !visible(id) || !exists(id),
+            );
+            return hidden.length ? (
+              <section key={group}>
+                <h3>{t.lens[group as keyof typeof facts.groups]}</h3>
+                {hidden.map((id) => (
+                  <button
+                    type="button"
+                    key={id}
+                    disabled={!visible(id) || !exists(id)}
+                    onClick={() => revealRelated(id)}
+                  >
+                    {graph.nodes.get(id)!.name}
+                    {!visible(id) && <small>{t.lens.filtered}</small>}
+                  </button>
+                ))}
+              </section>
+            ) : null;
+          })}
+          <section>
+            <h3>{t.lens.files}</h3>
+            {facts.files === null ? (
+              <p>{t.lens.reading}</p>
+            ) : (
+              facts.files.map((m, index) => (
+                <button type="button" key={index} onClick={onExpand} title={m.error ?? m.resource}>
+                  {m.title ?? m.workspacePath ?? m.uri ?? m.resource}
+                </button>
+              ))
+            )}
+          </section>
+          <section>
+            <h3>{t.lens.cards}</h3>
+            {facts.cards === null ? (
+              <p>{t.lens.reading}</p>
+            ) : (
+              facts.cards.map(({ card, role }) => (
+                <div key={card.id}>
+                  <button type="button" onClick={() => onSelect({ kind: "card", id: card.id })}>
+                    {card.title || card.id}
+                  </button>
+                  {card.receivedBy && (
+                    <button
+                      type="button"
+                      className="map-lens-role"
+                      onClick={() => onSelect({ kind: "role", id: card.receivedBy! })}
+                    >
+                      {t.lens.receivedBy(role?.title ?? card.receivedBy)}
+                    </button>
+                  )}
+                </div>
+              ))
+            )}
+          </section>
+        </aside>
+      )}
 
+      {moment && !pastTree && (
+        <div className="empty" role="status">
+          {past.commit === moment.hash && past.error ? describe(past.error) : t.page.reading}
+        </div>
+      )}
       {moment && (
         <div className="panel timebar" role="group" aria-label={t.map.replay}>
           <div className="timebar-head">
@@ -3274,7 +3099,7 @@ function MapContent({
             >
               <Icon name={playing ? "pause" : "play"} size={14} />
             </button>
-            <div className="timebar-info">
+            <div className="timebar-info" data-tip={momentText} data-tip-start="">
               <span className="timebar-when">
                 {when(moment.date)}
                 <span className="muted">
@@ -3282,9 +3107,7 @@ function MapContent({
                   · {time === last ? t.map.latest : t.map.commitOf(time! + 1, last + 1)}
                 </span>
               </span>
-              <span className="timebar-what" title={momentText}>
-                {momentText}
-              </span>
+              <span className="timebar-what">{momentText}</span>
             </div>
             <button
               type="button"
@@ -3312,26 +3135,27 @@ function MapContent({
       )}
 
       <div className="panel maptools" role="toolbar" aria-label={t.map.tools}>
-        {(["goal", "prompt", "output"] as const).map((type) => (
-          <button
-            key={type}
-            type="button"
-            className="tool"
-            aria-pressed={filters.types[type]}
-            onClick={() => toggleType(type)}
-            aria-label={t.map.toggleType(filters.types[type], type)}
-            data-tip={t.map.toggleType(filters.types[type], type)}
-          >
-            <TypeGlyph type={type} size={15} />
-            <span>{graph.counts[type]}</span>
-          </button>
-        ))}
-        <span className="tool-sep" />
+        {!!graph.nodes.size &&
+          (["goal", "prompt", "output"] as const).map((type) => (
+            <button
+              key={type}
+              type="button"
+              className="tool"
+              aria-pressed={filters.types[type]}
+              onClick={() => toggleType(type)}
+              aria-label={t.map.toggleType(filters.types[type], type)}
+              data-tip={t.map.toggleType(filters.types[type], type)}
+            >
+              <TypeGlyph type={type} size={15} />
+              <span>{graph.counts[type]}</span>
+            </button>
+          ))}
+        {!!graph.nodes.size && <span className="tool-sep" />}
         <button
           type="button"
           className="tool tool-lens"
           aria-pressed={!!lensId}
-          disabled={selected?.kind !== "node"}
+          disabled={timeOpen || selected?.kind !== "node"}
           onClick={() => {
             setInkTool(null);
             setLens((l) => !l);
@@ -3370,7 +3194,8 @@ function MapContent({
         <button
           type="button"
           className="tool sq"
-          disabled={!canvas.canUndo}
+          disabled={timeOpen || !!lens || !canvas.canUndo}
+
           onClick={undo}
           aria-label={t.ink.undo}
           data-tip={t.ink.undo}
@@ -3381,7 +3206,8 @@ function MapContent({
         <button
           type="button"
           className="tool sq"
-          disabled={!canvas.canRedo}
+          disabled={timeOpen || !!lens || !canvas.canRedo}
+
           onClick={redo}
           aria-label={t.ink.redo}
           data-tip={t.ink.redo}
@@ -3412,7 +3238,11 @@ function MapContent({
         <button
           type="button"
           className="tool sq"
-          onClick={() => overview(undefined, ZOOM.min)}
+          onClick={() => {
+            initialView.current = false;
+            fittingAll.current = true;
+            overview({ duration: 0 }, ZOOM.min);
+          }}
           aria-label={t.map.fit}
           data-tip={t.map.fit}
         >
@@ -3442,93 +3272,8 @@ function MapContent({
           <Icon name="help" size={15} />
         </button>
         {keyOpen && <MapKey />}
-        <FarFace box={box} />
       </div>
     </div>
-  );
-}
-
-/**
- * How far out the map is, past FAR, marked on the map for the card face to follow. Marked rather than
- * rendered, so crossing a step restyles the cards once and redraws neither them nor the map.
- */
-function FarFace({ box }: { box: RefObject<HTMLDivElement | null> }) {
-  const far = useStore((s) => FAR.filter((z) => s.transform[2] < z).length);
-  const band = useStore((s) => GATHER.filter((g) => s.transform[2] < g.below).length);
-  useEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    if (far) el.dataset.far = String(far);
-    else delete el.dataset.far;
-    if (band) el.dataset.gather = String(band - 1);
-    else delete el.dataset.gather;
-  }, [box, far, band]);
-  return null;
-}
-
-type Label = {
-  id: string;
-  name: string;
-  /** Its band in GATHER. */
-  band: number;
-  /** Its left edge, at its card, and its middle, at its card or at the middle of its branch. */
-  x: number;
-  y: number;
-  /** How much is under it, when it is a Node at the gathered depth with room to say so. */
-  under: number;
-  behind: number;
-  ahead: number;
-};
-
-/**
- * The gathered map's names, laid out once per view for every band; the zoom only picks the band. Each sits
- * on its card, its text sized for the band, haloed so it reads over the outlines beside it.
- */
-function GatherLayer({ lay }: { lay: () => Label[] }) {
-  const host = useStore(
-    (s) => s.domNode?.querySelector<HTMLElement>(".react-flow__viewport") ?? null,
-  );
-  const gathered = useStore((s) => s.transform[2] < GATHER[0].below);
-  const labels = useMemo(() => (gathered ? lay() : []), [gathered, lay]);
-  // Names keep their size on screen through the band: the live zoom, never nearer than the band's far end.
-  const zf = useStore((s) => {
-    const z = s.transform[2];
-    const g = GATHER.find((g, i) => z < g.below && !(z < (GATHER[i + 1]?.below ?? 0)));
-    return g ? Math.max(z, g.z) : 1;
-  });
-  const names = useMemo(
-    () =>
-      labels.map((l) => (
-        <div
-          key={`${l.band}:${l.id}`}
-          className="map-gname"
-          data-g={l.band}
-          style={{ left: l.x, top: l.y }}
-        >
-          <b>{l.name}</b>
-          {l.under > 0 && <span>{l.under}</span>}
-          {l.behind > 0 && (
-            <span className="mcard-status is-behind">
-              <StatusMark kind="behind" />
-              {l.behind}
-            </span>
-          )}
-          {l.ahead > 0 && (
-            <span className="mcard-status is-ahead">
-              <StatusMark kind="ahead" />
-              {l.ahead}
-            </span>
-          )}
-        </div>
-      )),
-    [labels],
-  );
-  if (!host) return null;
-  return createPortal(
-    <div className="map-gather" aria-hidden="true" style={{ "--zf": zf } as CSSProperties}>
-      {names}
-    </div>,
-    host,
   );
 }
 
@@ -3564,16 +3309,6 @@ function MapKey() {
             <span className={`key-shape t-${p}`} />
           </dt>
           <dd>{t.map[p === "goal" ? "keyGoal" : p === "prompt" ? "keyPrompt" : "keyOutput"]}</dd>
-        </div>
-      ))}
-      {(["behind", "ahead"] as const).map((s) => (
-        <div key={s}>
-          <dt>
-            <span className={`mcard-status is-${s}`}>
-              <StatusMark kind={s} />
-            </span>
-          </dt>
-          <dd>{s === "behind" ? t.map.keyBehind : t.map.keyAhead}</dd>
         </div>
       ))}
       <div>

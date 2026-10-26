@@ -6,13 +6,14 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { Graph } from "../data/store.js";
 import { api, ApiError, describe, type NodeDocument } from "../data/api.js";
 import type { NodeSection } from "../data/node-details.js";
+import { materialFacts } from "../data/materials.js";
 import type {
+  MaterialState,
   SnapshotFile,
   SnapshotIncoming,
   SnapshotMaterial,
   SnapshotNode,
   SnapshotRef,
-  SyncFlag,
   NodeHistoryDetails,
   NodeHistoryEntry,
   NodeRelationsDetails,
@@ -219,7 +220,7 @@ export function Patch({ patch }: { patch: string }) {
 }
 
 /** How many versions show before "show all". */
-const RECENT = 6;
+export const RECENT = 6;
 
 /** A document's versions as a timeline, newest first; each opens to show what it changed. */
 export function History({
@@ -338,30 +339,20 @@ function latestVerification(value: unknown): Verification | null {
 }
 
 /**
- * Whether someone checked this Node against its materials, and why it is behind. Agents confirm Nodes; the
- * page only says what Tent sees.
+ * Whether someone checked this Node against its materials, after an unreadable header if it has one.
+ * Agents confirm Nodes; the page only says what Tent sees.
  */
-/** Review state, after why the Node is marked: an unreadable header, then what makes it behind. */
-export function ReviewRow({
-  doc,
-  flag,
-  node,
-}: {
-  doc: NodeDocument | null;
-  flag?: SyncFlag;
-  node?: SnapshotNode;
-}) {
+export function ReviewRow({ doc, node }: { doc: NodeDocument | null; node?: SnapshotNode }) {
   const last = latestVerification(doc?.frontmatter.verified);
   const tier = doc?.trustTier ?? "unverified";
   // Nothing checked and nothing wrong: no row saying so.
-  if (!node?.invalid && !flag?.behind && !last && tier === "unverified") return null;
+  if (!node?.invalid && !last && tier === "unverified") return null;
   return (
     <PropRow label={t.review.label}>
       <div className="review">
         {node?.invalid && (
           <span className="review-why is-invalid">{t.map.invalidWhy(node.invalidReason)}</span>
         )}
-        {flag?.behind && <span className="review-why">{t.map.behindWhy(flag.behind.reasons)}</span>}
         <span className={`review-tier is-${tier}`}>
           {t.review.tier[tier]}
           {last && <span className="review-by">{t.review.by(last.by, ago(last.at))}</span>}
@@ -406,8 +397,19 @@ function Capped({ items, cap = 8 }: { items: ReactNode[]; cap?: number }) {
   );
 }
 
-/** Unread and failed sections stay distinct from a successful empty answer. */
-export function ReadState({ section }: { section: NodeSection<unknown> }) {
+/**
+ * Unread and failed sections stay distinct from a successful empty answer. Given `rows`, an unread
+ * section holds the place its rows will take instead of saying it is reading, so nothing moves when they come.
+ */
+export function ReadState({
+  section,
+  rows,
+  kind = "prop",
+}: {
+  section: NodeSection<unknown>;
+  rows?: number;
+  kind?: "prop" | "version" | "card";
+}) {
   if (section.error)
     return (
       <p className="empty" role="alert">
@@ -417,7 +419,15 @@ export function ReadState({ section }: { section: NodeSection<unknown> }) {
         </button>
       </p>
     );
-  return section.data === null ? <p className="empty">{t.page.reading}</p> : null;
+  if (section.data !== null) return null;
+  if (rows === undefined) return <p className="empty">{t.page.reading}</p>;
+  return (
+    <div className={`skel skel-${kind}`} role="status" aria-label={t.page.reading}>
+      {Array.from({ length: rows }, (_, i) => (
+        <span key={i} />
+      ))}
+    </div>
+  );
 }
 
 /**
@@ -442,6 +452,10 @@ export function NodeProps({
     incoming: NodeSection<NodeRelationsDetails>;
     incomingOpen: boolean;
     onIncoming: () => void;
+    /** Its own materials as Tent compares them now. */
+    materials?: NodeSection<{ materials: MaterialState[] }>;
+    /** Header entries known to stay in the materials row while checked relations load. */
+    materialsDeclared?: number;
   };
   /** Rows the page adds after these. */
   children?: ReactNode;
@@ -472,6 +486,7 @@ export function NodeProps({
     (i) => !(i.from.kind === "node" && family.has(i.from.id) && i.via === "link"),
   );
   const files = (relations?.materials ?? []).filter((m) => m.kind !== "node" && m.kind !== "role");
+  const facts = materialFacts(details.materials?.data?.materials ?? []);
   const roles = relations?.roles ?? [];
   const history = details.history.data?.items ?? [];
   const latest = history[0];
@@ -486,7 +501,7 @@ export function NodeProps({
         ) : details.history.data ? (
           <span className="prop-none">{t.history.none}</span>
         ) : (
-          <ReadState section={details.history} />
+          <ReadState section={details.history} rows={1} />
         )}
       </PropRow>
       {roles.length > 0 && (
@@ -524,8 +539,10 @@ export function NodeProps({
           />
         </PropRow>
       )}
-      <PropRow label={t.rel.linksTo} wide hidden={!!relations && !outgoing.length}>
-        {!relations && <ReadState section={details.outgoing} />}
+      <PropRow label={t.rel.linksTo} wide>
+        {!relations && <ReadState section={details.outgoing} rows={1} />}
+        {/* Said rather than dropped, so the rows under it stay where they are when the read comes. */}
+        {!!relations && !outgoing.length && <span className="prop-none">{t.rel.noLinks}</span>}
         <Capped
           items={outgoing.map((r) => (
             <RefLink
@@ -564,7 +581,12 @@ export function NodeProps({
           ))}
         />
       </PropRow>
-      <PropRow label={t.rel.materials} wide hidden={!files.length}>
+      <PropRow
+        label={t.rel.materials}
+        wide
+        hidden={relations ? !files.length : !details.materialsDeclared}
+      >
+        {!relations && <ReadState section={details.outgoing} rows={1} />}
         <Capped
           items={files.map((m, k) => (
             <span
@@ -577,6 +599,9 @@ export function NodeProps({
               }
             >
               <MaterialName material={m} />
+              {facts.has(m.resource) && (
+                <span className="material-fact">{t.rel.materialFact[facts.get(m.resource)!]}</span>
+              )}
             </span>
           ))}
         />

@@ -4,7 +4,7 @@
 // rests on the stack opens the list. Rules: Tent Node "UI-图谱画模块依赖与状态", "分工搬进图谱" (cuca
 // 2026-10-16) and "Role 列表放顶栏：头像叠加竖排列表" (cuca 2026-10-17).
 import { useWantDetails } from "../data/details.js";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Graph } from "../data/store.js";
 import type { SnapshotCard, SnapshotRef } from "../data/types.js";
 import { isDraft, editDraft, useDraft, type Draft } from "../data/drafts.js";
@@ -18,6 +18,7 @@ import { moodOf, PUBLIC, sourceIds, type Desk, type Work } from "./work.js";
 
 type Props = {
   graph: Graph;
+  detailsReady: boolean;
   selected: SnapshotRef | null;
   work: Work;
   /** The open draft is on the page, so its row shows it folded. */
@@ -71,16 +72,25 @@ function Tally({ desk, role }: { desk: Desk; role: boolean }) {
 }
 
 export function Dock(props: Props) {
-  const { graph, work } = props;
+  const { graph, detailsReady, work, onHot, onPin } = props;
   const [lanesOpen, setLanesOpen] = useState<string[]>(() => readStored("tent-lanes-open", []));
   const [open, setOpen] = useState(() => readStored("tent-roles-open", false));
+  // A restored list waits for layout or its initial canvas error; opening by hand asks immediately.
+  const want = useWantDetails(open && detailsReady && !graph.detailed);
   const show = (next: boolean) => {
+    if (next && !graph.detailed) want();
+    if (!next) {
+      onHot(null);
+      onPin(null);
+    }
     setOpen(next);
     writeStored("tent-roles-open", next);
   };
   const [filter, setFilter] = useState("");
-  // Roles and Cards come with the snapshot: an open list reads it, and so does opening one.
-  const want = useWantDetails(open && !graph.detailed);
+  useEffect(() => () => onHot(null), [onHot]);
+  useEffect(() => {
+    onHot(null);
+  }, [filter, onHot]);
   const toggleLane = (lane: string) =>
     setLanesOpen((l) => {
       const next = l.includes(lane) ? l.filter((x) => x !== lane) : [...l, lane];
@@ -98,19 +108,20 @@ export function Dock(props: Props) {
     if (!lanesOpen.includes(landed.lane)) toggleLane(landed.lane);
   }
 
-  // A drag resting on the stack opens the list, so it can be let go on a row.
+  // Drag opening is temporary: the saved manual state is restored on every exit path.
   const drag = useDragState();
   const stack = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!drag || open) return;
-    const r = stack.current?.getBoundingClientRect();
-    if (!r || drag.x < r.left || drag.x > r.right || drag.y < r.top || drag.y > r.bottom) return;
-    const wait = setTimeout(() => {
+  const beforeDrag = useRef<boolean | null>(null);
+  useLayoutEffect(() => {
+    if (drag && beforeDrag.current === null) {
+      beforeDrag.current = open;
       setOpen(true);
       want();
-    }, 350);
-    return () => clearTimeout(wait);
-  }, [drag, open]);
+    } else if (!drag && beforeDrag.current !== null) {
+      setOpen(beforeDrag.current);
+      beforeDrag.current = null;
+    }
+  }, [!!drag]);
   useEffect(() => {
     if (!open) return;
     const esc = (e: KeyboardEvent) => {
@@ -146,10 +157,26 @@ export function Dock(props: Props) {
           aria-label={t.work.title}
           data-tip={open ? undefined : t.work.loadTip}
           data-tip-end=""
-          onClick={() => show(true)}
+          aria-expanded={open}
+          onClick={() => show(!open)}
         >
           {open ? t.work.reading : t.work.load}
         </button>
+        {open && (
+          <section className="dock panel is-reading" aria-label={t.work.title} aria-busy="true">
+            <div className="dock-head">
+              <span className="dock-title">{t.work.reading}</span>
+              <button
+                type="button"
+                className="icon-btn dock-fold"
+                onClick={() => show(false)}
+                aria-label={t.work.foldAll}
+              >
+                <Icon name="close" size={13} />
+              </button>
+            </div>
+          </section>
+        )}
       </div>
     );
 
@@ -161,9 +188,9 @@ export function Dock(props: Props) {
       <button
         ref={stack}
         type="button"
-        className={`role-stack${open ? " is-open" : ""}`}
+        className={`role-stack${open ? " is-open" : ""}${roles === 0 ? " is-empty" : ""}`}
         aria-expanded={open}
-        aria-label={t.work.title}
+        aria-label={`${t.work.title} · ${t.work.roles(roles)}`}
         data-tip={open ? undefined : t.work.stackTip}
         data-tip-end=""
         onClick={() => show(!open)}
@@ -279,13 +306,14 @@ function Lane({
     idle ? "is-idle" : "",
     over ? "is-over" : "",
     hotLane === lane ? "is-hot" : "",
+    pinned === lane ? "is-pinned" : "",
     selected?.kind === "role" && selected.id === lane ? "is-active" : "",
     viewing && lane !== PUBLIC && work.laneOf(viewing) === lane ? "is-linked" : "",
   ]
     .filter(Boolean)
     .join(" ");
   return (
-    <div className={cls} data-drop={`lane:${lane}`} data-lane={lane}>
+    <div className={cls} data-drop={`lane:${lane}`} data-drop-label={name} data-lane={lane}>
       <div
         className="lane-head"
         onPointerEnter={() => !drag && onHot(lane)}

@@ -84,7 +84,7 @@ function OneFile({
   info: FileInfo | null | undefined;
   onToast: (text: string) => void;
 }) {
-  if (info === null) return <FileCard file={file} info={null} onToast={onToast} />;
+  if (info === null) return <MissingFile file={file} onToast={onToast} />;
   if (file.show === "text")
     return <TextFile nodeId={nodeId} file={file} info={info} onToast={onToast} />;
   if (file.show === "other" || (info && info.size > limitOf(file)))
@@ -115,7 +115,9 @@ function TextFile({
     });
     return () => abort.abort();
   }, [nodeId, file.path, info?.modifiedAt]);
-  if (read === "missing") return <FileCard file={file} info={null} onToast={onToast} />;
+  if (read === "missing") return <MissingFile file={file} onToast={onToast} />;
+  // Not yet known to be there: no frame that a missing file would take back a moment later.
+  if (read === undefined && info === undefined) return null;
   if (read === "binary")
     return <FileCard file={{ ...file, show: "other" }} info={info} onToast={onToast} />;
   const name = t.file.preview(file.name);
@@ -279,7 +281,18 @@ function CopyPath({ path, onToast }: { path: string; onToast: (text: string) => 
   );
 }
 
-/** A file listed rather than shown: its name, size and path, or that it is missing. */
+/** A file that is not where the Node says: one line in amber and its path to copy, no frame. */
+function MissingFile({ file, onToast }: { file: LocalFile; onToast: (text: string) => void }) {
+  return (
+    <p className="file-gone" aria-label={t.file.label} title={file.path}>
+      <FileGlyph show={file.show} missing size={14} />
+      <span>{t.file.moved(file.name)}</span>
+      <CopyPath path={file.path} onToast={onToast} />
+    </p>
+  );
+}
+
+/** A file listed rather than shown: its name, size and path. */
 function FileCard({
   file,
   info,
@@ -289,21 +302,18 @@ function FileCard({
   info: FileInfo | undefined;
   onToast: (text: string) => void;
 }) {
-  const missing = info === null;
   return (
-    <section className={`file-card${missing ? " is-missing" : ""}`} aria-label={t.file.label}>
-      <FileGlyph show={file.show} missing={missing} size={22} />
+    <section className="file-card" aria-label={t.file.label}>
+      <FileGlyph show={file.show} size={22} />
       <div className="file-card-main">
         <div className="file-card-name">
           {file.name}
           {file.ext && <span className="file-ext">{file.ext}</span>}
-          {missing && <span className="pill pill-drift">{t.file.missing}</span>}
         </div>
         <div className="file-card-meta">
           {info && <span>{fileSize(info.size)}</span>}
           <span className="mono">{file.path}</span>
         </div>
-        {missing && <p className="file-note">{t.file.missingNote(file.path)}</p>}
         {info && info.size > limitOf(file) && file.show !== "other" && (
           <p className="file-note">{t.file.tooLarge}</p>
         )}

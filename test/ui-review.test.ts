@@ -3,7 +3,7 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { NodeDocument } from "../src/ui/data/api.js";
-import type { Snapshot, SnapshotFile, SyncFlag } from "../src/ui/data/types.js";
+import type { Snapshot, SnapshotFile } from "../src/ui/data/types.js";
 import { buildGraph } from "../src/ui/data/store.js";
 import { History, ReviewRow } from "../src/ui/panel/Details.js";
 import { setLang } from "../src/ui/i18n.js";
@@ -18,17 +18,12 @@ const displayed: NodeDocument = {
   trustTier: "machine-confirmed",
 };
 
-test("the review row states who checked the Node and why it is behind, with nothing to press", () => {
+test("the review row states who checked the Node, with nothing to press and no behind or ahead", () => {
   setLang("en", false);
-  const html = renderToStaticMarkup(
-    createElement(ReviewRow, {
-      doc: displayed,
-      flag: { behind: { reasons: ["material-changed:Alpha.md"] } } as SyncFlag,
-    }),
-  );
+  const html = renderToStaticMarkup(createElement(ReviewRow, { doc: displayed }));
   assert.match(html, /Machine-confirmed/);
   assert.match(html, /process:codex/);
-  assert.match(html, /Behind:/);
+  assert.doesNotMatch(html, /Behind|Ahead/);
   assert.doesNotMatch(html, /<button/);
 });
 

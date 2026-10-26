@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
+import { isNodeId } from "../../core/base/id.js";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { workspaceImage } from "../data/api.js";
@@ -19,6 +20,62 @@ function fileChip(path: string, alt: string) {
   return file;
 }
 
+/** A link to a Node or Card in the app, under its name. */
+function refLink(ref: SnapshotRef, name: string, graph: Graph) {
+  const glyph = glyphSvg(ref.kind === "node" ? primaryOf(graph.nodes.get(ref.id)!.type) : ref.kind);
+  const link = document.createElement("a");
+  link.className = "doc-ref";
+  link.href = `#${ref.id}`;
+  link.dataset.ref = refKey(ref);
+  link.innerHTML = `${glyph}<span></span>`;
+  link.querySelector("span")!.textContent = name;
+  return link;
+}
+
+const MENTION = /\b(?:node|card)-[a-z0-9]+\b|\b[0-9a-f]{40}\b/gi;
+
+/** A Node or Card id or a full commit hash written in the text, as it reads; null when the id is unknown. */
+function mention(text: string, graph: Graph) {
+  if (text.length === 40 && !text.includes("-")) {
+    const hash = document.createElement("button");
+    hash.type = "button";
+    hash.className = "doc-hash";
+    hash.dataset.copy = text;
+    hash.dataset.tip = text;
+    hash.textContent = text.slice(0, 8);
+    return hash;
+  }
+  const kind = isNodeId(text) ? "node" : "card";
+  const name = kind === "node" ? graph.nodes.get(text)?.name : graph.cards.get(text)?.title;
+  if (!name) return null;
+  const link = refLink({ kind, id: text }, name, graph);
+  link.dataset.tip = text;
+  return link;
+}
+
+/** Ids and hashes in running text and in code spans that hold nothing else; links and blocks keep theirs. */
+function mentions(box: HTMLElement, graph: Graph) {
+  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  while (walker.nextNode()) texts.push(walker.currentNode as Text);
+  for (const text of texts) {
+    if (text.parentElement!.closest("a, pre")) continue;
+    const code = text.parentElement!.tagName === "CODE" ? text.parentElement! : null;
+    const parts: (string | Node)[] = [];
+    let at = 0;
+    for (const m of text.data.matchAll(MENTION)) {
+      if (code && m[0] !== text.data.trim()) break;
+      const shown = mention(m[0], graph);
+      if (!shown) continue;
+      parts.push(text.data.slice(at, m.index), shown);
+      at = m.index + m[0].length;
+    }
+    if (!at) continue;
+    if (code) code.replaceWith(parts[1]!);
+    else text.replaceWith(...parts.concat(text.data.slice(at)).filter((p) => p !== ""));
+  }
+}
+
 /** Renders a Tent document; links to Tent documents become in-app references. */
 export function Markdown({
   body,
@@ -26,12 +83,16 @@ export function Markdown({
   graph,
   relations,
   onOpen,
+  onToast,
+  historical = false,
 }: {
   body: string;
   fromPath: string;
   graph: Graph;
   relations?: NodeRelationsDetails | null;
   onOpen: (ref: SnapshotRef) => void;
+  onToast?: (text: string) => void;
+  historical?: boolean;
 }) {
   const html = useMemo(() => {
     const box = document.createElement("div");
@@ -40,16 +101,7 @@ export function Markdown({
       const target = resolveHref(fromPath, anchor.getAttribute("href") ?? "");
       const ref = documentRef(graph, fromPath, anchor.getAttribute("href") ?? "", relations);
       if (ref) {
-        const glyph = glyphSvg(
-          ref.kind === "node" ? primaryOf(graph.nodes.get(ref.id)!.type) : ref.kind,
-        );
-        const link = document.createElement("a");
-        link.className = "doc-ref";
-        link.href = `#${ref.id}`;
-        link.dataset.ref = refKey(ref);
-        link.innerHTML = `${glyph}<span></span>`;
-        link.querySelector("span")!.textContent = anchor.textContent;
-        anchor.replaceWith(link);
+        anchor.replaceWith(refLink(ref, anchor.textContent ?? "", graph));
       } else if (target.external) {
         anchor.setAttribute("target", "_blank");
         anchor.setAttribute("rel", "noopener");
@@ -65,7 +117,7 @@ export function Markdown({
       const src = img.getAttribute("src") ?? "";
       if (loadableImage(src)) return;
       // Workspace images load after rendering, through the service.
-      const workspace = workspaceImagePath(fromPath, src);
+      const workspace = historical ? null : workspaceImagePath(fromPath, src);
       if (workspace) {
         img.removeAttribute("src");
         img.dataset.workspace = workspace;
@@ -74,8 +126,9 @@ export function Markdown({
       const target = resolveHref(fromPath, src);
       img.replaceWith(fileChip(target.file ?? target.tentPath ?? src, img.alt));
     });
+    mentions(box, graph);
     return box.innerHTML;
-  }, [body, fromPath, graph, relations]);
+  }, [body, fromPath, graph, relations, historical]);
 
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -98,6 +151,15 @@ export function Markdown({
       className="doc"
       dangerouslySetInnerHTML={{ __html: html }}
       onClick={(event) => {
+        const hash = (event.target as HTMLElement).closest<HTMLElement>("[data-copy]");
+        if (hash) {
+          const text = hash.dataset.copy!;
+          navigator.clipboard?.writeText(text).then(
+            () => onToast?.(t.sheet.copied(hash.textContent ?? text)),
+            () => onToast?.(text),
+          );
+          return;
+        }
         const link = (event.target as HTMLElement).closest<HTMLElement>("[data-ref]");
         if (!link) return;
         event.preventDefault();

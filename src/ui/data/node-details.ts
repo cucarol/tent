@@ -76,3 +76,20 @@ export function useNodeSection<T>(
     retry: () => setAttempt((a) => a + 1),
   };
 }
+
+/** The section's last settled read for the same Node while a newer read is still on its way. */
+export function useHeldSection<T>(nodeId: string, section: NodeSection<T>): NodeSection<T> {
+  const held = useRef<{ nodeId: string; section: NodeSection<T> } | null>(null);
+  return heldSection(held, nodeId, section);
+}
+
+export function heldSection<T>(
+  held: { current: { nodeId: string; section: NodeSection<T> } | null },
+  nodeId: string,
+  section: NodeSection<T>,
+): NodeSection<T> {
+  if (section.data !== null || section.error) held.current = { nodeId, section };
+  else if (held.current?.nodeId === nodeId)
+    return { ...held.current.section, retry: section.retry };
+  return section;
+}

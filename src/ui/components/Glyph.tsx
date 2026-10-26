@@ -3,6 +3,7 @@ import { ICON_SVG, type IconName } from "./icons.js";
 import { primaryOf, type Primary } from "../data/store.js";
 import { fileOf, infoOf, useFiles, type FileKind } from "../data/files.js";
 import type { SnapshotNode } from "../data/types.js";
+import { t } from "../i18n.js";
 
 /**
  * Type icons, drawn like the robot avatars. Goal is a pennant on a pole. Prompt and output share the robot's
@@ -130,7 +131,10 @@ export function FileGlyph({
   kind?: Primary;
 }) {
   return (
-    <span className={`file-glyph${kind ? ` p-${kind}` : ""}${missing ? " is-missing" : ""}`}>
+    <span
+      className={`file-glyph${kind ? ` p-${kind}` : ""}${missing ? " is-missing" : ""}`}
+      title={missing ? t.file.gone : undefined}
+    >
       <Icon name={missing ? "fileMissing" : FILE_ICONS[show]} size={size} />
     </span>
   );

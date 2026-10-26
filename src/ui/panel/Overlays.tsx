@@ -15,7 +15,14 @@ function items(graph: Graph): Item[] {
     ...graph.snapshot.nodes.map((n) => ({
       ref: { kind: "node" as const, id: n.id },
       name: n.name,
-      sub: n.description || n.type,
+      // The kind is named at the row's end; under the name, what it says or else where it sits.
+      sub:
+        n.description ||
+        graph
+          .ancestors(n.id)
+          .map((a) => a.name)
+          .join(" / ") ||
+        t.node.topLevel,
       hay: `${n.name} ${n.id} ${n.type} ${n.description} ${n.tags.join(" ")} ${n.body}`.toLowerCase(),
       kindLabel: primaryOf(n.type),
     })),

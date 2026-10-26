@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { test } from "node:test";
 import type { WorkspaceMap, WorkspaceMapNode } from "../src/core/read/workspace-map.js";
 import { buildGraph, mapSnapshot, withMap } from "../src/ui/data/store.js";
 import { detailLoader } from "../src/ui/data/details.js";
-import { mapFlags } from "../src/ui/data/flags.js";
-import { MAP_STALE, summarizeBehind } from "../src/ui/data/reasons.js";
 import { setLang, t } from "../src/ui/i18n.js";
+import { NodeFs } from "../src/fs/node-fs.js";
+import { readWorkspaceMap } from "../src/core/read/workspace-map.js";
+import { readWorkspaceRevision } from "../src/core/workspace/workspace-revision.js";
+import { testScratchRoot } from "./scratch.js";
 
 function mapNode(
   id: string,
@@ -99,8 +103,6 @@ test("the first screen carries the map's expiry, header diagnosis and module lin
   assert.equal(byId.get("g")!.stale, undefined);
   assert.deepEqual([byId.get("x")!.invalid, byId.get("x")!.invalidReason], [true, "bad header"]);
   assert.deepEqual(snapshot.modules?.edges, [{ from: "o", to: "p", imports: 3 }]);
-  // Before materials are compared, only an explicit expiry marks a Node; nothing claims to be in sync.
-  assert.deepEqual(mapFlags(snapshot), { p: { behind: { reasons: [MAP_STALE] } } });
   setLang("en", false);
   assert.equal(
     t.map.invalidWhy("Invalid frontmatter: bad\nline 4"),
@@ -127,15 +129,87 @@ test("the full snapshot keeps what only the map carries", () => {
   assert.equal(merged.modules?.edges.length, 1);
 });
 
-test("an expiry without a date reads as expired", () => {
-  assert.equal(summarizeBehind([MAP_STALE]).stale, "");
-  assert.equal(summarizeBehind(["Content is stale on or after 2026-10-01"]).stale, "2026-10-01");
-  assert.equal(summarizeBehind(["Material a.md changed"]).stale, null);
-  setLang("zh", false);
-  assert.equal(t.map.behindWhy([MAP_STALE]), "落后：内容已到期");
-  setLang("en", false);
-  assert.match(t.map.behindWhy([MAP_STALE]), /expired/);
-  setLang("zh", false);
+test("fresh Core expiry removes an old snapshot's completion without changing the full revision", async (t) => {
+  const root = await fs.mkdtemp(path.join(testScratchRoot(), "ui-expiry-repair-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
+  const adapter = new NodeFs(path.join(root, ".tent"));
+  await adapter.writeFile(
+    "Result/Result.md",
+    "---\nid: node-result\ntype: output\nstale_after: 2026-10-27T00:00:00Z\n---\nResult\n",
+  );
+  const workspace = { id: "ws-expiry", name: "Expiry" };
+  const repository = { basis: { head: null }, sources: [] };
+  const before = await readWorkspaceMap(
+    adapter,
+    workspace,
+    root,
+    repository,
+    "2026-10-26T23:59:59Z",
+  );
+  const revision = await readWorkspaceRevision(adapter);
+  const full = mapSnapshot(before);
+  full.nodes[0]!.outputAt = "2026-10-26T00:00:00Z";
+  const expired = await readWorkspaceMap(
+    adapter,
+    workspace,
+    root,
+    repository,
+    "2026-10-27T00:00:00Z",
+  );
+  assert.equal(await readWorkspaceRevision(adapter), revision);
+  assert.equal(before.nodes[0]!.stale, false);
+  assert.equal(expired.nodes[0]!.stale, true);
+  assert.notEqual(before.workspace.revision, expired.workspace.revision);
+  assert.equal(withMap(full, expired).nodes[0]!.outputAt, undefined);
+  assert.equal(withMap(full, before).nodes[0]!.outputAt, "2026-10-26T00:00:00Z");
+});
+
+test("a newer map adds, moves and removes topics before slower document details arrive", () => {
+  const full = mapSnapshot(map);
+  full.workspace = { ...full.workspace, revision: "full-before" };
+  full.nodes.find((n) => n.id === "p")!.body = "retained document details";
+  full.paths["roles/role-main.md"] = { kind: "role", id: "role-main" };
+  const next = {
+    ...map,
+    workspace: { ...map.workspace, revision: "map-after" },
+    nodes: [
+      mapNode("g", null, "goal", { childIds: ["p", "new"] }),
+      mapNode("p", "g", "prompt", {
+        name: "renamed",
+        path: "g/renamed",
+        notePath: "g/renamed/renamed.md",
+        stale: false,
+      }),
+      mapNode("new", "g", "prompt"),
+    ],
+  };
+  const merged = withMap(full, next);
+  assert.equal(
+    merged.workspace.revision,
+    "full-before",
+    "the retained details still need refreshing",
+  );
+  assert.deepEqual(
+    merged.nodes.map((n) => n.id),
+    ["g", "p", "new"],
+  );
+  const existing = merged.nodes.find((n) => n.id === "p")!;
+  assert.equal(existing.name, "renamed");
+  assert.equal(existing.body, "retained document details");
+  assert.equal(existing.stale, undefined, "the newer header clears an older expiry notice");
+  assert.equal(merged.nodes.find((n) => n.id === "new")!.body, "");
+  const graph = buildGraph(merged);
+  assert.deepEqual(
+    graph
+      .childrenOf("g")
+      .map((n) => n.id)
+      .sort(),
+    ["new", "p"],
+  );
+  assert.equal(graph.nodes.has("o"), false);
+  assert.equal(graph.refOf("/p/p.md"), null);
+  assert.deepEqual(graph.refOf("/g/renamed/renamed.md"), { kind: "node", id: "p" });
+  assert.deepEqual(graph.refOf("/roles/role-main.md"), { kind: "role", id: "role-main" });
 });
 
 function deferred<T>() {
@@ -225,36 +299,47 @@ test("the page reads the map first and the snapshot only where a view needs it",
   assert.match(app, /loadMap\(\)\.then\(/);
   // No unconditional snapshot read after the first paint.
   assert.doesNotMatch(app, /requestAnimationFrame/);
-  assert.equal(app.match(/loadSnapshot/g)?.length, 2, "imported once, handed to the loader once");
-  assert.match(app, /detailLoader\(\s*loadSnapshot,/);
-  assert.match(app, /window\.addEventListener\("focus", retry\)/);
+  assert.match(app, /workspaceRefresh\(\{/);
+  assert.match(app, /snapshot: api\.snapshot/);
+  assert.match(
+    app,
+    /applyMap: \(next\) => \{\s*(?:\/\/[^\n]*\n\s*)?setFactsEpoch\(\(epoch\) => epoch \+ 1\)/,
+  );
+  assert.match(app, /factsEpoch=\{factsEpoch\}/);
+  assert.match(app, /window\.addEventListener\("focus", refresh\)/);
   // A failed map read is an error; there is no fallback to the old snapshot-only service.
   assert.match(app, /\(e\) => live && setError\(/);
-  // Material comparison waits for the map, and applies at any revision until the snapshot is in.
-  assert.match(app, /useSyncFlags\(revision \?\? null, !!map\)/);
-  assert.match(app, /flags === UNREAD && snapshot \? mapFlags\(snapshot\) : flags/);
+  // Nothing on the map waits for materials to be compared.
+  assert.doesNotMatch(app, /\/api\/sync|useSyncFlags/);
   // A deep link to something the map does not hold asks for it.
   assert.match(
     app,
-    /if \(!graph\.detailed && id && !graph\.nodes\.has\(id\)\) return wantDetails\(\);/,
+    /if \(!graph\.detailed && id && !graph\.nodes\.has\(id\)\) \{[\s\S]*?return wantDetails\(\);/,
   );
   // An empty link opens nothing, even beside a Node listed under the empty id.
-  assert.match(app, /const ref: SnapshotRef | null = !ids*? null/);
+  assert.match(app, /const ref: SnapshotRef \| null = !id\s*\?\s*null/);
   // Each view that shows what the snapshot holds asks for it.
   assert.match(
     src("../src/ui/panel/Reader.tsx"),
     /useWantDetails\(target\.kind !== "node" && !graph\.detailed\)/,
   );
   assert.match(src("../src/ui/panel/Overlays.tsx"), /useWantDetails\(!graph\.detailed\)/);
-  assert.match(src("../src/ui/shell/Dock.tsx"), /useWantDetails\(open && !graph\.detailed\)/);
+  assert.match(
+    src("../src/ui/shell/Dock.tsx"),
+    /useWantDetails\(open && detailsReady && !graph\.detailed\)/,
+  );
   const view = src("../src/ui/map/MapView.tsx");
+  assert.match(
+    view,
+    /\.compareOutputs\(toCompare\)[\s\S]*?\}, \[compareKey, graph\.snapshot\.workspace\.revision, factsEpoch\]\);/,
+  );
   assert.match(view, /useWantDetails\(!!lensId && !graph\.detailed\)/);
-  assert.match(view, /useWantDetails\(!graph\.detailed && \[\.\.\.members\.values\(\)\]\.some/);
-  assert.match(view, /if \(!graph\.detailed\) \{\s*want\(\);/);
+  assert.match(view, /useWantDetails\(time === null && !graph\.detailed && members\.size > 0\)/);
+  assert.match(view, /if \(!currentGraph\.detailed\) \{\s*want\(\);/);
   // Module lines come with the map; only reactions wait for the snapshot.
   assert.match(view, /graph\.snapshot\.modules\?\.edges/);
   assert.doesNotMatch(view, /moduleDeps/);
   assert.equal(view.match(/if \(!graph\.detailed\) return out;/g)?.length, 1);
-  // A region says only what Tent holds: nothing while its relations are on their way, nothing for none.
+  // Selection reactions say only what Tent holds while their relations arrive.
   assert.doesNotMatch(view, /map-region-none/);
 });

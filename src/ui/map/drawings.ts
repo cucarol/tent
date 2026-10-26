@@ -1,7 +1,6 @@
 // Drawing on the map, as in Excalidraw: pen strokes, texts, rectangles, diamonds, ellipses, lines and arrows.
-// They are for looking at. Each keeps its own map coordinates; a line end may hold on to a shape or a Node
-// card only for the look, so it follows that thing about and records no relation in Tent. They live in the
-// canvas file (canvas.ts) beside card places and regions. Rules: Tent Node "UI-图谱画模块依赖与状态",
+// They follow topics only for the look and record no relation in Tent. They live in the
+// canvas file (canvas.ts) beside folds. Rules: Tent Node "UI-图谱画模块依赖与状态",
 // cuca 2026-10-13 and 2026-10-17.
 import type { Drawing } from "./canvas.js";
 
@@ -18,8 +17,10 @@ export type Head = (typeof HEADS)[number];
 export const FACES = ["rect", "diamond", "ellipse"] as const;
 export type FaceShape = (typeof FACES)[number];
 
-/** What every drawing may carry: its colour, its line, how far it is turned, and its layer. */
-type Look = { color?: Color; dash?: Dash; rot?: number; z?: number };
+/** Physical attachment only: offset from the topic title, and the last projected drawing centre. */
+export type Attachment = { topic: string; offset: Pt; lastAt: Pt };
+/** What every drawing may carry: its colour, its line, its turn, layer and attachment. */
+type Look = { color?: Color; dash?: Dash; rot?: number; z?: number; attachment?: Attachment };
 export type Stroke = Look & { id: string; kind: "pen"; points: Pt[] };
 /** A text: `w` wraps it to that width, else it is as wide as its longest line. */
 export type Note = Look & {
@@ -68,9 +69,42 @@ const isPt = (p: unknown): p is Pt => Array.isArray(p) && p.length === 2 && p.ev
 const oneOf = <T extends string>(list: readonly T[], v: unknown): T | undefined =>
   list.includes(v as T) ? (v as T) : undefined;
 
-/** The look a drawing in the file carries, keeping only values this page knows. */
+/** Parse known drawing fields while retaining fields owned by other UI versions. */
 function lookOf(d: Drawing): Look {
-  const out: Look = {};
+  // Unknown UI fields survive reading, geometry edits and saving. Recognized fields are parsed below.
+  const out = { ...d } as Record<string, unknown> & Look;
+  for (const key of [
+    "id",
+    "kind",
+    "color",
+    "dash",
+    "rot",
+    "z",
+    "attachment",
+    "points",
+    "at",
+    "text",
+    "w",
+    "size",
+    "shape",
+    "box",
+    "fill",
+    "label",
+    "ends",
+    "bend",
+    "heads",
+    "start",
+    "end",
+  ])
+    delete out[key];
+  const attachment = d.attachment as Partial<Attachment> | null;
+  if (
+    attachment &&
+    typeof attachment.topic === "string" &&
+    isPt(attachment.offset) &&
+    isPt(attachment.lastAt)
+  )
+    out.attachment = attachment as Attachment;
   const color = oneOf(COLORS, d.color),
     dash = oneOf(DASHES, d.dash);
   if (color) out.color = color;
@@ -205,6 +239,69 @@ export function boxOf(d: Ink, sizes?: Sizes): Box {
 }
 
 export const centre = (b: Box): Pt => [b.x + b.w / 2, b.y + b.h / 2];
+
+/** Topic title centres, all surviving Node IDs, and the actual focus (or the project centre). */
+export type InkContext = {
+  topics: ReadonlyMap<string, Pt>;
+  existingIds: ReadonlySet<string>;
+  centre: { id: string; at: Pt };
+};
+
+/** Beyond this distance a drawing follows the current centre rather than a distant branch. */
+export const ATTACH_REACH = 360;
+
+/** Reattach only after creating or deliberately changing a drawing's geometry. */
+export function attachInk(d: Ink, context: InkContext, sizes?: Sizes): Ink {
+  const at = centre(boxOf(d, sizes));
+  let topic = context.centre.id,
+    target = context.centre.at,
+    distance = ATTACH_REACH;
+  for (const [id, point] of context.topics) {
+    const next = Math.hypot(point[0] - at[0], point[1] - at[1]);
+    if (next < distance) {
+      topic = id;
+      target = point;
+      distance = next;
+    }
+  }
+  return {
+    ...d,
+    attachment: { topic, offset: [at[0] - target[0], at[1] - target[1]], lastAt: at },
+  };
+}
+
+/**
+ * Follow visible topics, hide drawings on folded/filtered topics, and freeze deleted targets.
+ * `all` always retains hidden drawings; save it, and use only `visible` for drawing and gesture diffs.
+ * The project centre belongs to its own focus, so switching focus cannot move its drawings elsewhere.
+ */
+export function projectInk(
+  ink: readonly Ink[],
+  context: InkContext,
+): { all: Ink[]; visible: Ink[] } {
+  const hidden = new Set<string>();
+  const targetOf = (id: string) =>
+    id === context.centre.id ? context.centre.at : context.topics.get(id);
+  const isHidden = (id: string) =>
+    !targetOf(id) && (id === "@mind-centre" || context.existingIds.has(id));
+  const all = ink.map((original) => {
+    const d = original.attachment ? original : attachInk(original, context);
+    const attachment = d.attachment!;
+    if (isHidden(attachment.topic)) hidden.add(d.id);
+    const target = targetOf(attachment.topic);
+    if (!target) return d;
+    const at: Pt = [target[0] + attachment.offset[0], target[1] + attachment.offset[1]];
+    const dx = at[0] - attachment.lastAt[0],
+      dy = at[1] - attachment.lastAt[1];
+    if (Math.abs(dx) < 0.000001 && Math.abs(dy) < 0.000001) return d;
+    return { ...moveBy(d, dx, dy), attachment: { ...attachment, lastAt: at } };
+  });
+  // Endpoints on hidden topics or hidden shapes disappear with them, retaining their last geometry.
+  for (const d of all)
+    if (isLine(d) && [d.start, d.end].some((id) => id && (isHidden(id) || hidden.has(id))))
+      hidden.add(d.id);
+  return { all, visible: all.filter((d) => !hidden.has(d.id)) };
+}
 
 /** `p` turned by `deg` degrees round `c`. */
 export function turn([px, py]: Pt, [cx, cy]: Pt, deg: number): Pt {

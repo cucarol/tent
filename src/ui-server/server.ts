@@ -1,5 +1,5 @@
 import { RoleCardsError } from "../core/graph/role-cards.js";
-import { inspectWorkspaceSync, readOutputComparisons } from "../core/graph/node-sync.js";
+import { inspectNodeSync, readOutputComparisons } from "../core/graph/node-sync.js";
 import { readNodeTimes } from "../core/read/node-times.js";
 import { readMaterialOverlaps } from "../core/read/material-overlaps.js";
 // The local service behind `tent ui`: serves the bundled Web UI and a small JSON API over Core.
@@ -26,6 +26,7 @@ import {
 import { readDocumentDiff, readDocumentVersion } from "../core/read/document-diff.js";
 import { parseFrontmatter, serializeFrontmatter } from "../core/base/frontmatter.js";
 import { documentVersionSchema } from "../core/store/git-history.js";
+import { readHistoryTree } from "../core/read/history-query.js";
 import { NodeWriteError, writeNodeDocument } from "../core/graph/node-document-write.js";
 import { nodeTrustTier } from "../core/base/node-provenance.js";
 import { confirmNodeSync } from "../core/graph/node-sync.js";
@@ -36,7 +37,7 @@ import { loadNodeCatalog } from "../core/graph/node-catalog.js";
 import { editRoleContext } from "../core/read/role-context.js";
 import { deleteRole } from "../core/write/role-delete.js";
 import { readRoleDocument } from "../core/store/role-document.js";
-import { readNodeForEdit } from "../core/read/node-query.js";
+import { readNode, readNodeForEdit } from "../core/read/node-query.js";
 import { nodeNotePath, TENT_SYSTEM_DIR, workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import { resolvedMaterialOccurrences } from "../core/base/material.js";
 import {
@@ -56,6 +57,7 @@ import { createModuleDependencyRepositoryReader } from "../fs/module-dependencie
 import { readModuleMapRepository } from "../fs/workspace-scan.js";
 import { buildSnapshot } from "./snapshot.js";
 import { batchRead } from "./read-batch.js";
+import { changeHints } from "./change-hints.js";
 import { readWorkspaces, rememberWorkspace, workspaceKey } from "./workspaces.js";
 
 export type UiServerOptions = {
@@ -206,6 +208,7 @@ async function startWorkspaceServer(
   const opened = new Set<Promise<UiServer>>();
   const token = randomBytes(32).toString("base64url");
   const tokenDigest = createHash("sha256").update(token).digest();
+  const changes = changeHints(workspaceRoot);
   let port = 0;
   // Queue writes from this service before entering Tent's bounded cross-process lock wait.
   let queue: Promise<unknown> = Promise.resolve();
@@ -218,25 +221,6 @@ async function startWorkspaceServer(
     fs.observationScope(async () => {
       const revision = await readWorkspaceRevision(queryFs);
       return readers().length ? JSON.stringify({ revision }) : undefined;
-    }),
-  );
-  const syncReads = batchRead<undefined, string>((readers) =>
-    fs.observationScope(async () => {
-      const revision = await readWorkspaceRevision(queryFs);
-      if (!readers().length) return;
-      const sync = await inspectWorkspaceSync(queryFs);
-      if (!readers().length) return;
-      return JSON.stringify({
-        revision,
-        nodes: Object.fromEntries(
-          sync.nodes
-            .filter((n) => n.ahead || n.behind)
-            .map((n) => [
-              n.nodeId,
-              { ...(n.ahead ? { ahead: n.ahead } : {}), ...(n.behind ? { behind: n.behind } : {}) },
-            ]),
-        ),
-      });
     }),
   );
   const snapshotReads = batchRead<
@@ -269,6 +253,16 @@ async function startWorkspaceServer(
       throw new HttpError(403, "FORBIDDEN_ORIGIN", "Writes must come from the Tent UI page");
     if (write && !/^application\/json\b/.test(req.headers["content-type"] ?? ""))
       throw new HttpError(415, "UNSUPPORTED_MEDIA_TYPE", "Send JSON");
+    if (method === "GET" && url.pathname === "/api/changes") {
+      try {
+        if (!(await changes.subscribe(res))) return;
+      } catch {
+        throw new HttpError(503, "CHANGES_UNAVAILABLE", "Use page polling for workspace changes");
+      }
+      // Accepting the request counts once; pushed hints and an open stream never renew idle time.
+      activity();
+      return;
+    }
     res.once("finish", () => {
       if (res.statusCode >= 200 && res.statusCode < 400) activity();
     });
@@ -346,12 +340,6 @@ async function startWorkspaceServer(
       );
     if (route === "GET /api/nodes/times")
       return json(res, 200, await readNodeTimes(queryFs, url.searchParams.getAll("nodeId")));
-    if (route === "GET /api/sync") {
-      // The initial UI read runs beside the snapshot; keep its starting document revision.
-      const body = await syncReads(undefined, res);
-      if (body !== undefined && !res.destroyed) return jsonBody(res, 200, body);
-      return;
-    }
     if (route === "GET /api/snapshot") {
       const fresh = url.searchParams.get("fresh") === "1";
       const result = await snapshotReads({ fresh, etag: req.headers["if-none-match"] }, res);
@@ -360,9 +348,23 @@ async function startWorkspaceServer(
         return end(res, 304, { ETag: result.etag });
       return jsonBody(res, 200, result.body!, { ETag: result.etag });
     }
-    const nodeDetail = /^\/api\/nodes\/([^/]+)\/(history|cards|relations)$/.exec(url.pathname);
+    const nodeDetail = /^\/api\/nodes\/([^/]+)\/(history|cards|relations|materials)$/.exec(
+      url.pathname,
+    );
     if (nodeDetail && method === "GET") {
       const id = decodeURIComponent(nodeDetail[1]!);
+      // The Node's own materials as Tent compares them now; the goal materials an output inherits are
+      // the goal's to show.
+      if (nodeDetail[2] === "materials")
+        return json(res, 200, {
+          materials: (await inspectNodeSync(fs, id)).materials
+            .filter((m) => !m.goalId)
+            .map((m) => ({
+              resource: m.resource,
+              state: m.state,
+              ...(m.reason ? { reason: m.reason } : {}),
+            })),
+        });
       if (nodeDetail[2] === "history")
         return json(res, 200, await readNodeHistoryDetails(queryFs, id));
       if (nodeDetail[2] === "cards") return json(res, 200, await readNodeCardsDetails(queryFs, id));
@@ -372,6 +374,14 @@ async function startWorkspaceServer(
       return json(res, 200, await readNodeRelationsDetails(queryFs, id, direction));
     }
     if (nodeId && method === "GET") {
+      if (url.searchParams.has("at")) {
+        const historical = await readNode(fs, workspace.id, {
+          nodeId: decodeURIComponent(nodeId),
+          version: versionParam(url, "at"),
+          view: "body",
+        });
+        return json(res, 200, historical.node);
+      }
       const read = async () => {
         const document = await readNodeForEdit(fs, decodeURIComponent(nodeId), {
           capture: url.searchParams.get("capture") === "true",
@@ -575,6 +585,8 @@ async function startWorkspaceServer(
       const input = record(await readJson(req, BODY_LIMIT.document));
       return json(res, 200, await serial(async () => createCardDocument(fs, cardInput(input))));
     }
+    if (route === "GET /api/history/tree")
+      return json(res, 200, await readHistoryTree(queryFs, url.searchParams.get("commit") ?? ""));
     if (route === "GET /api/history/document")
       return json(res, 200, await readDocumentVersion(fs, versionParam(url, "at")));
     if (route === "GET /api/history/diff") {
@@ -818,11 +830,13 @@ async function startWorkspaceServer(
       if (origin && !origins().some((o) => origin === `http://${o}`))
         throw new HttpError(403, "FORBIDDEN_ORIGIN", "Unexpected Origin");
       if (!isApi) return page(req, res, url);
-      // These reads create their scope only when their batch starts, after all
-      // its callers arrived. Waiting HTTP requests retain no document caches.
+      // Batched reads create their scope when their batch starts. Canvas reads
+      // validate one whole file directly and need no workspace document caches.
       if (
         req.method === "GET" &&
-        ["/api/revision", "/api/sync", "/api/snapshot"].includes(url.pathname)
+        (["/api/revision", "/api/snapshot", "/api/canvas", "/api/changes"].includes(url.pathname) ||
+          // Comparing materials opens a scope of its own that reads their content.
+          /^\/api\/nodes\/[^/]+\/materials$/.test(url.pathname))
       )
         return api(req, res, url);
       return req.method === "GET" || req.method === "HEAD"
@@ -864,6 +878,7 @@ async function startWorkspaceServer(
     close: () =>
       (closing ??= (async () => {
         if (serving.get(key) === registered) serving.delete(key);
+        changes.close();
         const stopped = new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
           server.closeAllConnections();

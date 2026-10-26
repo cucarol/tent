@@ -1,14 +1,12 @@
-// The lines a region draws between its own cards: only relations Tent already records, one style each.
-// Nothing here judges what a relation means; that is for the Agent. Rules: Tent Node
-// "UI-图谱画模块依赖与状态", "画布是投影；拖在一起形成区域" (cuca and judge 2026-10-16).
+// Existing Tent facts between selected topics. No inferred relations.
 import type { Graph } from "../data/store.js";
 import { resultNodeIds } from "../data/card-state.js";
 
-export type RegionLineKind = "parent" | "link" | "material" | "code" | "card";
-export type RegionLine = {
+export type SelectionLineKind = "parent" | "link" | "material" | "code" | "card";
+export type SelectionLine = {
   from: string;
   to: string;
-  kind: RegionLineKind;
+  kind: SelectionLineKind;
   /** Shared file names, for a material line. */
   files?: string[];
   /** Import count, for a code line. */
@@ -24,27 +22,20 @@ const fileName = (path: string) => path.split("/").filter(Boolean).at(-1) ?? pat
 /**
  * Relations among `members`: up and down the tree, references in the body or as materials, material
  * files they share, code imports, and outputs a Card brought back, or Nodes its returned result names, to the cards it was sent with.
- * Given `outside`, the same relations between a member and one of those cards instead.
  */
-export function regionLines(
+export function selectionLines(
   graph: Graph,
   members: readonly string[],
   upOf: (id: string) => string | null,
   code: readonly CodeEdge[] = [],
-  outside?: readonly string[],
-): RegionLine[] {
+): SelectionLine[] {
   const here = new Set(members);
-  const there = new Set(outside);
-  const all = outside ? [...members, ...outside.filter((id) => !here.has(id))] : members;
-  const ok = (a: string, b: string) =>
-    outside
-      ? (here.has(a) && there.has(b) && !here.has(b)) ||
-        (here.has(b) && there.has(a) && !here.has(a))
-      : here.has(a) && here.has(b);
-  const out = new Map<string, RegionLine>();
+  const all = members;
+  const ok = (a: string, b: string) => here.has(a) && here.has(b);
+  const out = new Map<string, SelectionLine>();
   const pair = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
   const family = new Set<string>();
-  const add = (line: RegionLine) => {
+  const add = (line: SelectionLine) => {
     if (line.from === line.to || !ok(line.from, line.to)) return;
     const key = `${line.kind}:${line.kind === "material" ? pair(line.from, line.to) : `${line.from}>${line.to}`}`;
     const had = out.get(key);
@@ -98,24 +89,4 @@ export function regionLines(
       for (const s of sent) add({ from: o, to: s, kind: "card", cards: [c.title] });
   }
   return [...out.values()];
-}
-
-/**
- * Cards among `outside` directly related to a region's members, with how: what the region's title
- * offers to pull in when looking one layer out.
- */
-export function reachOut(
-  graph: Graph,
-  members: readonly string[],
-  outside: readonly string[],
-  upOf: (id: string) => string | null,
-  code: readonly CodeEdge[] = [],
-): Map<string, RegionLine[]> {
-  const here = new Set(members);
-  const out = new Map<string, RegionLine[]>();
-  for (const line of regionLines(graph, members, upOf, code, outside)) {
-    const far = here.has(line.from) ? line.to : line.from;
-    out.set(far, [...(out.get(far) ?? []), line]);
-  }
-  return out;
 }

@@ -338,37 +338,34 @@ test("restyling writes only what differs from the default", () => {
 
 test("undo turns back only the entries its step changed, so what arrived meanwhile stays", () => {
   const file: CanvasFile = {
-    version: 2,
-    positions: { "node-aaaaaa": [0, 0] },
-    regions: [{ id: "g", name: "", box: [0, 0, 10, 10] }],
+    version: 3,
+    open: ["node-aaaaaa"],
+    shut: [],
     drawings: [pen("p", [[0, 0]]) as Drawing],
   };
-  // This page moves a card, names the region and writes a text.
+  // This page closes a topic and writes a text.
   const step: Pending = {
-    positions: new Map([["node-aaaaaa", [5, 5]]]),
-    regions: new Map([["g", { id: "g", name: "登录", box: [0, 0, 10, 10] }]]),
+    folds: new Map([["node-aaaaaa", null]]),
     drawings: new Map([["t", note("t", [0, 0], "a") as Drawing]]),
   };
   const back = inverseOf(file, step);
-  assert.deepEqual([...back.positions], [["node-aaaaaa", [0, 0]]]);
-  assert.deepEqual([...back.regions], [["g", file.regions[0]]]);
+  assert.deepEqual([...back.folds], [["node-aaaaaa", "open"]]);
   assert.deepEqual([...back.drawings], [["t", null]]);
-  // Another page then adds a stroke and places a card; undo here leaves both.
+  // Another page then adds a stroke and opens a card; undo here leaves both.
   const remote: CanvasFile = withPending(file, {
     ...noPending(),
-    positions: new Map([["node-bbbbbb", [1, 1]]]),
+    folds: new Map([["node-bbbbbb", "open"]]),
     drawings: new Map([["q", pen("q", [[2, 2]]) as Drawing]]),
   });
   const undone = withPending(withPending(remote, step), back);
-  assert.deepEqual(undone.positions, { "node-aaaaaa": [0, 0], "node-bbbbbb": [1, 1] });
+  assert.deepEqual([...undone.open].sort(), ["node-aaaaaa", "node-bbbbbb"]);
   assert.deepEqual(
     undone.drawings.map((d) => d.id),
     ["p", "q"],
   );
-  assert.equal(undone.regions[0].name, "");
   // Steps laid over each other: the later one wins where both touch.
-  const both = laidOver(step, { ...noPending(), positions: new Map([["node-aaaaaa", [9, 9]]]) });
-  assert.deepEqual(both.positions.get("node-aaaaaa"), [9, 9]);
+  const both = laidOver(step, { ...noPending(), folds: new Map([["node-aaaaaa", "shut"]]) });
+  assert.equal(both.folds.get("node-aaaaaa"), "shut");
   assert.equal(both.drawings.size, 1);
 });
 

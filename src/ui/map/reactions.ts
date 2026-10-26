@@ -1,14 +1,13 @@
-// What a region's cards give when put together: facts Tent already holds about each pair, by the three
+// What selected topics give when put together: facts Tent already holds about each pair, by the three
 // Node types, and whether a goal, a rule and a conclusion close a loop. Nothing here judges whether a
 // conclusion meets its goal or two rules contradict; that is for the Agent.
 // Rules: Tent Node "UI-图谱画模块依赖与状态", "画布是投影…三种类型起反应", "验证反应" (cuca 2026-10-16/17).
 import type { Graph } from "../data/store.js";
 import { primaryOf } from "../data/store.js";
-import { onlyGaps } from "../data/reasons.js";
-import type { OutputComparison, SyncFlags } from "../data/types.js";
+import type { OutputComparison } from "../data/types.js";
 
 /**
- * Core's output comparisons as this page holds them: read for the outputs now in regions, being read
+ * Core's output comparisons as this page holds them: read for the outputs now selected, being read
  * again (the last answer still shown, marked as such), not read yet, or the last read failed.
  */
 export type Comparisons = {
@@ -60,7 +59,7 @@ export type Verify = {
   writtenAt: string | null;
 };
 
-/** goal + prompt: does the rule hang on or link to the goal, what both name, and has the rule fallen behind. */
+/** goal + prompt: does the rule hang on or link to the goal, and what both name. */
 export type Constrain = {
   kind: "constrain";
   goal: string;
@@ -68,8 +67,6 @@ export type Constrain = {
   on: "child" | "below" | "link" | "none";
   /** Materials both name, by exact path. */
   shared: string[];
-  /** The rule's own materials: none known to have moved, some did, or no basis to tell. */
-  rule: "fresh" | "behind" | "gaps";
 };
 
 /**
@@ -168,10 +165,7 @@ export function headOf(r: Reaction): Head {
       if (r.goalState === "unknown") return { mark: "none", says: "unknown" };
       return { mark: "ok", says: "ok" };
     case "constrain":
-      if (r.on === "none") return { mark: "info", says: "off" };
-      if (r.rule === "behind") return { mark: "warn", says: "behind" };
-      if (r.rule === "gaps") return { mark: "none", says: "unknown" };
-      return { mark: "ok", says: "on" };
+      return r.on === "none" ? { mark: "info", says: "off" } : { mark: "ok", says: "on" };
     case "contrast":
       if (r.order === "after") return { mark: "warn", says: "after" };
       return r.cites ? { mark: "ok", says: "cites" } : { mark: "info", says: "silent" };
@@ -347,20 +341,13 @@ export function verifyOf(
   };
 }
 
-export function constrainOf(
-  graph: Graph,
-  flags: SyncFlags,
-  goal: string,
-  prompt: string,
-): Constrain {
-  const reasons = flags[prompt]?.behind?.reasons ?? [];
+export function constrainOf(graph: Graph, goal: string, prompt: string): Constrain {
   return {
     kind: "constrain",
     goal,
     prompt,
     on: below(graph, prompt, goal) ?? (linked(graph, goal, prompt) ? "link" : "none"),
     shared: sharedOf(graph, goal, prompt),
-    rule: !reasons.length ? "fresh" : onlyGaps(reasons) ? "gaps" : "behind",
   };
 }
 
@@ -454,7 +441,6 @@ export function outputsToCompare(graph: Graph, members: readonly string[]): stri
 /** Every reaction between two cards, by their types; the same two cards in either order give the same. */
 export function pairOf(
   graph: Graph,
-  flags: SyncFlags,
   compared: Comparisons,
   x: string,
   y: string,
@@ -469,7 +455,7 @@ export function pairOf(
     case "goal+output":
       return verifyOf(graph, compared, by("goal"), by("output"));
     case "goal+prompt":
-      return constrainOf(graph, flags, by("goal"), by("prompt"));
+      return constrainOf(graph, by("goal"), by("prompt"));
     case "output+prompt":
       return contrastOf(graph, by("prompt"), by("output"), times);
     case "goal+goal":
@@ -490,10 +476,9 @@ const ORDER: Kind[] = ["loop", "verify", "constrain", "contrast", "overlap", "go
  */
 export const listed = (r: Reaction) => r.kind === "verify" || matters(r);
 
-/** Every reaction among a region's cards: the closed loops first, then each pair by its recipe. */
+/** Every reaction among selected topics: the closed loops first, then each pair by its recipe. */
 export function reactionsIn(
   graph: Graph,
-  flags: SyncFlags,
   compared: Comparisons,
   members: readonly string[],
   times: Times = noTimes,
@@ -502,7 +487,7 @@ export function reactionsIn(
   const out: Reaction[] = [];
   for (let i = 0; i < ids.length; i++)
     for (let j = i + 1; j < ids.length; j++) {
-      const r = pairOf(graph, flags, compared, ids[i], ids[j], times);
+      const r = pairOf(graph, compared, ids[i], ids[j], times);
       if (r) out.push(r);
     }
   const of = (type: string) => ids.filter((id) => typeOf(graph, id) === type);
@@ -518,7 +503,7 @@ export function reactionsIn(
 }
 
 /** Whether a dragged card would react with another: they share a recipe that has something to say. */
-export function reacts(graph: Graph, flags: SyncFlags, x: string, y: string): boolean {
-  const r = pairOf(graph, flags, noComparisons, x, y);
+export function reacts(graph: Graph, x: string, y: string): boolean {
+  const r = pairOf(graph, noComparisons, x, y);
   return !!r && matters(r);
 }

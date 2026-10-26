@@ -26,7 +26,7 @@ import {
   type Reaction,
   type Verify,
 } from "../src/ui/map/reactions.js";
-import { RegionProduct } from "../src/ui/map/Reaction.js";
+import { SelectionReaction } from "../src/ui/map/Reaction.js";
 
 const node = (id: string, parentId: string | null, extra: Partial<SnapshotNode> = {}) =>
   ({
@@ -171,22 +171,14 @@ const world = graphOf([
 // note2 cites lint; note names style only as a Card source, which is not citing it.
 world.nodes.get("lint")!.incoming.push(by("note2"));
 
-test("goal and rule: whether the rule hangs on the goal, what both name, and whether it fell behind", () => {
-  const child = constrainOf(world, {}, "app", "lint");
+test("goal and rule: whether the rule hangs on the goal, and what both name", () => {
+  const child = constrainOf(world, "app", "lint");
   assert.equal(child.on, "child");
   assert.deepEqual(child.shared, ["app/"]);
   assert.deepEqual(headOf(child), { mark: "ok", says: "on" });
-  assert.equal(constrainOf(world, {}, "app", "style").on, "link");
-  // Fallen behind, or no basis to tell: never a plain match.
-  const moved = { lint: { behind: { reasons: ["Material changed: src/app/x.ts"] } } };
-  assert.deepEqual(headOf(constrainOf(world, moved, "app", "lint")), {
-    mark: "warn",
-    says: "behind",
-  });
-  const gaps = { lint: { behind: { reasons: ["no retained baseline for src/app/"] } } };
-  assert.deepEqual(headOf(constrainOf(world, gaps, "app", "lint")).mark, "none");
+  assert.equal(constrainOf(world, "app", "style").on, "link");
   // Not hanging on it and naming nothing in common: only counted.
-  const off = constrainOf(world, {}, "app", "spare");
+  const off = constrainOf(world, "app", "spare");
   assert.deepEqual(headOf(off), { mark: "info", says: "off" });
   assert.equal(listed(off), false);
 });
@@ -234,7 +226,7 @@ test("a goal, a rule and a conclusion close a loop only when all three links hol
 });
 
 test("a region lists loops first, then each pair by its recipe; unrelated pairs only count", () => {
-  const all = reactionsIn(world, {}, noComparisons, ["app", "lint", "note", "spare"]);
+  const all = reactionsIn(world, noComparisons, ["app", "lint", "note", "spare"]);
   assert.deepEqual(
     all.map((r) => r.kind),
     ["loop", "verify", "constrain", "constrain", "contrast", "contrast", "govern"],
@@ -245,17 +237,17 @@ test("a region lists loops first, then each pair by its recipe; unrelated pairs 
   );
   // A goal, a rule and a conclusion with no link between them are not a loop.
   assert.deepEqual(
-    reactionsIn(world, {}, noComparisons, ["other", "spare", "loose"]).map((r) => r.kind),
+    reactionsIn(world, noComparisons, ["other", "spare", "loose"]).map((r) => r.kind),
     ["verify", "constrain", "contrast"],
   );
   // Only outputs that meet a goal are compared.
   assert.deepEqual(outputsToCompare(graph, ["out", "rule", "goal"]), ["out"]);
   assert.deepEqual(outputsToCompare(graph, ["out", "aside", "rule"]), []);
   // A dragged card lights up only the cards it has something to say with.
-  assert.equal(reacts(world, {}, "app", "note"), true);
-  assert.equal(reacts(world, {}, "lint", "app"), true);
-  assert.equal(reacts(world, {}, "spare", "app"), false);
-  assert.equal(reacts(world, {}, "loose", "other"), false);
+  assert.equal(reacts(world, "app", "note"), true);
+  assert.equal(reacts(world, "lint", "app"), true);
+  assert.equal(reacts(world, "spare", "app"), false);
+  assert.equal(reacts(world, "loose", "other"), false);
 });
 
 test("mixed kinds read as items; plain facts read as nothing moved, never as all matching", () => {
@@ -271,12 +263,15 @@ test("mixed kinds read as items; plain facts read as nothing moved, never as all
     unclear: 0,
   });
   const html = renderToStaticMarkup(
-    createElement(RegionProduct, { list: facts, nameOf: (id: string) => id }),
+    createElement(SelectionReaction, { list: facts, nameOf: (id: string) => id }),
   );
   assert.match(html, /2 项|2 items/);
   assert.doesNotMatch(html, /都对得上|All match/);
   const lone = renderToStaticMarkup(
-    createElement(RegionProduct, { list: [governOf(world, "lint", "spare")], nameOf: (id) => id }),
+    createElement(SelectionReaction, {
+      list: [governOf(world, "lint", "spare")],
+      nameOf: (id) => id,
+    }),
   );
   assert.equal(lone, "");
 });
@@ -325,7 +320,9 @@ test("several pairs say all match only when every pair is known to match", () =>
     [unknown, pair({ output: "o2", goalState: "unknown" })],
     [waiting, pair({ output: "o2", goalState: null, read: "waiting" })],
   ]) {
-    const html = renderToStaticMarkup(createElement(RegionProduct, { list, nameOf: (id) => id }));
+    const html = renderToStaticMarkup(
+      createElement(SelectionReaction, { list, nameOf: (id) => id }),
+    );
     assert.match(html, /react-pill/);
     assert.doesNotMatch(html, /都对得上|All match/);
     assert.doesNotMatch(html, /is-ok/);

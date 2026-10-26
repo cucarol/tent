@@ -6,24 +6,21 @@ import { CANVAS_PATH } from "../base/paths.js";
 
 export const CANVAS_LIMIT = 5 * 1024 * 1024;
 const nodeId = z.string().refine(isNodeId);
-const canvasSchema = z.strictObject({
-  version: z.literal(2),
-  positions: z.record(nodeId, z.tuple([z.number(), z.number()])),
-  regions: z
-    .array(
-      z.strictObject({
-        id: z.string(),
-        name: z.string(),
-        box: z.tuple([z.number(), z.number(), z.number().positive(), z.number().positive()]),
-      }),
-    )
-    .refine((regions) => new Set(regions.map((region) => region.id)).size === regions.length),
-  drawings: z.array(
-    z
-      .looseObject({ id: z.string(), kind: z.enum(["pen", "text", "shape"]) })
-      .refine((drawing) => !Object.prototype.hasOwnProperty.call(drawing, "node")),
-  ),
-});
+const distinct = (ids: readonly string[]) => new Set(ids).size === ids.length;
+const nodeIds = z.array(nodeId).refine(distinct);
+// The map lays every topic out itself; the file keeps folds and opaque UI drawings.
+const canvasSchema = z
+  .strictObject({
+    version: z.literal(3),
+    open: nodeIds,
+    shut: nodeIds,
+    drawings: z.array(
+      z
+        .looseObject({ id: z.string(), kind: z.enum(["pen", "text", "shape"]) })
+        .refine((drawing) => !Object.prototype.hasOwnProperty.call(drawing, "node")),
+    ),
+  })
+  .refine((canvas) => !canvas.open.some((id) => canvas.shut.includes(id)));
 export type Canvas = z.infer<typeof canvasSchema>;
 export type CanvasDocument = { etag: string; canvas: Canvas } | { etag: null; canvas: null };
 

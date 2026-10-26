@@ -1,4 +1,4 @@
-import { useMemo, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { SnapshotCommit } from "../data/types.js";
 import { t } from "../i18n.js";
 import { dayLabel, when } from "../util.js";
@@ -26,6 +26,12 @@ export function Timeline({
   summarize: (commit: SnapshotCommit) => string;
 }) {
   const last = commits.length - 1;
+  const scrubbing = useRef(false);
+  const [preview, setPreview] = useState(index);
+  const displayed = Math.min(preview, last);
+  useEffect(() => {
+    if (!scrubbing.current) setPreview(index);
+  }, [index]);
   const [hover, setHover] = useState<number | null>(null);
   const ticks = useMemo(
     () =>
@@ -77,10 +83,27 @@ export function Timeline({
         className="timeline-range"
         min={0}
         max={last}
-        value={index}
+        value={displayed}
         aria-label={t.map.moment}
-        aria-valuetext={when(commits[index]!.date)}
-        onChange={(e) => onChange(Number(e.target.value))}
+        aria-valuetext={when(commits[displayed]!.date)}
+        onPointerDown={(e) => {
+          scrubbing.current = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }}
+        onPointerUp={(e) => {
+          scrubbing.current = false;
+          onChange(Number(e.currentTarget.value));
+        }}
+        onPointerCancel={() => {
+          scrubbing.current = false;
+          setPreview(index);
+        }}
+        onChange={(e) => {
+          const next = Number(e.target.value);
+          setPreview(next);
+          // Pointer scrubbing moves only the native thumb; read/layout starts at release.
+          if (!scrubbing.current) onChange(next);
+        }}
       />
       <div className="timeline-days" aria-hidden="true">
         {days.map((d) => (
