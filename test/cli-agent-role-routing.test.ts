@@ -76,18 +76,44 @@ test("subcommand help works without required fields, stdin or a Workspace", asyn
     }
   }
   for (const sub of ["start", "stop"]) {
-    const result = await runHookCommand(sub, ["--help"], {
-      packageRoot: repoRoot,
-      stdin: "this must not be read as a Hook event",
-    });
-    assert.equal(result.exitCode, 0, result.stderr);
-    assert.match(result.stdout, /tent hook start\|stop/);
-    assert.doesNotMatch(result.stdout, /unavailable/);
+    for (const flag of ["--help", "-h"]) {
+      const result = await runHookCommand(sub, [flag], {
+        get packageRoot(): string {
+          throw new Error("Hook help must not inspect the package or Workspace");
+        },
+        get stdin(): string {
+          throw new Error("Hook help must not read stdin");
+        },
+      });
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.match(result.stdout, /tent hook start\|stop/);
+      assert.doesNotMatch(result.stdout, /unavailable/);
+    }
   }
-  for (const args of [["role", "create"], ["hook", "start"], ["new"], ["version"]]) {
+  for (const args of [
+    ["role", "create"],
+    ["hook", "start"],
+    ["hook", "stop"],
+    ["new"],
+    ["version"],
+  ]) {
     const result = await runCli(...args, "--help");
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /tent /);
     assert.doesNotMatch(result.stdout, /unavailable|already a Tent/);
+  }
+});
+
+test("ordinary Stop returns before parsing arguments, reading stdin or inspecting a package", async () => {
+  for (const args of [[], ["--host", "codex"], ["--unknown"], ["--host"]]) {
+    const result = await runHookCommand("stop", args, {
+      get packageRoot(): string {
+        throw new Error("Stop must not inspect the package or Workspace");
+      },
+      get stdin(): string {
+        throw new Error("Stop must not read stdin");
+      },
+    });
+    assert.deepEqual(result, { exitCode: 0, stdout: "{}\n", stderr: "" });
   }
 });

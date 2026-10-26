@@ -106,7 +106,10 @@ export function rootBundleOptions(buildRoot) {
 export async function buildPluginRuntime(buildRoot, outputRoot) {
   const inputs = new Set();
   const identity = buildIdentity(buildRoot);
-  for (const [artifact, entry] of [["cli", "src/cli/tent.ts"]]) {
+  for (const [artifact, entry] of [
+    ["cli", "src/cli/tent.ts"],
+    ["tool-hook", "src/cli/tool-hook-entry.ts"],
+  ]) {
     const result = await esbuild.build({
       ...canonicalBuildOptions(buildRoot),
       entryPoints: [entry],
@@ -129,6 +132,18 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
       },
     });
     assertCanonicalMetafile(`plugin-${artifact}`, result.metafile);
+    if (artifact === "tool-hook") {
+      for (const output of Object.values(result.metafile.outputs))
+        for (const [input, contribution] of Object.entries(output.inputs))
+          if (
+            contribution.bytesInOutput > 0 &&
+            (input.startsWith("node_modules/") ||
+              /src\/(?:cli\/tent|core\/base\/frontmatter|core\/store\/scaffold|core\/workspace\/status)\.ts$/.test(
+                input,
+              ))
+          )
+            throw new Error(`Tool hook must not load CLI/parser dependencies: ${input}`);
+    }
     for (const input of Object.keys(result.metafile.inputs)) inputs.add(input);
     for (const output of Object.values(result.metafile.outputs)) {
       const unbundled = output.imports.filter((item) => item.external && !isBuiltin(item.path));
@@ -136,7 +151,7 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
         throw new Error(`Plugin has external runtime imports: ${JSON.stringify(unbundled)}`);
     }
   }
-  await assertCanonicalRootArtifacts(outputRoot, ["cli.mjs"]);
+  await assertCanonicalRootArtifacts(outputRoot, ["cli.mjs", "tool-hook.mjs"]);
   return [...inputs].sort();
 }
 

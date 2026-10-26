@@ -1,5 +1,5 @@
 import type { SessionObservationEvent } from "./session-observations.js";
-import { materialCoverageContains } from "../base/material-coverage.js";
+import { materialCoverageContains } from "../base/material-coverage-match.js";
 import type { StopMaterialIndex } from "./stop-material-index.js";
 import type { StopQuestion } from "./stop-advice.js";
 

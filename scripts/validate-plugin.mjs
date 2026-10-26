@@ -126,8 +126,8 @@ export async function validateHostPackage(root, host) {
   validateDocuments(await readAgentDocuments(root));
   const hooks = JSON.parse(await fs.readFile(path.join(root, "hooks/hooks.json"), "utf8")).hooks;
   check(
-    JSON.stringify(Object.keys(hooks).sort()) === JSON.stringify(["SessionStart", "Stop"]),
-    `${host}: expected SessionStart and Stop hooks`,
+    JSON.stringify(Object.keys(hooks).sort()) === JSON.stringify(["PostToolUse", "SessionStart"]),
+    `${host}: expected tool and start hooks`,
   );
   const variable = host === "codex" ? "PLUGIN_ROOT" : "CLAUDE_PLUGIN_ROOT";
   const realRoot = await fs.realpath(root);
@@ -147,7 +147,10 @@ export async function validateHostPackage(root, host) {
           `${host}: Hook points outside the package`,
         );
         check((await fs.stat(filename)).isFile(), `${host}: Hook launcher is not a file`);
-        const action = event === "Stop" ? "stop" : "start";
+        const action = {
+          SessionStart: "start",
+          PostToolUse: "tool",
+        }[event];
         check(command.endsWith(` -- ${action}`), `${host}: wrong Hook action`);
         const launcher = await fs.readFile(filename, "utf8");
         check(launcher.includes(`"--host", "${host}"`), `${host}: launcher must fix its host`);

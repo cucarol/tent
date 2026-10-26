@@ -2,6 +2,10 @@ import * as fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import * as z from "zod/v4";
+import type { RejectedRootMarker } from "../core/workspace/root-discovery.js";
+import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
+import { isValidTentIndexMarker } from "../core/store/scaffold.js";
+import { rootMarkerDigest, hookIndexDigest } from "./hook-index-identity.js";
 import { NodeFs } from "./node-fs.js";
 import { fileState, stateCacheHit, withFileReadScope } from "./file-state-cache.js";
 import { loadNodeCatalog } from "../core/graph/node-catalog.js";
@@ -52,7 +56,11 @@ const directorySchema = z.strictObject({
 });
 const headerSchema = z.strictObject({ state: stateSchema, content: z.string() });
 const cacheSchema = z.strictObject({
-  schema: z.literal(7),
+  schema: z.literal(8),
+  rootMarkerDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  rejectedRootMarkers: z.array(
+    z.strictObject({ root: z.string(), digest: z.string().regex(/^[a-f0-9]{64}$/) }),
+  ),
   workspaceRoot: z.string(),
   writtenAtNs: z.string().regex(/^\d+$/),
   directories: z.array(z.tuple([relativePath, directorySchema])),
@@ -84,8 +92,16 @@ async function readCache(cacheFile: string, workspaceRoot: string): Promise<Cach
     const cached = cacheSchema.parse(JSON.parse(await fs.readFile(cacheFile, "utf8")));
     if (
       cached.workspaceRoot !== workspaceRoot ||
-      cached.sourceDigest !== hash([cached.writtenAtNs, cached.directories, cached.headers]) ||
-      cached.indexDigest !== hash(cached.index)
+      cached.sourceDigest !==
+        hash([
+          cached.writtenAtNs,
+          cached.directories,
+          cached.headers,
+          cached.rootMarkerDigest,
+          cached.rejectedRootMarkers,
+        ]) ||
+      cached.indexDigest !==
+        hookIndexDigest(cached.index, cached.rootMarkerDigest, cached.rejectedRootMarkers)
     )
       return undefined;
     const directories = new Map(cached.directories),
@@ -133,7 +149,12 @@ async function readCache(cacheFile: string, workspaceRoot: string): Promise<Cach
 export async function loadStopMaterialIndex(
   systemRoot: string,
   workspaceRoot: string,
+  rejectedMarkers: readonly RejectedRootMarker[] = [],
 ): Promise<StopMaterialIndex> {
+  const marker = await fs.readFile(path.join(systemRoot, "index.md"));
+  if (!isValidTentIndexMarker(marker.toString("utf8")))
+    throw new Error("Invalid Tent index marker");
+  const markerDigest = rootMarkerDigest(marker);
   const adapter = new NodeFs(systemRoot);
   const cacheDir = path.join(systemRoot, ".git", "tent-material-cache");
   const cacheFile = path.join(cacheDir, "stop-material-index.json");
@@ -142,6 +163,16 @@ export async function loadStopMaterialIndex(
     .then((stat) => stat.isDirectory())
     .catch(() => false);
   const cached = hasGit ? await readCache(cacheFile, workspaceRoot) : undefined;
+  const rejectionKey = (root: string) =>
+    JSON.stringify([
+      process.platform === "win32" ? path.resolve(root).toLowerCase() : path.resolve(root),
+      workspaceRootFromSystemRoot(root) !== undefined,
+    ]);
+  const rejections = new Map<string, RejectedRootMarker>(
+    cached?.rejectedRootMarkers.map((marker) => [rejectionKey(marker.root), marker]),
+  );
+  for (const marker of rejectedMarkers) rejections.set(rejectionKey(marker.root), marker);
+  const rejectedRootMarkers = [...rejections.values()].sort((a, b) => a.root.localeCompare(b.root));
   const oldDirectories = new Map(cached?.directories),
     oldHeaders = new Map(cached?.headers);
   const directories = new Map<string, DirectoryRecord>();
@@ -152,7 +183,10 @@ export async function loadStopMaterialIndex(
   // to grant a cache hit merely because building the index took a long time.
   const writtenAtNs = String(BigInt(Date.now()) * 1_000_000n);
   let changed = !cached,
-    refreshed = !cached;
+    refreshed =
+      !cached ||
+      cached.rootMarkerDigest !== markerDigest ||
+      hash(cached.rejectedRootMarkers) !== hash(rejectedRootMarkers);
   while (pending.length) {
     await Promise.all(
       pending.splice(0, 64).map(async (directory) => {
@@ -239,13 +273,21 @@ export async function loadStopMaterialIndex(
       await fs.writeFile(
         temp,
         JSON.stringify({
-          schema: 7,
+          schema: 8,
+          rootMarkerDigest: markerDigest,
+          rejectedRootMarkers,
           workspaceRoot,
           writtenAtNs,
           directories: directoryRecords,
           headers: headerRecords,
-          sourceDigest: hash([writtenAtNs, directoryRecords, headerRecords]),
-          indexDigest: hash(index),
+          sourceDigest: hash([
+            writtenAtNs,
+            directoryRecords,
+            headerRecords,
+            markerDigest,
+            rejectedRootMarkers,
+          ]),
+          indexDigest: hookIndexDigest(index, markerDigest, rejectedRootMarkers),
           index,
         }),
       );

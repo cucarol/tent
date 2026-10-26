@@ -1,6 +1,6 @@
 # Tent Agent 插件
 
-插件提供四个 Skill、SessionStart 与同步 Stop Hook，以及同包 CLI。Node、Role、Card 的读写规则在 Core；Skill 按工作需要提供操作指引。
+插件提供四个 Skill、SessionStart 与 PostToolUse Hook，以及同包 CLI 和独立工具 Hook 运行时。Stop 静默结束。Node、Role、Card 的读写规则在 Core；Skill 按工作需要提供操作指引。
 
 ## 构建与安装
 
@@ -28,6 +28,7 @@ release/
       skills/tent-init/references/host-hooks.md
       skill-resources/
       cli.mjs
+      tool-hook.mjs
       ui-dist/
       docs/
   claude-code/
@@ -39,6 +40,7 @@ release/
       skills/tent-init/references/host-hooks.md
       skill-resources/
       cli.mjs
+      tool-hook.mjs
       ui-dist/
       docs/
 ```
@@ -75,7 +77,7 @@ claude plugin install tent --marketplace "https://github.com/cucarol/tent.git#pl
 
 Codex 的 Git ref 与 catalogue 路径遵循[官方打包文档](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli)，Claude Code 的 `#ref` 遵循[官方 Git marketplace 说明](https://code.claude.com/docs/en/plugins/host-marketplace#host-your-marketplace)。旧版 Claude Code 没有 `--marketplace` 时，先 `claude plugin marketplace add "https://github.com/cucarol/tent.git#plugin-dist"`，再 `claude plugin install tent@tent`。宿主的信任确认仍按正常流程完成。
 
-新安装或修改后的 Hook 按宿主流程启用和审查；Codex 已发布的 Hook 定义逐字节保留。安装后在实际宿主中检查发现、启用和事件投递，配置文件存在不代表已经生效。
+新安装或修改后的 Hook 按宿主流程启用和审查；新增或变更后的定义须重新通过原生信任审阅。安装后在实际宿主中检查发现、启用和事件投递，配置文件存在不代表已经生效。
 
 npm 包 `vibe-tent` 是单独的 CLI 包，用 `npm install -g vibe-tent` 安装后使用 `tent` 命令。它不包含完整的宿主插件安装结构。发布工作流用 npm 可信发布把 Release 上的同一个 tgz 发到 npm，不使用 token；npm 上已有该版本时跳过。
 
@@ -149,13 +151,15 @@ Node 正文或语义元数据变化时记录 OKF 原生 `generated: {by, at}`；
 
 ## Hook 边界
 
-SessionStart 先收录待处理的原生 Node 编辑，仅在有待收录改动时拿写锁，不再保存会话基线。随后以事实陈述注入约 300 B：`Tent Workspace`、`Tent CLI`、`workspace brief` 提示与构建身份各一行，源码 checkout 提交不一致时再加一行；不注入完整简报。Stop 同步运行：同仓各 linked worktree 的写入先换算为相对该检出顶层的路径，匹配主检出的模块；相对 Codex patch 路径从会话检出顶层解析，其他仓库不匹配。返回只问规则和决定，不要求先合入代码。它只从转录尾部确定本轮写入的文件、用材料索引点名模块并检测廉价的决定正则；不收录原生 Node 编辑、不算 behind、不观察文件哈希、不写会话观察、不等 `mutation.lock`。原生编辑留到下一次正常 Tent 命令收录，落后状态由输入一侧的 brief 报告。只有本轮写入的文件被模块覆盖才续作：模块是 `sources` 中持有 `track: structure` 目录或前缀材料的有效 Node，不看标签，普通证据目录不参与。Core 统一解析成员；前缀只允许最后一段末尾的一个 `*`。每个文件只点名最具体的覆盖模块，同样具体的都保留，带祖先名字链和可打开的 Node 文件路径而不展开正文。最多五个模块、每模块八个文件，多出模块写 `+N more modules`。
+SessionStart 先收录待处理的原生 Node 编辑，仅在有待收录改动时拿写锁。随后提示工作区、同包 CLI、`workspace brief` 与构建身份，并准备已有材料索引。不注册 UserPromptSubmit，也不建立 Session 或输入文件基线。插件不注册 Stop，结束时不启动 Tent 命令。既有 CLI `hook stop` 返回空 JSON，不 block、不加 context、不产生额外维护回答。
 
-点名采用 SPEC 的固定英文文案，合并可能的新决定。Stop 不查询文件存在性或 ignore，模块点名只按声明地址，不因文件被忽略、已跟踪或不可用而过滤。意图信号只认“决定、确认、改成、新增需求”等明确表述，普通“请、需要、fix”不触发；本轮有明确 Node 或 Card 写入证据时不再提示意图。包含宿主信封的完整 JSON 不超过 2 KiB，溢出先删文件名、再删模块，保留固定文案和问题类别。Codex 用 `decision: block` 与 `reason`；Claude Code 用 `hookSpecificOutput` 的 `hookEventName: Stop` 与 `additionalContext`。`stop_hook_active: true` 立即静默，包括续作执行工具后的 Stop；取消、没有覆盖写入的轮次也静默，不自动执行 check 或 confirm。有效提问投递前，在 `.tent/temp/stop-reviews/` 以宿主、会话和轮次的 SHA-256 建独占空 claim，重复事件最多投递一次，无全局锁或重试；claim 写失败不续作，claim 后崩溃可能丢失该次投递。claim 不存转录或文件内容，也不压制不同轮次的相同文件。
+成功写文件的 PostToolUse 才提示：Claude Code 的 Write、Edit、MultiEdit、NotebookEdit 需要成功结构化结果与输入路径一致；Codex apply_patch 使用成功结果中实际发布的文件路径，不从输入或 shell 文本猜测。失败、取消、只读、无覆盖以及 Node/Card 维护不提醒。同仓 linked worktree 按各自检出根归一，再匹配主检出的模块；其他仓库不匹配。每轮同一 Node 仅提醒一次，原生宿主/会话/回合身份隔离，独占空 claim 不保存聊天或文件内容。问答工具实际返回非空回答后给专门的记录提醒，取代原先 Stop 的正则意图问题。
 
-材料索引使用现有 `.tent/.git/tent-material-cache/stop-material-index.json` 持久增量缓存。每次校验目录与头部的大小、纳秒 mtime、ctime 和文件身份；匹配且不处于时间粒度竞争窗口的条目复用已有观察，目录变化才重新枚举，头部变化或处于竞争窗口才实读。同长度、恢复 mtime 的编辑仍由 ctime 或身份变化触发失效；全部状态字段都未变化的极少见修改可能漏看，单个 `node check` 提供内容实读兜底。缓存缺失、损坏或版本不符从当前文件重建，缓存写失败直接计算；不加常驻进程或 watcher，不修改项目文件、Node/Card/Role、Git 提交或引用。300 ms 保持规模目标，按相同夹具和既定口径报告实际时间；持有工作区锁时不得等待，完整续作成本另计。
+模块仍由 Core 按 `sources` 中 `track: structure` 的目录或前缀确定，每个文件只点名最具体的模块，保留并列与祖先名字。英文提醒逐字以 SPEC§8 为准。完整宿主 JSON 不超过 2 KiB，最多五个模块、每模块八个路径；固定行动句完整保留。提醒进入已有工具链的下一请求，无需记录时 Agent 不再额外说明，最后仍给工作总结。
 
-Codex 以原生 `turn_id` 定位轮次；Claude Code CLI 用 `--host claude-code`，以原生 `prompt_id` 对应转录的 `promptId`，没有身份的版本静默。Claude Read、Write、Edit 需匹配成功的结构化工具结果，侧链不计入。未观察到的 shell 或外部编辑器改动、取消轮次和未投递的提问都无法兜底内容保鲜；必须跟随内容变化的规则另挂具体文件或 SPEC 小节。两个实际宿主都须验证消息抵达且只续作一次；Hook 自身热耗时与完整续作成本分别记录。官方契约：[Codex Hooks](https://learn.chatgpt.com/docs/hooks)。
+工具 Hook 使用独立 `tool-hook.mjs`，不载入完整 CLI、不起 Git、不读转录、不算 behind、不读取代码内容、不等 `mutation.lock`，只读已有材料覆盖与临时空 claim。已有索引缺失或损坏则静默，下次 SessionStart 重建；会话中修改 Node 的模块声明到下次启动才刷新。材料索引复用 `.tent/.git/tent-material-cache/stop-material-index.json`，仍由既有 Core 目录/frontmatter 规则生成，不引入常驻服务或新缓存。同一缓存只附加 Core 完整解析过的根 marker 字节身份及实际拒绝候选的字节身份；工具共享原找根与 linked worktree 路由，只有根身份及沿途拒绝证明均匹配时才使用覆盖。普通项目或子目录 index.md 必须有 Core 拒绝证明才能越过，不靠正则另判 YAML；marker 或证明变动后保守静默，等下次 SessionStart 重新准备。每个宿主的普通、未覆盖、已提醒三种路径分别相邻交替测 11 对工具命令与裸 `node -e 0`，各组每对墙钟差的中位数目标为 ≤50ms；两边都含 Node 启动，Tent 不额外套命令 shell，宿主自带的 shell 不计为 Tent 开销。全部原始配对及离群值保留，不用两组中位数之差或筛选快样本代替。原生宿主与本地模拟模型后端的协议验证不等于真实模型推理或桌面 UI 延迟达标。
+
+shell 或外部编辑器的路径不能从工具事件可靠识别。不建立输入基线或次轮补报，由 brief、check 的既有领先/落后事实兜底。两个实际宿主须分别验证原生信任、成功写入、context 进入已有下一请求和最后可见工作总结。手工 JSON 只证明处理器，不证明宿主生效。宿主事件契约见 [Codex Hooks](https://learn.chatgpt.com/docs/hooks) 和 [Claude Code Hooks](https://code.claude.com/docs/en/hooks)。
 
 `workspace brief` 展示落后与领先两种同步状态计数、无效 Node、待接收 Card、待收回结果、仍需处理的 Card、领先原因、已接收 Card 的来源变化和落后详情，并给出可打开的根 Node 文件。可选详情按 4 KiB 预算裁剪，无效 Node、待接收 Card 和待收回结果不省略；不再读取会话观察日志或列出未关联产出。`workspace drift` 分页保留完整待检查关系。即使没有 Hook，这两个命令也会重新观察 Node 已声明的本地材料版本。保存 Node 时自动记录新材料版本，已变化或读不到的旧材料保留原基线，普通保存不能清除落后。用 `node check` 查看，复核判断后用 `node confirm`；修正正文可用 `node write --confirm` 同时确认，write-many 更新条目也支持 `confirm: true`。用 `node link-output` 在目标下新建 output Node；全部 goal 祖先都保留比较基线，最近的 goal 作为显示归属。目标变化由 goal 领先表达，旧产物保持冻结；完整读取时用 changedSince 说明此后的变化。基线按 Node ID 与文档保存在同一 Git 提交，Markdown 不增加同步或哈希字段。已接收 Card 的 Node 来源变化会在 brief 中提示重读；取消任务用 `card deprecate`，默认列表和简报会隐藏它，显式查看或接收仍会给出警告与现行引用。细节见上文 Node 与 Card 的维护者说明；同步状态不改变 OKF `status`。
 

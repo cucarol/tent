@@ -179,7 +179,7 @@ test("Stop excludes draft module coverage while retaining stable modules beneath
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 7);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 8);
   assert.equal(await adapter.readFile("Core/Core.md"), draftRaw);
   await adapter.writeFile("Core/Core.md", original);
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), stable);
@@ -443,7 +443,7 @@ test("Claude native identity bounds successful reads/writes and ignores failures
   assert.deepEqual((await readClaudeTurnActivity(log, root, "side")).observations, []);
 });
 
-test("native Stop qualifies writes once, stays silent for active later tools, uncovered and empty turns", async (t) => {
+test("native Stop stays silent for writes, repeated events, active tools, uncovered and empty turns", async (t) => {
   const { root, adapter } = await fixture(t);
   const log = path.join(root, "turn.jsonl");
   const hook = async (
@@ -503,11 +503,7 @@ test("native Stop qualifies writes once, stays silent for active later tools, un
   for (const host of ["codex", "claude-code"] as const) {
     const first = await hook(host, "qualifies", "src/core/card-one.ts");
     const result = JSON.parse(first.stdout);
-    assert.ok(
-      host === "codex"
-        ? result.decision === "block" && result.reason
-        : result.hookSpecificOutput?.additionalContext,
-    );
+    assert.deepEqual(result, {});
     assert.ok(Buffer.byteLength(first.stdout) <= 2048);
     assert.equal((await hook(host, "qualifies", "src/core/card-one.ts")).stdout, "{}\n");
     assert.equal((await hook(host, "later-tools", "src/core/card-one.ts", true)).stdout, "{}\n");
@@ -569,7 +565,7 @@ test("Stop excludes unknown lifecycle from modules and ordinary materials across
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 7);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 8);
   assert.deepEqual(modulesForIndexedTurn(expected, event(["unknown/a.ts"])), []);
   assert.deepEqual(questionsForIndexedTurn(expected, event(["only-unknown.txt"])), []);
   const transcript = path.join(root, "unknown-lifecycle.jsonl");

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { exec, execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
@@ -78,7 +77,13 @@ test("both host packages carry the same common payload and separate native shell
     );
     await assert.rejects(fs.access(path.join(bundle, "host-hooks.md")), { code: "ENOENT" });
   }
-  const commonFiles = ["cli.mjs", "package.json", "THIRD_PARTY_NOTICES.txt", "LICENSE"];
+  const commonFiles = [
+    "cli.mjs",
+    "tool-hook.mjs",
+    "package.json",
+    "THIRD_PARTY_NOTICES.txt",
+    "LICENSE",
+  ];
   for (const dir of ["ui-dist", "docs", "skill-resources", "skills"]) {
     const codexFiles = (await fs.readdir(path.join(codex, dir), { recursive: true })).map(
       (f) => `${dir}/${f.replaceAll("\\", "/")}`,
@@ -103,13 +108,6 @@ test("both host packages carry the same common payload and separate native shell
   assert.deepEqual(
     await fs.readFile(path.join(codex, "hooks/hooks.json")),
     await fs.readFile(path.join(root, "plugins/codex/tent/hooks/hooks.json")),
-  );
-  assert.equal(
-    createHash("sha256")
-      .update(await fs.readFile(path.join(codex, "hooks/hooks.json")))
-      .digest("hex"),
-    "142e9524a80ca621779fcf723f39a6d49ec5852dbdb9abb4aa888194c66e6ba7",
-    "Published Codex Hook definitions retain their trust identity",
   );
   const catalogue = JSON.parse(
     await fs.readFile(
@@ -217,8 +215,7 @@ test("Claude Code Hook commands use their own bundle even when PLUGIN_ROOT point
     });
   const start = JSON.parse(await invoke("SessionStart")).hookSpecificOutput.additionalContext;
   assert.ok(start.includes(JSON.stringify(path.join(bundle, "cli.mjs"))));
-  // Missing native prompt identity is a Claude-specific silent Stop, proving fixed host routing.
-  assert.deepEqual(JSON.parse(await invoke("Stop")), {});
+  assert.equal(hooks.Stop, undefined);
   const { validateHostPackage } = await import(
     new URL("../scripts/validate-plugin.mjs", import.meta.url).href
   );
@@ -232,7 +229,7 @@ test("Claude Code Hook commands use their own bundle even when PLUGIN_ROOT point
 });
 
 test(
-  "standalone plugin runs direct documents and two advisory hooks without a Service",
+  "standalone plugin runs direct documents and advisory hooks without a Service",
   { timeout: 180_000 },
   async (t) => {
     const bundle = bundleFor("codex");
@@ -329,8 +326,8 @@ test(
     const hooks = JSON.parse(
       await fs.readFile(path.join(bundle, "hooks/hooks.json"), "utf8"),
     ).hooks;
-    assert.deepEqual(Object.keys(hooks).sort(), ["SessionStart", "Stop"]);
-    assert.equal(hooks.Stop[0].hooks[0].async, undefined);
+    assert.deepEqual(Object.keys(hooks).sort(), ["PostToolUse", "SessionStart"]);
+    assert.equal(hooks.Stop, undefined);
     const hook = (event: string, extra: Record<string, unknown> = {}) =>
       new Promise<string>((resolve, reject) => {
         const child = exec(
@@ -353,42 +350,7 @@ test(
     assert.ok(start.includes(JSON.stringify(path.join(bundle, "cli.mjs"))));
     assert.match(start, /workspace brief/);
     assert.doesNotMatch(start, /SKILL\.md|\$tent-|reconcile|baseline|sessionToken/);
-    assert.match(
-      JSON.parse(await hook("Stop")).systemMessage,
-      /Stop session and turn identities are required/,
-    );
-    const transcript = path.join(workspace, "turn.jsonl");
-    await fs.writeFile(path.join(workspace, "new.svg"), "<svg>private payload</svg>");
-    await fs.writeFile(
-      transcript,
-      [
-        { type: "event_msg", payload: { type: "task_started", turn_id: "turn-1" } },
-        {
-          type: "event_msg",
-          payload: {
-            type: "item_completed",
-            turn_id: "turn-1",
-            item: {
-              type: "FileChange",
-              status: "completed",
-              changes: { "new.svg": { type: "add" } },
-            },
-          },
-        },
-      ]
-        .map((row) => JSON.stringify(row))
-        .join("\n") + "\n",
-    );
-    const stopInput = { turn_id: "turn-1", transcript_path: transcript };
-    const stop = await hook("Stop", stopInput);
-    assert.ok(Buffer.byteLength(stop) <= 2048);
-    assert.deepEqual(JSON.parse(stop), {});
-    const observationDir = path.join(workspace, ".tent", "temp", "observations");
-    await assert.rejects(fs.access(observationDir), { code: "ENOENT" });
-    assert.deepEqual(JSON.parse(await hook("Stop", stopInput)), {});
-    await assert.rejects(fs.access(path.join(workspace, ".tent", "temp", "stop-reviews")), {
-      code: "ENOENT",
-    });
+    assert.equal(hooks.Stop, undefined);
     await assert.rejects(fs.access(dataDir), { code: "ENOENT" });
     await assert.rejects(fs.access(trap), { code: "ENOENT" });
     // A broken CLI is not repaired with a cwd/global runtime.

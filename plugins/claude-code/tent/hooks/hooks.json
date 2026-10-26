@@ -1,17 +1,5 @@
 {
   "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.CLAUDE_PLUGIN_ROOT,'hooks','session.mjs')).href)\" -- stop",
-            "timeout": 60,
-            "statusMessage": "Checking Tent context updates"
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "hooks": [
@@ -22,6 +10,18 @@
             "statusMessage": "Locating Tent workspace"
           }
         ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.CLAUDE_PLUGIN_ROOT,'hooks','session.mjs')).href)\" -- tool",
+            "timeout": 60
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion"
       }
     ]
   }

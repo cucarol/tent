@@ -8,6 +8,8 @@ import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import { findTentSystemRoot } from "../src/core/workspace/status.js";
 import { resolveWorkspacePaths } from "../src/cli/workspace-path.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
+import { runToolHook } from "../src/cli/tool-hook.js";
+import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
 import { runHookCommand } from "../src/cli/hook.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
@@ -99,7 +101,7 @@ test("linked checkout CLI discovery, append and material state use the main Tent
 });
 
 for (const host of ["codex", "claude-code"] as const) {
-  test(`${host} Stop routes writes across main, internal and external linked checkouts`, async (t) => {
+  test(`${host} successful tool hook routes writes across main, internal and external linked checkouts`, async (t) => {
     const { base, main, roots, node } = await fixture(t);
     const foreign = path.join(main, "src/foreign");
     await fs.mkdir(foreign);
@@ -118,84 +120,38 @@ for (const host of ["codex", "claude-code"] as const) {
     let turn = 0;
     async function stop(cwd: string, file: string) {
       const id = `turn-${turn++}`;
-      const log = path.join(base, `${id}.jsonl`);
-      const rows =
-        host === "codex"
-          ? [
-              { type: "turn_context", payload: { turn_id: id, cwd } },
-              { type: "event_msg", payload: { type: "task_started", turn_id: id } },
-              {
-                type: "response_item",
-                payload: {
-                  type: "custom_tool_call",
-                  name: "apply_patch",
-                  call_id: "patch",
-                  input: `*** Begin Patch\n*** Update File: ${file}\n@@\n-old\n+new\n*** End Patch`,
-                },
-              },
-              {
-                type: "response_item",
-                payload: {
-                  type: "custom_tool_call_output",
-                  call_id: "patch",
-                  output: "Success. Updated the following files:\n",
-                },
-              },
-            ]
-          : [
-              { type: "user", promptId: id, cwd, message: { content: "Edit code." } },
-              {
-                type: "assistant",
-                cwd,
-                message: {
-                  content: [
-                    { type: "tool_use", id: "write", name: "Write", input: { file_path: file } },
-                  ],
-                },
-              },
-              {
-                type: "user",
-                promptId: id,
-                cwd,
-                message: {
-                  content: [{ type: "tool_result", tool_use_id: "write", is_error: false }],
-                },
-                toolUseResult: { type: "update", filePath: file },
-              },
-            ];
-      await fs.writeFile(log, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+      await loadStopMaterialIndex(path.join(main, ".tent"), main);
       return JSON.parse(
-        (
-          await runHookCommand("stop", ["--host", host], {
-            packageRoot: main,
-            stdin: JSON.stringify({
-              cwd,
-              session_id: host,
-              turn_id: id,
-              prompt_id: id,
-              transcript_path: log,
-              hook_event_name: "Stop",
-            }),
-          })
-        ).stdout,
+        await runToolHook(host, {
+          cwd,
+          session_id: host,
+          turn_id: id,
+          prompt_id: id,
+          hook_event_name: "PostToolUse",
+          tool_use_id: id,
+          tool_name: host === "codex" ? "apply_patch" : "Write",
+          tool_input:
+            host === "codex"
+              ? { command: `*** Begin Patch\n*** Update File: ${file}\n*** End Patch` }
+              : { file_path: file },
+          tool_response:
+            host === "codex"
+              ? `Success. Updated the following files:\nM ${file}\n`
+              : { filePath: file, type: "update" },
+        }),
       );
     }
     for (const cwd of roots) {
       for (const target of roots) {
         const notice = await stop(cwd, path.join(target, "src/core/code.ts"));
-        const reason =
-          host === "codex" ? notice.reason : notice.hookSpecificOutput?.additionalContext;
+        const reason = notice.hookSpecificOutput?.additionalContext;
         assert.ok(reason?.includes(node.nodeId), JSON.stringify({ cwd, target, notice }));
         assert.match(reason, /src\/core\/code\.ts/);
         assert.doesNotMatch(reason, /\.worktrees|codex-home|\.claude/);
       }
       const relativeCwd = host === "codex" ? path.join(cwd, "src/core") : cwd;
       const notice = await stop(relativeCwd, "src/core/code.ts");
-      assert.ok(
-        (host === "codex" ? notice.reason : notice.hookSpecificOutput?.additionalContext)?.includes(
-          node.nodeId,
-        ),
-      );
+      assert.ok(notice.hookSpecificOutput?.additionalContext?.includes(node.nodeId));
       for (const other of [foreign, submodule])
         assert.deepEqual(await stop(cwd, path.join(other, "code.ts")), {});
     }
@@ -217,18 +173,12 @@ for (const host of ["codex", "claude-code"] as const) {
           );
           assert.equal(await resolver.relative(file), "src/core/code.ts");
           const notice = await stop(cwd, file);
-          const reason =
-            host === "codex" ? notice.reason : notice.hookSpecificOutput?.additionalContext;
+          const reason = notice.hookSpecificOutput?.additionalContext;
           assert.ok(reason?.includes(node.nodeId), JSON.stringify({ cwd, file, notice }));
         }
         const relativeCwd = host === "codex" ? cwd : root.toLowerCase();
         const notice = await stop(relativeCwd, "src/core/code.ts");
-        assert.ok(
-          (host === "codex"
-            ? notice.reason
-            : notice.hookSpecificOutput?.additionalContext
-          )?.includes(node.nodeId),
-        );
+        assert.ok(notice.hookSpecificOutput?.additionalContext?.includes(node.nodeId));
         for (const other of [foreign, submodule])
           assert.deepEqual(await stop(cwd, path.join(other.toLowerCase(), "code.ts")), {});
       }

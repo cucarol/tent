@@ -42,6 +42,16 @@ function stableClock(t: TestContext) {
 }
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const indexDigest = (cached: Record<string, unknown>) =>
+  digest([cached.rootMarkerDigest, cached.rejectedRootMarkers, cached.index]);
+const sourceDigest = (cached: Record<string, unknown>) =>
+  digest([
+    cached.writtenAtNs,
+    cached.directories,
+    cached.headers,
+    cached.rootMarkerDigest,
+    cached.rejectedRootMarkers,
+  ]);
 
 test("Stop header equivalence ignores provenance but preserves identity, validity and coverage changes", () => {
   const original = "---\nid: node-a\ntype: goal\ngenerated: {at: old}\n---\n";
@@ -74,7 +84,8 @@ test("Stop updates a generated-only header record while retaining the same proje
     cached.headers.find(([name]: [string]) => name === "A/A.md")[1].content,
     /generated/,
   );
-  assert.equal(cached.indexDigest, digest(expected));
+  assert.deepEqual(cached.index, expected);
+  assert.equal(cached.indexDigest, indexDigest(cached));
   await fs.writeFile(filename, changed.replace("type: goal", "type: output"));
   assert.equal(
     (await loadStopMaterialIndex(systemRoot, root)).nodes.find((node) => node.nodeId === "node-a")
@@ -237,42 +248,79 @@ test("Stop index rejects corrupt, obsolete and incomplete cache records and surv
   stableClock(t);
   const expected = await loadStopMaterialIndex(systemRoot, root);
   const valid = await fs.readFile(cacheFile, "utf8");
+  const baseline = JSON.parse(valid);
+  assert.equal(baseline.schema, 8);
+  assert.equal(baseline.sourceDigest, sourceDigest(baseline));
+  assert.equal(baseline.indexDigest, indexDigest(baseline));
   const directories = t.mock.method(NodeFs.prototype, "listDir");
-  const cases = [
-    "broken JSON",
-    JSON.stringify({ ...JSON.parse(valid), schema: 3 }),
-    JSON.stringify({ ...JSON.parse(valid), schema: 4 }),
-    (() => {
-      const cached = JSON.parse(valid);
-      cached.schema = 5;
-      cached.index = { nodes: [] };
-      cached.indexDigest = digest(cached.index);
-      return JSON.stringify(cached);
-    })(),
-    JSON.stringify({ ...JSON.parse(valid), index: { nodes: [] } }),
-    (() => {
-      const cached = JSON.parse(valid);
-      cached.headers[0][1].content = "---\nid: node-forged\n---\n";
-      return JSON.stringify(cached);
-    })(),
-    (() => {
-      const cached = JSON.parse(valid);
-      cached.directories.pop();
-      cached.sourceDigest = digest([cached.writtenAtNs, cached.directories, cached.headers]);
-      return JSON.stringify(cached);
-    })(),
-    (() => {
-      const cached = JSON.parse(valid);
-      cached.directories[0][1].state.mtimeNs = "invalid";
-      cached.sourceDigest = digest([cached.writtenAtNs, cached.directories, cached.headers]);
-      return JSON.stringify(cached);
-    })(),
+  assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
+  assert.equal(directories.mock.callCount(), 0, "control cache must be a real hit");
+  const cases: [string, string, boolean?, boolean?][] = [
+    ["malformed JSON", "broken JSON"],
+    ["obsolete schema 3", JSON.stringify({ ...baseline, schema: 3 }), true, true],
+    ["obsolete schema 4", JSON.stringify({ ...baseline, schema: 4 }), true, true],
+    ["obsolete schema 7", JSON.stringify({ ...baseline, schema: 7 }), true, true],
+    [
+      "obsolete schema 5 with intact digests",
+      (() => {
+        const cached = JSON.parse(valid);
+        cached.schema = 5;
+        cached.index = { nodes: [] };
+        cached.indexDigest = indexDigest(cached);
+        return JSON.stringify(cached);
+      })(),
+      true,
+      true,
+    ],
+    ["index digest mismatch", JSON.stringify({ ...baseline, index: { nodes: [] } }), true, false],
+    [
+      "header source digest mismatch",
+      (() => {
+        const cached = JSON.parse(valid);
+        cached.headers[0][1].content = "---\nid: node-forged\n---\n";
+        return JSON.stringify(cached);
+      })(),
+      false,
+      true,
+    ],
+    [
+      "incomplete directory topology with intact digests",
+      (() => {
+        const cached = JSON.parse(valid);
+        cached.directories.pop();
+        cached.sourceDigest = sourceDigest(cached);
+        return JSON.stringify(cached);
+      })(),
+      true,
+      true,
+    ],
+    [
+      "invalid state field with intact digests",
+      (() => {
+        const cached = JSON.parse(valid);
+        cached.directories[0][1].state.mtimeNs = "invalid";
+        cached.sourceDigest = sourceDigest(cached);
+        return JSON.stringify(cached);
+      })(),
+      true,
+      true,
+    ],
   ];
-  for (const invalid of cases) {
+  for (const [reason, invalid, validSourceDigest, validIndexDigest] of cases) {
+    if (validSourceDigest !== undefined && validIndexDigest !== undefined) {
+      const cached = JSON.parse(invalid);
+      assert.equal(cached.sourceDigest === sourceDigest(cached), validSourceDigest, reason);
+      assert.equal(cached.indexDigest === indexDigest(cached), validIndexDigest, reason);
+    }
     await fs.writeFile(cacheFile, invalid);
     directories.mock.resetCalls();
-    assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-    assert.ok(directories.mock.callCount() > 0);
+    assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected, reason);
+    assert.deepEqual(
+      directories.mock.calls.map((call) => call.arguments[0]).sort(),
+      ["", "A", "A/Child"],
+      `${reason} must discard the whole cache, not just refresh its damaged subtree`,
+    );
+    t.diagnostic(`Rejected ${reason}`);
   }
   await fs.rm(cacheFile);
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
