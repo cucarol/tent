@@ -52,3 +52,54 @@ test("existing Git ignore entries and structural markers remain valid", async (t
 test("retired agent commands remain unavailable", async () => {
   await assert.rejects(run("agent", "session-start"), /Unknown command: tent agent/);
 });
+
+test("new accepts workspace selection by flag or an equivalent positional path", async (t) => {
+  const scratch = path.resolve(".scratch");
+  await fs.mkdir(scratch, { recursive: true });
+  const root = await fs.mkdtemp(path.join(scratch, "new-workspace-option-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  for (const name of ["flag", "both"]) {
+    const workspace = path.join(root, name);
+    await fs.mkdir(workspace);
+    await fs.writeFile(path.join(workspace, "README.md"), "Keep project files\n");
+    const args = ["new", "--workspace", workspace];
+    if (name === "both") args.push(path.relative(process.cwd(), workspace) + "/.");
+    const { stdout } = await run(...args);
+    assert.match(stdout, /Created Tent:/);
+    assert.equal((await fs.stat(path.join(workspace, ".tent/.git"))).isDirectory(), true);
+    assert.equal(
+      await fs.readFile(path.join(workspace, "README.md"), "utf8"),
+      "Keep project files\n",
+    );
+    await assert.rejects(run("new", "--workspace", workspace), /already a Tent/);
+  }
+  const { stdout } = await run("new", "--help");
+  assert.match(stdout, /tent new --workspace <workspace-path>/);
+});
+
+test("new rejects conflicting workspace selections before creating either Tent", async (t) => {
+  const scratch = path.resolve(".scratch");
+  await fs.mkdir(scratch, { recursive: true });
+  const root = await fs.mkdtemp(path.join(scratch, "new-conflicting-options-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const positional = path.join(root, "positional");
+  const flag = path.join(root, "flag");
+  await assert.rejects(run("new", positional, "--workspace", flag), /must name the same directory/);
+  assert.deepEqual(await fs.readdir(root), []);
+});
+
+test("version accepts workspace without requiring or changing a Tent", async (t) => {
+  const scratch = path.resolve(".scratch");
+  await fs.mkdir(scratch, { recursive: true });
+  const root = await fs.mkdtemp(path.join(scratch, "version-workspace-option-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "not-created");
+  const expected = (await run("--version")).stdout;
+  for (const command of ["--version", "version", "-v"]) {
+    const { stdout } = await run(command, "--workspace", workspace);
+    assert.equal(stdout, expected);
+  }
+  const { stdout } = await run("version", "--json", "--workspace", workspace);
+  assert.equal(JSON.parse(stdout).runtimePath, cli);
+  assert.deepEqual(await fs.readdir(root), []);
+});

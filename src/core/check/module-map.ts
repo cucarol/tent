@@ -353,7 +353,7 @@ export function checkModuleMap(input: ModuleMapInput) {
         code: "deps.cycle",
         object: `${a.path} <-> ${b.path}`,
         facts: { nodeIds: [a.id, b.id], forwardImports: forward, reverseImports: reverse },
-        fix: "Merge these modules or declare allow:deps.cycle with the other module's link on one body line.",
+        fix: "Keep both modules when their responsibilities differ: declare allow:deps.cycle with the other module's link and why they import each other on one body line. Merge them only when they are one responsibility.",
       });
     }
   }
@@ -428,7 +428,7 @@ export function checkModuleMap(input: ModuleMapInput) {
       },
       fix: generated
         ? "Keep the generated output and its source in the same module."
-        : "Merge these modules or declare allow:history.always-together with the other module's link and their shared change workflow on one body line.",
+        : "Keep both modules when their responsibilities differ: declare allow:history.always-together with the other module's link and their shared change workflow on one body line. Merge them only when they are one responsibility.",
     });
   }
   for (const facts of moduleFacts) {

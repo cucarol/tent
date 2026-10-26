@@ -32,10 +32,16 @@ async function main() {
   if (cmd === "version" || cmd === "--version" || cmd === "-v") {
     const { values } = parseArgs({
       args,
-      options: { json: { type: "boolean" }, help: { type: "boolean", short: "h" } },
+      options: {
+        json: { type: "boolean" },
+        help: { type: "boolean", short: "h" },
+        workspace: { type: "string" },
+      },
     });
     if (values.help) {
-      console.log("Usage: tent version [--json]\nShow the local build identity and runtime path.");
+      console.log(
+        "Usage: tent version [--json] [--workspace <path>]\nShow the local build identity and runtime path.",
+      );
       return;
     }
     const identity = await readBuildIdentity(packageRoot());
@@ -69,16 +75,24 @@ async function main() {
     const { positionals, values } = parseArgs({
       args,
       allowPositionals: true,
-      options: { help: { type: "boolean", short: "h" } },
+      options: { help: { type: "boolean", short: "h" }, workspace: { type: "string" } },
     });
     if (values.help) {
       console.log(
-        "Usage: tent new <workspace-path>\nCreate an empty .tent and independent local Git.",
+        "Usage: tent new <workspace-path> | tent new --workspace <workspace-path>\nCreate an empty .tent and independent local Git.",
       );
       return;
     }
-    if (positionals.length !== 1) return fail("Usage: tent new <workspace-path>");
-    await newTent(positionals[0]);
+    const target = values.workspace ?? positionals[0];
+    if (positionals.length > 1 || !target)
+      return fail("Usage: tent new <workspace-path> | tent new --workspace <workspace-path>");
+    if (
+      positionals[0] !== undefined &&
+      values.workspace !== undefined &&
+      path.relative(path.resolve(positionals[0]), path.resolve(values.workspace)) !== ""
+    )
+      return fail("The workspace path and --workspace must name the same directory.");
+    await newTent(target);
     return;
   }
   if (cmd === "ui") {
@@ -148,7 +162,7 @@ function helpText(): string {
 Run it inside a Workspace, or name one with --workspace <path>.
 
 Start
-  tent new <path>                    Create an empty Tent in <path>/.tent with its own Git history.
+  tent new <path>                    Create an empty Tent in <path>/.tent with its own Git history; --workspace <path> also selects the new root.
   tent ui [--port <n>] [--no-open]   Open the map in the browser; Ctrl+C stops it.
 
 Read and record

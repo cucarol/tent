@@ -558,7 +558,7 @@ test("history changes preflight findings, never the draft or native Node state",
   assert.ok(history.summary.issues.some((issue) => issue.code === "history.always-together"));
   assert.match(
     formatWorkspaceDraft(history.summary),
-    /history.always-together.*fix: Merge these modules/,
+    /history\.always-together.*fix: Keep both modules when their responsibilities differ: declare allow:history\.always-together.*Merge them only when they are one responsibility\./,
   );
   assert.equal(empty.summary.issues.length, 0);
   const a = history.summary.modules.find((module) => module.name === "a")!;
