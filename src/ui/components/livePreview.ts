@@ -22,7 +22,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { workspaceImage } from "../data/api.js";
 import { t } from "../i18n.js";
-import { loadableImage } from "../util.js";
+import { loadableImage, markdownUriPattern } from "../util.js";
 import { TYPE_ICON_SVG, glyphSvg as typeSvg } from "./Glyph.js";
 
 export type RefKind = keyof typeof TYPE_ICON_SVG;
@@ -237,6 +237,7 @@ class TableWidget extends WidgetType {
         if (align[c]) td.style.textAlign = align[c];
         td.innerHTML = DOMPurify.sanitize(
           marked.parseInline(cell.text, { gfm: true, async: false }) as string,
+          { ALLOWED_URI_REGEXP: markdownUriPattern },
         );
         td.querySelectorAll("a[href]").forEach((a) => {
           const kind = this.refKind(a.getAttribute("href")!);

@@ -2,10 +2,49 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { marked } from "marked";
 import { tableModel } from "../src/ui/components/livePreview.js";
 import { Patch } from "../src/ui/panel/Details.js";
 import { plainLine } from "../src/core/base/document-title.js";
-import { inlineDiff, lineDiff, trimSegments } from "../src/ui/util.js";
+import {
+  directoryPath,
+  inlineDiff,
+  lineDiff,
+  markdownUriPattern,
+  resolveHref,
+  trimSegments,
+} from "../src/ui/util.js";
+
+test("Markdown link policy retains table directory navigation and existing external protocols", () => {
+  const uri = "file:///D:/workspace/folder/";
+  const { rows } = tableModel(`| x |\n|---|\n| [folder](${uri}) |`);
+  const html = marked.parseInline(rows[1]![0]!.text, { gfm: true, async: false }) as string;
+  const href = html.match(/href="([^"]+)"/)![1]!;
+  assert.equal(href, uri);
+  assert.equal(markdownUriPattern.test(href), true);
+  assert.equal(directoryPath("Author/Author.md", href), uri);
+  for (const target of [
+    "matrix:u/alice:example.org",
+    "https://example.org/",
+    "http://example.org/",
+    "ftp://example.org/",
+    "ftps://example.org/",
+    "mailto:alice@example.org",
+    "tel:123",
+    "callto:alice",
+    "sms:123",
+    "cid:part",
+    "xmpp:alice@example.org",
+    "../folder/",
+    "#section",
+  ])
+    assert.equal(markdownUriPattern.test(target), true, target);
+  assert.deepEqual(resolveHref("Author/Author.md", "matrix:u/alice:example.org"), {
+    external: "matrix:u/alice:example.org",
+  });
+  for (const target of ["javascript:alert(1)", "vbscript:msgbox(1)", "data:text/html,unsafe"])
+    assert.equal(markdownUriPattern.test(target), false, target);
+});
 
 test("a conflict shows the lines that differ, with a little context", () => {
   const theirs = ["one", "two", "three", "four", "five", "six", "seven"].join("\n");

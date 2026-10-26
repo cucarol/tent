@@ -18,7 +18,7 @@ import { primaryOf, type Graph } from "../data/store.js";
 import type { NodeRelationsDetails, SnapshotRef } from "../data/types.js";
 import { documentRef } from "../data/document-links.js";
 import { t } from "../i18n.js";
-import { relativeHref, resolveHref, workspaceImagePath } from "../util.js";
+import { directoryPath, relativeHref, resolveHref, workspaceImagePath } from "../util.js";
 import { followLinks, livePreview, type RefKind } from "./livePreview.js";
 
 type Props = {
@@ -33,6 +33,7 @@ type Props = {
   onSave: () => void;
   /** Ctrl-click on a link to another Tent document. */
   onOpen: (ref: SnapshotRef) => void;
+  onDirectory?: (path: string) => void;
   onToast: (text: string) => void;
 };
 
@@ -253,18 +254,31 @@ export default function MarkdownEditor({
   onChange,
   onSave,
   onOpen,
+  onDirectory,
   onToast,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>(null);
   const mode = useRef(new Compartment());
-  const latest = useRef({ graph, fromPath, relations, onChange, onSave, onOpen, onToast });
-  latest.current = { graph, fromPath, relations, onChange, onSave, onOpen, onToast };
+  const latest = useRef({
+    graph,
+    fromPath,
+    relations,
+    onChange,
+    onSave,
+    onOpen,
+    onDirectory,
+    onToast,
+  });
+  latest.current = { graph, fromPath, relations, onChange, onSave, onOpen, onDirectory, onToast };
 
   const follow = (href: string) => {
     const { graph, fromPath, relations } = latest.current;
     const ref = documentRef(graph, fromPath, href, relations);
     if (ref) return latest.current.onOpen(ref);
+    const directory = directoryPath(fromPath, href);
+    if (directory !== null && latest.current.onDirectory)
+      return latest.current.onDirectory(directory);
     const target = resolveHref(fromPath, href);
     if (target.external && /^(https?|mailto):/i.test(target.external))
       window.open(target.external, "_blank", "noopener");

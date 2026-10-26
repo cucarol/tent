@@ -5703,6 +5703,28 @@ a.btn {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.file-directory {
+  max-height: min(50vh, 400px);
+  overflow: auto;
+}
+.file-directory-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.file-directory-row:hover {
+  background: var(--bg-subtle);
+}
+.file-directory-row .file-size {
+  margin-left: auto;
+}
 .file-size {
   font-size: 12px;
   color: var(--text-3);

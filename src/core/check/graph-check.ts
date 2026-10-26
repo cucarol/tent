@@ -251,22 +251,27 @@ export async function checkGraph(
     } catch (cause) {
       return message(cause);
     }
+    const directory = isDirectoryMaterial(locator);
+    const kind = directory ? "directory" : "file";
     try {
-      if (filename !== undefined && (await exists(filename))) return;
+      if (filename !== undefined && (await exists(filename, directory))) return;
       if (
         target.startsWith("/") &&
         locator.kind === "path" &&
         locator.anchor === "bundle" &&
-        (await exists(path.resolve(workspaceRoot, locator.target)))
+        (await exists(path.resolve(workspaceRoot, locator.target), directory))
       ) {
         const relative = path.posix.relative(
           path.posix.join(".tent", path.posix.dirname(owner)),
           locator.target,
         );
-        const address = relative.split("/").map(encodeURIComponent).join("/") + locator.suffix;
-        return `Local link target does not exist as a file; leading / resolves from .tent; write ${JSON.stringify(address)} relative to this document`;
+        const address =
+          relative.split("/").map(encodeURIComponent).join("/") +
+          (directory && !relative.endsWith("/") ? "/" : "") +
+          locator.suffix;
+        return `Local link target does not exist as a ${kind}; leading / resolves from .tent; write ${JSON.stringify(address)} relative to this document`;
       }
-      return "Local link target does not exist as a file";
+      return `Local link target does not exist as a ${kind}`;
     } catch (cause) {
       error(owner, `Cannot inspect ${JSON.stringify(target)}: ${message(cause)}`);
     }

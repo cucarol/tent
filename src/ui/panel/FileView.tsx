@@ -1,21 +1,144 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { ApiError, nodeText, workspaceBlob, type FileInfo, type NodeText } from "../data/api.js";
+import {
+  ApiError,
+  nodeText,
+  readDirectory,
+  workspaceText,
+  workspaceBlob,
+  type FileInfo,
+  type NodeText,
+} from "../data/api.js";
 import {
   fileLimit,
   fileOf,
   filesOf,
   fileSize,
   infoOf,
+  localFileAt,
   useFiles,
   type NodeFile,
 } from "../data/files.js";
 import type { SnapshotNode } from "../data/types.js";
+import type { SnapshotRef } from "../data/types.js";
+import type { Graph } from "../data/store.js";
+import type { DirectoryEntry, WorkspaceDirectory } from "../../core/read/workspace-directory.js";
 import { FileGlyph, Icon } from "../components/Glyph.js";
 import { t } from "../i18n.js";
 
 export type LocalFile = Extract<NodeFile, { kind: "file" }>;
 
 const limitOf = (file: LocalFile) => fileLimit(file.show);
+
+/** One level in the existing file panel; child files keep the same preview flow. */
+export function DirectoryView({
+  path,
+  graph,
+  onDirectory,
+  onOpen,
+  onToast,
+}: {
+  path: string;
+  graph: Graph;
+  onDirectory: (path: string | null) => void;
+  onOpen: (ref: SnapshotRef) => void;
+  onToast: (text: string) => void;
+}) {
+  const [read, setRead] = useState<{
+    path: string;
+    value?: WorkspaceDirectory;
+    failed?: boolean;
+  }>();
+  const [picked, setPicked] = useState<{ directory: string; file: DirectoryEntry }>();
+  useEffect(() => {
+    const abort = new AbortController();
+    readDirectory(path, abort.signal).then(
+      (value) => !abort.signal.aborted && setRead({ path, value }),
+      () => !abort.signal.aborted && setRead({ path, failed: true }),
+    );
+    return () => abort.abort();
+  }, [path]);
+  const value = read?.path === path ? read.value : undefined;
+  const file = picked?.directory === path ? picked.file : undefined;
+  const open = (entry: DirectoryEntry) => {
+    if (entry.kind === "directory") return onDirectory(entry.path);
+    const ref = entry.path.startsWith(".tent/")
+      ? graph.snapshot.paths[entry.path.slice(6)]
+      : undefined;
+    if (ref && graph.exists(ref)) return onOpen(ref);
+    setPicked({ directory: path, file: entry });
+  };
+  return (
+    <>
+      <section className="file-view" aria-label={t.file.directory}>
+        <div className="file-bar">
+          <Icon name="folder" size={15} />
+          <span className="file-name">{(value ? value.path : path) || "/"}</span>
+          <span className="file-acts">
+            <button
+              type="button"
+              className="btn plain"
+              disabled={!value || value.parent === null}
+              onClick={() => value && onDirectory(value.parent)}
+            >
+              {t.file.parent}
+            </button>
+            <button type="button" className="btn plain" onClick={() => onDirectory(null)}>
+              {t.app.close}
+            </button>
+          </span>
+        </div>
+        {value ? (
+          value.entries.length ? (
+            <div className="file-directory">
+              {value.entries.map((entry) => (
+                <button
+                  type="button"
+                  className="file-directory-row"
+                  key={entry.path}
+                  onClick={() => open(entry)}
+                >
+                  {entry.kind === "directory" ? (
+                    <Icon name="folder" size={15} />
+                  ) : (
+                    <FileGlyph show={localFileAt(entry.path).show} size={15} />
+                  )}
+                  <span className="file-name">
+                    {entry.name}
+                    {entry.kind === "directory" ? "/" : ""}
+                  </span>
+                  {entry.kind === "file" && (
+                    <span className="file-size">{fileSize(entry.size)}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="file-stage">
+              <p className="file-note">{t.file.emptyDirectory}</p>
+            </div>
+          )
+        ) : (
+          <div className="file-stage">
+            <p
+              className="file-note"
+              role={read?.path === path && read.failed ? "alert" : undefined}
+            >
+              {read?.path === path && read.failed ? t.file.directoryFailed : t.file.loading}
+            </p>
+          </div>
+        )}
+      </section>
+      {file && (
+        <OneFile
+          key={file.path}
+          file={localFileAt(file.path)}
+          info={{ size: file.size, modifiedAt: file.modifiedAt }}
+          onToast={onToast}
+        />
+      )}
+    </>
+  );
+}
 
 /**
  * The files a Node names, above its text. Its own file opens with the page; with sources, a row of them
@@ -79,7 +202,7 @@ function OneFile({
   info,
   onToast,
 }: {
-  nodeId: string;
+  nodeId?: string;
   file: LocalFile;
   info: FileInfo | null | undefined;
   onToast: (text: string) => void;
@@ -99,7 +222,7 @@ function TextFile({
   info,
   onToast,
 }: {
-  nodeId: string;
+  nodeId?: string;
   file: LocalFile;
   info: FileInfo | undefined;
   onToast: (text: string) => void;
@@ -108,11 +231,17 @@ function TextFile({
   useEffect(() => {
     const abort = new AbortController();
     setRead(undefined);
-    nodeText(nodeId, file.path, abort.signal).then(setRead, (error: unknown) => {
-      if (abort.signal.aborted) return;
-      const status = error instanceof ApiError ? error.status : 0;
-      setRead(status === 404 ? "missing" : status === 415 ? "binary" : "failed");
-    });
+    const request = nodeId
+      ? nodeText(nodeId, file.path, abort.signal)
+      : workspaceText(file.path, abort.signal);
+    request.then(
+      (value) => !abort.signal.aborted && setRead(value),
+      (error: unknown) => {
+        if (abort.signal.aborted) return;
+        const status = error instanceof ApiError ? error.status : 0;
+        setRead(status === 404 ? "missing" : status === 415 ? "binary" : "failed");
+      },
+    );
     return () => abort.abort();
   }, [nodeId, file.path, info?.modifiedAt]);
   if (read === "missing") return <MissingFile file={file} onToast={onToast} />;

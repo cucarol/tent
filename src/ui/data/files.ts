@@ -20,8 +20,9 @@ const KINDS: [RegExp, FileKind][] = [
     "text",
   ],
 ];
-export const fileKind = (resource: string): FileKind =>
-  KINDS.find(([suffix]) => suffix.test(resource.split(/[?#]/)[0]!))?.[1] ?? "other";
+const filenameKind = (name: string): FileKind =>
+  KINDS.find(([suffix]) => suffix.test(name))?.[1] ?? "other";
+export const fileKind = (resource: string): FileKind => filenameKind(resource.split(/[?#]/)[0]!);
 
 export type NodeFile =
   | { kind: "file"; path: string; name: string; ext: string; show: FileKind }
@@ -39,6 +40,11 @@ function localFile(m: SnapshotMaterial): Extract<NodeFile, { kind: "file" }> | n
   // A folder (written with a closing slash) is where the Node's code lives, not a file it can show.
   if (m.resource.split(/[?#]/)[0]!.endsWith("/")) return null;
   const path = m.workspacePath;
+  return localFileAt(path);
+}
+
+/** The same suffix-driven preview for a file opened from a directory. */
+export function localFileAt(path: string): Extract<NodeFile, { kind: "file" }> {
   const name = path.split("/").pop() ?? path;
   const dot = name.lastIndexOf(".");
   return {
@@ -46,7 +52,7 @@ function localFile(m: SnapshotMaterial): Extract<NodeFile, { kind: "file" }> | n
     path,
     name,
     ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : "",
-    show: fileKind(name),
+    show: filenameKind(name),
   };
 }
 

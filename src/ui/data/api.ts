@@ -3,6 +3,7 @@
 import { t } from "../i18n.js";
 import type { WorkspaceMap } from "../../core/read/workspace-map.js";
 import type { HistoryTree } from "../../core/read/history-query.js";
+import type { WorkspaceDirectory } from "../../core/read/workspace-directory.js";
 import type {
   CardState,
   CodeFacts,
@@ -329,6 +330,11 @@ export const nodeText = (id: string, workspacePath: string, signal?: AbortSignal
     `/api/nodes/${encodeURIComponent(id)}/text?path=${encodeURIComponent(workspacePath)}`,
     { signal },
   );
+
+export const readDirectory = (path: string, signal?: AbortSignal) =>
+  call<WorkspaceDirectory>(`/api/directories?path=${encodeURIComponent(path)}`, { signal });
+export const workspaceText = (path: string, signal?: AbortSignal) =>
+  call<NodeText>(`/api/files/text?path=${encodeURIComponent(path)}`, { signal });
 
 /** A workspace file's bytes; <iframe>, <video> and <audio> cannot send the token themselves. */
 export async function workspaceBlob(workspacePath: string, signal?: AbortSignal): Promise<Blob> {

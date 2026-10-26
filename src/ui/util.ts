@@ -1,5 +1,9 @@
 import { t } from "./i18n.js";
 
+/** DOMPurify's supported link protocols, plus file: for workspace directory navigation. */
+export const markdownUriPattern =
+  /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|file):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
+
 export const shortHash = (hash: string | undefined) => (hash ?? "").slice(0, 7);
 
 export function dayLabel(iso: string, now = new Date()): string {
@@ -57,6 +61,36 @@ export function resolveHref(
     clean.startsWith("/") ? `.tent/${clean.slice(1)}` : `.tent/${dir}/${clean}`,
   );
   return full.startsWith(".tent/") ? { tentPath: full.slice(6) } : { file: full };
+}
+
+/** A slash-marked body directory; the service validates existence and Workspace containment. */
+export function directoryPath(fromPath: string, href: string): string | null {
+  if (href.startsWith("//") || href.includes("\\")) return null;
+  try {
+    if (/^file:/i.test(href)) {
+      const uri = new URL(href);
+      return !uri.search && !uri.hash && decodeURIComponent(uri.pathname).endsWith("/")
+        ? href
+        : null;
+    }
+    const decoded = decodeURIComponent(href);
+    if (
+      /^[a-z][a-z\d+.-]*:/i.test(href) ||
+      /[?#]/.test(href) ||
+      !decoded.endsWith("/") ||
+      decoded.startsWith("//") ||
+      /[\\\0]/.test(decoded)
+    )
+      return null;
+    const owner = fromPath.split("/").slice(0, -1).join("/");
+    const path = normalize(
+      href.startsWith("/") ? `.tent/${decoded.slice(1)}` : `.tent/${owner}/${decoded}`,
+    );
+    if (href.startsWith("/") && path !== ".tent" && !path.startsWith(".tent/")) return null;
+    return path !== ".." && !path.startsWith("../") ? path : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Images the page can load by address; Workspace images come through the tent ui service. */

@@ -51,6 +51,11 @@ import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
 import { readModuleDependencies } from "../core/graph/module-dependencies.js";
 import { checkWorkspaceModules } from "../core/check/workspace-module-map.js";
 import { readWorkspaceMap } from "../core/read/workspace-map.js";
+import {
+  workspaceDirectory,
+  workspaceNavigationPath,
+  type DirectoryEntry,
+} from "../core/read/workspace-directory.js";
 import { validationIssueText } from "../core/base/validation-message.js";
 import { NodeFs, SystemClock } from "../fs/node-fs.js";
 import { createModuleDependencyRepositoryReader } from "../fs/module-dependencies.js";
@@ -610,6 +615,10 @@ async function startWorkspaceServer(
         ...(other.portTaken === undefined ? {} : { portTaken: other.portTaken }),
       });
     }
+    if (route === "GET /api/directories")
+      return json(res, 200, await directory(url.searchParams.get("path") ?? ""));
+    if (route === "GET /api/files/text")
+      return json(res, 200, await textFile(url.searchParams.get("path") ?? ""));
     if (route === "GET /api/files") return file(res, url.searchParams.get("path") ?? "");
     // A read sent as POST: the list of paths can outgrow a URL.
     if (route === "POST /api/files/info") {
@@ -678,15 +687,21 @@ async function startWorkspaceServer(
    * A workspace file by its workspace-relative path, after following links. Paths that leave the
    * workspace, are absolute, or reach into a `.git` directory are refused with 403.
    */
-  async function workspaceFile(relative: string) {
-    if (!relative) throw new HttpError(422, "INVALID_INPUT", "A workspace path is required");
+  async function workspaceEntry(relative: string, kind?: "file" | "directory") {
+    if (!relative && kind !== "directory")
+      throw new HttpError(422, "INVALID_INPUT", "A workspace path is required");
     const parts = relative.split("/");
     const outside = () =>
-      new HttpError(403, "FORBIDDEN_PATH", "Only files inside the workspace can be read");
+      new HttpError(
+        403,
+        "FORBIDDEN_PATH",
+        "Only paths inside the workspace outside .git can be read",
+      );
     if (
       relative.startsWith("/") ||
       /[\\\0:]/.test(relative) ||
-      parts.some((p) => !p || p === "." || p === ".." || p.toLowerCase() === ".git")
+      (relative !== "" &&
+        parts.some((p) => !p || p === "." || p === ".." || p.toLowerCase() === ".git"))
     )
       throw outside();
     const root = await fsp.realpath(workspaceRoot);
@@ -694,7 +709,7 @@ async function startWorkspaceServer(
       if (!isMissing(error)) throw error;
       throw new HttpError(404, "NOT_FOUND", `No such file: ${relative}`);
     });
-    if (!real.startsWith(root + path.sep)) throw outside();
+    if (real !== root && !real.startsWith(root + path.sep)) throw outside();
     // A link inside the workspace may still lead into a Git directory; the rule holds for where it ends.
     if (
       path
@@ -704,8 +719,45 @@ async function startWorkspaceServer(
     )
       throw outside();
     const stat = await fsp.stat(real);
-    if (!stat.isFile()) throw new HttpError(404, "NOT_FOUND", `No such file: ${relative}`);
+    if (kind && (kind === "directory" ? !stat.isDirectory() : !stat.isFile()))
+      throw new HttpError(404, "NOT_FOUND", `No such ${kind}: ${relative}`);
     return { real, stat };
+  }
+
+  const workspaceFile = (relative: string) => workspaceEntry(relative, "file");
+
+  async function directory(address: string) {
+    let relative: string;
+    try {
+      relative = workspaceNavigationPath(address, workspaceRoot);
+    } catch (cause) {
+      throw new HttpError(
+        403,
+        "FORBIDDEN_PATH",
+        cause instanceof Error ? cause.message : String(cause),
+      );
+    }
+    const { real } = await workspaceEntry(relative, "directory");
+    const entries: DirectoryEntry[] = [];
+    for (const name of await fsp.readdir(real)) {
+      if (name.toLowerCase() === ".git") continue;
+      const child = relative ? `${relative}/${name}` : name;
+      // Apply the file endpoint's containment and .git checks to aliases as well.
+      try {
+        const observed = await workspaceEntry(child);
+        if (!observed.stat.isDirectory() && !observed.stat.isFile()) continue;
+        entries.push({
+          name,
+          path: child,
+          kind: observed.stat.isDirectory() ? "directory" : "file",
+          size: observed.stat.size,
+          modifiedAt: observed.stat.mtime.toISOString(),
+        });
+      } catch (cause) {
+        if (!(cause instanceof HttpError) || ![403, 404].includes(cause.status)) throw cause;
+      }
+    }
+    return workspaceDirectory(relative, entries);
   }
 
   /**
@@ -743,6 +795,10 @@ async function startWorkspaceServer(
     );
     if (!named.includes(relative))
       throw new HttpError(403, "FORBIDDEN_PATH", "Only files the Node names can be read here");
+    return textFile(relative);
+  }
+
+  async function textFile(relative: string) {
     const { real, stat } = await workspaceFile(relative);
     const handle = await fsp.open(real, "r");
     try {

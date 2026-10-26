@@ -26,9 +26,10 @@ async function fixture(t: TestContext) {
   const adapter = new NodeFs(systemRoot);
   const write = (file: string, data: Record<string, unknown>, body = "") =>
     adapter.writeFile(file, serializeFrontmatter({ type: "prompt", ...data }, body));
-  const fileExists = async (filename: string) => {
+  const fileExists = async (filename: string, directory = false) => {
     try {
-      return (await fs.stat(filename)).isFile();
+      const stat = await fs.stat(filename);
+      return directory ? stat.isDirectory() : stat.isFile();
     } catch (error) {
       if (["ENOENT", "ENOTDIR"].includes(String((error as NodeJS.ErrnoException).code)))
         return false;
@@ -121,6 +122,109 @@ test("leading slash body links suggest existing Workspace files without changing
   );
   assert.equal(links[2].reason, "Local link target does not exist as a file");
   assert.deepEqual(await bytes(root), before);
+});
+
+test("body directory links check the explicit path type without reading directory contents", async (t) => {
+  const { root, workspace, systemRoot, adapter, write, fileExists } = await fixture(t);
+  const directory = path.join(workspace, "source folder");
+  const outside = path.join(root, "outside folder");
+  await fs.mkdir(directory);
+  await fs.mkdir(outside);
+  await fs.writeFile(path.join(directory, "unreadable-as-text.bin"), Uint8Array.of(0xff));
+  await fs.writeFile(path.join(workspace, "file.txt"), "file");
+  await adapter.writeFile("attachments/file.txt", "internal file");
+  await adapter.mkdir("group");
+  await write("Target/Target.md", { id: "node-target" });
+  await write("roles/role-a.md", { id: "role-a", type: "role" });
+  await write("cards/card-a.md", {
+    id: "card-a",
+    type: "card",
+    schemaVersion: 3,
+    state: "pending",
+    sources: [],
+  });
+  const targets = [
+    "../../source%20folder/",
+    pathToFileURL(outside + path.sep).href,
+    "../group/",
+    "/group/",
+    "../../",
+    "../../file.txt?view=plain#part",
+    "../attachments/file.txt",
+    "node-target#part",
+    "role-a#part",
+    "card-a#part",
+    "../Target/Target.md#part",
+    "https://example.invalid/missing/",
+    "//example.invalid/missing/",
+    "#part",
+    "../../missing/",
+    "../../source%20folder",
+    "../../file.txt/",
+    pathToFileURL(path.join(workspace, "file.txt") + path.sep).href,
+    "../../source%20folder/#part",
+    "../../source%20folder/?view=plain",
+  ];
+  await write(
+    "Author/Author.md",
+    { id: "node-author" },
+    targets.map((target, i) => `[link ${i}](${target})`).join("\n"),
+  );
+  const before = await bytes(root);
+  const inspected: Array<[string, boolean]> = [];
+  adapter.observeMaterial = async () => {
+    throw new Error("Body navigation must not observe material content");
+  };
+  const result = await checkGraph(adapter, workspace, async (filename, directory = false) => {
+    inspected.push([filename, directory]);
+    return fileExists(filename, directory);
+  });
+  assert.deepEqual(result.errors, []);
+  const unresolved = result.issues.filter((issue) => issue.kind === "unresolved-link");
+  assert.deepEqual(unresolved.map((issue) => issue.target).sort(), targets.slice(-6).sort());
+  assert.equal(
+    unresolved.find((issue) => issue.target === "../../missing/")!.reason,
+    "Local link target does not exist as a directory",
+  );
+  assert.equal(
+    unresolved.find((issue) => issue.target === "../../source%20folder")!.reason,
+    "Local link target does not exist as a file",
+  );
+  assert.ok(
+    inspected.some(([file, directory]) => file === path.normalize(outside) + path.sep && directory),
+  );
+  assert.ok(
+    inspected.some(([file, directory]) => file === path.join(systemRoot, "group") && directory),
+  );
+  assert.equal(
+    inspected.some(([file]) => /node-target|role-a|card-a|Target\.md/.test(file)),
+    false,
+  );
+  assert.deepEqual(await bytes(root), before);
+});
+
+test("leading slash directory diagnostics preserve the directory marker and anchor", async (t) => {
+  const { workspace, adapter, write, fileExists } = await fixture(t);
+  await fs.mkdir(path.join(workspace, "source folder"));
+  await adapter.mkdir("present");
+  await fs.writeFile(path.join(workspace, "wrong-type"), "not a directory");
+  await write(
+    "Author/Author.md",
+    { id: "node-author" },
+    "[workspace](/source%20folder/) [internal](/present/) [file](/wrong-type/)",
+  );
+  const result = await checkGraph(adapter, workspace, fileExists);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(
+    result.issues.map((issue) => ["target" in issue ? issue.target : undefined, issue.reason]),
+    [
+      [
+        "/source%20folder/",
+        'Local link target does not exist as a directory; leading / resolves from .tent; write "../../source%20folder/" relative to this document',
+      ],
+      ["/wrong-type/", "Local link target does not exist as a directory"],
+    ],
+  );
 });
 
 test("whole graph inspection reports the three categories across Nodes, Roles and Cards", async (t) => {

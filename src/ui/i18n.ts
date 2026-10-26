@@ -758,6 +758,10 @@ const zh = {
   },
   file: {
     label: "文件",
+    directory: "目录",
+    parent: "上层目录",
+    emptyDirectory: "这个目录是空的。",
+    directoryFailed: "读不出这个目录；只能浏览工作区内的目录。",
     remote: "远程地址",
     open: "打开",
     openTab: "新标签打开",
@@ -1543,6 +1547,10 @@ const en: Messages = {
   },
   file: {
     label: "File",
+    directory: "Directory",
+    parent: "Parent directory",
+    emptyDirectory: "This directory is empty.",
+    directoryFailed: "This directory could not be read. Only workspace directories can be browsed.",
     remote: "Remote address",
     open: "Open",
     openTab: "Open in new tab",

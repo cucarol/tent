@@ -31,7 +31,7 @@ import { editDraft, isDraft, useDraft, type Draft } from "../data/drafts.js";
 import { cardStage, cardStateLabel, resultParts } from "../data/card-state.js";
 import { nodeDrafts as drafts } from "../data/node-drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
-import { FileView } from "./FileView.js";
+import { DirectoryView, FileView } from "./FileView.js";
 import { fileOf, FilesContext, infoOf, useFileInfoRead } from "../data/files.js";
 import { Tray, Pet, turnPet } from "../components/Pet.js";
 import { Markdown } from "../components/Markdown.js";
@@ -82,7 +82,13 @@ type Props = {
  * What a page is laid out for; narrow puts the rail into the one column. Past is set once the title block
  * has scrolled away, and the bar then names the object; toTop scrolls back to it.
  */
-type PageProps = Props & { narrow: boolean; past?: boolean; toTop?: () => void };
+type PageProps = Props & {
+  narrow: boolean;
+  past?: boolean;
+  toTop?: () => void;
+  directoryPanel: ReactNode;
+  onDirectory: (path: string | null) => void;
+};
 
 /** Below this width the rail joins the text column: in the panel beside the map and in small windows. */
 const NARROW = 760;
@@ -130,7 +136,23 @@ export function Reader(props: Props) {
   };
   const toTop = () =>
     box.current?.querySelector(".pg-scroll")?.scrollTo({ top: 0, behavior: "smooth" });
-  const page = { ...props, narrow, past, toTop };
+  const key = `${target.kind}:${target.id}`;
+  const [directory, setDirectory] = useState<{ target: string; path: string | null }>();
+  const onDirectory = (path: string | null) => {
+    setDirectory({ target: key, path });
+    if (path !== null) toTop();
+  };
+  const directoryPanel =
+    directory?.target === key && directory.path !== null ? (
+      <DirectoryView
+        path={directory.path}
+        graph={graph}
+        onDirectory={onDirectory}
+        onOpen={props.onOpen}
+        onToast={props.onToast}
+      />
+    ) : null;
+  const page = { ...props, narrow, past, toTop, directoryPanel, onDirectory };
   return (
     <section
       ref={box}
@@ -1097,6 +1119,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
         actions={actions}
       />
       <PageBody
+        lead={props.directoryPanel}
         narrow={narrow}
         className={`t-${p}`}
         head={
@@ -1186,13 +1209,14 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
                   onChange={change}
                   onSave={() => save()}
                   onOpen={follow}
+                  onDirectory={props.onDirectory}
                   onToast={onToast}
                 />
               </Suspense>
             ) : (
               <>
                 <FilesContext.Provider value={files}>
-                  <FileView node={node} onToast={onToast} />
+                  {!props.directoryPanel && <FileView node={node} onToast={onToast} />}
                 </FilesContext.Provider>
                 {!!document.error && body.trim() && <ReadState section={document} />}
                 {doc && !aboveKnown && !document.error ? (
@@ -1205,6 +1229,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
                     relations={outgoing.data}
                     onOpen={onOpen}
                     onToast={onToast}
+                    onDirectory={props.onDirectory}
                   />
                 ) : !doc ? (
                   <ReadState section={document} />
@@ -1400,6 +1425,7 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
         }
       />
       <PageBody
+        lead={props.directoryPanel}
         narrow={narrow}
         head={
           <>
@@ -1445,6 +1471,7 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
                 graph={graph}
                 onOpen={onOpen}
                 onToast={onToast}
+                onDirectory={props.onDirectory}
               />
             </div>
             <Section title={t.page.here} count={here.length}>
@@ -1669,6 +1696,7 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
                     graph={graph}
                     onOpen={onOpen}
                     onToast={onToast}
+                    onDirectory={props.onDirectory}
                   />
                 ) : (
                   <p className="empty">{t.card.noText}</p>
@@ -1695,59 +1723,62 @@ function CardPage(props: PageProps & { card: SnapshotCard }) {
           </>
         }
         lead={
-          <Section title={t.page.sourcesPinned}>
-            <ol className="rail-srcs">
-              {card.sources.map((s, i) => {
-                const node = s.id ? graph.nodes.get(s.id) : undefined;
-                const role = s.id ? graph.roles.get(s.id) : undefined;
-                // A Node or Role deleted since: its pinned name, not the encoded path to where it was.
-                const gone = !!s.id && !node && !role && (s.kind === "node" || s.kind === "role");
-                return (
-                  <li key={i}>
-                    <span className="num ref">{i + 1}</span>
-                    {node || role ? (
-                      <button
-                        type="button"
-                        className="t"
-                        onClick={() => onOpen({ kind: node ? "node" : "role", id: s.id! })}
-                        title={s.version ? shortHash(s.version.commit) : undefined}
-                      >
-                        {node ? (
-                          <TypeGlyph type={node.type} size={13} />
-                        ) : (
-                          <Pet id={role!.id} size={14} />
-                        )}
-                        <span>{node?.name ?? role!.title}</span>
-                      </button>
-                    ) : gone ? (
-                      <span className="t is-gone">{s.title ?? goneName(s.resource)}</span>
-                    ) : (
-                      <span className="t">
-                        <MaterialName material={s} />
-                      </span>
-                    )}
-                    {gone ? (
-                      <span className="same">{t.page.sourceGone}</span>
-                    ) : s.changedSince && s.version ? (
-                      <button
-                        type="button"
-                        className={`chg${since === i ? " is-open" : ""}`}
-                        onClick={() => setSince(since === i ? null : i)}
-                        data-tip={t.page.changedTip}
-                        data-tip-end=""
-                      >
-                        <Icon name="clock" size={11} />
-                        {t.side.changed}
-                      </button>
-                    ) : (
-                      !s.version && <span className="same">{t.page.unpinned}</span>
-                    )}
-                  </li>
-                );
-              })}
-              {!card.sources.length && <p className="empty">{t.page.noSources}</p>}
-            </ol>
-          </Section>
+          <>
+            {props.directoryPanel}
+            <Section title={t.page.sourcesPinned}>
+              <ol className="rail-srcs">
+                {card.sources.map((s, i) => {
+                  const node = s.id ? graph.nodes.get(s.id) : undefined;
+                  const role = s.id ? graph.roles.get(s.id) : undefined;
+                  // A Node or Role deleted since: its pinned name, not the encoded path to where it was.
+                  const gone = !!s.id && !node && !role && (s.kind === "node" || s.kind === "role");
+                  return (
+                    <li key={i}>
+                      <span className="num ref">{i + 1}</span>
+                      {node || role ? (
+                        <button
+                          type="button"
+                          className="t"
+                          onClick={() => onOpen({ kind: node ? "node" : "role", id: s.id! })}
+                          title={s.version ? shortHash(s.version.commit) : undefined}
+                        >
+                          {node ? (
+                            <TypeGlyph type={node.type} size={13} />
+                          ) : (
+                            <Pet id={role!.id} size={14} />
+                          )}
+                          <span>{node?.name ?? role!.title}</span>
+                        </button>
+                      ) : gone ? (
+                        <span className="t is-gone">{s.title ?? goneName(s.resource)}</span>
+                      ) : (
+                        <span className="t">
+                          <MaterialName material={s} />
+                        </span>
+                      )}
+                      {gone ? (
+                        <span className="same">{t.page.sourceGone}</span>
+                      ) : s.changedSince && s.version ? (
+                        <button
+                          type="button"
+                          className={`chg${since === i ? " is-open" : ""}`}
+                          onClick={() => setSince(since === i ? null : i)}
+                          data-tip={t.page.changedTip}
+                          data-tip-end=""
+                        >
+                          <Icon name="clock" size={11} />
+                          {t.side.changed}
+                        </button>
+                      ) : (
+                        !s.version && <span className="same">{t.page.unpinned}</span>
+                      )}
+                    </li>
+                  );
+                })}
+                {!card.sources.length && <p className="empty">{t.page.noSources}</p>}
+              </ol>
+            </Section>
+          </>
         }
         props={
           <dl className="props">
@@ -1833,6 +1864,7 @@ function DraftPage(props: PageProps & { card: SnapshotCard }) {
         }
       />
       <PageBody
+        lead={props.directoryPanel}
         narrow={narrow}
         head={
           <>

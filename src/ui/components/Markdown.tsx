@@ -5,7 +5,13 @@ import DOMPurify from "dompurify";
 import { workspaceImage } from "../data/api.js";
 import type { Graph } from "../data/store.js";
 import { primaryOf, refKey } from "../data/store.js";
-import { loadableImage, resolveHref, workspaceImagePath } from "../util.js";
+import {
+  directoryPath,
+  loadableImage,
+  markdownUriPattern,
+  resolveHref,
+  workspaceImagePath,
+} from "../util.js";
 import { t } from "../i18n.js";
 import { glyphSvg } from "./Glyph.js";
 import type { NodeRelationsDetails, SnapshotRef } from "../data/types.js";
@@ -85,6 +91,7 @@ export function Markdown({
   onOpen,
   onToast,
   historical = false,
+  onDirectory,
 }: {
   body: string;
   fromPath: string;
@@ -93,16 +100,25 @@ export function Markdown({
   onOpen: (ref: SnapshotRef) => void;
   onToast?: (text: string) => void;
   historical?: boolean;
+  onDirectory?: (path: string) => void;
 }) {
   const html = useMemo(() => {
     const box = document.createElement("div");
-    box.innerHTML = DOMPurify.sanitize(marked.parse(body, { gfm: true, async: false }) as string);
+    box.innerHTML = DOMPurify.sanitize(marked.parse(body, { gfm: true, async: false }) as string, {
+      // Preserve file: destinations long enough to route directories through the local service.
+      ALLOWED_URI_REGEXP: markdownUriPattern,
+    });
     box.querySelectorAll("a[href]").forEach((anchor) => {
       const target = resolveHref(fromPath, anchor.getAttribute("href") ?? "");
       const ref = documentRef(graph, fromPath, anchor.getAttribute("href") ?? "", relations);
+      const directory = directoryPath(fromPath, anchor.getAttribute("href") ?? "");
       if (ref) {
         anchor.replaceWith(refLink(ref, anchor.textContent ?? "", graph));
-      } else if (target.external) {
+      } else if (directory !== null && onDirectory) {
+        anchor.className = "doc-file";
+        anchor.setAttribute("href", "#");
+        (anchor as HTMLElement).dataset.directory = directory;
+      } else if (target.external && !/^file:/i.test(target.external)) {
         anchor.setAttribute("target", "_blank");
         anchor.setAttribute("rel", "noopener");
       } else {
@@ -128,7 +144,7 @@ export function Markdown({
     });
     mentions(box, graph);
     return box.innerHTML;
-  }, [body, fromPath, graph, relations, historical]);
+  }, [body, fromPath, graph, relations, historical, onDirectory]);
 
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -158,6 +174,12 @@ export function Markdown({
             () => onToast?.(t.sheet.copied(hash.textContent ?? text)),
             () => onToast?.(text),
           );
+          return;
+        }
+        const directory = (event.target as HTMLElement).closest<HTMLElement>("[data-directory]");
+        if (directory) {
+          event.preventDefault();
+          onDirectory?.(directory.dataset.directory!);
           return;
         }
         const link = (event.target as HTMLElement).closest<HTMLElement>("[data-ref]");

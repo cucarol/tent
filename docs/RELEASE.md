@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Body links ending in `/` accept existing local directories. The Web UI browses Workspace directories one level at a time in the file panel, with file previews and parent navigation.
 - Interrupted saves recover as a complete old or new transaction on the next Tent open; `tent workspace repair` restores damaged Tent history while preserving other edits.
 
 ## 0.2.0
