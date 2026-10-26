@@ -1444,10 +1444,9 @@ test("an issue-tagged output is enough for its goal and clears the brief's goal 
   ]);
   brief = makeContextBrief(await inspectCurrentContext(fs));
   assert.deepEqual(brief.counts, { ahead: 1, behind: 0 });
-  assert.deepEqual(
-    brief.ahead.map((item) => item.nodeId),
-    [lonely],
-  );
+  assert.deepEqual(brief.ahead, []);
+  assert.equal(brief.omitted.ahead, 1);
+  assert.match(brief.driftRead!.command, /^tent workspace drift --workspace /);
 });
 
 test("explicit deprecated Nodes remain inspectable while workspace inspection excludes them", async (t) => {

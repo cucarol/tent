@@ -52,8 +52,10 @@ test("sync reads changed materials without a revision change and agrees with bri
   const brief = makeContextBrief(await inspectCurrentContext(tent));
   for (const kind of ["ahead", "behind"] as const) {
     assert.equal(Object.values(flags).filter((flag) => flag[kind]).length, brief.counts[kind]);
-    assert.ok(brief[kind].some((item) => item.nodeId === goal));
+    assert.deepEqual(brief[kind], []);
+    assert.equal(brief.omitted[kind], brief.counts[kind]);
   }
+  assert.match(brief.driftRead!.command, /^tent workspace drift --workspace /);
   const current = await readNodeForEdit(tent, goal);
   await confirmNodeSync(tent, goal, { baseEtag: current.etag });
   const confirmed = await sync();

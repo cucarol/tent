@@ -34,18 +34,29 @@ test("brief reports native capture failure without unhandled unused Card query p
   await new Promise<void>((resolve) => setImmediate(resolve));
 });
 
-test("brief never hides invalid files or pending Cards and folds only missing-baseline debt", () => {
+test("brief limits each waiting list independently and retains totals, read commands and full paths", () => {
   const pending = Array.from({ length: 40 }, (_, i) => ({
     cardId: `card-pending${i}`,
     state: "pending",
+    orderKey: String(i).padStart(3, "0"),
     title: "待接收的工作".repeat(8),
     ...(i === 0 ? { diagnostic: "Source unavailable" } : {}),
   }));
-  const invalidNodes = Array.from({ length: 10 }, (_, i) => ({
+  const returned = Array.from({ length: 12 }, (_, i) => ({
+    cardId: `card-returned${i}`,
+    state: "returned",
+    title: `Completed ${i}`,
+    returnTo: "role-requester",
+    receivedBy: "role-worker",
+    result: "Full receipt belongs in card show",
+    publishedAt: `2026-10-${String(30 - i).padStart(2, "0")}T00:00:00Z`,
+  }));
+  const invalidNodes = Array.from({ length: 11 }, (_, i) => ({
     path: `.tent/${"很长的实际目录".repeat(30)}/${i}.md`,
     reason: "Invalid frontmatter",
   }));
   const context: CurrentContext = {
+    workspaceRoot: "D:/Workspace with spaces/Tent",
     roots: Array.from({ length: 13 }, (_, i) => ({
       nodeId: `node-root${i}`,
       name: `Root ${i}`,
@@ -76,16 +87,24 @@ test("brief never hides invalid files or pending Cards and folds only missing-ba
       outputNodes: [],
       requirementsWithoutOutputs: [],
     },
-    cards: { revision: "fixture", items: pending },
-    changedCardSources: { items: [], diagnostics: [] },
+    cards: {
+      revision: "fixture",
+      items: [
+        ...pending,
+        ...returned,
+        { cardId: "card-unknown", diagnostic: "Card header unavailable; inspect raw" },
+      ],
+    },
+    changedCardSources: { items: [], diagnostics: [{ message: "Could not compare" }] },
+    recoveryConflicts: ["a/complete recovery path.md"],
   };
   const brief = makeContextBrief(context);
   const withoutRoots = makeContextBrief({ ...context, roots: [] });
   assert.deepEqual(brief.cardInputs, withoutRoots.cardInputs);
   assert.deepEqual(brief.ahead, withoutRoots.ahead);
   assert.deepEqual(brief.behind, withoutRoots.behind);
-  assert.equal(brief.roots.length, 12);
-  assert.equal(brief.omitted.roots, 1);
+  assert.equal(brief.roots.length, 10);
+  assert.equal(brief.omitted.roots, 3);
   assert.deepEqual(Object.keys(brief).slice(0, 5), [
     "counts",
     "invalidNodes",
@@ -93,22 +112,69 @@ test("brief never hides invalid files or pending Cards and folds only missing-ba
     "ahead",
     "changedCardSources",
   ]);
-  assert.equal(brief.cardInputs.length, pending.length);
-  assert.equal(brief.omitted.cardInputs, 0);
-  assert.deepEqual(brief.invalidNodes, invalidNodes);
+  assert.deepEqual(
+    brief.cardInputs.filter((item) => item.state === "pending").map((item) => item.cardId),
+    pending.slice(0, 10).map((item) => item.cardId),
+  );
+  assert.deepEqual(
+    brief.cardInputs.filter((item) => item.state === "returned").map((item) => item.cardId),
+    returned.slice(0, 10).map((item) => item.cardId),
+  );
+  assert.equal(brief.omitted.cardInputs, 32);
+  assert.deepEqual(brief.invalidNodes, invalidNodes.slice(0, 10));
+  assert.equal(brief.omitted.invalidNodes, 1);
+  assert.deepEqual(brief.pendingCardsRead, {
+    total: 40,
+    command: "tent card list --state pending --workspace 'D:/Workspace with spaces/Tent'",
+  });
+  assert.deepEqual(brief.returnedCardsRead, {
+    total: 12,
+    command: "tent card list --state returned --workspace 'D:/Workspace with spaces/Tent'",
+  });
+  assert.deepEqual(brief.invalidNodesRead, {
+    total: 11,
+    command: "tent workspace check --json --workspace 'D:/Workspace with spaces/Tent'",
+  });
+  assert.equal(brief.cardInputs.find((item) => item.cardId === "card-unknown")?.state, "unknown");
+  assert.ok(brief.cardInputs.every((item) => !("path" in item) && !("result" in item)));
+  assert.deepEqual(brief.roots[0], { nodeId: "node-root0", name: "Root 0", type: "prompt" });
+  assert.equal(brief.cardSourcesUncertain, true);
   assert.equal(brief.baselineOnlyBehind, 1);
   assert.deepEqual(brief.behind, []);
   const text = formatContextBrief(brief);
-  assert.ok(text.indexOf("Root Nodes:") > text.indexOf("Input Cards"));
-  assert.match(text, /\+1 more · tent node list$/);
+  assert.ok(text.indexOf("Root Nodes (13 total):") > text.indexOf("Input Cards"));
+  assert.equal(brief.rootsRead!.total, 13);
+  assert.ok(text.endsWith(`+3 more: ${brief.rootsRead!.command}`));
+  assert.equal(
+    brief.rootsRead!.command,
+    "tent node list --workspace 'D:/Workspace with spaces/Tent'",
+  );
   assert.ok(
     Buffer.byteLength(text) > 4096,
-    "mandatory actionable information may exceed the optional detail budget",
+    "complete paths can exceed 4 KiB; there is no total byte cap",
   );
-  assert.equal(text.split("\n")[1], "Invalid Nodes:");
-  for (const item of invalidNodes) assert.ok(text.includes(item.path));
-  for (const card of pending) assert.ok(text.includes(`.tent/cards/${card.cardId}.md`));
-  assert.match(text, /1 behind Nodes have no retained baseline.*tent workspace drift --json/);
+  assert.ok(text.includes("Invalid Nodes (11 total):"));
+  for (const item of invalidNodes.slice(0, 10)) assert.ok(text.includes(item.path));
+  for (const read of [brief.pendingCardsRead!, brief.returnedCardsRead!, brief.invalidNodesRead!])
+    assert.ok(text.split("\n").includes(`+${read.total - 10} more: ${read.command}`));
+  assert.match(text, /card-unknown.*Card header unavailable; inspect raw.*\[unknown\]/);
+  assert.match(
+    text,
+    /Transaction recovery kept external edits:\n- .tent\/a\/complete recovery path.md/,
+  );
+  assert.doesNotMatch(text, /\.tent\/cards\/|Full receipt belongs/);
+  assert.match(text, /1 behind Nodes have no retained baseline\./);
+  assert.ok(text.includes("tent workspace drift --workspace 'D:/Workspace with spaces/Tent'"));
+  const scoped = makeContextBrief(context, { roleId: "role-requester" });
+  assert.equal(
+    scoped.pendingCardsRead!.command,
+    "tent card list --role role-requester --include-open --state pending --workspace 'D:/Workspace with spaces/Tent'",
+  );
+  assert.equal(
+    scoped.returnedCardsRead!.command,
+    "tent card list --role role-requester --state returned --workspace 'D:/Workspace with spaces/Tent'",
+  );
+  assert.deepEqual(scoped.counts, brief.counts);
 });
 
 async function fixture(t: TestContext) {
@@ -210,7 +276,7 @@ test("brief ignores retained session logs and has no unrecorded-file section", a
   assert.equal(await read.call(adapter, legacy), "invalid old session log\n");
 });
 
-test("brief exposes live root entry files without drift or another catalog scan", async (t) => {
+test("brief exposes root identities without drift or another catalog scan", async (t) => {
   const f = await fixture(t);
   const created = await f.node("write-many", ["--input-json", "-"], {
     items: [
@@ -251,15 +317,13 @@ test("brief exposes live root entry files without drift or another catalog scan"
       nodeId: created.results[index].nodeId,
       name: index === 0 ? "Map" : "Other",
       type: "prompt",
-      path: created.results[index].path,
     })),
   );
-  for (const root of brief.roots) assert.ok((await fs.stat(path.join(f.root, root.path))).isFile());
   const cli = await f.workspace("brief");
   assert.deepEqual(cli.value.roots, brief.roots);
   const text = await runWorkspaceCommand("brief", [], { workspace: f.root });
   assert.equal(text.exitCode, 0, text.stderr);
-  assert.match(text.stdout, /Map \[prompt\] \.tent\/Map\/Map.md/);
+  assert.ok(text.stdout.includes(`${created.results[0].nodeId} Map [prompt]`));
   assert.doesNotMatch(text.stdout, /Archived|Core\/Core.md/);
 });
 
@@ -298,7 +362,8 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   const headBefore = await git(path.join(f.root, ".tent"), "rev-parse", "HEAD");
   let brief = await f.workspace("brief");
   assert.equal(brief.value.counts.behind, 1);
-  assert.deepEqual(brief.value.behind.map((item: { nodeId: string }) => item.nodeId).sort(), [id]);
+  assert.deepEqual(brief.value.behind, []);
+  assert.equal(brief.value.driftRead.command, `tent workspace drift --workspace ${f.root}`);
   assert.ok(Buffer.byteLength(brief.stdout) <= 4096);
   let drift = (await f.workspace("drift")).value;
   const behind = drift.items.find(
@@ -519,7 +584,8 @@ test("brief keeps Card delivery independent of goal outputs and only warns for c
   ]);
   const returned = (await f.workspace("brief", ["--role", "role-requester"])).value;
   assert.equal(returned.cardInputs[0].state, "returned");
-  assert.equal(returned.cardInputs[0].result, `Done ${output.nodeId}`);
+  assert.equal("result" in returned.cardInputs[0], false);
+  assert.equal((await card("show", [published.cardId])).result, `Done ${output.nodeId}`);
   assert.deepEqual((await f.workspace("brief", ["--role", "role-worker"])).value.cardInputs, []);
   assert.deepEqual(
     (await f.workspace("brief", ["--role", "role-requester"])).value.cardInputs,
@@ -545,7 +611,7 @@ test("brief keeps Card delivery independent of goal outputs and only warns for c
   assert.deepEqual(after.cardInputs, []);
 });
 
-test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts and complete identities", () => {
+test("brief reports only drift counts and a qualified entry while bounding other discovery without a byte cap", () => {
   const nodes = Array.from({ length: 100 }, (_, i) => ({
     nodeId: `node-${i}`,
     path: i === 1 ? "Short" : `一个很长的名字${"非常长".repeat(200)}`,
@@ -560,6 +626,7 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
     reasons: ["材料变化".repeat(100)],
   }));
   const context: CurrentContext = {
+    workspaceRoot: "D:/Frozen Tent",
     roots: [],
     sync: {
       invalidNodes: [],
@@ -576,6 +643,7 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
         resource: `/Source${i}/Source${i}.md`,
         state: "changed" as const,
         publishedVersion: { commit: "a".repeat(40), path: `Source${i}/Source${i}.md` },
+        path: `${"完整的来源目录".repeat(100)}/${i}.md`,
         reason: "来源材料变化".repeat(100),
       })),
       diagnostics: [],
@@ -583,16 +651,96 @@ test("a Unicode-heavy brief stays within 4 KiB in both forms and retains counts 
   };
   const brief = makeContextBrief(context);
   assert.deepEqual(brief.counts, { ahead: 50, behind: 50 });
-  assert.ok(Buffer.byteLength(JSON.stringify(brief) + "\n") <= 4096);
-  assert.ok(Buffer.byteLength(formatContextBrief(brief) + "\n") <= 4096);
+  assert.ok(Buffer.byteLength(JSON.stringify(brief) + "\n") > 4096);
+  assert.ok(Buffer.byteLength(formatContextBrief(brief) + "\n") > 4096);
   assert.match(formatContextBrief(brief).split("\n")[0], /^behind 50 · ahead 50$/);
-  assert.ok(brief.omitted.behind > 0 && brief.omitted.ahead > 0);
-  assert.ok(brief.omitted.changedCardSources > 0);
+  assert.deepEqual(brief.ahead, []);
+  assert.deepEqual(brief.behind, []);
+  assert.deepEqual(
+    brief.changedCardSources.map((item) => item.nodeId),
+    [1, 3, 5, 7, 9, 11, 13, 15, 17, 19].map((i) => `node-${i}`),
+  );
+  assert.equal(brief.omitted.ahead, 50);
+  assert.equal(brief.omitted.behind, 50);
+  assert.equal(brief.omitted.changedCardSources, 15);
+  assert.deepEqual(brief.driftRead, {
+    command: "tent workspace drift --workspace 'D:/Frozen Tent'",
+  });
+  assert.deepEqual(brief.changedCardSourcesRead, {
+    total: 25,
+    command: "tent card list --state consumed --workspace 'D:/Frozen Tent'",
+  });
+  assert.equal(
+    brief.changedCardSources[0].path,
+    `.tent/${context.changedCardSources.items[1].path}`,
+  );
+  const read = brief.changedCardSourcesRead!;
+  assert.ok(
+    formatContextBrief(brief)
+      .split("\n")
+      .includes(`+${read.total - 10} more: ${read.command}`),
+  );
+  assert.equal(formatContextBrief(brief).split("\n")[1], brief.driftRead!.command);
   assert.match(formatContextBrief(brief), /Received Card sources changed/);
-  assert.equal(brief.ahead[0].reason, "No output");
-  assert.equal("since" in brief.ahead[0], false);
-  assert.equal("sinceUnknown" in brief.ahead[0], false);
-  assert.equal("ageSeconds" in brief.ahead[0], false);
+  assert.doesNotMatch(JSON.stringify(brief), /No output|ageSeconds|sinceUnknown/);
+  assert.doesNotMatch(formatContextBrief(brief), /^Ahead:|^Behind:/m);
+  const quiet = makeContextBrief({
+    ...context,
+    sync: { ...context.sync, nodes: [], counts: { synced: 0, ahead: 0, behind: 0, unanchored: 0 } },
+    changedCardSources: { items: [], diagnostics: [] },
+  });
+  assert.equal(quiet.driftRead, undefined);
+  assert.equal(formatContextBrief(quiet), "behind 0 · ahead 0");
+});
+
+test("brief keeps interleaved Card states in their original sorted order and preserves diagnostic totals", () => {
+  const items = Array.from({ length: 12 }, (_, i) => [
+    { cardId: `card-returned${i}`, state: "returned", returnTo: "role-requester" },
+    { cardId: `card-consumed${i}`, state: "consumed", returnTo: "role-requester" },
+    { cardId: `card-unknown${i}`, diagnostic: "Card header unavailable; inspect raw" },
+  ])
+    .flat()
+    .map((item, i) => ({
+      ...item,
+      publishedAt: new Date(Date.UTC(2026, 9, 26, 12, 0, 60 - i)).toISOString(),
+    }));
+  const context: CurrentContext = {
+    workspaceRoot: "D:/Tent",
+    roots: [],
+    sync: {
+      invalidNodes: [],
+      nodes: [],
+      counts: { synced: 0, ahead: 0, behind: 0, unanchored: 0 },
+      outputNodes: [],
+      requirementsWithoutOutputs: [],
+    },
+    cards: { revision: "fixture", items },
+    changedCardSources: { items: [], diagnostics: [{ message: "Source could not be compared" }] },
+    recoveryConflicts: Array.from({ length: 12 }, (_, i) => `a/full recovery path ${i}.md`),
+    draftCount: 3,
+  };
+  const brief = makeContextBrief(context, { roleId: "role-requester" });
+  assert.deepEqual(
+    brief.cardInputs.map((item) => item.cardId),
+    items.slice(0, 30).map((item) => item.cardId),
+  );
+  assert.equal(brief.omitted.cardInputs, 6);
+  assert.deepEqual(brief.consumedCardsRead, {
+    total: 12,
+    command: "tent card list --role role-requester --state consumed --workspace D:/Tent",
+  });
+  assert.deepEqual(brief.unknownCardsRead, {
+    total: 12,
+    command: "tent card list --role role-requester --workspace D:/Tent",
+  });
+  assert.equal(brief.cardSourcesUncertain, true);
+  assert.deepEqual(brief.recoveryConflicts, context.recoveryConflicts);
+  assert.deepEqual(brief.drafts, { count: 3, command: "tent node list --status draft" });
+  const text = formatContextBrief(brief);
+  assert.match(text, /3 条还没定 · tent node list --status draft/);
+  for (const p of context.recoveryConflicts!) assert.ok(text.includes(`.tent/${p}`));
+  for (const read of [brief.returnedCardsRead!, brief.consumedCardsRead!, brief.unknownCardsRead!])
+    assert.ok(text.split("\n").includes(`+2 more: ${read.command}`));
 });
 
 test("CLI discovery text and JSON stay byte-identical when the clock advances one second", async (t) => {
@@ -640,11 +788,10 @@ test("CLI discovery text and JSON stay byte-identical when the clock advances on
   };
   const before = await readAll();
   const brief = JSON.parse(before["brief json"]);
-  assert.equal(brief.ahead[0].reason, "Goal subtree has no current output Node");
-  assert.equal("since" in brief.ahead[0], false);
-  assert.equal("sinceUnknown" in brief.ahead[0], false);
-  assert.equal("ageSeconds" in brief.ahead[0], false);
-  assert.ok(before["brief text"].includes("Goal subtree has no current output Node"));
+  assert.deepEqual(brief.ahead, []);
+  assert.equal(brief.counts.ahead, 1);
+  assert.equal(brief.driftRead.command, `tent workspace drift --workspace ${f.root}`);
+  assert.ok(before["brief text"].includes(brief.driftRead.command));
   assert.equal(JSON.parse(before["card list json"]).items.length, 1);
   assert.ok(
     JSON.parse(before["drift json"]).items.some(
@@ -658,7 +805,7 @@ test("CLI discovery text and JSON stay byte-identical when the clock advances on
   assert.equal(await git(path.join(f.root, ".tent"), "rev-parse", "HEAD"), head);
 });
 
-test("brief and drift both show a dual-status goal and leave neutral recorded output quiet", () => {
+test("brief counts a dual-status goal while drift lists both findings and leaves neutral output quiet", () => {
   const context: CurrentContext = {
     roots: [],
     sync: {
@@ -697,19 +844,11 @@ test("brief and drift both show a dual-status goal and leave neutral recorded ou
   };
   const brief = makeContextBrief(context);
   assert.deepEqual(brief.counts, { ahead: 1, behind: 1 });
-  assert.deepEqual(
-    brief.behind.map((item) => item.nodeId),
-    ["node-goal"],
-  );
-  assert.deepEqual(
-    brief.ahead.map((item) => item.nodeId),
-    ["node-goal"],
-  );
-  assert.equal(brief.behind[0]!.reason, "Material changed");
-  assert.equal(brief.ahead[0]!.reason, "No output");
+  assert.deepEqual(brief.behind, []);
+  assert.deepEqual(brief.ahead, []);
   const text = formatContextBrief(brief);
-  assert.match(text, /^behind 1 · ahead 1\nAhead:/);
-  assert.ok(text.indexOf("Ahead:") < text.indexOf("Behind:"));
+  assert.match(text, /^behind 1 · ahead 1\ntent workspace drift --workspace/);
+  assert.doesNotMatch(text, /Ahead:|Behind:|node-goal|Material changed|No output/);
   assert.doesNotMatch(text, /start time not recorded/);
   assert.doesNotMatch(text, /node-quiet|Recent inputs|Recent outputs|synced/);
   assert.deepEqual(

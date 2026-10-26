@@ -46,7 +46,7 @@ export const workspaceHelpText = `tent workspace — the whole Workspace at once
   tent workspace check-modules [--json]
   tent workspace export --output <new-directory>
 
-brief: where to start. Counts, invalid Nodes and waiting Cards, then ahead and behind Nodes, with optional detail within 4 KiB; mandatory Cards and invalid Nodes can exceed that budget. Omitted detail is counted. --role keeps only that Role's Cards.
+brief: where to start. Counts, invalid Nodes and waiting Cards; for ahead and behind Nodes only their counts, since drift lists them. Every other list shows up to 10 items, then its total and the command that lists the rest. --role keeps only that Role's Cards.
 check: broken links, invalid or missing materials, missing Markdown sections, and Node files whose disk and Tent Git presence differ after valid native edits are collected. Exits 1 when it finds any; JSON still goes to stdout.
 repair restores Tent's own Git history after an interrupted write: it backs up the damaged files, points the branch at the latest intact commit, rebuilds the index, restores tracked files that were zero-filled, keeps other edits, then runs git fsck. When more than one commit could be the latest it lists them and stops; rerun with --head <commit>. Damaged caches are rebuilt on read and need no command.
 drift: every ahead and behind Node, in pages.

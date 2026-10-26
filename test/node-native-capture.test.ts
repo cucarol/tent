@@ -562,7 +562,12 @@ for (const malformed of ["yaml", "schema"] as const)
     assert.equal(brief.invalidNodes[0].path, `.tent/${file}`);
     assert.ok(brief.invalidNodes[0].reason);
     const text = await runWorkspaceCommand("brief", [], { ...options, json: false });
-    assert.match(text.stdout.split("\n")[1]!, /^Invalid Nodes:/);
+    const lines = text.stdout.trimEnd().split("\n");
+    assert.match(lines[0]!, /^behind \d+ · ahead \d+$/);
+    assert.match(lines[1]!, /^tent workspace drift --workspace /);
+    const invalidHeading = lines.indexOf("Invalid Nodes:");
+    assert.ok(invalidHeading > 1);
+    assert.ok(lines[invalidHeading + 1]!.includes(`.tent/${file}`));
     const checked = await runWorkspaceCommand("check", [], options);
     assert.equal(checked.exitCode, 1);
     assert.match(checked.stdout, /结果/);

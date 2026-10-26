@@ -99,13 +99,21 @@ test("without draft Nodes brief preserves its JSON and text shape", async () => 
     behind: [],
     roots: [],
     baselineOnlyBehind: 0,
-    omitted: { roots: 0, behind: 0, ahead: 0, cardInputs: 0, changedCardSources: 0 },
+    omitted: {
+      roots: 0,
+      invalidNodes: 0,
+      behind: 0,
+      ahead: 0,
+      cardInputs: 0,
+      changedCardSources: 0,
+    },
   });
   assert.equal(formatContextBrief(brief), "behind 0 · ahead 0");
 });
 
-test("draft discovery leaves the full optional detail budget available in both forms", () => {
+test("draft discovery preserves drift counts and its entry without adding Node details", () => {
   const context = emptyContext();
+  context.workspaceRoot = "D:/Tent";
   const node = {
     nodeId: "node-behind",
     path: "P/Named",
@@ -119,25 +127,29 @@ test("draft discovery leaves the full optional detail budget available in both f
   };
   context.sync.nodes.push(node);
   context.sync.counts.behind = 1;
-  const initialSize = Buffer.byteLength(JSON.stringify(makeContextBrief(context)) + "\n");
-  node.path = "P".repeat(4096 - initialSize + 1) + "/Named";
+  node.path = "P".repeat(8000) + "/Named";
   const withoutDrafts = makeContextBrief(context);
-  assert.equal(withoutDrafts.behind.length, 1);
-  assert.equal(Buffer.byteLength(JSON.stringify(withoutDrafts) + "\n"), 4096);
-  assert.ok(Buffer.byteLength(formatContextBrief(withoutDrafts) + "\n") <= 4096);
+  assert.equal(withoutDrafts.behind.length, 0);
+  assert.equal(withoutDrafts.counts.behind, 1);
+  assert.deepEqual(withoutDrafts.driftRead, {
+    command: "tent workspace drift --workspace D:/Tent",
+  });
+  assert.ok(!JSON.stringify(withoutDrafts).includes(node.path));
 
   const withDrafts = makeContextBrief({ ...context, draftCount: 1 });
   const { drafts, ...optionalDetails } = withDrafts;
   assert.deepEqual(optionalDetails, withoutDrafts);
   assert.deepEqual(drafts, { count: 1, command: "tent node list --status draft" });
-  assert.ok(Buffer.byteLength(JSON.stringify(withDrafts) + "\n") > 4096);
   assert.equal(
-    formatContextBrief(withDrafts).replace("1 条还没定 · tent node list --status draft\n", ""),
+    formatContextBrief(withDrafts)
+      .split("\n")
+      .filter((line) => line !== "1 条还没定 · tent node list --status draft")
+      .join("\n"),
     formatContextBrief(withoutDrafts),
   );
 });
 
-test("draft discovery remains visible when mandatory Cards already exceed the detail budget", () => {
+test("draft discovery remains visible alongside a bounded Card list and its true total", () => {
   const context = emptyContext();
   context.cards.items = Array.from({ length: 50 }, (_, i) => ({
     cardId: `card-${i}`,
@@ -148,8 +160,9 @@ test("draft discovery remains visible when mandatory Cards already exceed the de
   const withDrafts = makeContextBrief({ ...context, draftCount: 2 });
   const { drafts: _drafts, ...details } = withDrafts;
   assert.deepEqual(details, withoutDrafts);
-  assert.ok(Buffer.byteLength(JSON.stringify(withoutDrafts)) > 4096);
-  assert.equal(withDrafts.cardInputs.length, 50);
+  assert.equal(withDrafts.cardInputs.length, 10);
+  assert.equal(withDrafts.pendingCardsRead!.total, 50);
+  assert.equal(withDrafts.omitted.cardInputs, 40);
   assert.equal(
     formatContextBrief(withDrafts).split("\n")[1],
     "2 条还没定 · tent node list --status draft",

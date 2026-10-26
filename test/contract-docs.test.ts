@@ -89,7 +89,11 @@ test("PLUGIN.md matches SPEC frozen outputs, goal ancestry and brief counts", as
     spec,
     /An output depends on every goal ancestor|Behind outputs do not enter completed goal counts/,
   );
-  assert.match(spec, /`workspace brief \[--role <id>\]` reports behind and ahead counts/);
+  assert.match(
+    spec,
+    /`workspace brief \[--role <id>\]` reports true workspace-wide behind and ahead counts with a drift inspection command/,
+  );
+  assert.match(spec, /Ahead\/behind Node entries are not listed/);
   assert.match(plugin, /全部 goal 祖先/);
   assert.match(plugin, /`changedSince`/);
   assert.doesNotMatch(plugin, /最近的 goal 祖先提供隐式来源/);
