@@ -405,7 +405,8 @@ test("Tent identities and uncertain declarations never create provisional file t
     const html = renderToStaticMarkup(
       createElement(NodeProps, {
         graph,
-        node,
+        // While the checked read is out, the page's Node carries the declared header.
+        node: { ...node, materials: preview.materials },
         onOpen: noop,
         details: {
           history: section<NodeHistoryDetails>(),
@@ -413,7 +414,6 @@ test("Tent identities and uncertain declarations never create provisional file t
           incoming: section<NodeRelationsDetails>(),
           incomingOpen: false,
           onIncoming: noop,
-          materialsDeclared: preview.materials.length,
         },
       }),
     );
@@ -445,7 +445,7 @@ test("a declared Workspace directory holds its materials row without becoming a 
   const html = renderToStaticMarkup(
     createElement(NodeProps, {
       graph,
-      node,
+      node: { ...node, materials: preview.materials },
       onOpen: noop,
       details: {
         history: section<NodeHistoryDetails>(),
@@ -453,7 +453,6 @@ test("a declared Workspace directory holds its materials row without becoming a 
         incoming: section<NodeRelationsDetails>(),
         incomingOpen: false,
         onIncoming: noop,
-        materialsDeclared: preview.materials.length,
       },
     }),
   );

@@ -32,12 +32,15 @@ const limitOf = (file: LocalFile) => fileLimit(file.show);
 /** One level in the existing file panel; child files keep the same preview flow. */
 export function DirectoryView({
   path,
+  pick,
   graph,
   onDirectory,
   onOpen,
   onToast,
 }: {
   path: string;
+  /** A file in it to open as soon as the listing is in. */
+  pick?: string;
   graph: Graph;
   onDirectory: (path: string | null) => void;
   onOpen: (ref: SnapshotRef) => void;
@@ -52,11 +55,16 @@ export function DirectoryView({
   useEffect(() => {
     const abort = new AbortController();
     readDirectory(path, abort.signal).then(
-      (value) => !abort.signal.aborted && setRead({ path, value }),
+      (value) => {
+        if (abort.signal.aborted) return;
+        setRead({ path, value });
+        const file = value.entries.find((e) => e.kind === "file" && e.path === pick);
+        if (file) setPicked({ directory: path, file });
+      },
       () => !abort.signal.aborted && setRead({ path, failed: true }),
     );
     return () => abort.abort();
-  }, [path]);
+  }, [path, pick]);
   const value = read?.path === path ? read.value : undefined;
   const file = picked?.directory === path ? picked.file : undefined;
   const open = (entry: DirectoryEntry) => {
@@ -148,15 +156,24 @@ export function DirectoryView({
  */
 export function FileView({
   node,
+  notes,
+  want,
   onToast,
 }: {
   node: SnapshotNode;
+  /** A file of its own to open, asked for at a time, so asking again opens it again. */
+  want?: { path: string; at: number };
+  /** What changed in a file since the Node was written, by Workspace path, said on its tab. */
+  notes?: ReadonlyMap<string, string>;
   onToast: (text: string) => void;
 }) {
   const own = fileOf(node);
   const list = filesOf(node);
   const files = useFiles();
   const [picked, setPicked] = useState<{ node: string; path: string | null } | null>(null);
+  useEffect(() => {
+    if (want) setPicked({ node: node.id, path: want.path });
+  }, [want?.at]);
   const shown = picked?.node === node.id ? picked.path : own?.kind === "file" ? own.path : null;
   const file = list.find((f) => f.file.path === shown)?.file;
   return (
@@ -176,9 +193,15 @@ export function FileView({
               <FileGlyph show={f.show} size={13} />
               <span className="file-tab-name">{f.name}</span>
               <small>{source ? t.rel.sourceN(source) : t.rel.mainMaterial}</small>
+              {notes?.has(f.path) && <span className="material-fact">{notes.get(f.path)}</span>}
             </button>
           ))}
         </div>
+      )}
+      {!list.some((f) => f.source) && file && notes?.has(file.path) && (
+        <p className="file-changed">
+          <span className="material-fact">{notes.get(file.path)}</span>
+        </p>
       )}
       {file && (
         <OneFile

@@ -32,7 +32,8 @@ import { cardStage, cardStateLabel, resultParts } from "../data/card-state.js";
 import { nodeDrafts as drafts } from "../data/node-drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { DirectoryView, FileView } from "./FileView.js";
-import { fileOf, FilesContext, infoOf, useFileInfoRead } from "../data/files.js";
+import { fileOf, filesOf, FilesContext, infoOf, useFileInfoRead } from "../data/files.js";
+import { materialFacts } from "../data/materials.js";
 import { Tray, Pet, turnPet } from "../components/Pet.js";
 import { Markdown } from "../components/Markdown.js";
 import {
@@ -88,6 +89,8 @@ type PageProps = Props & {
   toTop?: () => void;
   directoryPanel: ReactNode;
   onDirectory: (path: string | null) => void;
+  /** A Workspace file the text links to, opened in its folder's listing. */
+  onFileIn: (path: string) => void;
 };
 
 /** Below this width the rail joins the text column: in the panel beside the map and in small windows. */
@@ -137,22 +140,31 @@ export function Reader(props: Props) {
   const toTop = () =>
     box.current?.querySelector(".pg-scroll")?.scrollTo({ top: 0, behavior: "smooth" });
   const key = `${target.kind}:${target.id}`;
-  const [directory, setDirectory] = useState<{ target: string; path: string | null }>();
+  const [directory, setDirectory] = useState<{
+    target: string;
+    path: string | null;
+    file?: string;
+  }>();
   const onDirectory = (path: string | null) => {
     setDirectory({ target: key, path });
     if (path !== null) toTop();
+  };
+  const onFileIn = (file: string) => {
+    setDirectory({ target: key, path: file.split("/").slice(0, -1).join("/"), file });
+    toTop();
   };
   const directoryPanel =
     directory?.target === key && directory.path !== null ? (
       <DirectoryView
         path={directory.path}
+        pick={directory.file}
         graph={graph}
         onDirectory={onDirectory}
         onOpen={props.onOpen}
         onToast={props.onToast}
       />
     ) : null;
-  const page = { ...props, narrow, past, toTop, directoryPanel, onDirectory };
+  const page = { ...props, narrow, past, toTop, directoryPanel, onDirectory, onFileIn };
   return (
     <section
       ref={box}
@@ -415,14 +427,28 @@ const Crumb = ({ onClick, children }: { onClick?: () => void; children: ReactNod
     <span className="pg-crumb is-current">{children}</span>
   );
 
-/** Title block: the object's large icon (a Role's pet), what kind it is, and its name. */
-function Hero({ icon, eyebrow, title }: { icon?: ReactNode; eyebrow: ReactNode; title: string }) {
+/**
+ * Title block: the object's large icon (a Role's pet), what kind it is, and its name. A Node's name is read
+ * first, so what kind it is follows in a quiet line under it (`meta`) instead of above it.
+ */
+function Hero({
+  icon,
+  eyebrow,
+  meta,
+  title,
+}: {
+  icon?: ReactNode;
+  eyebrow?: ReactNode;
+  meta?: ReactNode;
+  title: string;
+}) {
   return (
     <div className="hero">
       {icon}
       <div className="hero-text">
-        <div className="eyebrow">{eyebrow}</div>
+        {eyebrow && <div className="eyebrow">{eyebrow}</div>}
         <h1 className="page-title">{title}</h1>
+        {meta && <div className="hero-meta">{meta}</div>}
       </div>
     </div>
   );
@@ -867,6 +893,23 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
     if (bodySettled && fileKnown) setFileFirst({ key: pageKey, doc, path: ownPath });
   }, [bodySettled, fileKnown, pageKey, doc, ownPath]);
   const fileShown = sectionsGo && fileFirst.path === ownPath;
+  // A file the text links to: one of its own opens on its tab, any other in its folder's listing.
+  const [wantFile, setWantFile] = useState<{ path: string; at: number }>();
+  const onFile = (path: string) => {
+    if (!filesOf(node).some((f) => f.file.path === path)) return props.onFileIn(path);
+    props.onDirectory(null);
+    setWantFile({ path, at: Date.now() });
+    props.toTop?.();
+  };
+  // What changed in each file since this was written, on its tab, in words rather than colour.
+  const facts = materialFacts(materials.data?.materials ?? []);
+  const materialNotes = new Map(
+    node.materials.flatMap((m) =>
+      m.workspacePath && facts.has(m.resource)
+        ? [[m.workspacePath, t.rel.materialFact[facts.get(m.resource)!]] as const]
+        : [],
+    ),
+  );
   const aboveKnown =
     waited ||
     ((fileKnown || fileShown) && (!header.pending || !!outgoing.data || !!outgoing.error));
@@ -1036,11 +1079,13 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
       {!panel && (
         <button
           type="button"
-          className="btn plain"
+          className="icon-btn"
           onClick={() => onLocate({ kind: "node", id: node.id })}
+          aria-label={t.reader.locate}
+          data-tip={t.reader.locate}
+          data-tip-end=""
         >
-          <Icon name="locate" size={15} />
-          {t.reader.locate}
+          <Icon name="locate" size={16} />
         </button>
       )}
       <button
@@ -1065,17 +1110,24 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
           </>
         )}
       </button>
-      <button
-        type="button"
-        className={`btn${at >= 0 ? " is-in" : " accent"}`}
-        onClick={() => work.attach(node.id)}
-        disabled={!!work.openDraft && work.publishing === work.openDraft}
-        data-tip={at >= 0 ? t.side.inDraft : t.page.attachTip}
-        data-tip-end=""
-      >
-        <Icon name={at >= 0 ? "check" : "addToCard"} size={15} />
-        {at < 0 ? t.side.attach : narrow ? t.page.inDraftShort(at + 1) : t.page.inDraft(at + 1)}
-      </button>
+      {/* Cards are a second Agent's business: with no Role and no Card yet, the page does not offer one. */}
+      {(at >= 0 || graph.roles.size > 0 || graph.cards.size > 0) && (
+        <button
+          type="button"
+          className={`icon-btn${at >= 0 ? " is-in" : ""}`}
+          onClick={() => work.attach(node.id)}
+          disabled={!!work.openDraft && work.publishing === work.openDraft}
+          aria-label={at < 0 ? t.side.attach : t.page.inDraft(at + 1)}
+          data-tip={
+            at >= 0
+              ? `${t.page.inDraft(at + 1)} · ${t.side.inDraft}`
+              : `${t.side.attach} · ${t.page.attachTip}`
+          }
+          data-tip-end=""
+        >
+          <Icon name={at >= 0 ? "check" : "addToCard"} size={16} />
+        </button>
+      )}
       <NodeMenu graph={graph} node={mapNode} onGone={props.onClose} onToast={onToast} />
     </>
   );
@@ -1124,24 +1176,20 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
         className={`t-${p}`}
         head={
           <>
-            {/* An opened Node needs no type icon: the eyebrow names its type (cuca 2026-10-21). */}
+            {/* An opened Node needs no type icon: the line under its name says its type (cuca 2026-10-21). */}
             <Hero
-              eyebrow={
+              meta={
                 <>
                   <b className={`p-${p}`}>{p}</b>
                   {node.status === "draft" ? (
                     <span className="eyebrow-note">{t.node.undecided}</span>
                   ) : (
-                    node.status !== "stable" && (
-                      <span className="pill">{t.node.status(node.status)}</span>
-                    )
+                    node.status !== "stable" && <span>{t.node.status(node.status)}</span>
                   )}
                   {state.recent && <span className="pill pill-recent">{t.node.recent}</span>}
                   {state.drift && <span className="pill pill-drift">{t.node.drift}</span>}
                   {node.tags.map((tag) => (
-                    <span key={tag} className="pill">
-                      #{tag}
-                    </span>
+                    <span key={tag}>#{tag}</span>
                   ))}
                 </>
               }
@@ -1216,7 +1264,9 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
             ) : (
               <>
                 <FilesContext.Provider value={files}>
-                  {!props.directoryPanel && <FileView node={node} onToast={onToast} />}
+                  {!props.directoryPanel && (
+                    <FileView node={node} notes={materialNotes} want={wantFile} onToast={onToast} />
+                  )}
                 </FilesContext.Provider>
                 {!!document.error && body.trim() && <ReadState section={document} />}
                 {doc && !aboveKnown && !document.error ? (
@@ -1230,6 +1280,7 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
                     onOpen={onOpen}
                     onToast={onToast}
                     onDirectory={props.onDirectory}
+                    onFile={onFile}
                   />
                 ) : !doc ? (
                   <ReadState section={document} />
@@ -1252,13 +1303,9 @@ function NodePage(props: PageProps & { node: SnapshotNode }) {
               incomingOpen,
               onIncoming: () => setIncomingOpen(true),
               materials,
-              materialsDeclared: header.materials.length,
             }}
           >
             <ReviewRow doc={doc} node={node} />
-            <PropRow label="id">
-              <CopyId id={node.id} onToast={onToast} />
-            </PropRow>
           </NodeProps>
         }
         rail={

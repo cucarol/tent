@@ -8,7 +8,10 @@ import test from "node:test";
 import { openTestService, removeTestFixture } from "./node-fs.js";
 import { directoryPath, resolveHref } from "../src/ui/util.js";
 import { localFileAt } from "../src/ui/data/files.js";
-import type { WorkspaceDirectory } from "../src/core/read/workspace-directory.js";
+import {
+  workspaceDirectory,
+  type WorkspaceDirectory,
+} from "../src/core/read/workspace-directory.js";
 import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
 
 test("body directory routing preserves the marker, encoding and .tent anchor", () => {
@@ -43,6 +46,29 @@ test("body directory routing preserves the marker, encoding and .tent anchor", (
     show: "text",
   });
   assert.equal(localFileAt("source folder/alpha #%.txt").show, "text");
+});
+
+test("a directory lists folders first, then names case-insensitively with numbers by value", () => {
+  const entry = (name: string, kind: "directory" | "file" = "file") => ({
+    name,
+    path: `docs/${name}`,
+    kind,
+    size: 0,
+    modifiedAt: "2026-10-27T00:00:00.000Z",
+  });
+  const listed = workspaceDirectory("docs", [
+    entry("b10.md"),
+    entry("README.md"),
+    entry("a.md"),
+    entry("Zeta", "directory"),
+    entry("B2.md"),
+    entry("A.md"),
+    entry("alpha", "directory"),
+  ]);
+  assert.deepEqual(
+    listed.entries.map((e) => e.name),
+    ["alpha", "Zeta", "A.md", "a.md", "B2.md", "b10.md", "README.md"],
+  );
 });
 
 test("directory API reads one level in directory-first name order and shares file previews", async (t) => {

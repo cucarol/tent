@@ -292,10 +292,11 @@ export function useNodeActions({
               setAsking("move");
             },
           },
-          { label: t.manage.copyId, run: copy(node.id) },
-          { label: t.manage.copyPath, run: copy(`.tent/${node.notePath}`) },
         ]
       : []),
+    // The page shows no id row; it is copied from here (2026-10-27).
+    { label: t.manage.copyId, run: copy(node.id) },
+    ...(tree ? [{ label: t.manage.copyPath, run: copy(`.tent/${node.notePath}`) }] : []),
     ...(!archived
       ? [
           {

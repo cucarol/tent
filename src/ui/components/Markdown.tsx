@@ -13,7 +13,8 @@ import {
   workspaceImagePath,
 } from "../util.js";
 import { t } from "../i18n.js";
-import { glyphSvg } from "./Glyph.js";
+import { fileSvg, glyphSvg } from "./Glyph.js";
+import { fileKind } from "../data/files.js";
 import type { NodeRelationsDetails, SnapshotRef } from "../data/types.js";
 import { documentRef } from "../data/document-links.js";
 
@@ -24,6 +25,18 @@ function fileChip(path: string, alt: string) {
   file.title = t.doc.workspaceFile(path);
   file.textContent = t.doc.image(alt || path.split("/").pop()!);
   return file;
+}
+
+/** A link to a Workspace file or folder, under its icon; it opens in the file area below the title. */
+function fileLink(anchor: Element, kind: "file" | "directory", path: string) {
+  const link = document.createElement("a");
+  link.className = `doc-ref is-${kind}`;
+  link.href = "#";
+  link.title = kind === "file" ? t.doc.workspaceFile(path) : `${path}/`;
+  link.dataset[kind] = path;
+  link.innerHTML = `${fileSvg(kind === "file" ? fileKind(path) : "folder")}<span></span>`;
+  link.querySelector("span")!.textContent = anchor.textContent;
+  return link;
 }
 
 /** A link to a Node or Card in the app, under its name. */
@@ -92,6 +105,7 @@ export function Markdown({
   onToast,
   historical = false,
   onDirectory,
+  onFile,
 }: {
   body: string;
   fromPath: string;
@@ -101,6 +115,8 @@ export function Markdown({
   onToast?: (text: string) => void;
   historical?: boolean;
   onDirectory?: (path: string) => void;
+  /** Opens a Workspace file the text links to; without it the link stays a plain marker. */
+  onFile?: (path: string) => void;
 }) {
   const html = useMemo(() => {
     const box = document.createElement("div");
@@ -115,12 +131,13 @@ export function Markdown({
       if (ref) {
         anchor.replaceWith(refLink(ref, anchor.textContent ?? "", graph));
       } else if (directory !== null && onDirectory) {
-        anchor.className = "doc-file";
-        anchor.setAttribute("href", "#");
-        (anchor as HTMLElement).dataset.directory = directory;
+        anchor.replaceWith(fileLink(anchor, "directory", directory));
       } else if (target.external && !/^file:/i.test(target.external)) {
         anchor.setAttribute("target", "_blank");
         anchor.setAttribute("rel", "noopener");
+      } else if (onFile && target.file && target.file !== ".." && !target.file.startsWith("../")) {
+        // A project document or source file reads like a file, and opens like one.
+        anchor.replaceWith(fileLink(anchor, "file", target.file));
       } else {
         const file = document.createElement("span");
         file.className = "doc-file";
@@ -144,7 +161,7 @@ export function Markdown({
     });
     mentions(box, graph);
     return box.innerHTML;
-  }, [body, fromPath, graph, relations, historical, onDirectory]);
+  }, [body, fromPath, graph, relations, historical, onDirectory, !!onFile]);
 
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -174,6 +191,12 @@ export function Markdown({
             () => onToast?.(t.sheet.copied(hash.textContent ?? text)),
             () => onToast?.(text),
           );
+          return;
+        }
+        const file = (event.target as HTMLElement).closest<HTMLElement>("[data-file]");
+        if (file) {
+          event.preventDefault();
+          onFile?.(file.dataset.file!);
           return;
         }
         const directory = (event.target as HTMLElement).closest<HTMLElement>("[data-directory]");

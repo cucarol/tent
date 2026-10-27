@@ -7,6 +7,7 @@ import type { Graph } from "../data/store.js";
 import { api, ApiError, describe, type NodeDocument } from "../data/api.js";
 import type { NodeSection } from "../data/node-details.js";
 import { materialFacts } from "../data/materials.js";
+import { filesOf } from "../data/files.js";
 import type {
   MaterialState,
   SnapshotFile,
@@ -454,8 +455,6 @@ export function NodeProps({
     onIncoming: () => void;
     /** Its own materials as Tent compares them now. */
     materials?: NodeSection<{ materials: MaterialState[] }>;
-    /** Header entries known to stay in the materials row while checked relations load. */
-    materialsDeclared?: number;
   };
   /** Rows the page adds after these. */
   children?: ReactNode;
@@ -485,7 +484,11 @@ export function NodeProps({
   const incoming = (details.incoming.data?.incoming ?? []).filter(
     (i) => !(i.from.kind === "node" && family.has(i.from.id) && i.via === "link"),
   );
-  const files = (relations?.materials ?? []).filter((m) => m.kind !== "node" && m.kind !== "role");
+  // Files the page already shows as tabs, or as its own file, are listed there once, with what changed.
+  const tabbed = new Set(filesOf(node).map((f) => f.file.path));
+  const unshown = (m: SnapshotMaterial) =>
+    m.kind !== "node" && m.kind !== "role" && !(m.workspacePath && tabbed.has(m.workspacePath));
+  const files = (relations?.materials ?? []).filter(unshown);
   const facts = materialFacts(details.materials?.data?.materials ?? []);
   const roles = relations?.roles ?? [];
   const history = details.history.data?.items ?? [];
@@ -518,27 +521,7 @@ export function NodeProps({
           ))}
         </PropRow>
       )}
-      <PropRow label={t.rel.parent}>
-        {node.parentId ? (
-          <RefLink graph={graph} target={{ kind: "node", id: node.parentId }} onOpen={onOpen} />
-        ) : (
-          <span className="prop-none">{t.rel.topLevel}</span>
-        )}
-      </PropRow>
-      {node.childIds.length > 0 && (
-        <PropRow label={t.rel.children} wide>
-          <Capped
-            items={graph.childrenOf(node.id).map((c) => (
-              <RefLink
-                key={c.id}
-                graph={graph}
-                target={{ kind: "node", id: c.id }}
-                onOpen={onOpen}
-              />
-            ))}
-          />
-        </PropRow>
-      )}
+      {/* Parents are the page's trail and children the map's branch; the rows say only what those cannot. */}
       <PropRow label={t.rel.linksTo} wide>
         {!relations && <ReadState section={details.outgoing} rows={1} />}
         {/* Said rather than dropped, so the rows under it stay where they are when the read comes. */}
@@ -584,7 +567,7 @@ export function NodeProps({
       <PropRow
         label={t.rel.materials}
         wide
-        hidden={relations ? !files.length : !details.materialsDeclared}
+        hidden={relations ? !files.length : !node.materials.some(unshown)}
       >
         {!relations && <ReadState section={details.outgoing} rows={1} />}
         <Capped

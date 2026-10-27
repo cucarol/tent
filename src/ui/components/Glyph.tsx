@@ -118,6 +118,10 @@ const FILE_ICONS: Record<FileKind, IconName> = {
   text: "fileText",
   other: "file",
 };
+/** A file's icon by what its suffix shows, or a folder's, as markup for rendered Markdown. */
+export const fileSvg = (show: FileKind | "folder", size = 14) =>
+  `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_SVG[show === "folder" ? "folder" : FILE_ICONS[show]]}</svg>`;
+
 /** A Node's own file, drawn by what its suffix shows in the Node's type colour; a missing file is crossed out. */
 export function FileGlyph({
   show,

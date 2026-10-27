@@ -35,6 +35,11 @@ export function workspaceNavigationPath(address: string, root: string): string {
   return relative;
 }
 
+// Names read the way a person scans a folder: case folded and numbers by value, so B2 sits between a and
+// b10. Names equal under that rule keep a fixed byte order, so the listing never depends on read order.
+const byName = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+const nameOrder = (a: string, b: string) => byName.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0);
+
 /** A single observed level, with no traversal or material observation. */
 export function workspaceDirectory(path: string, entries: DirectoryEntry[]): WorkspaceDirectory {
   return {
@@ -43,15 +48,7 @@ export function workspaceDirectory(path: string, entries: DirectoryEntry[]): Wor
     entries: entries
       .filter((entry) => entry.name.toLowerCase() !== ".git")
       .sort((a, b) =>
-        a.kind !== b.kind
-          ? a.kind === "directory"
-            ? -1
-            : 1
-          : a.name < b.name
-            ? -1
-            : a.name > b.name
-              ? 1
-              : 0,
+        a.kind !== b.kind ? (a.kind === "directory" ? -1 : 1) : nameOrder(a.name, b.name),
       ),
   };
 }

@@ -776,6 +776,12 @@ function MapContent({
   const handsTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(handsTimer.current), []);
   const [keyOpen, setKeyOpen] = useState(false);
+  // The toolbar starts as zoom and fit; the rest is one click away and stays open once opened.
+  const [toolsOpen, setToolsOpen] = useState(() => readStored("tent-map-tools-open", false));
+  const showTools = (open: boolean) => {
+    setToolsOpen(open);
+    writeStored("tent-map-tools-open", open);
+  };
   const [lens, setLensSession] = useState<LensSession | null>(null);
   const lensReturn = useRef<Viewport | null>(null);
   const revealTarget = useRef<string | null>(null);
@@ -3135,87 +3141,97 @@ function MapContent({
       )}
 
       <div className="panel maptools" role="toolbar" aria-label={t.map.tools}>
-        {!!graph.nodes.size &&
-          (["goal", "prompt", "output"] as const).map((type) => (
+        {/* Something in use keeps its tool in view: a lens, time, the pen, a hidden type or the legend. */}
+        {(toolsOpen ||
+          !!lensId ||
+          timeOpen ||
+          inking ||
+          keyOpen ||
+          !Object.values(filters.types).every(Boolean)) && (
+          <>
+            {!!graph.nodes.size &&
+              (["goal", "prompt", "output"] as const).map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  className="tool"
+                  aria-pressed={filters.types[type]}
+                  onClick={() => toggleType(type)}
+                  aria-label={t.map.toggleType(filters.types[type], type)}
+                  data-tip={t.map.toggleType(filters.types[type], type)}
+                >
+                  <TypeGlyph type={type} size={15} />
+                  <span>{graph.counts[type]}</span>
+                </button>
+              ))}
+            {!!graph.nodes.size && <span className="tool-sep" />}
             <button
-              key={type}
               type="button"
-              className="tool"
-              aria-pressed={filters.types[type]}
-              onClick={() => toggleType(type)}
-              aria-label={t.map.toggleType(filters.types[type], type)}
-              data-tip={t.map.toggleType(filters.types[type], type)}
+              className="tool tool-lens"
+              aria-pressed={!!lensId}
+              disabled={timeOpen || selected?.kind !== "node"}
+              onClick={() => {
+                setInkTool(null);
+                setLens((l) => !l);
+              }}
+              aria-label={t.map.lens}
+              data-tip={selected?.kind === "node" ? t.map.lensTitle : t.map.lensNeedsNode}
+              data-key={selected?.kind === "node" ? "L" : undefined}
             >
-              <TypeGlyph type={type} size={15} />
-              <span>{graph.counts[type]}</span>
+              <Icon name="lens" size={15} />
+              <span className="lbl">{t.map.lens}</span>
             </button>
-          ))}
-        {!!graph.nodes.size && <span className="tool-sep" />}
-        <button
-          type="button"
-          className="tool tool-lens"
-          aria-pressed={!!lensId}
-          disabled={timeOpen || selected?.kind !== "node"}
-          onClick={() => {
-            setInkTool(null);
-            setLens((l) => !l);
-          }}
-          aria-label={t.map.lens}
-          data-tip={selected?.kind === "node" ? t.map.lensTitle : t.map.lensNeedsNode}
-          data-key={selected?.kind === "node" ? "L" : undefined}
-        >
-          <Icon name="lens" size={15} />
-          <span className="lbl">{t.map.lens}</span>
-        </button>
-        <button
-          type="button"
-          className="tool tool-time"
-          aria-pressed={timeOpen}
-          onClick={() => (timeOpen ? closeTime() : openTime())}
-          aria-label={t.map.time}
-          data-tip={t.map.timeTitle}
-        >
-          <Icon name="clock" size={15} />
-          <span className="lbl">{t.map.time}</span>
-        </button>
-        <button
-          type="button"
-          className="tool tool-ink"
-          aria-pressed={inking}
-          disabled={!inkShown || !ink.ready}
-          onClick={() => setInkTool((tool) => (tool ? null : "select"))}
-          aria-label={t.ink.draw}
-          data-tip={t.ink.drawTitle}
-        >
-          <Icon name="pen" size={15} />
-          <span className="lbl">{t.ink.draw}</span>
-        </button>
-        <span className="tool-sep" />
-        <button
-          type="button"
-          className="tool sq"
-          disabled={timeOpen || !!lens || !canvas.canUndo}
+            <button
+              type="button"
+              className="tool tool-time"
+              aria-pressed={timeOpen}
+              onClick={() => (timeOpen ? closeTime() : openTime())}
+              aria-label={t.map.time}
+              data-tip={t.map.timeTitle}
+            >
+              <Icon name="clock" size={15} />
+              <span className="lbl">{t.map.time}</span>
+            </button>
+            <button
+              type="button"
+              className="tool tool-ink"
+              aria-pressed={inking}
+              disabled={!inkShown || !ink.ready}
+              onClick={() => setInkTool((tool) => (tool ? null : "select"))}
+              aria-label={t.ink.draw}
+              data-tip={t.ink.drawTitle}
+            >
+              <Icon name="pen" size={15} />
+              <span className="lbl">{t.ink.draw}</span>
+            </button>
+            <span className="tool-sep" />
+            <button
+              type="button"
+              className="tool sq"
+              disabled={timeOpen || !!lens || !canvas.canUndo}
 
-          onClick={undo}
-          aria-label={t.ink.undo}
-          data-tip={t.ink.undo}
-          data-key="Ctrl Z"
-        >
-          <Icon name="undo" size={15} />
-        </button>
-        <button
-          type="button"
-          className="tool sq"
-          disabled={timeOpen || !!lens || !canvas.canRedo}
+              onClick={undo}
+              aria-label={t.ink.undo}
+              data-tip={t.ink.undo}
+              data-key="Ctrl Z"
+            >
+              <Icon name="undo" size={15} />
+            </button>
+            <button
+              type="button"
+              className="tool sq"
+              disabled={timeOpen || !!lens || !canvas.canRedo}
 
-          onClick={redo}
-          aria-label={t.ink.redo}
-          data-tip={t.ink.redo}
-          data-key="Ctrl Shift Z"
-        >
-          <Icon name="redo" size={15} />
-        </button>
-        <span className="tool-sep" />
+              onClick={redo}
+              aria-label={t.ink.redo}
+              data-tip={t.ink.redo}
+              data-key="Ctrl Shift Z"
+            >
+              <Icon name="redo" size={15} />
+            </button>
+            <span className="tool-sep" />
+          </>
+        )}
         <button
           type="button"
           className="tool sq zoom-step"
@@ -3248,28 +3264,43 @@ function MapContent({
         >
           <Icon name="fit" size={15} />
         </button>
-        <span className="tool-sep" />
-        <button
-          type="button"
-          className={`tool sq${pictureFailed ? " is-failed" : ""}`}
-          aria-busy={picturing}
-          disabled={picturing}
-          onClick={() => void exportPicture()}
-          aria-label={t.map.picture}
-          data-tip={pictureFailed ? t.map.pictureFailed : t.map.pictureTip}
-        >
-          <Icon name="download" size={15} />
-        </button>
+        {(toolsOpen || keyOpen) && (
+          <>
+            <span className="tool-sep" />
+            <button
+              type="button"
+              className={`tool sq${pictureFailed ? " is-failed" : ""}`}
+              aria-busy={picturing}
+              disabled={picturing}
+              onClick={() => void exportPicture()}
+              aria-label={t.map.picture}
+              data-tip={pictureFailed ? t.map.pictureFailed : t.map.pictureTip}
+            >
+              <Icon name="download" size={15} />
+            </button>
+            <button
+              type="button"
+              className="tool sq"
+              aria-expanded={keyOpen}
+              onClick={() => setKeyOpen((o) => !o)}
+              aria-label={t.map.legend}
+              data-tip={keyOpen ? undefined : t.map.legend}
+              data-tip-end=""
+            >
+              <Icon name="help" size={15} />
+            </button>
+          </>
+        )}
         <button
           type="button"
           className="tool sq"
-          aria-expanded={keyOpen}
-          onClick={() => setKeyOpen((o) => !o)}
-          aria-label={t.map.legend}
-          data-tip={keyOpen ? undefined : t.map.legend}
+          aria-expanded={toolsOpen}
+          onClick={() => showTools(!toolsOpen)}
+          aria-label={toolsOpen ? t.map.toolsLess : t.map.toolsMore}
+          data-tip={toolsOpen ? t.map.toolsLess : t.map.toolsMore}
           data-tip-end=""
         >
-          <Icon name="help" size={15} />
+          <Icon name={toolsOpen ? "close" : "working"} size={15} />
         </button>
         {keyOpen && <MapKey />}
       </div>

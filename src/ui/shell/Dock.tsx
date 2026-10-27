@@ -146,6 +146,8 @@ export function Dock(props: Props) {
     waiting = sum("waiting") + sum("returned");
   const q = filter.trim().toLowerCase();
   const listed = q ? lanes.filter((l) => work.laneName(l).toLowerCase().includes(q)) : lanes;
+  // One Agent and no Card yet: the robots are only a face that says what they are for, and how to get one.
+  const alone = roles === 0 && graph.cards.size === 0 && !writing;
 
   if (!graph.detailed)
     return (
@@ -188,10 +190,10 @@ export function Dock(props: Props) {
       <button
         ref={stack}
         type="button"
-        className={`role-stack${open ? " is-open" : ""}${roles === 0 ? " is-empty" : ""}`}
+        className={`role-stack${open ? " is-open" : ""}${roles === 0 ? " is-empty" : ""}${alone ? " is-alone" : ""}`}
         aria-expanded={open}
-        aria-label={`${t.work.title} · ${t.work.roles(roles)}`}
-        data-tip={open ? undefined : t.work.stackTip}
+        aria-label={alone ? t.work.noRolesTitle : `${t.work.title} · ${t.work.roles(roles)}`}
+        data-tip={open ? undefined : alone ? t.work.noRolesTip : t.work.stackTip}
         data-tip-end=""
         onClick={() => show(!open)}
       >
@@ -206,14 +208,40 @@ export function Dock(props: Props) {
             </span>
           ))}
         </span>
-        <span className="role-sum">
-          {t.work.roles(roles)}
-          {doing > 0 && <span className="is-doing"> · {t.work.doingN(doing)}</span>}
-          {waiting > 0 && <span> · {t.work.waitingN(waiting)}</span>}
-        </span>
-        <Icon name="down" size={14} />
+        {!alone && (
+          <>
+            <span className="role-sum">
+              {t.work.roles(roles)}
+              {doing > 0 && <span className="is-doing"> · {t.work.doingN(doing)}</span>}
+              {waiting > 0 && <span> · {t.work.waitingN(waiting)}</span>}
+            </span>
+            <Icon name="down" size={14} />
+          </>
+        )}
       </button>
-      {open && (
+      {open && alone && (
+        <section className="dock panel is-alone" aria-label={t.work.noRolesTitle}>
+          <div className="dock-head">
+            <span className="dock-title">{t.work.noRolesTitle}</span>
+            <button
+              type="button"
+              className="icon-btn dock-fold"
+              onClick={() => show(false)}
+              aria-label={t.work.foldAll}
+              data-tip={t.work.foldAll}
+              data-key="Esc"
+              data-tip-end=""
+            >
+              <Icon name="close" size={13} />
+            </button>
+          </div>
+          <div className="dock-alone">
+            <p>{t.work.noRolesBody}</p>
+            <p>{t.work.noRolesHow}</p>
+          </div>
+        </section>
+      )}
+      {open && !alone && (
         <section className="dock panel" aria-label={t.work.title}>
           <div className="dock-head">
             <span className="dock-title">{t.work.title}</span>
