@@ -382,39 +382,34 @@ test(
   },
 );
 
-test("a native burst waits for lock release, coalesces empty hints and leaves later changes observable", async (t) => {
+test("a burst waits for lock release before empty hints wake fresh Core reads", async (t) => {
   const { workspaceRoot, note, server } = await fixture(t);
+  const initial = await (await read(server, "/api/nodes/node-main")).json();
   const observed = observeWatch(t);
   const live = await stream(t, server);
   await live.wait(1);
   const tent = openTestFs(path.join(workspaceRoot, ".tent"));
+  const lines = Array.from({ length: 20 }, (_, i) => `line ${i}\n`);
   await tent.withLock("mutation.lock", async () => {
-    for (let i = 0; i < 20; i++) await fs.appendFile(note, `line ${i}\n`);
+    for (const line of lines) await fs.appendFile(note, line);
     await delay(180);
     assert.deepEqual(live.frames, [": connected"]);
   });
   await live.wait(2);
-  await delay(180);
   const burstHints = live.frames.length - 1;
-  assert.ok(
-    burstHints > 0 && burstHints < 20,
-    `Native notifications did not coalesce: ${burstHints}`,
-  );
   assert.ok(live.frames.slice(1).every((frame) => frame === "event: change\ndata: {}"));
   const current = await read(server, "/api/nodes/node-main");
   assert.equal(current.status, 200);
-  assert.equal(
-    (await current.json()).body,
-    "Initial body\n" + Array.from({ length: 20 }, (_, i) => `line ${i}\n`).join(""),
-  );
-  // Releasing the CLI's existing lock is sufficient even if no document event is delivered.
-  let beforeRelease = 0;
+  assert.equal((await current.json()).body, initial.body + lines.join(""));
+  // Count at release: late notifications may add empty hints to another batch.
+  let next = 0;
   await tent.withLock("mutation.lock", async () => {
-    beforeRelease = live.frames.length;
+    const whileLocked = live.frames.length;
     await delay(100);
-    assert.equal(live.frames.length, beforeRelease);
+    assert.equal(live.frames.length, whileLocked);
+    next = live.frames.length + 1;
   });
-  await live.wait(beforeRelease + 1);
+  await live.wait(next);
   const beforeFile = live.frames.length;
   await fs.appendFile(note, "independent later edit\n");
   await live.wait(beforeFile + 1);

@@ -11,33 +11,20 @@ import {
   structureMaterialCoverage,
   materialCoverageContains,
 } from "../src/core/base/material-coverage.js";
-import {
-  formatStopTurnReview,
-  TURN_REVIEW_ACTION,
-  TURN_REVIEW_RULE,
-} from "../src/core/return/stop-turn-review.js";
-import type { SessionObservationEvent } from "../src/core/return/session-observations.js";
-import type { StopQuestion } from "../src/core/return/stop-advice.js";
-import { runHookCommand } from "../src/cli/hook.js";
-import { readClaudeTurnActivity } from "../src/cli/claude-turn-activity.js";
 import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
-import { modulesForIndexedTurn } from "../src/core/return/stop-turn-review.js";
-import { buildStopMaterialIndex } from "../src/core/return/stop-material-index.js";
+import { modulesForIndexedTurn } from "../src/core/return/tool-turn-review.js";
+import {
+  type StopMaterialIndex,
+  buildStopMaterialIndex,
+} from "../src/core/return/stop-material-index.js";
 import { createHash } from "node:crypto";
 import { isUsableNode } from "../src/core/store/tree.js";
-import { questionsForIndexedTurn, stopAdvice } from "../src/core/return/stop-advice.js";
-import { codexHookAdapter } from "../src/cli/codex-turn-activity.js";
-import { claudeHookAdapter } from "../src/cli/claude-turn-activity.js";
-import { stopReviewOutput } from "../src/cli/hook-adapter.js";
 
-const event = (files: string[] = []): SessionObservationEvent => ({
-  turnId: "turn",
+const event = (files: string[] = []): Parameters<typeof modulesForIndexedTurn>[1] => ({
   files: files.map((address) => ({
     kind: "written",
     address,
   })),
-  signals: [],
-  uncertain: false,
 });
 
 async function fixture(t: TestContext) {
@@ -151,7 +138,7 @@ test("modules require explicit structure sources and retain all equally specific
   );
 });
 
-test("Stop excludes draft module coverage while retaining stable modules beneath it", async (t) => {
+test("material index excludes draft module coverage while retaining stable modules beneath it", async (t) => {
   const { root, adapter } = await fixture(t);
   const systemRoot = path.join(root, ".tent");
   await fs.mkdir(path.join(systemRoot, ".git"));
@@ -189,338 +176,7 @@ test("Stop excludes draft module coverage while retaining stable modules beneath
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), stable);
 });
 
-test("intent update selects a goal from this turn's modules in changed-file order", async (t) => {
-  const { root, adapter, node } = await fixture(t);
-  await node("AFirst", "node-first", "../../src/first/");
-  await node("ZSecond", "node-second", "../../src/second/");
-  for (const name of ["AFirst", "ZSecond"]) {
-    const file = `${name}/${name}.md`;
-    await adapter.writeFile(
-      file,
-      (await adapter.readFile(file)).replace("type: output", "type: goal"),
-    );
-  }
-  const index = buildStopMaterialIndex(await loadNodeCatalog(adapter), root);
-  for (const files of [
-    ["src/second/only.ts"],
-    [
-      "src/core/other-one.ts",
-      "src/core/other-two.ts",
-      "src/core/other-three.ts",
-      "src/first/one.ts",
-      "src/second/one.ts",
-      "src/second/two.ts",
-    ],
-  ]) {
-    const turn = { ...event(files), signals: ["possible-decision" as const] };
-    assert.deepEqual(questionsForIndexedTurn(index, turn)[0]!.answers, [
-      "Update existing node-second",
-      "Create a confirmed goal or prompt",
-      "Discussion only; do not save",
-    ]);
-    const advice = stopAdvice(index, turn, 4096)!;
-    assert.match(advice, /Update existing node-second/);
-    assert.doesNotMatch(advice, /Update existing node-first/);
-  }
-});
-
-test("intent update is omitted when this turn hits only non-goal modules", async (t) => {
-  const { root, adapter, node } = await fixture(t);
-  await node("AUnrelated", "node-unrelated", "../../src/unrelated/");
-  const unrelated = "AUnrelated/AUnrelated.md";
-  await adapter.writeFile(
-    unrelated,
-    (await adapter.readFile(unrelated)).replace("type: output", "type: goal"),
-  );
-  await adapter.writeFile(
-    "Core/Core.md",
-    (await adapter.readFile("Core/Core.md")).replace("type: output", "type: prompt"),
-  );
-  const index = buildStopMaterialIndex(await loadNodeCatalog(adapter), root);
-  const turn = {
-    ...event(["src/core/other.ts", "src/core/card-one.ts"]),
-    signals: ["possible-decision" as const],
-  };
-  const asked = questionsForIndexedTurn(index, turn);
-  assert.equal(asked.length, 1);
-  assert.deepEqual(asked[0]!.answers, [
-    "Create a confirmed goal or prompt",
-    "Discussion only; do not save",
-  ]);
-  const advice = stopAdvice(index, turn, 4096)!;
-  assert.match(advice, /Create a confirmed goal or prompt; Discussion only; do not save/);
-  assert.doesNotMatch(advice, /Update existing/);
-});
-
-const questions: StopQuestion[] = [
-  {
-    kind: "possible-intent",
-    question: "new requirement?",
-    answers: ["Create goal", "Discussion only"],
-  },
-  {
-    kind: "possible-intent",
-    question: "new decision?",
-    answers: ["Update", "Create", "Discussion"],
-  },
-];
-test("Core budgets UTF-8 text independently of any host envelope", () => {
-  const modules = [
-    { nodeId: "node-one", path: "模块/one.md", names: ["模块"], files: ["src/a.ts"] },
-  ];
-  const full = formatStopTurnReview(4096, modules, questions)!;
-  const bytes = Buffer.byteLength(full);
-  assert.ok(bytes > full.length);
-  assert.equal(formatStopTurnReview(bytes, modules, questions), full);
-  const bounded = formatStopTurnReview(bytes - 1, modules, questions)!;
-  assert.ok(Buffer.byteLength(bounded) <= bytes - 1);
-  assert.ok(bounded.includes(TURN_REVIEW_RULE));
-  assert.ok(bounded.includes(TURN_REVIEW_ACTION));
-  assert.equal(formatStopTurnReview(1, modules, questions), undefined);
-});
-
-test("both native envelopes merge all questions and keep fixed text within 2 KiB", () => {
-  for (const host of ["codex", "claude-code"] as const) {
-    const adapter = host === "codex" ? codexHookAdapter : claudeHookAdapter;
-    const modules = Array.from({ length: 7 }, (_, index) => ({
-      nodeId: `node-${index}`,
-      path: `Core/Module${index}`,
-      names: ["Core", `Module${index}`],
-      files: Array.from({ length: 10 }, (_, file) => `src/core/${index}-${file}.ts`),
-    }));
-    let message = "";
-    const output = stopReviewOutput(adapter, (budget) => {
-      message = formatStopTurnReview(budget, modules, questions)!;
-      return message;
-    })!;
-    assert.ok(message.includes(TURN_REVIEW_RULE));
-    assert.ok(message.includes(TURN_REVIEW_ACTION));
-    assert.equal((message.match(/^[1-3]\. /gm) ?? []).length, 2);
-    assert.match(message, /\+\d+ more modules/);
-    assert.ok((message.match(/^- /gm) ?? []).length <= 5);
-    assert.ok(Buffer.byteLength(output) <= 2048);
-    let huge = "";
-    const hugeOutput = stopReviewOutput(adapter, (budget) => {
-      huge = formatStopTurnReview(
-        budget,
-        modules.map((module) => ({
-          ...module,
-          path: '模块\\"'.repeat(2000),
-          names: ["名".repeat(2000)],
-        })),
-        questions.map((question) => ({
-          ...question,
-          question: '问题\\"\n'.repeat(2000),
-          answers: question.answers.map(() => '回答\\"\t'.repeat(2000)),
-        })),
-      )!;
-      return huge;
-    })!;
-    assert.ok(huge.includes(TURN_REVIEW_RULE));
-    assert.ok(huge.includes(TURN_REVIEW_ACTION));
-    assert.equal((huge.match(/^[1-3]\. /gm) ?? []).length, 2);
-    assert.ok(Buffer.byteLength(hugeOutput) <= 2048);
-    assert.equal(formatStopTurnReview(2048, [], questions), undefined);
-    const envelope = adapter.stopEnvelope("review");
-    assert.deepEqual(
-      envelope,
-      host === "codex"
-        ? { decision: "block", reason: "review" }
-        : { hookSpecificOutput: { hookEventName: "Stop", additionalContext: "review" } },
-    );
-  }
-});
-
-for (const host of ["codex", "claude-code"] as const) {
-  test(`${host} reclaims filename escaping overhead before dropping the only Node`, () => {
-    const adapter = host === "codex" ? codexHookAdapter : claudeHookAdapter;
-    const boundaryLengths = host === "codex" ? [158, 158, 158, 159] : [156, 154, 154, 153];
-    const cases = [
-      {
-        lengths: Array(4).fill(host === "codex" ? 137 : 132) as number[],
-        file: '"'.repeat(host === "codex" ? 193 : 200),
-        bytes: host === "codex" ? 1856 : 1849,
-      },
-      ...['"', "a", " "].map((file) => ({ lengths: boundaryLengths, file, bytes: 2048 })),
-    ];
-    for (const { lengths, file, bytes } of cases) {
-      const names = lengths.map((length, index) => `${index}${"x".repeat(length - 1)}`);
-      const node = {
-        nodeId: "node-one",
-        path: `.tent/${names.join("/")}/${names.at(-1)}.md`,
-        names,
-        moduleCoverage: [{ kind: "directory" as const, prefix: "" }],
-      };
-      const withoutFilename = formatStopTurnReview(4096, [{ ...node, files: [] }], [])!;
-      const expected = JSON.stringify(adapter.stopEnvelope(withoutFilename)) + "\n";
-      assert.equal(Buffer.byteLength(expected), bytes);
-      const output = stopReviewOutput(adapter, (budget) =>
-        stopAdvice({ nodes: [node] }, event([file]), budget),
-      )!;
-      assert.ok(Buffer.byteLength(output) <= 2048);
-      const envelope = JSON.parse(output);
-      const message =
-        host === "codex" ? envelope.reason : envelope.hookSpecificOutput.additionalContext;
-      assert.ok(message.includes(`(${node.nodeId}, ${node.path})`));
-      assert.ok(message.includes(TURN_REVIEW_RULE));
-      assert.ok(message.includes(TURN_REVIEW_ACTION));
-      assert.equal(output, expected);
-    }
-  });
-}
-
-function claudeTranscript(root: string, promptId: string, tool = "Write", error = false) {
-  const file = path.join(root, "src/core/card-one.ts");
-  return (
-    [
-      {
-        type: "user",
-        promptId,
-        isSidechain: false,
-        cwd: root,
-        message: { content: "please edit file" },
-      },
-      {
-        type: "assistant",
-        cwd: root,
-        message: {
-          content: [{ type: "tool_use", id: "call", name: tool, input: { file_path: file } }],
-        },
-      },
-      {
-        type: "user",
-        promptId,
-        cwd: root,
-        message: {
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: "call",
-              ...(error ? { is_error: true } : {}),
-              content: "opaque payload",
-            },
-          ],
-        },
-        toolUseResult:
-          tool === "Read"
-            ? { type: "text", file: { filePath: file } }
-            : tool === "Edit"
-              ? { filePath: file, structuredPatch: [] }
-              : { type: "create", filePath: file },
-      },
-    ]
-      .map((row) => JSON.stringify(row))
-      .join("\n") + "\n"
-  );
-}
-
-test("Claude native identity bounds successful reads/writes and ignores failures, sidechains and later prompts", async (t) => {
-  const { root } = await fixture(t);
-  const log = path.join(root, "claude.jsonl");
-  await fs.writeFile(
-    log,
-    claudeTranscript(root, "write") +
-      claudeTranscript(root, "overwrite").replace('"type":"create"', '"type":"update"') +
-      claudeTranscript(root, "read", "Read") +
-      claudeTranscript(root, "edit", "Edit") +
-      claudeTranscript(root, "failed", "Write", true),
-  );
-  for (const [prompt, kind] of [
-    ["write", "written"],
-    ["overwrite", "written"],
-    ["read", "read"],
-    ["edit", "written"],
-  ]) {
-    const activity = await readClaudeTurnActivity(log, root, prompt);
-    assert.equal(activity.uncertain, false);
-    assert.deepEqual(
-      activity.observations.map(({ kind, address }) => ({ kind, address })),
-      [{ kind, address: "src/core/card-one.ts" }],
-    );
-  }
-  assert.deepEqual((await readClaudeTurnActivity(log, root, "failed")).observations, []);
-  assert.deepEqual((await readClaudeTurnActivity(log, root, undefined)).observations, []);
-  await fs.writeFile(
-    log,
-    claudeTranscript(root, "side").replaceAll('"isSidechain":false', '"isSidechain":true'),
-  );
-  assert.deepEqual((await readClaudeTurnActivity(log, root, "side")).observations, []);
-});
-
-test("native Stop stays silent for writes, repeated events, active tools, uncovered and empty turns", async (t) => {
-  const { root, adapter } = await fixture(t);
-  const log = path.join(root, "turn.jsonl");
-  const hook = async (
-    host: "codex" | "claude-code",
-    id: string,
-    file: string | undefined,
-    active = false,
-    cancelled = false,
-  ) => {
-    await fs.writeFile(
-      log,
-      host === "claude-code"
-        ? claudeTranscript(root, id)
-        : [
-            { type: "event_msg", payload: { type: "task_started", turn_id: id } },
-            ...(file
-              ? [
-                  {
-                    type: "event_msg",
-                    payload: {
-                      type: "item_completed",
-                      turn_id: id,
-                      item: {
-                        type: "FileChange",
-                        status: "completed",
-                        changes: { [file]: { type: "update" } },
-                      },
-                    },
-                  },
-                ]
-              : []),
-            ...(cancelled
-              ? [{ type: "event_msg", payload: { type: "turn_aborted", turn_id: id } }]
-              : []),
-          ]
-            .map((row) => JSON.stringify(row))
-            .join("\n") + "\n",
-    );
-    return runHookCommand("stop", ["--host", host], {
-      packageRoot: root,
-      stdin: JSON.stringify({
-        hook_event_name: "Stop",
-        cwd: root,
-        session_id: host,
-        transcript_path: log,
-        ...(host === "codex" ? { turn_id: id } : { prompt_id: id }),
-        stop_hook_active: active,
-      }),
-    });
-  };
-  assert.equal((await hook("codex", "none", undefined)).stdout, "{}\n");
-  assert.equal((await hook("codex", "outside", "uncovered.ts")).stdout, "{}\n");
-  assert.equal(
-    (await hook("codex", "cancelled", "src/core/card-one.ts", false, true)).stdout,
-    "{}\n",
-  );
-  for (const host of ["codex", "claude-code"] as const) {
-    const first = await hook(host, "qualifies", "src/core/card-one.ts");
-    const result = JSON.parse(first.stdout);
-    assert.deepEqual(result, {});
-    assert.ok(Buffer.byteLength(first.stdout) <= 2048);
-    assert.equal((await hook(host, "qualifies", "src/core/card-one.ts")).stdout, "{}\n");
-    assert.equal((await hook(host, "later-tools", "src/core/card-one.ts", true)).stdout, "{}\n");
-    assert.equal(await adapter.exists("temp/observations"), false);
-    const broken = await runHookCommand("stop", ["--host", host], {
-      packageRoot: root,
-      stdin: JSON.stringify({ hook_event_name: "Stop", cwd: root, stop_hook_active: true }),
-    });
-    assert.equal(broken.stdout, "{}\n");
-  }
-});
-
-test("Stop excludes unknown lifecycle from modules and ordinary materials across cold, hot and old caches", async (t) => {
+test("material index excludes unknown lifecycle from modules and ordinary materials across cold, hot and old caches", async (t) => {
   const { root, adapter, node } = await fixture(t);
   const systemRoot = path.join(root, ".tent");
   await node("UnknownModule", "node-unknownmodule", "../../unknown/", true, "status: mystery\n");
@@ -571,43 +227,6 @@ test("Stop excludes unknown lifecycle from modules and ordinary materials across
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
   assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 8);
   assert.deepEqual(modulesForIndexedTurn(expected, event(["unknown/a.ts"])), []);
-  assert.deepEqual(questionsForIndexedTurn(expected, event(["only-unknown.txt"])), []);
-  const transcript = path.join(root, "unknown-lifecycle.jsonl");
-  await fs.writeFile(
-    transcript,
-    [
-      { type: "event_msg", payload: { type: "task_started", turn_id: "unknown-status" } },
-      {
-        type: "event_msg",
-        payload: {
-          type: "item_completed",
-          turn_id: "unknown-status",
-          item: {
-            type: "FileChange",
-            status: "completed",
-            changes: { "unknown/a.ts": { type: "update" } },
-          },
-        },
-      },
-    ]
-      .map((row) => JSON.stringify(row))
-      .join("\n") + "\n",
-  );
-  assert.equal(
-    (
-      await runHookCommand("stop", ["--host", "codex"], {
-        packageRoot: root,
-        stdin: JSON.stringify({
-          hook_event_name: "Stop",
-          cwd: root,
-          session_id: "lifecycle",
-          turn_id: "unknown-status",
-          transcript_path: transcript,
-        }),
-      })
-    ).stdout,
-    "{}\n",
-  );
   await fs.writeFile(
     path.join(systemRoot, unknownModulePath),
     moduleRaw.replace("status: mystery", "status: stable"),
@@ -621,7 +240,6 @@ test("Stop excludes unknown lifecycle from modules and ordinary materials across
     modulesForIndexedTurn(repaired, event(["unknown/a.ts"])).map((module) => module.nodeId),
     ["node-unknownmodule"],
   );
-  assert.deepEqual(questionsForIndexedTurn(repaired, event(["only-unknown.txt"])), []);
   await fs.writeFile(path.join(systemRoot, unknownModulePath), moduleRaw);
   await fs.writeFile(path.join(systemRoot, unknownEvidencePath), evidenceRaw);
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
@@ -729,4 +347,33 @@ test("material index cache validates file state and topology; missing, corrupt a
     "tent-material-cache",
   ]);
   assert.equal(await adapter.exists("temp/stop-reviews"), false);
+});
+
+test("written file coverage ranks distinct writes and ignores reads before reminder truncation", () => {
+  const index: StopMaterialIndex = {
+    nodes: Array.from({ length: 7 }, (_, i) => ({
+      nodeId: `node-${i}`,
+      path: `.tent/${i}/${i}.md`,
+      names: [`M${i}`],
+      moduleCoverage: [{ kind: "directory", prefix: `src/${i}/` }],
+    })),
+  };
+  const addresses = [
+    ...Array.from({ length: 7 }, (_, i) => `src/${i}/a.ts`),
+    "src/6/b.ts",
+    "src/5/b.ts",
+    "src/6/c.ts",
+    "src/0/a.ts",
+  ];
+  const event: Parameters<typeof modulesForIndexedTurn>[1] = {
+    files: addresses.map((address) => ({
+      kind: "written",
+      address,
+    })),
+  };
+  event.files.push({ ...event.files[0]!, kind: "read", address: "src/0/read.ts" });
+  assert.deepEqual(
+    modulesForIndexedTurn(index, event).map((m) => m.nodeId),
+    ["node-6", "node-5", "node-0", "node-1", "node-2", "node-3", "node-4"],
+  );
 });

@@ -2,8 +2,7 @@ import path from "node:path";
 import { createTurnPathResolver } from "../core/workspace/git-checkout.js";
 import { findPreparedHookWorkspace } from "../fs/hook-material-index.js";
 import { claimStopReview, hasStopReviewClaim } from "../fs/stop-review-claim.js";
-import { modulesForIndexedTurn } from "../core/return/stop-turn-review.js";
-import { ANSWER_REVIEW } from "../core/return/tool-turn-review.js";
+import { ANSWER_REVIEW, modulesForIndexedTurn } from "../core/return/tool-turn-review.js";
 import { toolReviewOutput } from "./hook-adapter.js";
 import { answeredQuestion, successfulWritePaths } from "./tool-write-event.js";
 
@@ -62,7 +61,6 @@ export async function runToolHook(
         ),
     );
     const modules = modulesForIndexedTurn(index, {
-      turnId,
       files: addresses.flatMap((address) =>
         address &&
         !address
@@ -75,8 +73,6 @@ export async function runToolHook(
           ? [{ kind: "written" as const, address }]
           : [],
       ),
-      signals: [],
-      uncertain: false,
     });
     if (!modules.length) return silent;
     const key = (nodeId: string) => JSON.stringify([turnId, "node", nodeId]);
