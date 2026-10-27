@@ -37,6 +37,8 @@ import { listWorkspaceRelations, type DocumentRef } from "./workspace-relations.
 import { cardSourceIdentityError } from "./card-context.js";
 import { retainedDocumentFs, uncapturedChecker } from "./retained-read.js";
 import { cardOrderKey, cardOrderBetween, validCardOrder } from "../base/card-order.js";
+import { markdownMaterialHeading } from "../base/material-section.js";
+import { NodeSectionError, selectSection } from "../base/markdown-section.js";
 
 export type CardDocumentState = "pending" | "consumed" | "returned" | "closed";
 type CardFields = Record<string, unknown> & {
@@ -300,6 +302,35 @@ export async function verifyCardSourceVersions(
       return error instanceof Error ? error : new Error(String(error));
     }
   });
+}
+
+/** Advisory section diagnostics use the source pins in the actual published Card. */
+export async function cardSourceSectionWarnings(fs: FsAdapter, publication: DocumentVersion) {
+  const history = await historyOf(fs);
+  const card = parseFrontmatter(await history.read(publication));
+  const sources = sourcesSchema.parse(card.data.sources).filter((source) => source.version);
+  const retained = await verifyCardSourceVersions(
+    fs,
+    sources.map((source) => ({ owner: publication.path, source })),
+  );
+  const warnings: string[] = [];
+  for (const [index, source] of sources.entries()) {
+    const read = retained[index]!;
+    if (read instanceof Error) continue;
+    const heading = markdownMaterialHeading(
+      materialLocator(source.resource, publication.path, true),
+    );
+    if (heading === undefined) continue;
+    try {
+      selectSection(parseFrontmatter(read.raw).body, heading);
+    } catch (error) {
+      if (!(error instanceof NodeSectionError)) throw error;
+      warnings.push(
+        `Warning: source ${JSON.stringify(source.resource)} selects an unavailable section in its pinned version ${JSON.stringify(read.version)}: ${error.message}; the Card keeps it.`,
+      );
+    }
+  }
+  return warnings;
 }
 
 /** Only the selected Node/Role bytes are captured. External declarations remain addresses. */

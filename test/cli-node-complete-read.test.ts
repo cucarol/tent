@@ -262,6 +262,7 @@ test("complete bounded body and raw reads retain their ordinary replacement basi
   for (const view of ["body", "raw"]) {
     const node = await cli("get", ["node-bravo", "--view", view]);
     assert.deepEqual(Object.keys(node).sort(), [
+      ...(view === "body" ? ["agentContext"] : []),
       "etag",
       "materials",
       "nodeId",
@@ -269,6 +270,7 @@ test("complete bounded body and raw reads retain their ordinary replacement basi
       "uncaptured",
     ]);
     assert.deepEqual(node.materials, []);
+    assert.equal(!!node.agentContext, view === "body");
     assert.equal(node.uncaptured, true);
     assert.equal(node.text, view === "raw" ? raw : parseFrontmatter(raw).body);
     assert.equal(node.etag, contentEtag(raw));

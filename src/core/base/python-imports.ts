@@ -4,7 +4,7 @@ type Token = { value: string; kind: string; start: number; end: number };
 type Statement = { tokens: Token[]; indent: number; line: number };
 type Import = { module: string; names: string[]; execution: RepositoryImport["execution"] };
 
-function statements(text: string, tokens: Token[]): Statement[] {
+export function pythonStatements(text: string, tokens: Token[]): Statement[] {
   const result: Statement[] = [];
   let current: Token[] = [];
   let depth = 0;
@@ -65,7 +65,7 @@ export function pythonImports(text: string, tokens: Token[]): Import[] {
     const name = condition.map((token) => token.value).join("");
     return guards.has(name) || (name.endsWith(".TYPE_CHECKING") && typing.has(name.slice(0, -14)));
   };
-  for (const statement of statements(text, tokens)) {
+  for (const statement of pythonStatements(text, tokens)) {
     if (statement.line !== previousLine) {
       while (blocks.length && blocks[blocks.length - 1]!.indent >= statement.indent) blocks.pop();
       inline = undefined;

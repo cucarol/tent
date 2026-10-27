@@ -37,7 +37,7 @@ export function incompleteNodeRead<T>(value: T): T {
   ) as T;
 }
 
-const bytes = 16 * 1024;
+const bytes = 16 * 1024 - 1; // The CLI appends one terminating newline.
 class PageError extends Error {
   constructor(
     readonly code: "INVALID_CURSOR" | "PAGE_TOO_LARGE",
@@ -226,6 +226,7 @@ export function pageItems<T extends { items: unknown[]; revision?: string }>(
     start?: number;
     expectedRevision?: string;
     window?: { start: number; total: number };
+    maxBytes?: number;
   } = {},
 ) {
   const revision = result.revision ?? canonicalSha256(result);
@@ -269,9 +270,9 @@ export function pageItems<T extends { items: unknown[]; revision?: string }>(
     },
   });
   let end = Math.min(start + limit, total);
-  while (end > start && !fits(make(end))) end--;
+  while (end > start && !fits(make(end), options.maxBytes)) end--;
   const page = make(end);
-  if ((end === start && start < total) || !fits(page))
+  if ((end === start && start < total) || !fits(page, options.maxBytes))
     throw new PageError("PAGE_TOO_LARGE", "Record exceeds CLI page budget");
   return page;
 }

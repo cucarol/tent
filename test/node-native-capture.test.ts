@@ -468,6 +468,7 @@ test("native body saves retain exact bytes and old bases; node get is pure and t
   for (const args of [[], ["--full"], ["--view", "raw"]]) {
     const read = parse(await runNodeCommand("get", [output, ...args], options));
     assert.deepEqual(Object.keys(read).sort(), [
+      ...(!args.length ? ["agentContext"] : []),
       "changedSince",
       "etag",
       "materials",
@@ -476,6 +477,7 @@ test("native body saves retain exact bytes and old bases; node get is pure and t
       "uncaptured",
     ]);
     assert.deepEqual(read.materials, [], "ancestor material declarations are not own materials");
+    assert.equal(!!read.agentContext, !args.length);
     assert.ok(
       read.changedSince.some(
         (change: { kind: string; nodeId?: string }) =>
@@ -562,16 +564,17 @@ for (const malformed of ["yaml", "schema"] as const)
         : original.replace("type: output", "type: invalid");
     await adapter.writeFile(file, raw);
     const brief = parse(await runWorkspaceCommand("brief", [], options));
-    assert.equal(brief.invalidNodes.length, 1);
-    assert.equal(brief.invalidNodes[0].path, `.tent/${file}`);
-    assert.ok(brief.invalidNodes[0].reason);
+    const invalidNodes = brief.workspaceIssues.items.filter(
+      (item: { kind: string }) => item.kind === "invalid",
+    );
+    assert.equal(invalidNodes.length, 1);
+    assert.ok(invalidNodes[0].line.includes(file));
     const text = await runWorkspaceCommand("brief", [], { ...options, json: false });
     const lines = text.stdout.trimEnd().split("\n");
     assert.match(lines[0]!, /^behind \d+ · ahead \d+$/);
-    assert.match(lines[1]!, /^tent workspace drift --workspace /);
-    const invalidHeading = lines.indexOf("Invalid Nodes:");
-    assert.ok(invalidHeading > 1);
-    assert.ok(lines[invalidHeading + 1]!.includes(`.tent/${file}`));
+    const invalidLine = lines.findIndex((line) => line.includes(file));
+    assert.ok(invalidLine > 0 && invalidLine < lines.indexOf("Input Cards"));
+    assert.ok(lines.some((line) => line.includes("tent workspace drift --workspace")));
     const checked = await runWorkspaceCommand("check", [], options);
     assert.equal(checked.exitCode, 1);
     assert.match(checked.stdout, /结果/);
@@ -651,7 +654,11 @@ test("an unretained invalid descendant cannot be moved or captured through its v
   const raw = "---\nid: node-badnative\ntype: invalid\n---\nKeep these bytes";
   await adapter.writeFile(file, raw);
   const brief = parse(await runWorkspaceCommand("brief", [], options));
-  assert.ok(brief.invalidNodes.some((item: { path: string }) => item.path === `.tent/${file}`));
+  assert.ok(
+    brief.workspaceIssues.items.some(
+      (item: { kind: string; line: string }) => item.kind === "invalid" && item.line.includes(file),
+    ),
+  );
   assert.equal((await runNodeCommand("rename", [goal, "Moved"], options)).exitCode, 1);
   assert.equal(await adapter.readFile(file), raw);
   assert.equal(await adapter.exists("Moved"), false);

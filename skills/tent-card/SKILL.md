@@ -18,7 +18,7 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows; more c
 | A Card you sent is `returned` | `tent card take <card-id> --role <role-id>` | `result`; the Card is `closed` |
 | Idle as a Role, if the host wakes you after a background command | `tent card watch --role <role-id>` in the background; add `--include-open` to see public Cards too | exit 0 prints Cards in queue order and returns to collect; take the first Card |
 
-The receiver starts without this conversation; name the goal and let the sources carry the rest. Add `--return-to` with your own Role when you want to hear back:
+The receiver starts without this conversation; name the goal and let the sources carry the rest. Add `--return-to` with your own Role when you want to hear back. The receiver's first page shows only the opening of each source, about 1,600 characters; when the requirement sits further down a long Node, point the source at its section: `--source 'node-abc123#Heading'`.
 
 ```text
 printf 'Build the login goal.\n' | tent card create --prompt - --source node-abc123 --source docs/req.md --target role-xyz789 --return-to role-abc456

@@ -91,14 +91,22 @@ test("PLUGIN.md matches SPEC frozen outputs, goal ancestry and brief counts", as
   );
   assert.match(
     spec,
-    /`workspace brief \[--role <id>\]` reports true workspace-wide behind and ahead counts with a drift inspection command/,
+    /`workspace brief \[--role <id>\]` keeps its existing native-edit collection boundary.*within the same 16 KiB response/,
   );
-  assert.match(spec, /Ahead\/behind Node entries are not listed/);
+  assert.match(
+    spec,
+    /Recently changed Nodes, unfinished Cards and workspace problems each have at most ten entries/,
+  );
+  assert.match(spec, /identities are never cut/);
   assert.match(plugin, /全部 goal 祖先/);
   assert.match(plugin, /`changedSince`/);
   assert.doesNotMatch(plugin, /最近的 goal 祖先提供隐式来源/);
   assert.match(plugin, /落后与领先两种同步状态计数/);
   assert.doesNotMatch(plugin, /四种同步状态计数/);
+  assert.match(plugin, /16 KiB/);
+  assert.match(plugin, /各最多 10 条/);
+  assert.match(plugin, /根 Node.*`node list`/);
+  assert.doesNotMatch(plugin, /按 4 KiB 预算裁剪|待收回结果不省略/);
 });
 
 test("type guidance names exactly three types and the preset tags", async () => {

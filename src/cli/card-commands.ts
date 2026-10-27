@@ -1,4 +1,6 @@
 import { transactionResult } from "./transaction-result.js";
+import { agentContextOutput } from "./agent-context.js";
+import { contextExcerpt, originalContextBytes } from "../core/read/agent-context-page.js";
 import { workspaceReadPaths } from "./read-paths.js";
 import { formatCliTime } from "./time-text.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
@@ -11,6 +13,7 @@ import { localMaterialPath, materialLocator, type MaterialSource } from "../core
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import {
   verifyCardSourceVersions,
+  cardSourceSectionWarnings,
   createCardDocument,
   readCardDocument,
   takeCardDocument,
@@ -151,6 +154,8 @@ async function runCardCommandOpened(
       id = positionals[0]!;
     await opened(fs);
     let result: unknown;
+    const assemble =
+      ["show", "take"].includes(sub) && value("view") !== "raw" && (number("start") ?? 0) === 0;
     let warnings: string[] = [];
     if (sub === "watch") {
       const items = (
@@ -207,7 +212,7 @@ async function runCardCommandOpened(
         "cards/input.md",
         workspaceRoot,
       );
-      result = await createCardDocument(fs, {
+      const created = await createCardDocument(fs, {
         cardId: value("id"),
         prompt,
         title: value("title"),
@@ -215,6 +220,8 @@ async function runCardCommandOpened(
         returnTo: value("return-to"),
         ...material,
       });
+      result = created;
+      warnings.push(...(await cardSourceSectionWarnings(fs, created.version)));
     } else if (sub === "return")
       result = await returnCardDocument(fs, id, {
         roleId: value("role")!,
@@ -250,25 +257,64 @@ async function runCardCommandOpened(
         expectedEtag: value("expected-etag"),
         retainedState: true,
       };
-      result = pageText(
-        workspaceReadPaths(await readCardDocument(fs, id, options), workspaceRoot),
-        `card.${sub}:${id}`,
-        { start: number("start"), end: number("end") },
-      );
-    } else
-      result = pageText(
-        {
-          ...workspaceReadPaths(await takeCardDocument(fs, id, value("role")), workspaceRoot),
-          workspaceRoot,
-        },
-        `card.get:${id}`,
-      );
+      const document = workspaceReadPaths(await readCardDocument(fs, id, options), workspaceRoot);
+      result = pageText(document, `card.${sub}:${id}`, {
+        start: number("start"),
+        end: number("end"),
+        ...(assemble
+          ? {
+              maxBytes: Math.max(
+                originalContextBytes / 2,
+                originalContextBytes -
+                  512 * ((Array.isArray(document.sources) ? document.sources.length : 0) + 1),
+              ),
+              pageEnd: Math.min(
+                number("end") ?? document.range.end,
+                contextExcerpt(document.text, 1600).text.length,
+              ),
+            }
+          : {}),
+      });
+    } else {
+      const document = {
+        ...workspaceReadPaths(await takeCardDocument(fs, id, value("role")), workspaceRoot),
+        workspaceRoot,
+      };
+      result = pageText(document, `card.get:${id}`, {
+        maxBytes: Math.max(
+          originalContextBytes / 2,
+          originalContextBytes - 512 * (document.sources.length + 1),
+        ),
+        pageEnd: contextExcerpt(document.text, 1600).text.length,
+      });
+    }
+    result = workspaceReadPaths(result, workspaceRoot);
     const json = values.json === true || globals.json === true;
     const sourceLines =
       !json && ["show", "get", "take"].includes(sub)
-        ? await cardSourceLines(fs, workspaceRoot, result as { path?: string; sources?: unknown })
+        ? await cardSourceLines(
+            fs,
+            workspaceRoot,
+            result as { path?: string; sources?: unknown },
+            assemble
+              ? (lines) =>
+                  Buffer.byteLength(formatCard(result, sub, lines, value("target")).trimEnd()) <=
+                  originalContextBytes
+              : undefined,
+          )
         : undefined;
-    result = workspaceReadPaths(result, workspaceRoot);
+    if (assemble) {
+      const output = mutation ? { ...(result as object), workspaceRoot } : (result as object);
+      const response = await agentContextOutput(
+        fs,
+        workspaceRoot,
+        { kind: "card", cardId: id },
+        output,
+        json,
+        (entry) => formatCard(entry, sub, sourceLines, value("target")),
+      );
+      return { ...response, stderr: warnings.length ? `${warnings.join("\n")}\n` : "" };
+    }
     return {
       exitCode: 0,
       stdout:
@@ -305,7 +351,7 @@ Sources keep their order. Paths start at the Workspace root: docs/req.md, ./docs
 Each Role has a queue, and Cards without --target wait in the public area. New Cards join the end; take from the front. move changes the queue or the place in it.
 take receives a Card and prints its input; it needs --role for a targeted Card or one with --return-to. With --return-to, the receiver returns one line of at most 200 characters, with details in Nodes, and the return-to Role takes the Card again to close it. Repeating the same take or return is a replay, not a second run.
 watch waits for the Role's pending Cards in queue order, then Cards returned to it in return order. --include-open adds public Cards, marked [public]; taking one claims it. It checks every 3 seconds; --timeout 0 checks once. Exit codes: 0 = Cards (one line each, or a JSON array); 2 = timeout (no output); 1 = error.
-show previews a Card without taking it; continue long input with page.next. list shows newest first, except --state pending, which shows queue order. deprecate cancels a Card and hides it from lists.
+show previews a Card without taking it; show and take include related Agent context on the first page. Continue long input with page.next using --start, --end and --expected-etag; raw and continuation pages have no assembly. list shows newest first, except --state pending, which shows queue order. deprecate cancels a Card and hides it from lists.
 --workspace <path> picks the Workspace; --json prints JSON. In Git Bash, run commands whose arguments start with / with MSYS_NO_PATHCONV=1.
 `;
 }
@@ -315,6 +361,7 @@ async function cardSourceLines(
   fs: NodeFs,
   workspaceRoot: string,
   card: { path?: string; sources?: unknown },
+  fits?: (summary: string) => boolean,
 ): Promise<string | undefined> {
   if (!card.path || !Array.isArray(card.sources) || !card.sources.length) return undefined;
   const owner = card.path.replace(/^\.tent\//, "");
@@ -325,6 +372,12 @@ async function cardSourceLines(
   );
   let next = 0;
   const lines: string[] = [];
+  const display = (value: string, label: string) => {
+    const excerpt = contextExcerpt(value.replace(/[\r\n\t]/g, " "), 120);
+    return (
+      excerpt.text + (excerpt.truncated || excerpt.text !== value ? ` [${label} truncated]` : "")
+    );
+  };
   for (const [index, source] of sources.entries()) {
     let detail: string;
     if (source.version !== undefined) {
@@ -332,14 +385,15 @@ async function cardSourceLines(
       const version = source.version as { commit?: unknown; path?: unknown };
       const short = `@${String(version.commit).slice(0, 7)}`;
       const file = String(version.path);
-      if (read instanceof Error) detail = `pinned ${short}, unavailable: ${read.message}`;
+      if (read instanceof Error)
+        detail = `pinned ${short}, unavailable: ${display(read.message, "diagnostic")}`;
       else if (file.startsWith("roles/")) {
         const roleId = path.posix.basename(file, ".md");
         const title = parseFrontmatter(read.raw).data.title;
-        detail = `Role ${typeof title === "string" && title ? title : roleId}  ${roleId}  ${short}`;
+        detail = `Role ${display(typeof title === "string" && title ? title : roleId, "title")}  ${roleId}  ${short}`;
       } else {
         const name = path.posix.basename(path.posix.dirname(file));
-        detail = `Node ${name}  ${String(parseFrontmatter(read.raw).data.id)}  ${short}`;
+        detail = `Node ${display(name, "name")}  ${String(parseFrontmatter(read.raw).data.id)}  ${short}`;
       }
     } else {
       let locator;
@@ -365,7 +419,19 @@ async function cardSourceLines(
       `  ${index + 1}. ${readable.path ?? source.resource}${readable.heading ? ` # ${readable.heading}` : ""}  ${detail}`,
     );
   }
-  return ["Sources:", ...lines].join("\n");
+  const summary = (count: number) =>
+    [
+      "Sources:",
+      ...lines.slice(0, count),
+      ...(count < lines.length
+        ? [
+            `  ${lines.length - count} source summaries omitted; the raw Card read below lists all source addresses and versions.`,
+          ]
+        : []),
+    ].join("\n");
+  let count = lines.length;
+  while (count && fits && !fits(summary(count))) count--;
+  return summary(count);
 }
 
 function formatCard(value: unknown, sub: string, sourceLines?: string, target?: string) {

@@ -1,4 +1,6 @@
 import { transactionResult } from "./transaction-result.js";
+import { assembleAgentContext } from "../core/read/agent-context.js";
+import { projectAgentBrief, formatAgentBrief } from "../core/read/agent-brief.js";
 import { workspaceReadPaths } from "./read-paths.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
@@ -22,12 +24,7 @@ import {
   checkWorkspaceModules,
   formatWorkspaceModules,
 } from "../core/check/workspace-module-map.js";
-import {
-  inspectCurrentContext,
-  makeContextBrief,
-  formatContextBrief,
-  inspectWorkspaceDrift,
-} from "../core/read/context-brief.js";
+import { inspectCurrentContext, inspectWorkspaceDrift } from "../core/read/context-brief.js";
 import { canonicalSha256 } from "../core/base/canonical-digest.js";
 import { pageItems } from "./reader-page.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
@@ -58,7 +55,10 @@ export async function runWorkspaceCommand(
   args: string[],
   globals: NodeCommandOptions = {},
 ): Promise<NodeCommandResult> {
-  return transactionResult((opened) => runWorkspaceCommandOpened(sub, args, globals, opened));
+  return transactionResult(
+    (opened) => runWorkspaceCommandOpened(sub, args, globals, opened),
+    sub === "brief" ? "workspace.brief" : undefined,
+  );
 }
 
 async function runWorkspaceCommandOpened(
@@ -210,19 +210,21 @@ async function runWorkspaceCommandOpened(
         return result;
       });
     if (sub === "brief") {
-      const brief = await withDocumentHeaderCache(roots.systemRoot, async () =>
-        makeContextBrief(
-          await inspectCurrentContext(fs, {
-            roleId: values.role,
-            nodes: captureNodes(),
-          }),
-          { roleId: values.role },
-        ),
-      );
+      const brief = await withDocumentHeaderCache(roots.systemRoot, async () => {
+        const context = await inspectCurrentContext(fs, {
+          roleId: values.role,
+          nodes: captureNodes(),
+        });
+        const facts = await assembleAgentContext(fs, roots.workspaceRoot, {
+          kind: "brief",
+          ...(values.role ? { roleId: values.role } : {}),
+        });
+        return projectAgentBrief(context, facts, roots.workspaceRoot);
+      });
       return {
         exitCode: 0,
         stdout:
-          (values.json || globals.json ? JSON.stringify(brief) : formatContextBrief(brief)) + "\n",
+          (values.json || globals.json ? JSON.stringify(brief) : formatAgentBrief(brief)) + "\n",
         stderr: "",
       };
     }

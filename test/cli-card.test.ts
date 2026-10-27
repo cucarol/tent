@@ -470,3 +470,82 @@ test("Card CLI creates ordered sources, previews and receives with an explicit R
   );
   assert.equal((await fs.readdir(path.join(root, ".tent"))).includes("card-consumptions"), false);
 });
+
+test("Card create warns for unavailable pinned sections while publishing and supports node-id#Heading", async (t) => {
+  const { root, globals } = await fixture(t);
+  const sourceFile = path.join(root, ".tent", "Task", "Task.md");
+  await fs.mkdir(path.dirname(sourceFile));
+  await fs.writeFile(
+    sourceFile,
+    serializeFrontmatter(
+      { id: "node-task", type: "goal" },
+      "Old opening.\n" +
+        "x".repeat(1800) +
+        "\n## Heading\nPinned late requirement.\n## Repeat\none\n## Repeat\ntwo",
+    ),
+  );
+  const validResponse = await runCardCommand(
+    "create",
+    ["--prompt", "Work", "--source", "node-task#Heading"],
+    globals,
+  );
+  const valid = value(validResponse);
+  assert.equal(validResponse.stderr, "");
+  const stored = parseFrontmatter(await fs.readFile(path.join(root, valid.path), "utf8"));
+  const selected = (
+    stored.data.sources as { resource: string; version: { commit: string; path: string } }[]
+  )[0]!;
+  assert.equal(selected.resource, "../Task/Task.md#Heading");
+  assert.equal(selected.version.path, "Task/Task.md");
+  assert.match(selected.version.commit, /^[a-f0-9]{64}$/);
+  const shown = value(await runCardCommand("show", [valid.cardId], globals));
+  const reference = shown.agentContext.sections
+    .find((item: { kind: string }) => item.kind === "references")
+    .items.find((item: { nodeId?: string }) => item.nodeId === "node-task");
+  assert.match(reference.text, /^## Heading\nPinned late requirement/);
+  assert.equal(reference.heading, "Heading");
+  const missing = await runCardCommand(
+    "create",
+    ["--prompt", "Work", "--source", "node-task#Missing"],
+    globals,
+  );
+  const missingCard = value(missing);
+  assert.match(missing.stderr, /Warning: source .*Missing.*pinned version.*section not found/);
+  assert.match(missing.stderr, /the Card keeps it/);
+  assert.equal(
+    parseFrontmatter(await fs.readFile(path.join(root, missingCard.path), "utf8")).data.state,
+    "pending",
+  );
+  await fs.writeFile(
+    sourceFile,
+    serializeFrontmatter(
+      { id: "node-task", type: "goal" },
+      "Today opening.\n## Missing\nToday section.",
+    ),
+  );
+  for (const [heading, warning] of [
+    ["Heading", false],
+    ["Missing", true],
+    ["Repeat", true],
+  ] as const) {
+    const response = await runCardCommand(
+      "create",
+      [
+        "--prompt",
+        "Work",
+        "--source",
+        JSON.stringify({ resource: `.tent/Task/Task.md#${heading}`, version: selected.version }),
+      ],
+      globals,
+    );
+    const created = value(response);
+    assert.equal(created.state, "pending");
+    assert.equal(response.stderr.includes("Warning: source"), warning, response.stderr);
+    if (heading === "Repeat") assert.match(response.stderr, /heading is duplicated/);
+    const published = parseFrontmatter(await fs.readFile(path.join(root, created.path), "utf8"));
+    assert.deepEqual(
+      (published.data.sources as { version: object }[])[0]!.version,
+      selected.version,
+    );
+  }
+});

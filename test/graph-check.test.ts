@@ -1,5 +1,5 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
-import { historyHead } from "./scratch.js";
+import { captureFixtureDocuments, historyHead } from "./scratch.js";
 import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -14,6 +14,7 @@ import { renameNode } from "../src/core/graph/rename-ops.js";
 import { withTentMutation } from "../src/core/store/adapter.js";
 import { testScratchRoot } from "./scratch.js";
 import { loadTent } from "../src/core/store/tree.js";
+import { readCardBodyReferences } from "../src/core/read/card-references.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
@@ -237,6 +238,7 @@ test("whole graph inspection reports the three categories across Nodes, Roles an
   await fs.writeFile(outside, "explicit file URI outside Workspace");
   await write("Target Name/Target Name.md", { id: "node-target" }, "# part");
   await adapter.writeFile("attachments/linked.pdf", "attachment");
+  await adapter.writeFile("attachments/Guide/note.md", "Ordinary Markdown attachment.");
   await adapter.writeFile("Author/node-example.txt", "ordinary local file");
   await write(
     "roles/role-a.md",
@@ -258,7 +260,7 @@ test("whole graph inspection reports the three categories across Nodes, Roles an
         { resource: "file:///bad%ZZ" },
       ],
     },
-    "[role](role-a#anything)",
+    "[role](role-a#anything) [guide](../attachments/Guide/note.md)",
   );
   await write(
     "Author/Author.md",
@@ -318,6 +320,12 @@ test("whole graph inspection reports the three categories across Nodes, Roles an
   );
   assert.equal(result.issues.filter((issue) => issue.path === "roles/role-a.md").length, 1);
   assert.equal(result.issues.filter((issue) => issue.path === "cards/card-a.md").length, 2);
+  assert.ok(
+    !result.issues.some(
+      (issue) =>
+        issue.kind === "unresolved-link" && issue.target === "../attachments/Guide/note.md",
+    ),
+  );
   assert.deepEqual(
     result.issues
       .filter((issue) => issue.kind === "missing-material-file")
@@ -533,6 +541,52 @@ test("Card fragment sources still pin complete Node bytes and survive a missing 
   assert.equal(await adapter.history.read(version), original);
   await write("Design/Design.md", { id: "node-design" }, "## Other\ncurrent only\n");
   assert.deepEqual((await checkGraph(adapter, workspace, fileExists)).issues, []);
+});
+
+test("failed publication section keeps its known Node identity after alias reuse by an ordinary file", async (t) => {
+  const { workspace, systemRoot, adapter, write, fileExists } = await fixture(t);
+  await initializeFixtureHistory(systemRoot);
+  await write("Old/Old.md", { id: "node-old" }, "## Existing\nOriginal Node.");
+  await captureFixtureDocuments(systemRoot);
+  const card = await createCardDocument(adapter, {
+    cardId: "card-aliasmissing",
+    prompt: "Read [rule](../Old#Missing).",
+    sources: [],
+  });
+  const published = await adapter.readFile(card.path);
+  assert.equal(parseFrontmatter(published).body, "Read [rule](../Old#Missing).");
+  const original = (await readCardBodyReferences(adapter, card.cardId)).references[0]!;
+  assert.equal(original.scope, "node");
+  assert.equal(original.nodeId, undefined);
+  assert.equal(original.targetNodeId, "node-old");
+  assert.match(original.reason!, /Missing/);
+  await renameNode(
+    { fs: adapter, clock: { now: () => "2026-10-28T00:00:00.000Z" }, tentName: "test" },
+    "Old",
+    "New",
+  );
+  await adapter.writeFile("Old", "An ordinary regular file, not a Node document.");
+  assert.equal(await fileExists(path.join(systemRoot, "Old")), true);
+  assert.equal(await adapter.readFile(card.path), published);
+  const beforeHead = await historyHead(systemRoot);
+  const beforeNode = await adapter.readFile("New/New.md");
+  t.mock.method(adapter.history, "captureUnlocked", () => {
+    throw new Error("Graph must not capture");
+  });
+  const checked = await checkGraph(adapter, workspace, fileExists);
+  const issue = checked.issues.find(
+    (entry) =>
+      entry.kind === "unresolved-link" &&
+      entry.path === card.path &&
+      entry.target === "../Old#Missing",
+  );
+  assert.ok(issue, JSON.stringify(checked));
+  assert.equal(issue.reason, original.reason);
+  assert.deepEqual(checked.errors, []);
+  assert.equal(await historyHead(systemRoot), beforeHead);
+  assert.equal(await adapter.readFile(card.path), published);
+  assert.equal(await adapter.readFile("New/New.md"), beforeNode);
+  assert.equal(await adapter.readFile("Old"), "An ordinary regular file, not a Node document.");
 });
 
 test("retained Card source versions survive live moves and deletion without document or history writes", async (t) => {

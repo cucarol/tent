@@ -8,6 +8,8 @@ import { extractCFamilyImports, isCFamilySource, isCFamilyConfig } from "./cfami
 import { extractPhpImports, isPhpConfig } from "./php-imports.js";
 import { deferredImportTokens } from "./import-execution.js";
 import { pythonImports } from "./python-imports.js";
+import { sourceTokens as tokens } from "./source-tokens.js";
+import { traceTestReexports } from "./test-reexports.js";
 
 /** Workspace-relative POSIX paths. Omit content for files that need no parsing. */
 export type RepositorySource = { path: string; content?: string };
@@ -40,82 +42,6 @@ export const isImportConfig = (file: string) =>
   isCSharpConfig(file) ||
   isPhpConfig(file) ||
   isCFamilyConfig(file);
-
-type Token = { value: string; kind: "word" | "string" | "symbol"; start: number; end: number };
-
-/** Small lexical pass: quoted examples and comments never become import statements. */
-function tokens(text: string, python = false, go = false): Token[] {
-  const result: Token[] = [];
-  let i = 0;
-  while (i < text.length) {
-    const start = i,
-      c = text[i]!;
-    if (/\s/.test(c)) {
-      i++;
-      continue;
-    }
-    if ((python && c === "#") || (!python && text.startsWith("//", i))) {
-      while (i < text.length && text[i] !== "\n") i++;
-      continue;
-    }
-    if (!python && text.startsWith("/*", i)) {
-      const end = text.indexOf("*/", i + 2);
-      i = end < 0 ? text.length : end + 2;
-      continue;
-    }
-    if (
-      !python &&
-      !go &&
-      c === "/" &&
-      (!result.length ||
-        ["=", "(", "[", ",", ":", ";", "!", "?", "return", "=>"].includes(
-          result[result.length - 1]!.value,
-        ))
-    ) {
-      i++;
-      let characterClass = false;
-      while (i < text.length) {
-        if (text[i] === "\\") {
-          i += 2;
-          continue;
-        }
-        if (text[i] === "[") characterClass = true;
-        if (text[i] === "]") characterClass = false;
-        if (text[i++] === "/" && !characterClass) break;
-      }
-      while (/[a-z]/i.test(text[i] ?? "")) i++;
-      result.push({ value: "", kind: "string", start, end: i });
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      const triple = python && text.startsWith(c.repeat(3), i);
-      const delimiter = triple ? c.repeat(3) : c;
-      i += delimiter.length;
-      const contentStart = i;
-      while (i < text.length && !text.startsWith(delimiter, i)) {
-        if (text[i] === "\\") i += 2;
-        else i++;
-      }
-      const value = text.slice(contentStart, i);
-      i = Math.min(text.length, i + delimiter.length);
-      // Template literals/docstrings are opaque; they cannot name static imports.
-      result.push({
-        value: triple || (c === "`" && !go) ? "" : value,
-        kind: "string",
-        start,
-        end: i,
-      });
-      continue;
-    }
-    if (/[\w$]/.test(c)) {
-      while (i < text.length && /[\w$]/.test(text[i]!)) i++;
-      result.push({ value: text.slice(start, i), kind: "word", start, end: i });
-      continue;
-    }
-    result.push({ value: c, kind: "symbol", start, end: ++i });
-  }
-  return result;
-}
 
 function scriptImports(text: string, declaration: boolean) {
   const ts = tokens(text),
@@ -215,12 +141,21 @@ export type RepositoryImportOptions = {
   php?: boolean;
 };
 
-/** Direct test-to-production import evidence, not execution coverage or helper traversal. */
+/** Anchored static test imports and unique value re-export definitions, never execution coverage. */
 export function extractRepositoryTestImports(
   input: readonly RepositorySource[],
   options: RepositoryImportOptions = {},
 ) {
-  return extractImports(input, options, true);
+  const direct = extractImports(input, options, true);
+  const extra = traceTestReexports(input, direct.edges, isTestSource);
+  return {
+    ...direct,
+    edges: [
+      ...new Map(
+        [...direct.edges, ...extra.edges].map((edge) => [JSON.stringify(edge), edge]),
+      ).values(),
+    ].sort((a, b) => comparePaths(JSON.stringify(a), JSON.stringify(b))),
+  };
 }
 
 function extractImports(

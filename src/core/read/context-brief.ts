@@ -152,7 +152,52 @@ const shorten = (value: string, length: number) =>
     .slice(0, length)
     .join("");
 
-/** This is a discovery page; omitted details are counted, never misrepresented as complete addresses. */
+/** Agent brief queue: pending, returned receipts, then work awaiting return. */
+export function compareBriefCards(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+  roleId?: string,
+) {
+  const priority = (card: typeof a) =>
+    card.state === "pending" ? 0 : card.state === "returned" ? 1 : 2;
+  const group = priority(a) - priority(b);
+  if (group) return group;
+  if (a.state === "pending" && b.state === "pending") {
+    const queue = (card: typeof a) => (card.target === roleId ? "" : String(card.target ?? "~"));
+    const aq = queue(a),
+      bq = queue(b);
+    if (aq !== bq) return aq < bq ? -1 : 1;
+    const ao = String(a.orderKey ?? ""),
+      bo = String(b.orderKey ?? "");
+    if (ao !== bo) return ao < bo ? -1 : 1;
+  } else {
+    const at = String(a.publishedAt ?? ""),
+      bt = String(b.publishedAt ?? "");
+    if (at !== bt) return at < bt ? 1 : -1;
+  }
+  const aid = String(a.cardId),
+    bid = String(b.cardId);
+  return aid === bid ? 0 : aid < bid ? -1 : 1;
+}
+
+export function baselineOnlyBehind(node: WorkspaceSync["nodes"][number]) {
+  const missing = node.materials.filter(
+    (material) => material.state !== "current" && material.state !== "unanchored",
+  );
+  return (
+    !!node.behind &&
+    !node.stale &&
+    missing.length > 0 &&
+    missing.every(
+      (material) =>
+        material.state === "unavailable" &&
+        !material.recordedVersion &&
+        material.reason?.includes("no retained baseline"),
+    )
+  );
+}
+
+/** Discovery facts; the Agent brief projection separately bounds its final CLI response. */
 export function makeContextBrief(
   context: CurrentContext,
   options: { roleId?: string } = {},
@@ -178,22 +223,7 @@ export function makeContextBrief(
       ...(options.roleId && state === "pending" ? ["--include-open"] : []),
       ...(state ? ["--state", state] : []),
     ]);
-  const baselineOnly = (node: WorkspaceSync["nodes"][number]) => {
-    const missing = node.materials.filter(
-      (material) => material.state !== "current" && material.state !== "unanchored",
-    );
-    return (
-      !!node.behind &&
-      !node.stale &&
-      missing.length > 0 &&
-      missing.every(
-        (material) =>
-          material.state === "unavailable" &&
-          !material.recordedVersion &&
-          material.reason?.includes("no retained baseline"),
-      )
-    );
-  };
+  const baselineOnly = baselineOnlyBehind;
   const candidates = {
     cardInputs: context.cards.items
       .filter(

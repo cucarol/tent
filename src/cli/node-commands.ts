@@ -1,5 +1,7 @@
 import { workspaceReadPaths, nodeReadMaterials } from "./read-paths.js";
 import { transactionResult } from "./transaction-result.js";
+import { agentContextOutput } from "./agent-context.js";
+import { contextExcerpt, originalContextBytes } from "../core/read/agent-context-page.js";
 import { formatCliTime } from "./time-text.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
@@ -396,6 +398,7 @@ async function runNodeCommandOpened(
         const target = oneTarget(positionals, "tent node get <nodeId> [--full] [--json]");
         if (typeof target !== "string") return target;
         const ref = nodeRef(target);
+        let assemble = flags.full !== "true" && flags.view !== "raw" && !flags.cursor;
         const withContext = async <T>(value: T) =>
           flags.context === "true" && !flags["version-json"] && !flags.cursor
             ? { ...value, context: await goalContextText(await retainedDocumentFs(fs), ref) }
@@ -425,6 +428,7 @@ async function runNodeCommandOpened(
           nodeId: ref,
           ...coreReaderFlags(flags),
         });
+        assemble &&= !options.range || options.range.start === 0;
         const { node } = await readNode(
           fs,
           workspaceId,
@@ -440,7 +444,12 @@ async function runNodeCommandOpened(
                   `node.get:${nodeId}`,
                   {
                     cursor: flags.cursor,
-                    maxBytes: 16 * 1024 - 1280,
+                    maxBytes: assemble
+                      ? originalContextBytes - 1024 - (flags.context === "true" ? 1024 : 0)
+                      : 16 * 1024 - 1280,
+                    ...(assemble
+                      ? { pageEnd: node.range.start + contextExcerpt(node.text, 1600).text.length }
+                      : {}),
                   },
                 );
                 return {
@@ -464,7 +473,21 @@ async function runNodeCommandOpened(
                     : {}),
                 };
               })();
-        return print(await withContext(output), json, formatNodeRead);
+        const value = await withContext(output);
+        return assemble
+          ? agentContextOutput(
+              fs,
+              workspaceRoot,
+              {
+                kind: "node",
+                nodeId: ref,
+                ...(options.version ? { version: options.version } : {}),
+              },
+              value,
+              json,
+              formatNodeRead,
+            )
+          : print(value, json, formatNodeRead);
       }
       case "read-many": {
         if (flags.full === "true") return usage("read-many uses paged output");
@@ -490,7 +513,7 @@ async function runNodeCommandOpened(
           const item = workspaceReadPaths(entry.item, workspaceRoot);
           const next = start + items.length + 1;
           const candidate = pageText(item, `node.get:${item.nodeId}`, { maxBytes: 10 * 1024 });
-          if (Buffer.byteLength(JSON.stringify(make([...items, candidate], next))) > 16 * 1024)
+          if (Buffer.byteLength(JSON.stringify(make([...items, candidate], next))) > 16 * 1024 - 1)
             break;
           items.push(candidate);
         }
@@ -521,9 +544,20 @@ async function runNodeCommandOpened(
           {
             limit: numberFlag(flags, "limit"),
             cursor: flags.cursor,
+            ...(!flags.cursor ? { maxBytes: originalContextBytes / 2 } : {}),
           },
         );
-        return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
+        const output = workspaceReadPaths(result, workspaceRoot);
+        return !flags.cursor && flags.resource
+          ? agentContextOutput(
+              fs,
+              workspaceRoot,
+              { kind: "resource", resource: input.resource! },
+              output,
+              json,
+              formatReader,
+            )
+          : print(output, json, formatReader);
       }
       case "relations": {
         const target = oneTarget(
@@ -906,7 +940,7 @@ Organize
 tent node <command> --help shows all of its options.`;
   const notes: Record<string, string> = {
     list: "Without filters, lists the children of --parent, or the root Nodes. --type and --tag search the whole subtree instead; repeated --tag must all match. --full lists the whole tree; --include-archived adds archived Nodes. Ordinary list entries carry no ETag; read a Node with get before editing them.",
-    get: 'Prints the Node\'s text, its declared material paths and any changed-since notice, and its ETag. A long body comes in pages; continue with --cursor and --expected-etag from the last page. An ETag that starts with read: comes from a partial page and allows only metadata edits; read with --full before replacing or confirming content. --view body prints the body only, raw the whole file. --context adds a summary of the goals above it, up to 1 KiB. --range reads part of the body, as {"unit":"utf16","start":0,"end":10}. --version-json reads a saved version, even after the Node was edited or deleted.',
+    get: 'Prints the Node\'s text, its declared material paths and any changed-since notice, and its ETag. The first page includes related Agent context; raw, --full and continuation reads do not. A long body comes in pages; continue with --cursor and --expected-etag from the last page. An ETag that starts with read: comes from a partial page and allows only metadata edits; read with --full before replacing or confirming content. --view body prints the body only, raw the whole file. --context adds a summary of the goals above it, up to 1 KiB. --range reads part of the body, as {"unit":"utf16","start":0,"end":10}. --version-json reads a saved version, even after the Node was edited or deleted.',
     "read-many":
       "Reads several Nodes into one 16 KiB page. Continue with --start <page.nextIndex> and the same ids. An item cut short continues with node get --expected-etag <item.etag> --cursor <item.page.nextCursor> and the same view.",
     check:

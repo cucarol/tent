@@ -110,6 +110,10 @@ for (const view of ["body", "raw"] as const) {
     );
     assert.equal(result.exitCode, 0, result.stderr);
     const first = JSON.parse(result.stdout);
+    assert.equal(first.agentContext, undefined);
+    assert.ok(
+      first.items.every((entry: { agentContext?: unknown }) => entry.agentContext === undefined),
+    );
     assert.deepEqual(
       first.items.map((item: { nodeId: string }) => item.nodeId),
       ["node-alpha", "node-bravo"],
@@ -137,6 +141,7 @@ for (const view of ["body", "raw"] as const) {
     const continued = await runNodeCommand("get", continuationArgs, options);
     assert.equal(continued.exitCode, 0, continued.stderr);
     const continuation = JSON.parse(continued.stdout);
+    assert.equal(continuation.agentContext, undefined);
     assert.equal(continuation.range.start, item.range.end);
     assert.equal(continuation.uncaptured, true);
     assert.equal(continuation.text, text.slice(continuation.range.start, continuation.range.end));
@@ -198,13 +203,28 @@ for (const view of ["body", "raw"] as const) {
       assert.match(rejected.stderr, /(?:Node ETag|Reader source) changed/);
       assert.match(rejected.stderr, /reread|restart/);
     }
+    assert.deepEqual(
+      await tentFiles(workspace),
+      editedFiles,
+      "rejected continuations do not assemble or create syntax cache",
+    );
     const restarted = await runNodeCommand("get", ["node-alpha", "--view", view], options);
     assert.equal(restarted.exitCode, 0, restarted.stderr);
     assert.equal(
       JSON.parse(restarted.stdout).text,
       view === "body" ? "Edited after the batch" : edited,
     );
-    assert.deepEqual(await tentFiles(workspace), editedFiles);
+    assert.equal(!!JSON.parse(restarted.stdout).agentContext, view === "body");
+    const restartedFiles = await tentFiles(workspace);
+    if (view === "body") {
+      // Only this first default body read assembles references and can persist parsed syntax.
+      // read-many/raw/positive cursors above retain the complete earlier file snapshots.
+      const syntax = path.join(".git", "tent-material-cache", "markdown-syntax.bin");
+      assert.deepEqual(
+        restartedFiles.filter((file) => file.path !== syntax),
+        editedFiles.filter((file) => file.path !== syntax),
+      );
+    } else assert.deepEqual(restartedFiles, editedFiles);
     assert.equal(await adapter.history.currentCommit(), beforeHead);
     assert.deepEqual(await adapter.history.nodeRecords(), beforeRecords);
   });

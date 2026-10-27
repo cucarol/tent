@@ -23,6 +23,12 @@ import {
 } from "../src/core/read/context-brief.js";
 import type { FsAdapter } from "../src/core/store/adapter.js";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { formatAgentBrief, type AgentBrief } from "../src/core/read/agent-brief.js";
+
+const briefCards = (brief: AgentBrief) =>
+  brief.agentContext.sections.find((section) => section.kind === "open")!.items;
+const briefIssues = (brief: AgentBrief, kind: string) =>
+  brief.workspaceIssues.items.filter((item) => item.kind === kind);
 
 test("brief reports native capture failure without unhandled unused Card query promises", async () => {
   const adapter = {
@@ -277,8 +283,8 @@ test("brief ignores retained session logs and has no unrecorded-file section", a
   const brief = (await f.workspace("brief")).value;
   assert.equal("unlinkedOutputs" in brief, false);
   assert.equal("observationUncertain" in brief, false);
-  assert.equal("unlinkedOutputs" in brief.omitted, false);
-  assert.doesNotMatch(formatContextBrief(brief), /unrecorded|Session observations/);
+  assert.equal("unlinkedOutputs" in brief.workspaceIssues, false);
+  assert.doesNotMatch(formatAgentBrief(brief), /unrecorded|Session observations/);
   assert.equal(await read.call(adapter, legacy), "invalid old session log\n");
 });
 
@@ -326,10 +332,24 @@ test("brief exposes root identities without drift or another catalog scan", asyn
     })),
   );
   const cli = await f.workspace("brief");
-  assert.deepEqual(cli.value.roots, brief.roots);
+  assert.equal("roots" in cli.value, false);
+  assert.ok(
+    cli.value.agentContext.sourceReads.some((read: { command?: string }) =>
+      read.command?.includes("node list --full"),
+    ),
+  );
+  const listed = await f.node("list", []);
+  assert.deepEqual(
+    listed.items.map(({ nodeId, name, type }: { nodeId: string; name: string; type: string }) => ({
+      nodeId,
+      name,
+      type,
+    })),
+    brief.roots,
+  );
   const text = await runWorkspaceCommand("brief", [], { workspace: f.root });
   assert.equal(text.exitCode, 0, text.stderr);
-  assert.ok(text.stdout.includes(`${created.results[0].nodeId} Map [prompt]`));
+  assert.ok(text.stdout.includes(created.results[0].nodeId));
   assert.doesNotMatch(text.stdout, /Archived|Core\/Core.md/);
 });
 
@@ -368,9 +388,14 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
   const headBefore = await historyHead(path.join(f.root, ".tent"));
   let brief = await f.workspace("brief");
   assert.equal(brief.value.counts.behind, 1);
-  assert.deepEqual(brief.value.behind, []);
-  assert.equal(brief.value.driftRead.command, `tent workspace drift --workspace ${f.root}`);
-  assert.ok(Buffer.byteLength(brief.stdout) <= 4096);
+  assert.ok(briefIssues(brief.value, "behind").some((item) => item.nodeId === id));
+  assert.ok(
+    brief.value.agentContext.sourceReads.some(
+      (read: { command?: string }) =>
+        read.command?.includes("workspace drift") && read.command.includes(f.root),
+    ),
+  );
+  assert.ok(Buffer.byteLength(brief.stdout) <= 16384);
   let drift = (await f.workspace("drift")).value;
   const behind = drift.items.find(
     (item: { kind: string; nodeId: string }) => item.kind === "node-behind" && item.nodeId === id,
@@ -437,7 +462,9 @@ test("without Hooks the complete requirement, output, drift, review and unanchor
     false,
   );
   assert.ok(
-    brief.value.roots.some((item: { nodeId: string }) => item.nodeId === decision.node.nodeId),
+    brief.value.agentContext.sections
+      .find((section: { kind: string }) => section.kind === "references")
+      .items.some((item: { nodeId: string }) => item.nodeId === decision.node.nodeId),
   );
 });
 
@@ -510,10 +537,11 @@ test("brief keeps Card delivery independent of goal outputs and only warns for c
   ]);
   await card("take", [published.cardId, "--role", "role-worker"]);
   const received = (await f.workspace("brief")).value;
-  assert.deepEqual(received.changedCardSources, []);
-  assert.equal(received.cardInputs[0].state, "consumed");
-  assert.equal(received.cardInputs[0].receivedBy, "role-worker");
-  assert.equal(received.cardInputs[0].returnTo, "role-requester");
+  assert.deepEqual(briefIssues(received, "changed-source"), []);
+  assert.equal(briefCards(received)[0]!.state, "consumed");
+  const reception = await card("show", [published.cardId]);
+  assert.equal(reception.receivedBy, "role-worker");
+  assert.equal(reception.returnTo, "role-requester");
   await fs.writeFile(path.join(f.root, "result.html"), "<h1>result</h1>");
   const output = await f.node("link-output", [
     source.node.nodeId,
@@ -528,7 +556,7 @@ test("brief keeps Card delivery independent of goal outputs and only warns for c
     true,
   );
   const withOutput = (await f.workspace("brief")).value;
-  assert.deepEqual(withOutput.cardInputs, received.cardInputs);
+  assert.deepEqual(briefCards(withOutput), briefCards(received));
   for (const key of [
     "progress",
     "outputCount",
@@ -537,7 +565,7 @@ test("brief keeps Card delivery independent of goal outputs and only warns for c
     "outputNodeIds",
     "reviewOutputNodeIds",
   ])
-    assert.equal(key in withOutput.cardInputs[0], false);
+    assert.equal(key in briefCards(withOutput)[0]!, false);
   assert.equal(
     withOutput.counts.ahead,
     1,
@@ -545,16 +573,17 @@ test("brief keeps Card delivery independent of goal outputs and only warns for c
   );
   const textBrief = await runWorkspaceCommand("brief", [], { workspace: f.root });
   assert.equal(textBrief.exitCode, 0, textBrief.stderr);
-  assert.match(textBrief.stdout, /\[consumed\] received by role-worker return to role-requester/);
+  assert.match(textBrief.stdout, new RegExp(`${published.cardId} consumed`));
+  assert.match(textBrief.stdout, /reception\/return details are in the Card reads below/);
   assert.doesNotMatch(textBrief.stdout, /received-no-output|has-output|needs-review|1\/2/);
   const file = path.join(f.root, ".tent", "Spec", "Spec.md");
   const original = await fs.readFile(file, "utf8");
   await fs.writeFile(file, original.replace("Original requirement", "Changed requirement"));
   const head = await historyHead(path.join(f.root, ".tent"));
   const brief = await f.workspace("brief");
-  assert.equal(brief.value.changedCardSources[0].cardId, published.cardId);
-  assert.equal(brief.value.changedCardSources[0].nodeId, source.node.nodeId);
-  assert.equal(brief.value.changedCardSources[0].state, "changed");
+  const changedSource = briefIssues(brief.value, "changed-source")[0]!;
+  assert.equal(changedSource.cardId, published.cardId);
+  assert.equal(changedSource.nodeId, source.node.nodeId);
   assert.notEqual(
     await historyHead(path.join(f.root, ".tent")),
     head,
@@ -563,7 +592,7 @@ test("brief keeps Card delivery independent of goal outputs and only warns for c
   const currentOutput = await f.node("get", [output.nodeId, "--full"]);
   await f.node("confirm", [output.nodeId, "--base-etag", currentOutput.etag]);
   assert.deepEqual(
-    (await f.workspace("brief")).value.changedCardSources,
+    briefIssues((await f.workspace("brief")).value, "changed-source"),
     [],
     "completed source goal removes old changed Card warning",
   );
@@ -576,8 +605,8 @@ test("brief keeps Card delivery independent of goal outputs and only warns for c
   ]);
   const allOutputs = (await f.workspace("brief")).value;
   assert.deepEqual(
-    allOutputs.cardInputs,
-    received.cardInputs,
+    briefCards(allOutputs),
+    briefCards(received),
     "goal outputs do not complete the Card",
   );
   assert.equal(allOutputs.counts.ahead, 0);
@@ -589,32 +618,32 @@ test("brief keeps Card delivery independent of goal outputs and only warns for c
     `Done ${output.nodeId}`,
   ]);
   const returned = (await f.workspace("brief", ["--role", "role-requester"])).value;
-  assert.equal(returned.cardInputs[0].state, "returned");
-  assert.equal("result" in returned.cardInputs[0], false);
+  assert.equal(briefCards(returned)[0]!.state, "returned");
+  assert.equal("result" in briefCards(returned)[0]!, false);
   assert.equal((await card("show", [published.cardId])).result, `Done ${output.nodeId}`);
-  assert.deepEqual((await f.workspace("brief", ["--role", "role-worker"])).value.cardInputs, []);
+  assert.deepEqual(briefCards((await f.workspace("brief", ["--role", "role-worker"])).value), []);
   assert.deepEqual(
-    (await f.workspace("brief", ["--role", "role-requester"])).value.cardInputs,
-    returned.cardInputs,
+    briefCards((await f.workspace("brief", ["--role", "role-requester"])).value),
+    briefCards(returned),
   );
   await card("take", [published.cardId, "--role", "role-requester"]);
   assert.deepEqual(
-    (await f.workspace("brief")).value.cardInputs,
+    briefCards((await f.workspace("brief")).value),
     [],
     "taking the receipt closes its delivery",
   );
   const notice = await card("create", ["--prompt", "Read this", "--source", second.node.nodeId]);
   await card("take", [notice.cardId]);
   assert.deepEqual(
-    (await f.workspace("brief")).value.cardInputs,
+    briefCards((await f.workspace("brief")).value),
     [],
     "a Card without returnTo completes on take",
   );
   const shown = await card("show", [published.cardId]);
   await card("deprecate", [published.cardId, "--base-etag", shown.etag]);
   const after = (await f.workspace("brief")).value;
-  assert.deepEqual(after.changedCardSources, []);
-  assert.deepEqual(after.cardInputs, []);
+  assert.deepEqual(briefIssues(after, "changed-source"), []);
+  assert.deepEqual(briefCards(after), []);
 });
 
 test("brief reports only drift counts and a qualified entry while bounding other discovery without a byte cap", () => {
@@ -794,10 +823,13 @@ test("CLI discovery text and JSON stay byte-identical when the clock advances on
   };
   const before = await readAll();
   const brief = JSON.parse(before["brief json"]);
-  assert.deepEqual(brief.ahead, []);
   assert.equal(brief.counts.ahead, 1);
-  assert.equal(brief.driftRead.command, `tent workspace drift --workspace ${f.root}`);
-  assert.ok(before["brief text"].includes(brief.driftRead.command));
+  assert.ok(briefIssues(brief, "ahead").some((item) => item.nodeId === id));
+  const driftRead = brief.agentContext.sourceReads.find((read: { command?: string }) =>
+    read.command?.includes("workspace drift"),
+  )!;
+  assert.ok(driftRead.command.includes(f.root));
+  assert.ok(before["brief text"].includes(driftRead.command));
   assert.equal(JSON.parse(before["card list json"]).items.length, 1);
   assert.ok(
     JSON.parse(before["drift json"]).items.some(

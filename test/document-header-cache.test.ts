@@ -13,6 +13,7 @@ import {
   withFrontmatterCache,
 } from "../src/core/base/frontmatter.js";
 import { withDocumentHeaderCache } from "../src/fs/document-header-cache.js";
+import { runNodeCommand } from "../src/cli/node-commands.js";
 import { contentEtag } from "../src/core/base/etag.js";
 import { deserialize } from "node:v8";
 import { NodeFs } from "../src/fs/node-fs.js";
@@ -181,7 +182,15 @@ test("warm brief observes same-size native edits and bad headers without changin
   await fs.utimes(file, stat.atime, stat.mtime);
   const after = await brief();
   assert.notEqual(after, first);
-  assert.equal(JSON.parse(after).roots[0].type, "output");
+  assert.equal(
+    JSON.parse(after).agentContext.sections.find(
+      (section: { kind: string }) => section.kind === "references",
+    ).items.length,
+    1,
+  );
+  const listed = await runNodeCommand("list", [], { workspace: root, json: true });
+  assert.equal(listed.exitCode, 0, listed.stderr);
+  assert.equal(JSON.parse(listed.stdout).items[0].type, "output");
   assert.equal(await fs.readFile(file, "utf8"), edited);
   assert.notEqual(await historyHead(system), head);
   await fs.rm(cache);
@@ -189,7 +198,10 @@ test("warm brief observes same-size native edits and bad headers without changin
   const retained = await historyHead(system);
   await fs.writeFile(file, edited.replace("type: output", "type: [bad"));
   const invalid = JSON.parse(await brief());
-  assert.equal(invalid.invalidNodes.length, 1);
-  assert.match(invalid.invalidNodes[0].reason, /YAML/);
+  const invalidNodes = invalid.workspaceIssues.items.filter(
+    (item: { kind: string }) => item.kind === "invalid",
+  );
+  assert.equal(invalidNodes.length, 1);
+  assert.match(invalidNodes[0].line, /YAML/);
   assert.equal(await historyHead(system), retained);
 });
