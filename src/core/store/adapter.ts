@@ -8,6 +8,11 @@ import type { CaptureMetadata } from "./history-port.js";
 
 /** Prefix and decoded-text blob fingerprint from one current document observation. */
 export type DocumentHeaderObservation = { content: string; fingerprint: string };
+export type ObservationOptions = {
+  forceContent?: boolean;
+  /** Valid Node document paths already checked by this read-only inspection. */
+  nodePaths?: ReadonlySet<string>;
+};
 
 export interface FsAdapter {
   /** Available for adapters rooted at a Workspace's .tent directory. */
@@ -35,7 +40,7 @@ export interface FsAdapter {
     systemPath?: string;
   }>;
   /** Share one Workspace observation among the materials of a single inspection. */
-  observationScope?<T>(action: () => Promise<T>, options?: { forceContent?: boolean }): Promise<T>;
+  observationScope?<T>(action: () => Promise<T>, options?: ObservationOptions): Promise<T>;
   /** Git index membership of an explicit local file; undefined when it cannot be established. */
   materialIsTracked?(resource: string, documentPath: string): Promise<boolean | undefined>;
   /** Validated local text for explicit-write advice; never fetch remote materials. */

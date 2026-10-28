@@ -161,3 +161,35 @@ test("a swapped directory cannot persist another handle's header under the resto
   assert.equal(failure.code, "SOURCE_CHANGED");
   assert.match(failure.message, /Source changed while reading header/);
 });
+
+test("known Node material paths expire after writes and native quarantine changes", async (t) => {
+  const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-material-scope-"));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  const adapter = openTestFs(path.join(root, ".tent"));
+  const file = "Target/Target.md";
+  const raw = "---\nid: node-target\ntype: prompt\n---\n## Part\ncurrent\n";
+  await adapter.writeFile(file, raw);
+  const observe = () => adapter.observeMaterial("../Target/Target.md#Part", "Owner/Owner.md");
+  const options = { nodePaths: new Set([file]) };
+  await adapter.observationScope(async () => {
+    await observe();
+    adapter.invalidNodeEdits = new Map([[file, "native identity edit rejected"]]);
+    await assert.rejects(
+      observe(),
+      /Materials must point to Workspace files, or Node, Role, Card documents/,
+    );
+  }, options);
+  adapter.invalidNodeEdits = undefined;
+  await adapter.observationScope(async () => {
+    await observe();
+    await adapter.writeFile(file, raw.replace("node-target", "invalid"));
+    await assert.rejects(
+      observe(),
+      /Materials must point to Workspace files, or Node, Role, Card documents/,
+    );
+  }, options);
+  await assert.rejects(
+    adapter.observationScope(observe),
+    /Materials must point to Workspace files, or Node, Role, Card documents/,
+  );
+});

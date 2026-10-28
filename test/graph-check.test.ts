@@ -49,9 +49,9 @@ async function bytes(directory: string, prefix = ""): Promise<Record<string, str
   )) {
     const file = path.join(directory, entry.name);
     const key = `${prefix}${entry.name}`;
-    // Disposable history and completion indexes may be populated by a read-only query.
+    // Disposable observation caches may be populated by a read-only query.
     if (
-      /\/\.git\/tent-(?:history-index|derived-[a-z0-9-]+|material-cache\/completed-cards)\.json$/.test(
+      /\/\.git\/(?:tent-material-cache\/|tent-(?:history-index|derived-[a-z0-9-]+)\.json$)/.test(
         key,
       )
     )
@@ -468,8 +468,16 @@ test("material checks report missing or ambiguous Markdown sections at their occ
       { resource: pathToFileURL(path.join(workspace, "设计.markdown")).href + "#不存在" },
     ],
   });
+  const directories = new Map<string, number>();
+  const listDir = adapter.listDir.bind(adapter);
+  t.mock.method(adapter, "listDir", async (directory: string) => {
+    directories.set(directory, (directories.get(directory) ?? 0) + 1);
+    return listDir(directory);
+  });
   const before = await bytes(root);
   const result = await checkGraph(adapter, workspace, fileExists);
+  assert.equal(directories.get("Design"), 1);
+  assert.equal(directories.get("Owner"), 1);
   assert.deepEqual(result.errors, []);
   assert.equal(result.issues.length, 3);
   assert.ok(result.issues.every((issue) => issue.kind === "missing-material-section"));
@@ -710,4 +718,130 @@ test("unreadable Node documents and directory areas do not prevent checking heal
   deniedBinary.mock.restore();
   assert.deepEqual(await checkGraph(adapter, workspace, fileExists), result);
   assert.deepEqual(await bytes(root), before);
+});
+
+test("mixed Node failures finish before Role and Card discovery", async (t) => {
+  const { workspace, write, adapter, fileExists } = await fixture(t);
+  await write("A/A.md", { id: "bad-a" });
+  await write("B/B.md", { id: "bad-b" });
+  await write("roles/role-a.md", { id: "role-a", type: "role" });
+  await write("cards/card-a.md", {
+    id: "card-a",
+    type: "card",
+    schemaVersion: 3,
+    state: "pending",
+    sources: [],
+  });
+  const readBinary = adapter.readBinary.bind(adapter);
+  const listDir = adapter.listDir.bind(adapter);
+  const observed: string[] = [];
+  t.mock.method(adapter, "readBinary", async (file: string) => {
+    if (file === "A/A.md") {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      observed.push("A failed");
+      throw new Error("EIO: A unreadable");
+    }
+    if (file === "B/B.md") {
+      observed.push("B invalid UTF-8");
+      return Uint8Array.of(0xff);
+    }
+    observed.push(`read ${file}`);
+    return readBinary(file);
+  });
+  t.mock.method(adapter, "listDir", async (directory: string) => {
+    if (directory === "roles") {
+      observed.push("roles denied");
+      throw new Error("EACCES: roles denied");
+    }
+    if (directory === "cards") observed.push("cards listed");
+    return listDir(directory);
+  });
+  const result = await checkGraph(adapter, workspace, fileExists);
+  const roles = observed.indexOf("roles denied");
+  assert.ok(roles > observed.indexOf("A failed") && roles > observed.indexOf("B invalid UTF-8"));
+  assert.ok(observed.indexOf("cards listed") > roles);
+  assert.deepEqual(result, {
+    documents: 3,
+    issues: [],
+    notices: [],
+    errors: [
+      { path: "A/A.md", reason: "EIO: A unreadable" },
+      {
+        path: "A/A.md",
+        reason: "Invalid Node id: bad-a; canonical Node ids must start with node-.",
+      },
+      {
+        path: "B/B.md",
+        reason: "Invalid Node id: bad-b; canonical Node ids must start with node-.",
+      },
+      { path: "B/B.md", reason: "The encoded data was not valid for encoding utf-8" },
+      { path: "roles", reason: "EACCES: roles denied" },
+    ],
+  });
+});
+
+test("a slow document does not stall later independent document reads", async (t) => {
+  const { workspace, write, adapter, fileExists } = await fixture(t);
+  const documents = new Map<string, Uint8Array>();
+  for (let index = 0; index < 40; index++) {
+    const name = `N${String(index).padStart(2, "0")}`;
+    const file = `${name}/${name}.md`;
+    await write(file, { id: `node-${name.toLowerCase()}` });
+    documents.set(file, Buffer.from(await adapter.readFile(file)));
+  }
+  let release!: () => void;
+  const held = new Promise<Uint8Array>((resolve) => {
+    release = () => resolve(documents.get("N00/N00.md")!);
+  });
+  let released = false,
+    progressed = false;
+  t.mock.method(adapter, "readBinary", async (file: string) => {
+    if (file === "N00/N00.md") return held;
+    if (file === "N15/N15.md")
+      setImmediate(() => {
+        released = true;
+        release();
+      });
+    if (file === "N32/N32.md") progressed = !released;
+    return documents.get(file)!;
+  });
+  const result = await checkGraph(adapter, workspace, fileExists);
+  assert.equal(progressed, true);
+  assert.deepEqual(result, { documents: 40, issues: [], notices: [], errors: [] });
+});
+
+test("independent document validation overlaps while each document keeps declaration order", async (t) => {
+  const { workspace, write, adapter } = await fixture(t);
+  await write("A/A.md", {
+    id: "node-a",
+    resource: "../../missing-A",
+    sources: [{ resource: "../../missing-A-second" }],
+  });
+  await write("B/B.md", { id: "node-b", resource: "../../missing-B" });
+  let released = false,
+    overlapped = false,
+    ordered = false;
+  const result = await checkGraph(adapter, workspace, async (filename) => {
+    if (filename.endsWith("missing-A"))
+      await new Promise<void>((resolve) =>
+        setImmediate(() => {
+          released = true;
+          resolve();
+        }),
+      );
+    if (filename.endsWith("missing-B")) overlapped = !released;
+    if (filename.endsWith("missing-A-second")) ordered = released;
+    return false;
+  });
+  assert.equal(overlapped, true);
+  assert.equal(ordered, true);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(
+    result.issues.map((issue) => [issue.path, "field" in issue ? issue.field : undefined]),
+    [
+      ["A/A.md", "resource"],
+      ["A/A.md", "sources"],
+      ["B/B.md", "resource"],
+    ],
+  );
 });

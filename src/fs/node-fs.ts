@@ -3,10 +3,19 @@ import { hasDocumentHistory, type DocumentHistory } from "../core/store/history-
 
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
-import type { FsAdapter, Clock, DocumentHeaderObservation } from "../core/store/adapter.js";
+import type {
+  FsAdapter,
+  Clock,
+  DocumentHeaderObservation,
+  ObservationOptions,
+} from "../core/store/adapter.js";
 import { withFileMutationLock } from "./mutation-lock.js";
 import { constants } from "node:fs";
-import { checkedSourceFile, checkedSourceDirectory } from "./checked-source-file.js";
+import {
+  checkedSourceFile,
+  checkedSourceDirectory,
+  currentSourceFileIdentity,
+} from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CaptureMetadata } from "../core/store/history-port.js";
 import { SqliteDocumentHistory, sqliteContentFingerprint } from "../core/store/sqlite-history.js";
@@ -22,7 +31,7 @@ import {
 } from "../core/graph/node-sync-record.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { loadNodeCatalog } from "../core/graph/node-catalog.js";
-import { materialLocator, localMaterialPath } from "../core/base/material.js";
+import { materialLocator, localMaterialPath, type MaterialLocator } from "../core/base/material.js";
 import { assertSystemMaterial } from "../core/graph/material-target.js";
 import { materialIsTracked } from "./material-tracking.js";
 import { createHash } from "node:crypto";
@@ -69,6 +78,7 @@ export class NodeFs implements FsAdapter {
   private readonly boundaryReady = new AsyncLocalStorage<boolean>();
   private opening?: Promise<void>;
   private readonly readyScope = `node-fs-ready:${nextReadyScope++}`;
+  private readonly materialNodesScope = `${this.readyScope}:material-nodes`;
   recoveryConflicts: readonly string[] = [];
 
   async prepareFileTransaction(
@@ -229,12 +239,32 @@ export class NodeFs implements FsAdapter {
     this.history = history ?? new SqliteDocumentHistory(this.root, entry);
   }
 
-  async observationScope<T>(
-    action: () => Promise<T>,
-    options?: { forceContent?: boolean },
-  ): Promise<T> {
+  async observationScope<T>(action: () => Promise<T>, options?: ObservationOptions): Promise<T> {
     await this.ready();
-    return this.boundaryReady.run(true, () => this.observe(action, options));
+    return this.boundaryReady.run(true, () =>
+      this.observe(async () => {
+        if (options?.nodePaths) {
+          forgetScopedRead(this.materialNodesScope);
+          await scopedRead(this.materialNodesScope, async () => ({
+            paths: options.nodePaths!,
+            invalidNodeEdits: this.invalidNodeEdits,
+          }));
+        }
+        return action();
+      }, options),
+    );
+  }
+
+  private async assertMaterial(locator: MaterialLocator) {
+    const observed = await peekScopedRead<{
+      paths: ReadonlySet<string>;
+      invalidNodeEdits: NodeFs["invalidNodeEdits"];
+    }>(this.materialNodesScope);
+    await assertSystemMaterial(
+      this,
+      locator,
+      observed?.invalidNodeEdits === this.invalidNodeEdits ? observed?.paths : undefined,
+    );
   }
 
   private observe<T>(action: () => Promise<T>, options?: { forceContent?: boolean }): Promise<T> {
@@ -267,7 +297,7 @@ export class NodeFs implements FsAdapter {
     const locator = materialLocator(resource, documentPath, true);
     const filename = localMaterialPath(locator, this.workspaceRoot);
     if (!filename) return;
-    await assertSystemMaterial(this, locator);
+    await this.assertMaterial(locator);
     return readStructureSource(
       locator.kind === "uri" ? nodePath.parse(filename).root : this.workspaceRoot,
       filename,
@@ -282,7 +312,7 @@ export class NodeFs implements FsAdapter {
   ) {
     const workspaceRoot = workspaceRootFromSystemRoot(this.root);
     if (!workspaceRoot) throw new Error("Material observation requires a Workspace .tent root");
-    await assertSystemMaterial(this, materialLocator(resource, documentPath, true));
+    await this.assertMaterial(materialLocator(resource, documentPath, true));
     const cacheDir = (await this.exists(".git")) ? this.abs(".git/tent-material-cache") : undefined;
     const observed = await observeMaterialResource(
       workspaceRoot,
@@ -512,8 +542,6 @@ export class NodeFs implements FsAdapter {
 
   async readBinary(path: string): Promise<Uint8Array> {
     await this.ready();
-    const candidate = this.abs(path);
-    await checkedSourceFile(this.root, candidate);
     return (await this.readBytes(path, true)).bytes;
   }
 
@@ -522,7 +550,13 @@ export class NodeFs implements FsAdapter {
     const previous = peekScopedRead<ObservedBytes>(key);
     if (previous) {
       const observed = await previous;
-      const current = fileState(await fs.stat(this.abs(path), { bigint: true }));
+      // Reused bytes have no new opened handle to validate their current path.
+      // Uncached reads perform this check in the validated-open flow below.
+      const current = fileState(
+        checked
+          ? await currentSourceFileIdentity(this.root, this.abs(path))
+          : await fs.stat(this.abs(path), { bigint: true }),
+      );
       if (sameFileState(observed.state, current)) return observed;
       // Core rereads documents to detect conflicts. A request-local snapshot must
       // not turn that recheck into a comparison with its own earlier bytes.
@@ -543,7 +577,7 @@ export class NodeFs implements FsAdapter {
     pendingPrefix?: Promise<ObservedPrefix>,
   ): Promise<ObservedBytes> {
     const candidate = this.abs(path);
-    if (checked) await checkedSourceFile(this.root, candidate);
+    if (checked) await currentSourceFileIdentity(this.root, candidate);
     const handle = await fs.open(
       candidate,
       checked
@@ -552,29 +586,33 @@ export class NodeFs implements FsAdapter {
     );
     try {
       const before = await handle.stat({ bigint: true }),
-        current = checked ? await checkedSourceFile(this.root, candidate, false, true) : undefined;
+        current = checked ? await currentSourceFileIdentity(this.root, candidate) : undefined;
       if (current && (before.dev !== current.dev || before.ino !== current.ino))
         throw new ReaderError("SOURCE_CHANGED", "Source changed while opening");
       const prefix = await pendingPrefix;
+      const retained =
+        prefix?.bytes && sameFileState(prefix.state, fileState(before)) ? prefix.bytes : undefined;
       let buf: Buffer;
-      if (prefix?.bytes && sameFileState(prefix.state, fileState(before))) {
-        const rest = Buffer.alloc(Number(before.size) - prefix.bytes.length);
+      // Keep native readFile behavior for unknown-size and over-limit inputs.
+      if (retained || (before.isFile() && before.size > 0n && before.size <= 0x7fffffffn)) {
+        const start = retained?.length ?? 0;
+        const rest = Buffer.alloc(Number(before.size) - start);
         let offset = 0;
         while (offset < rest.length) {
           const { bytesRead } = await handle.read(
             rest,
             offset,
             rest.length - offset,
-            prefix.bytes.length + offset,
+            start + offset,
           );
           if (!bytesRead) throw new ReaderError("SOURCE_CHANGED", "Source truncated while reading");
           offset += bytesRead;
         }
-        buf = Buffer.concat([prefix.bytes, rest]);
+        buf = retained ? Buffer.concat([retained, rest]) : rest;
       } else buf = await handle.readFile();
       const after = await handle.stat({ bigint: true }),
         final = checked
-          ? await checkedSourceFile(this.root, candidate, false, true)
+          ? await currentSourceFileIdentity(this.root, candidate)
           : await fs.stat(candidate, { bigint: true });
       if (
         BigInt(buf.length) !== before.size ||

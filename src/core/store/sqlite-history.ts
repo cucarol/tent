@@ -31,6 +31,7 @@ import type {
 type Observer = { before(commit: string): Promise<void>; after(): Promise<void> };
 type Row = Record<string, string | number | null>;
 type Event = { seq: number; id: string; parent: string | null; time: string; metadata: string };
+const readBatchSize = 256;
 export type SqliteCheckpoint = "before-publication" | "before-commit" | "after-commit";
 
 export function sqliteContentFingerprint(raw: string): string {
@@ -182,9 +183,40 @@ export class SqliteDocumentHistory implements DocumentHistory {
   }
   private async raw(digest: string): Promise<string> {
     const row = (await this.all("SELECT raw FROM blobs WHERE digest=?", digest))[0];
+    return this.checkedRaw(digest, row);
+  }
+  private checkedRaw(digest: string, row: Row | Error | undefined): string {
+    if (row instanceof Error) throw row;
     if (!row || sqliteContentFingerprint(String(row.raw)) !== digest)
       throw new Error(`Damaged SQLite content: ${digest}`);
     return String(row.raw);
+  }
+  private async rawRows(digests: readonly string[]) {
+    const wanted = [...new Set(digests)];
+    const result = new Map<string, Row | Error>();
+    const db = await this.db();
+    for (let start = 0; start < wanted.length; start += readBatchSize) {
+      const batch = wanted.slice(start, start + readBatchSize);
+      try {
+        const rows = db
+          .prepare(
+            `SELECT digest,raw FROM blobs WHERE digest IN (${batch.map(() => "?").join(",")})`,
+          )
+          .all(...batch) as Row[];
+        for (const row of rows) result.set(String(row.digest), row);
+      } catch {
+        // A failed bulk query must not make one unreadable blob hide other
+        // requests, or supersede an earlier bad blob in directory order.
+        for (const digest of batch) {
+          try {
+            result.set(digest, { raw: await this.raw(digest) });
+          } catch (error) {
+            result.set(digest, error instanceof Error ? error : new Error(String(error)));
+          }
+        }
+      }
+    }
+    return result;
   }
   async available() {
     if (this.closed) throw new Error("Tent history connection is closed");
@@ -366,22 +398,85 @@ export class SqliteDocumentHistory implements DocumentHistory {
     ).length;
   }
   async readVersions(versions: readonly DocumentVersion[]) {
-    const head = (await this.all("SELECT MAX(seq) AS seq FROM events"))[0]?.seq;
+    const db = await this.db();
+    const head = db.prepare("SELECT MAX(seq) AS seq FROM events").get()?.seq ?? 0;
+    const key = (version: DocumentVersion) => JSON.stringify([version.commit, version.path]);
+    const wanted = [...new Map(versions.map((version) => [key(version), version])).values()];
+    const selections = new Map<string, Row>();
+    const fallback = new Set<string>();
+    for (let start = 0; start < wanted.length; start += readBatchSize) {
+      const batch = wanted.slice(start, start + readBatchSize);
+      try {
+        const rows = db
+          .prepare(
+            `WITH wanted(ordinal,commit_id,path) AS (VALUES ${batch.map(() => "(?,?,?)").join(",")})
+          SELECT w.ordinal,e.seq,
+            (SELECT c.after_digest FROM changes c WHERE c.path=w.path AND c.event<=e.seq ORDER BY c.event DESC LIMIT 1) AS digest,
+            EXISTS(SELECT 1 FROM changes c WHERE c.path=w.path AND c.event>e.seq AND c.event<=?) AS changed
+          FROM wanted w LEFT JOIN events e ON e.id=w.commit_id`,
+          )
+          .all(
+            ...batch.flatMap((version, index) => [start + index, version.commit, version.path]),
+            head,
+          ) as Row[];
+        for (const row of rows) selections.set(key(wanted[Number(row.ordinal)]!), row);
+      } catch {
+        // Preserve each request's original validation/error order if a bulk
+        // metadata query cannot complete, including raw-before-changed checks.
+        for (const version of batch) fallback.add(key(version));
+      }
+    }
+    const select = (version: DocumentVersion) => {
+      if (!/^[a-f0-9]{64}$/.test(version.commit))
+        throw new Error(`Invalid SQLite event: ${version.commit}`);
+      const row = selections.get(key(version));
+      if (row?.seq == null) throw new Error(`Unknown SQLite event: ${version.commit}`);
+      checkedPath(version.path);
+      if (!row.digest) throw new Error(`Document absent at SQLite event: ${version.path}`);
+      return { digest: String(row.digest), changedSince: !!row.changed };
+    };
+    const digests: string[] = [];
+    for (const version of wanted) {
+      if (fallback.has(key(version))) continue;
+      try {
+        digests.push(select(version).digest);
+      } catch {
+        /* Invalid selections keep their own result slot and fetch no blob. */
+      }
+    }
+    const rows = await this.rawRows(digests);
+    const content = new Map<string, string>();
     return Promise.all(
       versions.map(async (version) => {
         try {
-          const raw = await this.read(version);
+          let raw: string, changedSince: boolean;
+          if (fallback.has(key(version))) {
+            const event = await this.event(version.commit);
+            const digest = await this.digestAt(event.seq, version.path);
+            if (!digest) throw new Error(`Document absent at SQLite event: ${version.path}`);
+            raw = await this.raw(digest);
+            changedSince = !!(
+              await this.all(
+                "SELECT event FROM changes WHERE path=? AND event>? AND event<=? LIMIT 1",
+                version.path,
+                event.seq,
+                head,
+              )
+            ).length;
+          } else {
+            const selected = select(version);
+            let observed = content.get(selected.digest);
+            if (observed === undefined) {
+              observed = this.checkedRaw(selected.digest, rows.get(selected.digest));
+              content.set(selected.digest, observed);
+            }
+            raw = observed;
+            changedSince = selected.changedSince;
+          }
           return {
             version,
             raw,
-            changedSince: !!(
-              await this.all(
-                "SELECT event FROM changes WHERE path=? AND event>? AND event<=? LIMIT 1",
-                checkedPath(version.path),
-                (await this.event(version.commit)).seq,
-                head ?? 0,
-              )
-            ).length,
+            changedSince,
             ...(isHistoryDocument(version.path) ? { frontmatter: parseFrontmatter(raw).data } : {}),
           };
         } catch (error) {
@@ -392,16 +487,28 @@ export class SqliteDocumentHistory implements DocumentHistory {
   }
   async readDirectory(commit: string, directory?: string) {
     const seq = (await this.event(commit)).seq;
-    const rows = await this.all(
-      "SELECT c.path,c.after_digest AS digest FROM changes c WHERE c.event=(SELECT MAX(x.event) FROM changes x WHERE x.path=c.path AND x.event<=?) AND c.after_digest IS NOT NULL",
-      seq,
+    const rows = (
+      await this.all(
+        "SELECT c.path,c.after_digest AS digest FROM changes c WHERE c.event=(SELECT MAX(x.event) FROM changes x WHERE x.path=c.path AND x.event<=?) AND c.after_digest IS NOT NULL",
+        seq,
+      )
+    ).filter((row) =>
+      directory === undefined
+        ? isHistoryDocument(String(row.path))
+        : String(row.path).startsWith(`${directory}/`),
     );
+    const blobs = await this.rawRows(rows.map((row) => String(row.digest)));
+    const content = new Map<string, string>();
     const result = new Map<string, string>();
+    // Validate in selected-row order, never in the bulk blob query's order.
     for (const row of rows) {
-      const file = String(row.path);
-      if (directory === undefined ? !isHistoryDocument(file) : !file.startsWith(`${directory}/`))
-        continue;
-      result.set(file, await this.raw(String(row.digest)));
+      const digest = String(row.digest);
+      let raw = content.get(digest);
+      if (raw === undefined) {
+        raw = this.checkedRaw(digest, blobs.get(digest));
+        content.set(digest, raw);
+      }
+      result.set(String(row.path), raw);
     }
     return result;
   }

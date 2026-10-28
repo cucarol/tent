@@ -46,15 +46,20 @@ for (const writer of ["native save", "locked append"] as const) {
           return handle;
         return new Proxy(handle, {
           get(target, key) {
-            if (key === "readFile")
-              return async (...readArgs: Parameters<typeof handle.readFile>) => {
+            if (key === "read" || key === "readFile")
+              return async (...readArgs: unknown[]) => {
+                const result = await Reflect.apply(target[key], target, readArgs);
                 if (!competed) {
+                  assert.ok(
+                    key === "read" ? result.bytesRead > 0 : Buffer.byteLength(result) > 0,
+                    "the opened handle supplied real bytes before the competing write",
+                  );
                   competed = true;
                   if (writer === "locked append")
                     await appendNodeBody(adapter, output, { body: "competing save" });
                   else await fs.writeFile(filename, original + "\ncompeting save\n");
                 }
-                return target.readFile(...readArgs);
+                return result;
               };
             const value = Reflect.get(target, key, target);
             return typeof value === "function" ? value.bind(target) : value;

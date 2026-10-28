@@ -226,8 +226,8 @@ async function runWorkspaceCommandOpened(
         stderr: "",
       };
     }
-    const { invalidNodes: invalidNativeNodes } = await captureNodes();
     if (sub === "drift") {
+      await captureNodes();
       const inspected = await inspectWorkspaceDrift(fs);
       const result = pageItems(
         {
@@ -259,52 +259,58 @@ async function runWorkspaceCommandOpened(
       return { exitCode: 0, stdout: output + "\n", stderr: "" };
     }
     if (sub === "check") {
-      const checked = await checkGraph(
-        fs,
-        roots.workspaceRoot,
-        async (filename, directory?: boolean) => {
-          try {
-            const info = await stat(filename);
-            return directory ? info.isDirectory() : info.isFile();
-          } catch (error) {
-            if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""))
-              return false;
-            throw error;
-          }
-        },
-      );
-      const result = {
-        ...checked,
-        issues: checked.issues.map((issue) => ({ ...issue, path: `.tent/${issue.path}` })),
-        errors: checked.errors.map((error) => ({ ...error, path: `.tent/${error.path}` })),
-        notices: checked.notices.map((notice) => ({ ...notice, path: `.tent/${notice.path}` })),
-      };
-      for (const invalid of invalidNativeNodes)
-        if (!result.errors.some((error) => error.path === invalid.path))
-          result.errors.push({
-            path: invalid.path,
-            reason: invalid.reason,
-          });
-      const output =
-        values.json || globals.json
-          ? JSON.stringify(result)
-          : [
-              `${result.documents} documents; ${result.issues.length} issues; ${result.errors.length} inspection errors.`,
-              ...result.issues.map(
-                (issue) =>
-                  `${issue.path}: ${issue.kind}: ${"target" in issue ? issue.target : "state" in issue ? issue.state : (issue.resource ?? issue.field)} — ${issue.reason}`,
-              ),
-              ...result.errors.map((error) => `${error.path}: ${error.reason}`),
-              ...result.notices.map(
-                (notice) => `${notice.path}: ${notice.resource ?? notice.field} — ${notice.reason}`,
-              ),
-            ].join("\n");
-      return {
-        exitCode: result.issues.length || result.errors.length ? 1 : 0,
-        stdout: output + "\n",
-        stderr: "",
-      };
+      return await fs.observationScope(async () => {
+        const { invalidNodes: invalidNativeNodes, catalog } = await captureNodes();
+        const checked = await checkGraph(
+          fs,
+          roots.workspaceRoot,
+          async (filename, directory?: boolean) => {
+            try {
+              const info = await stat(filename);
+              return directory ? info.isDirectory() : info.isFile();
+            } catch (error) {
+              if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""))
+                return false;
+              throw error;
+            }
+          },
+          catalog?.tree,
+        );
+        const result = {
+          ...checked,
+          issues: checked.issues.map((issue) => ({ ...issue, path: `.tent/${issue.path}` })),
+          errors: checked.errors.map((error) => ({ ...error, path: `.tent/${error.path}` })),
+          notices: checked.notices.map((notice) => ({ ...notice, path: `.tent/${notice.path}` })),
+        };
+        for (const invalid of invalidNativeNodes)
+          if (!result.errors.some((error) => error.path === invalid.path))
+            result.errors.push({
+              path: invalid.path,
+              reason: invalid.reason,
+            });
+        const output =
+          values.json || globals.json
+            ? JSON.stringify(result)
+            : [
+                `${result.documents} documents; ${result.issues.length} issues; ${result.errors.length} inspection errors.`,
+                ...result.issues.map(
+                  (issue) =>
+                    `${issue.path}: ${issue.kind}: ${"target" in issue ? issue.target : "state" in issue ? issue.state : (issue.resource ?? issue.field)} — ${issue.reason}`,
+                ),
+                ...result.errors.map((error) => `${error.path}: ${error.reason}`),
+                ...result.notices.map(
+                  (notice) =>
+                    `${notice.path}: ${notice.resource ?? notice.field} — ${notice.reason}`,
+                ),
+              ].join("\n");
+        return {
+          exitCode: result.issues.length || result.errors.length ? 1 : 0,
+          stdout: output + "\n",
+          stderr: "",
+        };
+      });
     }
+    await captureNodes();
     const result = await exportGraph(
       { ...roots, workspaceId, env: { fs } },
       { outputDir: values.output! },

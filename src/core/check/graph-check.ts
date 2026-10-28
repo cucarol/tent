@@ -1,7 +1,7 @@
 import type { FsAdapter } from "../store/adapter.js";
 import path from "node:path";
 import { readOnlyFs } from "../store/adapter.js";
-import { loadTent } from "../store/tree.js";
+import { loadTent, type LoadedTent } from "../store/tree.js";
 import { buildNodeIndex } from "../base/okf-index.js";
 import { resolveOutLink, rewriteMarkdownDestinations } from "../base/links.js";
 import { resolveTargetPath } from "../base/link-target.js";
@@ -58,11 +58,22 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Observe current Node, Role and Card references without repair, capture or reception. */
+/** Observe current references, reusing native discovery from this inspection when supplied. */
 export async function checkGraph(
   fs: FsAdapter,
   workspaceRoot: string,
   fileExists: GraphFileExists,
+  observedTree?: LoadedTent,
+): Promise<GraphCheckResult> {
+  const run = () => checkGraphInScope(fs, workspaceRoot, fileExists, observedTree);
+  return fs.observationScope ? fs.observationScope(run) : run();
+}
+
+async function checkGraphInScope(
+  fs: FsAdapter,
+  workspaceRoot: string,
+  fileExists: GraphFileExists,
+  observedTree?: LoadedTent,
 ): Promise<GraphCheckResult> {
   const readonlyFs = readOnlyFs(fs);
   const result: GraphCheckResult = { documents: 0, issues: [], notices: [], errors: [] };
@@ -106,7 +117,8 @@ export async function checkGraph(
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  const tent = await loadTent(observationFs);
+  const tent = observedTree ?? (await loadTent(observationFs));
+  const nodePaths = new Set([...tent.byId.values()].map((node) => nodeNotePath(node.path)));
   const retainedPaths = await readonlyFs.retainedDocumentPaths?.();
   if (retainedPaths) {
     // Presence only: content edits are ordinary dirty files, captured by explicit reads.
@@ -134,13 +146,23 @@ export async function checkGraph(
         });
   }
   const index = buildNodeIndex([...tent.byPath.values()].filter((node) => !node.invalid));
-  async function readDocument(path: string, validate: (raw: string) => void, valid = true) {
+  type DocumentRead = {
+    path: string;
+    validate: (raw: string) => void;
+    valid?: boolean;
+    invalidReason?: string;
+  };
+  function readDocument(
+    path: string,
+    validate: (raw: string) => void,
+    observed: PromiseSettledResult<Uint8Array>,
+    valid = true,
+  ) {
     result.documents++;
     let raw: string;
     try {
-      raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-        await readonlyFs.readBinary(path),
-      );
+      if (observed.status === "rejected") throw observed.reason;
+      raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(observed.value);
     } catch (cause) {
       error(path, message(cause));
       return;
@@ -164,16 +186,47 @@ export async function checkGraph(
       error(path, message(cause));
     }
   }
+  async function readDocuments(pending: readonly DocumentRead[]) {
+    const observed = new Array<PromiseSettledResult<Uint8Array>>(pending.length);
+    let next = 0;
+    // Keep independent path/handle checks active when one read is slow. This is
+    // bounded I/O concurrency, not a larger batch that waits for its slowest file.
+    await Promise.all(
+      Array.from({ length: Math.min(32, pending.length) }, async () => {
+        for (;;) {
+          const index = next++;
+          const item = pending[index];
+          if (!item) return;
+          try {
+            observed[index] = {
+              status: "fulfilled",
+              value: await readonlyFs.readBinary(item.path),
+            };
+          } catch (reason) {
+            observed[index] = { status: "rejected", reason };
+          }
+        }
+      }),
+    );
+    // Completion timing cannot choose duplicate identities or diagnostic order.
+    for (const [index, item] of pending.entries()) {
+      if (item.invalidReason !== undefined) error(item.path, item.invalidReason);
+      readDocument(item.path, item.validate, observed[index]!, item.valid);
+    }
+  }
+  const nodeDocuments: DocumentRead[] = [];
   for (const node of tent.byPath.values()) {
     const file = nodeNotePath(node.path);
+    let invalidReason: string | undefined;
     if (node.invalid && !failedReads.has(file)) {
       const unavailableAncestor = node.invalidRootPath
         ? failedReads.get(nodeNotePath(node.invalidRootPath))
         : undefined;
-      error(file, unavailableAncestor ?? node.invalidReason ?? "Invalid Node document");
+      invalidReason = unavailableAncestor ?? node.invalidReason ?? "Invalid Node document";
     }
-    await readDocument(file, () => {}, !node.invalid);
+    nodeDocuments.push({ path: file, validate: () => {}, valid: !node.invalid, invalidReason });
   }
+  await readDocuments(nodeDocuments);
   const completed = await completedCardPaths(readonlyFs);
   const completedDocuments: Array<{ path: string; raw: string }> = [];
   const foundCards = new Set<string>();
@@ -182,19 +235,24 @@ export async function checkGraph(
     [CARDS_DIR, "card"],
   ] as const) {
     if (!(await observationFs.exists(directory))) continue;
+    const directoryDocuments: DocumentRead[] = [];
     for (const entry of await observationFs.listDir(directory)) {
       if (entry.isDir || !entry.name.endsWith(".md")) continue;
       const id = entry.name.slice(0, -3);
       const file = `${directory}/${entry.name}`;
       if (kind === "card") foundCards.add(file);
-      await readDocument(`${directory}/${entry.name}`, (raw) => {
-        if (kind === "role") parseRoleDocument(id, raw);
-        else {
-          parseCardDocument(id, raw);
-          if (completed.has(file)) completedDocuments.push({ path: file, raw });
-        }
+      directoryDocuments.push({
+        path: file,
+        validate: (raw) => {
+          if (kind === "role") parseRoleDocument(id, raw);
+          else {
+            parseCardDocument(id, raw);
+            if (completed.has(file)) completedDocuments.push({ path: file, raw });
+          }
+        },
       });
     }
+    await readDocuments(directoryDocuments);
   }
   for (const file of completed)
     if (!foundCards.has(file))
@@ -231,6 +289,13 @@ export async function checkGraph(
       fileCache.set(key, observed);
     }
     return observed;
+  }
+  function observeMaterial(resource: string, owner: string) {
+    if (!readonlyFs.observeMaterial) throw new Error("Material observer is unavailable");
+    const observe = () => readonlyFs.observeMaterial!(resource, owner);
+    return readonlyFs.observationScope
+      ? readonlyFs.observationScope(observe, { nodePaths })
+      : observe();
   }
   async function linkReason(target: string, owner: string): Promise<string | undefined> {
     if (target.startsWith("#") || target.startsWith("//")) return;
@@ -276,7 +341,7 @@ export async function checkGraph(
       error(owner, `Cannot inspect ${JSON.stringify(target)}: ${message(cause)}`);
     }
   }
-  for (const document of documents) {
+  async function checkDocument(document: (typeof documents)[number]) {
     const targets = new Set<string>();
     // Reuse the native Markdown parser for local destinations;
     // collecting destinations never rewrites the observed document.
@@ -318,7 +383,7 @@ export async function checkGraph(
         if (!parsed.success) throw new Error("Material resource must be nonempty text");
         const resource = parsed.data;
         const locator = materialLocator(resource, document.path, field === "sources");
-        await assertSystemMaterial(readonlyFs, locator);
+        await assertSystemMaterial(readonlyFs, locator, nodePaths);
         directory = isDirectoryMaterial(locator);
         if (isPrefixMaterial(locator))
           prefixResource =
@@ -336,7 +401,7 @@ export async function checkGraph(
             let possible;
             try {
               possible = candidate();
-              await assertSystemMaterial(readonlyFs, possible);
+              await assertSystemMaterial(readonlyFs, possible, nodePaths);
             } catch {
               continue;
             }
@@ -386,15 +451,13 @@ export async function checkGraph(
       if (filename === undefined) return;
       try {
         if (prefixResource !== undefined) {
-          if (!readonlyFs.observeMaterial) throw new Error("Material observer is unavailable");
-          await readonlyFs.observeMaterial(prefixResource, document.path);
+          await observeMaterial(prefixResource, document.path);
           return;
         }
         if (await exists(filename, directory)) {
           if (sectionResource !== undefined) {
-            if (!readonlyFs.observeMaterial) throw new Error("Material observer is unavailable");
             try {
-              await readonlyFs.observeMaterial(sectionResource, document.path);
+              await observeMaterial(sectionResource, document.path);
             } catch (cause) {
               if (
                 !(cause instanceof NodeSectionError) ||
@@ -443,6 +506,16 @@ export async function checkGraph(
       }
     }
   }
+  let nextDocument = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(32, documents.length) }, async () => {
+      for (;;) {
+        const document = documents[nextDocument++];
+        if (!document) return;
+        await checkDocument(document);
+      }
+    }),
+  );
   const compare = (a: unknown, b: unknown) => {
     const left = JSON.stringify(a),
       right = JSON.stringify(b);

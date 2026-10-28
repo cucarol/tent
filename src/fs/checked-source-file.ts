@@ -75,6 +75,29 @@ export function initialSourceFile(root: string, filename: string) {
   });
 }
 
+/** Reuse initial ancestry validation, but bind each live leaf path to fresh metadata. */
+export function currentSourceFileIdentity(root: string, filename: string): Promise<BigIntStats> {
+  return withFileReadScope(async () => {
+    if (!inside(root, filename)) throw new Error("Source target escapes root");
+    const directory = await checkedSourceDirectory(root, path.dirname(filename));
+    // Aliases and changed canonical parents retain the complete current check.
+    if (directory !== path.dirname(filename)) return checkedSourceFile(root, filename, false, true);
+    // These probes must not share either a settled or in-flight leaf observation:
+    // callers compare the result with an already-open handle before/after reading.
+    const actual = await realpath(filename);
+    if (path.dirname(actual) !== directory) return checkedSourceFile(root, filename, false, true);
+    const stat = await lstat(filename, { bigint: true });
+    if (stat.isSymbolicLink()) throw new Error("Symbolic links are not supported for source files");
+    if (!stat.isFile()) throw new Error("Source target is not a regular file");
+    if (
+      !inside(root, actual) ||
+      path.basename(filename).toLowerCase() !== path.basename(actual).toLowerCase()
+    )
+      throw new Error("Source target escapes Workspace");
+    return stat;
+  });
+}
+
 /** 逐段拒绝 symlink/junction，并核对实际路径与普通文件类型。 */
 export function checkedSourceFile(
   root: string,
