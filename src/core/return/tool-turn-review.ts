@@ -1,4 +1,5 @@
 import { materialCoverageContains } from "../base/material-coverage-match.js";
+import { isModuleProductionSource } from "../base/source-kind.js";
 import { sectionKey } from "./section-fingerprint.js";
 import type { StopMaterialFile, StopMaterialIndex } from "./stop-material-index.js";
 
@@ -6,6 +7,25 @@ export type TurnReviewModule = { nodeId: string; path: string; names: string[]; 
 
 const samePath = (a: string, b: string) =>
   process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+
+/** Hand-written product code that no module owns, as the module map's unowned and uncovered checks see it. */
+export function unownedFilesForTurn(
+  index: StopMaterialIndex,
+  written: readonly string[],
+): string[] {
+  const modules = index.nodes.filter((node) => node.moduleCoverage.length);
+  return [...new Set(written)]
+    .filter(
+      (address) =>
+        isModuleProductionSource(address) &&
+        !modules.some(
+          (node) =>
+            node.moduleMaterials.some((coverage) => materialCoverageContains(coverage, address)) ||
+            node.materialFiles.some((file) => samePath(file.path, address)),
+        ),
+    )
+    .sort();
+}
 
 /** Linked Markdown sections in the written files; the caller decides which of them changed. */
 export function sectionsForTurn(
@@ -121,4 +141,48 @@ export function formatToolTurnReview(
   return selected.length
     ? { message: render(), nodeIds: selected.map((module) => module.nodeId) }
     : undefined;
+}
+
+const unownedReview = (paths: string) =>
+  `Tent: no module Node owns these files: ${paths}. Before you end this turn, add a directory or filename-prefix source with track: structure to the module Node that owns them, or create a module Node if they start a new area. If they are temporary, say nothing about them.`;
+const unownedPaths = (shownFiles: string[], total: number) =>
+  [
+    ...shownFiles.map(shown),
+    ...(total > shownFiles.length ? [`+${total - shownFiles.length} more`] : []),
+  ].join(", ");
+
+/** At most eight paths, dropped from the end until the note fits; the files actually named are returned. */
+export function formatUnownedFiles(
+  textByteLimit: number,
+  files: string[],
+): { message: string; files: string[] } | undefined {
+  const selected = files.slice(0, 8);
+  const render = () => unownedReview(unownedPaths(selected, files.length));
+  while (selected.length && Buffer.byteLength(render()) > textByteLimit) selected.pop();
+  return selected.length ? { message: render(), files: selected } : undefined;
+}
+
+/**
+ * One context for one write: the covering Nodes take the whole budget first, and the
+ * unowned note gets what remains, losing paths from the end or dropping out entirely.
+ */
+export function formatWriteReview(
+  textByteLimit: number,
+  modules: TurnReviewModule[],
+  files: string[],
+): { message: string; nodeIds: string[]; files: string[] } | undefined {
+  const gap = "\n\n";
+  const review = modules.length ? formatToolTurnReview(textByteLimit, modules) : undefined;
+  const note = files.length
+    ? formatUnownedFiles(
+        textByteLimit - (review ? Buffer.byteLength(review.message + gap) : 0),
+        files,
+      )
+    : undefined;
+  if (!review && !note) return undefined;
+  return {
+    message: [review?.message, note?.message].filter((part) => part !== undefined).join(gap),
+    nodeIds: review?.nodeIds ?? [],
+    files: note?.files ?? [],
+  };
 }

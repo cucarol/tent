@@ -26,6 +26,6 @@ printf 'Build the login goal.\n' | tent card create --prompt - --source node-abc
 
 Send every task already decided now, one Card per task, in the order it should run; the receiver works through its queue without waiting for you. When no Role is clearly the receiver, leave out `--target`: the Card waits in the public area, where any Role may claim it.
 
-A return is one line of at most 200 characters: the outcome and the Node ids that hold the details. Report progress and completion this way, not with a new Card; send a Card only when the other Role has something to do.
+A return is one line of at most 200 characters: the outcome, the commits, and the Node ids that hold the details. Report progress and completion this way, not with a new Card; send a Card only when the other Role has something to do.
 
 Change requirements in the Nodes; a published Card stays as sent. A Node edit wakes no one: when it gives another Role something to do now, such as a new candidate to check, send that Role a Card naming the Node.

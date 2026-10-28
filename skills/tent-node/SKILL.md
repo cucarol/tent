@@ -21,7 +21,7 @@ Treat each Node by its [type](../../skill-resources/references/node-types.md). M
 
 ## After working
 
-Update only the Nodes your work touched; if nothing changed, change nothing. Record a failed approach and why, so no one retries it.
+Update only the Nodes your work touched; if nothing changed, change nothing. Write what now holds into the Node that governs that code or task: a rule and why, a rejected option and why, a dead end. Process, hashes and acceptance logs go in your report or Card return; the Node keeps a link to the report when it rests on one.
 
 | When | Command | Read |
 | --- | --- | --- |

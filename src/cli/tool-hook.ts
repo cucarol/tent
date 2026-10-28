@@ -8,6 +8,7 @@ import {
   modulesForIndexedTurn,
   nodesLinkingSections,
   sectionsForTurn,
+  unownedFilesForTurn,
 } from "../core/return/tool-turn-review.js";
 import { toolReviewOutput } from "./hook-adapter.js";
 import { answeredQuestion, successfulWritePaths } from "./tool-write-event.js";
@@ -87,7 +88,8 @@ export async function runToolHook(
       files: written.map((address) => ({ kind: "written" as const, address })),
       changedSections: new Set(changed.keys()),
     });
-    if (!modules.length) return silent;
+    const unowned = unownedFilesForTurn(index, written);
+    if (!modules.length && !unowned.length) return silent;
     // A changed section stays unsettled while a Node linking it is left unnamed.
     const settle = async (unnamed: Set<string>) => {
       const named = new Map(
@@ -100,26 +102,32 @@ export async function runToolHook(
       );
       await settleSections(systemRoot, workspaceRoot, named).catch(() => undefined);
     };
+    // A Node is named once per turn; an unowned file once per session.
     const key = (nodeId: string) => JSON.stringify([turnId, "node", nodeId]);
+    const fileKey = (address: string) =>
+      JSON.stringify(["unowned", process.platform === "win32" ? address.toLowerCase() : address]);
     const pending = [];
     for (const module of modules)
       if (!(await hasStopReviewClaim(systemRoot, host, event.session_id, key(module.nodeId))))
         pending.push(module);
-    if (!pending.length) {
+    let unnamed: string[] = [];
+    for (const file of unowned)
+      if (!(await hasStopReviewClaim(systemRoot, host, event.session_id, fileKey(file))))
+        unnamed.push(file);
+    if (!pending.length && !unnamed.length) {
       await settle(new Set());
       return silent;
     }
     let candidates = pending;
     const owned = new Set<string>();
     for (;;) {
-      const output = toolReviewOutput(candidates);
+      const output = toolReviewOutput(candidates, unnamed);
       if (!output) return silent;
       const competing = new Set<string>();
-      for (const nodeId of output.nodeIds) {
-        if (owned.has(nodeId)) continue;
-        if (await claimStopReview(systemRoot, host, event.session_id, key(nodeId)))
-          owned.add(nodeId);
-        else competing.add(nodeId);
+      for (const claim of [...output.nodeIds.map(key), ...output.files.map(fileKey)]) {
+        if (owned.has(claim)) continue;
+        if (await claimStopReview(systemRoot, host, event.session_id, claim)) owned.add(claim);
+        else competing.add(claim);
       }
       // Keep the complete rendered projection, including Nodes omitted by either
       // byte budget or count. They were not claimed and may be named by a later tool.
@@ -133,9 +141,10 @@ export async function runToolHook(
         );
         return output.stdout;
       }
-      // Another hook owns these Nodes. Rebudget without them and claim any newly
-      // visible Nodes before delivering; keep this process's existing claims.
-      candidates = candidates.filter((module) => !competing.has(module.nodeId));
+      // Another hook owns these Nodes or files. Rebudget without them and claim any newly
+      // visible ones before delivering; keep this process's existing claims.
+      candidates = candidates.filter((module) => !competing.has(key(module.nodeId)));
+      unnamed = unnamed.filter((file) => !competing.has(fileKey(file)));
     }
   } catch {
     return silent;

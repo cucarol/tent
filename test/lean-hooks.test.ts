@@ -102,7 +102,7 @@ test("failure, cancellation, reads, no identity, uncovered and Tent maintenance 
   ])
     assert.equal(await tool(undefined, extra), "{}\n");
   for (const file of [
-    "unknown.ts",
+    "unknown.txt",
     ".tent/Module/Module.md",
     ".tent/cards/card-x.md",
     ".scratch/a.ts",
@@ -316,6 +316,23 @@ test("Codex successful patch output is the path authority, including deletion an
     }),
     [],
   );
+});
+
+test("covering Nodes keep their room when an unowned note joins them", () => {
+  const modules = Array.from({ length: 5 }, (_, i) => ({
+    nodeId: `node-${i}`,
+    path: `.tent/M${i}/M${i}.md`,
+    names: ["n".repeat(219)],
+    files: ["src/a.ts"],
+  }));
+  const alone = toolReviewOutput(modules)!;
+  const joined = toolReviewOutput(modules, ["new.ts"])!;
+  assert.deepEqual(joined.nodeIds, alone.nodeIds);
+  assert.equal(joined.nodeIds.length, 5);
+  assert.deepEqual(joined.files, []);
+  assert.ok(Buffer.byteLength(joined.stdout) <= 2048);
+  const roomy = toolReviewOutput(modules.slice(0, 1), ["new.ts"])!;
+  assert.deepEqual([roomy.nodeIds, roomy.files], [["node-0"], ["new.ts"]]);
 });
 
 test("escaping overhead drops filenames before dropping the only covered Node", () => {
@@ -605,4 +622,32 @@ test("the record keeps the order a linked file was read in, even when a read is 
   await version("3");
   assert.match(await tool(["doc.md"], { turn_id: "fourth" }), /node-rule/);
   assert.equal(await tool(["doc.md"], { turn_id: "fifth" }), "{}\n");
+});
+
+test("hand-written code no module owns is named once per session, beside covering Nodes", async (t) => {
+  const { root, systemRoot, tool } = await fixture(t);
+  const note = (paths: string) =>
+    `Tent: no module Node owns these files: ${paths}. Before you end this turn, add a directory or filename-prefix source with track: structure to the module Node that owns them, or create a module Node if they start a new area. If they are temporary, say nothing about them.`;
+  const context = (output: string) => JSON.parse(output).hookSpecificOutput.additionalContext;
+  assert.equal(context(await tool(["app/new.ts"])), note("app/new.ts"));
+  assert.equal(await tool(["app/new.ts"], { turn_id: "later" }), "{}\n");
+  assert.equal(context(await tool(["app/new.ts"], { session_id: "other" })), note("app/new.ts"));
+  for (const file of ["app/a.test.ts", "app/gen/x.ts", "vendor/x.ts", "app/notes.md"])
+    assert.equal(await tool([file], { turn_id: file }), "{}\n", file);
+  const both = context(await tool(["src/a.ts", "app/b.ts"], { turn_id: "both" }));
+  assert.equal(
+    both,
+    `Tent: these Nodes cover the file you just changed:\n- Module (node-module, .tent/Module/Module.md): src/a.ts\n${TOOL_REVIEW_ACTION}\n\n${note("app/b.ts")}`,
+  );
+  // A module owns every directory it names, tracked or not.
+  await fs.writeFile(
+    path.join(systemRoot, "Other/Other.md"),
+    "---\nid: node-other\ntype: prompt\nsources:\n  - resource: ../../lib/\n    track: structure\n  - resource: ../../app/owned/\n---\nRule\n",
+  );
+  await loadStopMaterialIndex(systemRoot, root);
+  assert.equal(await tool(["app/owned/x.ts"], { turn_id: "owned" }), "{}\n");
+  const many = Array.from({ length: 20 }, (_, i) => `app/many/file-${i}.ts`);
+  const listed = await tool(many, { turn_id: "many" });
+  assert.ok(Buffer.byteLength(listed) <= 2048);
+  assert.equal(context(listed), note(`${[...many].sort().slice(0, 8).join(", ")}, +12 more`));
 });

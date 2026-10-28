@@ -27,6 +27,8 @@ export type StopIndexedNode = {
   type?: string;
   moduleCoverage: MaterialCoverage[];
   materialFiles: StopMaterialFile[];
+  /** A module owns every directory and prefix it names, tracked or not; empty for other Nodes. */
+  moduleMaterials: MaterialCoverage[];
 };
 export type StopMaterialIndex = { nodes: StopIndexedNode[] };
 
@@ -101,9 +103,12 @@ export function buildStopMaterialIndex(
           return coverage ? [coverage] : [];
         });
         const materialFiles = new Map<string, StopMaterialFile>();
+        const moduleMaterials: MaterialCoverage[] = [];
         for (const { field, resource } of materialOccurrences(data)) {
           const file = workspaceMaterialFile(resource, owner, workspaceRoot, field === "sources");
           if (file) materialFiles.set(JSON.stringify([file.path, file.heading]), file);
+          const coverage = structureMaterialCoverage(resource, owner, workspaceRoot);
+          if (coverage && moduleCoverage.length) moduleMaterials.push(coverage);
         }
         return {
           nodeId: node.nodeId,
@@ -112,6 +117,7 @@ export function buildStopMaterialIndex(
           ...(node.type ? { type: node.type } : {}),
           moduleCoverage,
           materialFiles: [...materialFiles.values()],
+          moduleMaterials,
         };
       }),
   };

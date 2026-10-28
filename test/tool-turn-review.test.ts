@@ -175,7 +175,7 @@ test("material index excludes draft module coverage while retaining stable modul
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 9);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 10);
   assert.equal(await adapter.readFile("Core/Core.md"), draftRaw);
   await adapter.writeFile("Core/Core.md", original);
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), stable);
@@ -230,7 +230,7 @@ test("material index excludes unknown lifecycle from modules and ordinary materi
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 9);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 10);
   assert.deepEqual(modulesForIndexedTurn(expected, event(["unknown/a.ts"])), []);
   await fs.writeFile(
     path.join(systemRoot, unknownModulePath),
@@ -362,6 +362,7 @@ test("written file coverage ranks distinct writes and ignores reads before remin
       names: [`M${i}`],
       moduleCoverage: [{ kind: "directory", prefix: `src/${i}/` }],
       materialFiles: [],
+      moduleMaterials: [],
     })),
   };
   const addresses = [

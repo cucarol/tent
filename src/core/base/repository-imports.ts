@@ -4,7 +4,8 @@ import { extractJavaImports } from "./java-imports.js";
 import { isJavaConfig } from "./java-build.js";
 import { extractCSharpImports } from "./csharp-imports.js";
 import { isCSharpConfig } from "./csharp-build.js";
-import { extractCFamilyImports, isCFamilySource, isCFamilyConfig } from "./cfamily-imports.js";
+import { extractCFamilyImports, isCFamilyConfig } from "./cfamily-imports.js";
+import { isCFamilySource, isCodeSource, isGeneratedSource, isTestSource } from "./source-kind.js";
 import { extractPhpImports, isPhpConfig } from "./php-imports.js";
 import { deferredImportTokens } from "./import-execution.js";
 import { pythonImports } from "./python-imports.js";
@@ -25,15 +26,7 @@ export type RepositoryImport = {
 export type RepositoryImportIssue = { file: string; specifier?: string; reason: string };
 
 export const comparePaths = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-export const isTestSource = (file: string) =>
-  /(^|\/)(tests?|__tests__|spec|testdata|fixtures)\/|(^|\/)test_[^/]+\.py$|[._-](test|spec)\.[^/]+$|_test\.go$/.test(
-    file,
-  );
-export const isCodeSource = (file: string) =>
-  /\.(go|[cm]?[jt]sx?|py|rs|java|kt|swift|rb|php|cs|vue|svelte)$/.test(file) ||
-  isCFamilySource(file);
-export const isGeneratedSource = (file: string) =>
-  /(^|\/)(gen|generated|__generated__)\/|\.pb\.go$|_pb\.ts$|\.pb\.ts$|\.g\.dart$/.test(file);
+export { isCodeSource, isGeneratedSource, isTestSource };
 export const isImportSource = (file: string) =>
   /\.(go|[cm]?[jt]sx?|py|rs|java|cs|php)$/.test(file) || isCFamilySource(file);
 export const isImportConfig = (file: string) =>

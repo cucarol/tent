@@ -22,7 +22,7 @@ async function readPreparedIndex(
       ),
     );
     if (
-      cached.schema !== 9 ||
+      cached.schema !== 10 ||
       typeof cached.workspaceRoot !== "string" ||
       path.relative(cached.workspaceRoot, workspaceRoot) !== "" ||
       cached.rootMarkerDigest !== rootMarkerDigest(marker) ||
@@ -59,6 +59,13 @@ async function readPreparedIndex(
             file &&
             typeof file.path === "string" &&
             (file.heading === undefined || typeof file.heading === "string"),
+        ) ||
+        !Array.isArray(node.moduleMaterials) ||
+        !node.moduleMaterials.every(
+          (coverage: { kind?: unknown; prefix?: unknown }) =>
+            coverage &&
+            ["directory", "prefix"].includes(String(coverage.kind)) &&
+            typeof coverage.prefix === "string",
         )
       )
         return;

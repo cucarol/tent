@@ -1,12 +1,12 @@
 import path from "node:path";
+import { isCFamilySource } from "./source-kind.js";
 import type {
   RepositoryImport,
   RepositoryImportIssue,
   RepositorySource,
 } from "./repository-imports.js";
 
-export const isCFamilySource = (file: string) =>
-  /\.(?:c|cc|cpp|cxx|C|h|hh|hpp|hxx|inc|inl|ipp|tpp)$/.test(file);
+export { isCFamilySource };
 export const isCFamilyConfig = (file: string) =>
   /(^|\/)(?:CMakeLists\.txt|compile_commands\.json)$/.test(file);
 

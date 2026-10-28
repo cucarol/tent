@@ -252,7 +252,7 @@ test("Stop index rejects corrupt, obsolete and incomplete cache records and surv
   const expected = await loadStopMaterialIndex(systemRoot, root);
   const valid = await fs.readFile(cacheFile, "utf8");
   const baseline = JSON.parse(valid);
-  assert.equal(baseline.schema, 9);
+  assert.equal(baseline.schema, 10);
   assert.equal(baseline.sourceDigest, sourceDigest(baseline));
   assert.equal(baseline.indexDigest, indexDigest(baseline));
   const directories = t.mock.method(NodeFs.prototype, "listDir");

@@ -7,6 +7,7 @@ import {
   type RepositoryImport,
 } from "../base/repository-imports.js";
 import { isTentWorkspacePath, materialCoverageContains } from "../base/material-coverage.js";
+import { isModuleProductionSource, isVendorSource } from "../base/source-kind.js";
 
 export const MODULE_MAP_THRESHOLDS = {
   historyCommitLimit: 300,
@@ -80,9 +81,7 @@ export type ModuleMapInput = {
 };
 
 const ordered = (items: Iterable<string>) => [...new Set(items)].sort(comparePaths);
-const vendor = (file: string) => /(^|\/)(vendor|node_modules|third_party|third-party)\//.test(file);
-export const isModuleProductionSource = (file: string) =>
-  isCodeSource(file) && !isTestSource(file) && !isGeneratedSource(file) && !vendor(file);
+export { isModuleProductionSource };
 const production = isModuleProductionSource;
 const barrel = (file: string) => /(^|\/)index\.[^/]+$/.test(file);
 
@@ -298,7 +297,8 @@ export function checkModuleMap(input: ModuleMapInput) {
   for (const edge of imports) {
     if (isTentWorkspacePath(edge.from) || isTentWorkspacePath(edge.to)) continue;
     if (isTestSource(edge.from)) {
-      if (!isCodeSource(edge.from) || isGeneratedSource(edge.from) || vendor(edge.from)) continue;
+      if (!isCodeSource(edge.from) || isGeneratedSource(edge.from) || isVendorSource(edge.from))
+        continue;
       if (edge.kind === "directory") {
         const files = (packageFiles.get(comparable(edge.to)) ?? []).filter(production);
         if (files.length) recordTest(directoryOwner(edge.to), edge.from);
