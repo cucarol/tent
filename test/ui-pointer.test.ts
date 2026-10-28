@@ -79,22 +79,44 @@ test("overlapping panels leave one continuous clear rectangle, independent of pa
   assert.equal(clearRect(room, [], { w: 450, h: 500 }), room);
 });
 
-test("wheel and pinch keep the map point under the pointer, including at a zoom limit", () => {
+test("Ctrl with the wheel and a pinch zoom about the pointer, one 10% step a notch", () => {
   const view = { x: 240, y: 160, zoom: 0.8 };
   const at = { x: 580, y: 390 };
   const limits = { min: 0.04, max: 4 };
-  for (const [deltaY, ctrlKey] of [
-    [120, false],
-    [-3, true],
-    [-10000, true],
+  const wheel = (
+    deltaY: number,
+    keys: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
+  ) =>
+    wheelViewport(
+      view,
+      at,
+      { deltaX: 0, deltaY, deltaMode: 0, ctrlKey: false, metaKey: false, shiftKey: false, ...keys },
+      limits,
+    );
+  for (const [deltaY, keys] of [
+    [120, { ctrlKey: true }],
+    [-100, { metaKey: true }],
+    [-3, { ctrlKey: true }],
+    [-10000, { ctrlKey: true }],
   ] as const) {
-    const next = wheelViewport(view, at, { deltaX: 0, deltaY, deltaMode: 0, ctrlKey }, limits);
+    const next = wheel(deltaY, keys);
     assert.ok(next.zoom >= limits.min && next.zoom <= limits.max);
     assert.ok(Math.abs((at.x - view.x) / view.zoom - (at.x - next.x) / next.zoom) < 0.001);
     assert.ok(Math.abs((at.y - view.y) / view.zoom - (at.y - next.y) / next.zoom) < 0.001);
   }
+  // One notch is one step, not a jump: a Ctrl-wheel of 100px once zoomed 2.7 times.
+  assert.ok(Math.abs(wheel(100, { ctrlKey: true }).zoom - 0.8 / 1.1) < 1e-9);
+  assert.ok(Math.abs(wheel(-10000, { ctrlKey: true }).zoom - 0.8 * 1.1 ** 1.5) < 1e-9);
+  // Without Ctrl the wheel moves the map, sideways with Shift; two fingers move it both ways.
+  assert.deepEqual(wheel(120, {}), { ...view, y: 40 });
+  assert.deepEqual(wheel(120, { shiftKey: true }), { ...view, x: 120 });
   assert.deepEqual(
-    wheelViewport(view, at, { deltaX: 12, deltaY: 24, deltaMode: 0, ctrlKey: false }, limits),
+    wheelViewport(
+      view,
+      at,
+      { deltaX: 12, deltaY: 24, deltaMode: 0, ctrlKey: false, metaKey: false, shiftKey: false },
+      limits,
+    ),
     { ...view, x: 228, y: 136 },
   );
 });
@@ -281,12 +303,15 @@ test("one capture keeps the original body and press anchor through a 24px Role a
   });
   const second = new Element();
   p.press({ ids: ["a", "b"] }, { originals: [p.source, second] });
-  assert.equal(p.source.captured, 7);
+  // Not held until the press is a drag, so a plain click still reaches what was pressed.
+  assert.equal(p.source.captured, null);
   p.move(34, 30);
   assert.equal(p.body.children.length, 0); // Exactly 4px is still a click.
+  assert.equal(p.source.captured, null);
   p.move(300, 120, 99);
   assert.equal(p.body.children.length, 0);
   p.move(35, 30);
+  assert.equal(p.source.captured, 7);
   const ghost = p.body.children[0]!;
   assert.ok(ghost);
   assert.equal(p.source.style.transform, undefined);

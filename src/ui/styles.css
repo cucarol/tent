@@ -34,6 +34,13 @@
   --prompt-soft: color-mix(in srgb, #246f70 10%, #ffffff);
   --output: #4e7a5c;
   --output-soft: color-mix(in srgb, #86a48e 18%, #ffffff);
+  /* Mind-map lines are pencil: the text colour thinned into the canvas, lighter with each level, so the
+     type icons carry the colour. The accent marks only the user's own. */
+  --map-trunk: color-mix(in srgb, var(--text) 80%, var(--canvas));
+  --map-first: color-mix(in srgb, var(--text) 34%, var(--canvas));
+  --map-second: color-mix(in srgb, var(--text) 20%, var(--canvas));
+  --map-far: color-mix(in srgb, var(--text) 14%, var(--canvas));
+  --map-faint: color-mix(in srgb, var(--text) 18%, var(--canvas));
   --new: #3d6bcb;
   --new-soft: #e8edf7;
   --warn: #a45f00;
@@ -97,6 +104,9 @@
   --prompt-soft: color-mix(in srgb, #6fb5b2 16%, #1b201f);
   --output: #98c1a3;
   --output-soft: color-mix(in srgb, #98c1a3 15%, #1b201f);
+  --map-first: color-mix(in srgb, var(--text) 42%, var(--canvas));
+  --map-second: color-mix(in srgb, var(--text) 28%, var(--canvas));
+  --map-far: color-mix(in srgb, var(--text) 20%, var(--canvas));
   --new: #7ea2ea;
   --new-soft: #22293a;
   --warn: #e3a544;
@@ -149,6 +159,9 @@
     --prompt-soft: color-mix(in srgb, #6fb5b2 16%, #1b201f);
     --output: #98c1a3;
     --output-soft: color-mix(in srgb, #98c1a3 15%, #1b201f);
+    --map-first: color-mix(in srgb, var(--text) 42%, var(--canvas));
+    --map-second: color-mix(in srgb, var(--text) 28%, var(--canvas));
+    --map-far: color-mix(in srgb, var(--text) 20%, var(--canvas));
     --new: #7ea2ea;
     --new-soft: #22293a;
     --warn: #e3a544;
@@ -1437,9 +1450,15 @@ body.is-resizing .stage {
     0 0 0 1px var(--border),
     var(--shadow-sm);
 }
+/* Archived, as on the map: a quieter name and the word, rather than a line through the name. */
 .row.is-deprecated .t {
-  text-decoration: line-through;
   color: var(--text-3);
+}
+.row-mark {
+  flex: none;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 400;
 }
 .row.is-dim {
   opacity: 0.38;
@@ -2795,6 +2814,19 @@ body.is-dragging * {
   color: var(--text-2);
 }
 
+/* One pointer over the whole map: an arrow on blank space and topics alike, an open hand while Space is
+   held, a closed hand only while the map is being moved, a pointing hand only on controls. React Flow's
+   own open hand and pointer would flip at every gap the pointer crosses. */
+.map .react-flow__pane.draggable,
+.map .react-flow__node:is(.selectable, .draggable) {
+  cursor: default;
+}
+.map.is-hand :is(.react-flow__pane, .react-flow__node) {
+  cursor: grab;
+}
+.map .react-flow__pane.dragging {
+  cursor: grabbing;
+}
 /* Lines never take the pointer, so they cannot steal hover from the cards they cross. */
 .map .react-flow__edge {
   pointer-events: none;
@@ -2807,35 +2839,8 @@ body.is-dragging * {
   stroke: var(--line);
   stroke-width: 1.25;
 }
-/* With every reference showing, the ones not in play stay faint. */
-.link-ref {
-  stroke: var(--text-3);
-  stroke-width: 1.2;
-  opacity: 0.55;
-}
-.link-arrow {
-  fill: var(--text-3);
-  opacity: 0.55;
-  transition: opacity 0.15s ease;
-}
-.link-ref.is-hot,
-.link-arrow.is-hot {
-  opacity: 1;
-}
-.link.is-dim,
-.link-arrow.is-dim {
+.link.is-dim {
   opacity: 0.25;
-}
-.link-tree.is-hot {
-  stroke: var(--text-3);
-  stroke-width: 1.5;
-}
-.link-ref.is-hot {
-  stroke: var(--text-2);
-  stroke-width: 1.4;
-}
-.link-arrow.is-hot {
-  fill: var(--text-2);
 }
 /* While cards are dragged their lines follow as plain curves, and a guide shows what the card lines up with;
    Alt drags free. The lines find their way round the cards once the cards land. */
@@ -3002,18 +3007,18 @@ body.is-dragging * {
   }
 }
 
-/* The toolbar, bottom centre: type filters | map modes | zoom | legend. */
+/* The toolbar, bottom centre of the map, in one row: type filters | undo | zoom | ···. Nothing moves it but
+   the map's own width; a narrow map moves undo and redo into the ··· rather than wrap. */
 .maptools {
   left: 50%;
   bottom: 14px;
-  transform: translateX(-50%);
+  translate: -50% 0;
   display: flex;
   align-items: center;
   gap: 2px;
   min-height: 40px;
   max-width: calc(100% - 16px);
   width: max-content;
-  flex-wrap: wrap;
   padding: 0 5px;
   white-space: nowrap;
 }
@@ -3053,18 +3058,12 @@ body.is-dragging * {
   filter: grayscale(1);
   opacity: 0.45;
 }
-.tool[aria-pressed="true"]:not(.tool-lens, .tool-time) .icon {
+.tool[aria-pressed="true"] .icon {
   color: var(--text);
 }
-.tool-lens[aria-pressed="true"],
-.tool-time[aria-pressed="true"],
 .tool[aria-expanded="true"] {
   background: var(--bg-emphasis);
   color: var(--text);
-}
-.tool-lens[aria-pressed="false"]:not(:disabled),
-.tool-time[aria-pressed="false"] {
-  color: var(--text-2);
 }
 .tool:disabled {
   color: color-mix(in srgb, var(--text-3) 60%, transparent) !important;
@@ -3086,31 +3085,55 @@ body.is-dragging * {
   font-size: 12px;
   color: var(--text-2);
 }
-/* A narrow map keeps the toolbar to icons; the tooltips still name them. */
-@container (max-width: 760px) {
-  .tool .lbl {
-    display: none;
-  }
-  .tool:has(.lbl) {
-    width: 30px;
-    padding: 0;
-  }
-  .tool-sep {
-    margin: 0 3px;
-  }
+/* The ···, opening upward from the bar's right end. */
+.tool-more .more-pop {
+  top: auto;
+  right: -6px;
+  bottom: calc(100% + 11px);
 }
-/* Phone width: pinch zooms, so the step buttons give way; fit stays. */
+/* Icon, name and key in a row; the shared menu item stacks its note instead. */
+.more-item.tool-item {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 9px;
+  color: var(--text-2);
+}
+.more-item.tool-item small {
+  font-variant-numeric: tabular-nums;
+}
+.more-item.tool-item[aria-checked="true"] {
+  background: var(--bg-emphasis);
+  color: var(--text);
+}
+.more-item.tool-item:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+.more-item.tool-item:disabled:hover {
+  background: none;
+}
+.more-item.tool-item.is-tight {
+  display: none;
+}
+/* A narrow map: pinch zooms, so the step buttons give way, and undo and redo move into the ···; fit stays. */
 @container (max-width: 500px) {
   .zoom-step,
   .zoom-value {
     display: none;
   }
-  .tool:not(.sq, :has(.lbl)) {
+  .tool:not(.sq) {
     padding: 0 7px;
     gap: 5px;
   }
   .tool-sep {
     margin: 0 2px;
+  }
+  .maptools .is-roomy {
+    display: none;
+  }
+  .more-item.tool-item.is-tight {
+    display: grid;
   }
 }
 /* Rows share one mark column, as wide as the widest mark in either language. */
@@ -3690,13 +3713,6 @@ textarea.ink-words::placeholder {
 .inktools-done {
   gap: 7px;
   padding: 0 6px 0 10px;
-}
-.tool-ink[aria-pressed="true"] {
-  background: var(--bg-emphasis);
-  color: var(--text);
-}
-.tool-ink[aria-pressed="false"]:not(:disabled) {
-  color: var(--text-2);
 }
 .key-ink {
   display: inline-grid;
@@ -5980,71 +5996,146 @@ a.btn {
   user-select: all;
 }
 
-/* Mind-map topics keep the title row on its branch underline. */
+/* Mind-map topics stand on their branch line: it runs under the icon and the name only, centred on the
+   bottom of the title row where the tree lines join it. Marks follow past its end, toward the fork; on the
+   left side they come first, so the line still meets the parent. A closed topic's line runs on under
+   its count. Level shows in the type and the pencil line: the centre's name on a 4px base line, the
+   first level 15px bold on 2px, then 13px and 12.5px on finer, lighter lines. The type icons carry the
+   colour; only the selected or carried topic's line is orange. */
 .mind-topic {
   position: relative;
   color: var(--text);
-  font-size: 12px;
-  --branch: var(--border-strong);
+  font-size: 13px;
+  --branch: var(--map-second);
+  --under: var(--branch);
+  --under-w: 1.2px;
+}
+.mind-topic.is-centre {
+  --branch: var(--map-trunk);
+  --under-w: 4px;
+}
+.mind-topic.is-first {
+  --branch: var(--map-first);
+  --under-w: 2px;
+}
+.mind-topic.is-far {
+  --branch: var(--map-far);
+  --under-w: 1px;
+  font-size: 12.5px;
+}
+.mind-topic:is(.is-selected, .is-picked),
+.drag-body .mind-topic {
+  --under: var(--accent);
+}
+.mind-topic.is-deeper:is(.is-selected, .is-picked),
+.drag-body .mind-topic.is-deeper {
+  --under-w: 2px;
 }
 .mind-title {
   position: relative;
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 0 5px 3px;
-  border-bottom: 1.5px solid var(--branch);
   white-space: nowrap;
   min-height: 25px;
   box-sizing: border-box;
 }
+.mind-topic[data-side="-1"] > .mind-title {
+  justify-content: flex-end;
+}
+.mind-topic[data-side="-1"] > .mind-title > :not(.mind-label) {
+  order: -1;
+}
+.mind-title > :not(.mind-label) {
+  margin-bottom: 3px;
+}
+.mind-label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  gap: 5px;
+  padding: 0 5px 3px;
+  box-sizing: border-box;
+}
+.mind-label::after,
+.mind-topic.is-folded > .mind-title::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--under-w) / -2);
+  height: var(--under-w);
+  border-radius: var(--under-w);
+  background: var(--under);
+}
+.mind-topic.is-folded > .mind-title::after {
+  right: calc(-1 * var(--count, 0px));
+}
+.mind-topic.is-folded[data-side="-1"] > .mind-title::after {
+  left: calc(-1 * var(--count, 0px));
+  right: 0;
+}
+.mind-topic.is-folded .mind-label::after {
+  content: none;
+}
 .mind-name {
-  flex: 1;
   flex-shrink: 0;
 }
 .mind-topic.is-first {
-  font-size: calc(14px * var(--topic-scale, 1));
-  font-weight: 600;
+  font-size: calc(15px * var(--topic-scale, 1));
+  font-weight: 700;
 }
-.mind-topic.is-first > .mind-title > .glyph {
+.mind-topic.is-first .mind-label > .glyph {
   width: calc(14px * var(--topic-scale, 1));
   height: calc(14px * var(--topic-scale, 1));
 }
-.mind-topic.is-centre > .mind-title > .glyph {
+.mind-topic.is-centre .mind-label > .glyph {
   width: calc(20px * var(--topic-scale, 1));
   height: calc(20px * var(--topic-scale, 1));
 }
-.map.is-distant .mind-topic.is-deeper > .mind-title > * {
+.map.is-distant .mind-topic.is-deeper > .mind-title > :not(.mind-label),
+.map.is-distant .mind-topic.is-deeper .mind-label > *,
+.map.is-distant .mind-topic.is-deeper > .mind-fork {
   visibility: hidden;
 }
-.mind-topic.is-first > .mind-title {
-  border-bottom-width: 3px;
-}
 .mind-topic.is-centre > .mind-title {
-  height: 100%;
-  min-height: 52px;
-  border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  background: var(--bg);
-  padding: 8px 14px;
-  font-size: calc(18px * var(--topic-scale, 1));
-  font-weight: 650;
+  font-size: calc(22px * var(--topic-scale, 1));
+  font-weight: 700;
 }
-.mind-topic.is-centre:has(> .mpreview) > .mind-title {
-  height: var(--head);
-}
-.mind-topic:is(.is-selected, .is-picked) > .mind-title {
-  background: var(--bg);
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 4px;
+.mind-topic.is-centre .mind-label {
+  padding: 0 6px 5px;
 }
 .mind-topic.is-dim {
   opacity: 0.3;
 }
+/* How a topic stands to the one in focus: a small tag beside it instead of a line between them. */
+.mind-near {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--canvas);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: peek-in 0.12s ease;
+}
+/* Archived: a quieter name and the word, rather than a line through the name. */
 .mind-topic.is-deprecated .mind-name {
-  text-decoration: line-through;
-  opacity: 0.65;
+  color: var(--text-3);
+}
+.mind-mark {
+  flex: none;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
 }
 .mind-topic.is-touched > .mind-title {
   background: var(--hover);
@@ -6075,11 +6166,12 @@ a.btn {
   background: var(--hover);
   color: var(--text);
 }
-/* Who is on a topic: Role faces past its right end, outside the box so they never move it. */
+/* Who is on a topic: Role faces past its far end and its count, in room the layout keeps for them, so
+   no line runs under them; the lines to its children leave after them. */
 .mind-hands {
   position: absolute;
-  left: calc(100% + 5px);
-  top: 50%;
+  left: calc(100% + 4px + var(--count, 0px));
+  top: calc(var(--head) / 2);
   transform: translateY(-50%);
   display: flex;
   align-items: center;
@@ -6159,12 +6251,13 @@ a.btn {
   color: var(--accent);
   font-size: 10px;
 }
+/* "n more" and "n outputs" are controls rather than topics: quiet words on a faint dashed line. */
 .mind-summary {
-  width: 112px;
   height: 24px;
   display: flex;
+  white-space: nowrap;
   align-items: center;
-  border-bottom: 1.5px solid var(--branch);
+  border-bottom: 1px dashed var(--map-faint);
 }
 .mind-summary button {
   display: flex;
@@ -6175,7 +6268,7 @@ a.btn {
   background: transparent;
   border: 0;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 .mind-summary button:hover {
   background: var(--hover);
@@ -6215,11 +6308,45 @@ a.btn {
 }
 .map-focus-path button {
   border: 0;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-2);
   padding: 3px 5px;
   max-width: 180px;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-focus-path button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+/* Back first, set off from the trail by a hairline. */
+.map-focus-path .map-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding-right: 8px;
+  color: var(--text);
+  font-weight: 600;
+}
+.map-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+.map-crumb-sep {
+  color: var(--text-3);
+}
+.map-crumb-here {
+  overflow: hidden;
+  padding: 3px 5px;
+  color: var(--text);
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6249,10 +6376,81 @@ a.btn {
   }
 }
 
-.mind-fold.is-folded {
-  background: var(--hover);
+/* The fold switch on the fork, where the line leaves for the children. While they are shown it is a dot
+   in the branch's own colour that appears on hover; when they are closed it is a small count past the
+   title, on the line that runs on beneath it. */
+.mind-fork {
+  position: absolute;
+  z-index: 1;
+  left: calc(100% + var(--fork, 0px));
+  top: var(--head);
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
   color: var(--text-3);
-  font-size: 10px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.mind-fork::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.5px solid var(--branch);
+  background: var(--canvas);
+}
+.mind-topic[data-side="-1"] > .mind-fork {
+  left: auto;
+  right: calc(100% + var(--fork-left, 0px));
+  transform: translate(50%, -50%);
+}
+.mind-topic[data-side="-1"] > .mind-hands {
+  left: auto;
+  right: calc(100% + 4px + var(--count, 0px));
+}
+.mind-topic:hover > .mind-fork,
+.mind-fork:focus-visible {
+  opacity: 1;
+}
+.mind-fork:hover::before {
+  background: var(--branch);
+}
+.mind-fork.is-folded {
+  left: calc(100% + 4px);
+  top: 0;
+  width: auto;
+  height: calc(var(--head) - 3px);
+  padding: 0 2px;
+  transform: none;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+  opacity: 1;
+}
+.mind-fork.is-folded::before {
+  content: none;
+}
+.mind-topic[data-side="-1"] > .mind-fork.is-folded {
+  left: auto;
+  right: calc(100% + 4px);
+  transform: none;
+}
+.mind-fork.is-folded:hover {
+  color: var(--text);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mind-fork {
+    transition: none;
+  }
 }
 .rline-path {
   stroke-dasharray: 5 5;

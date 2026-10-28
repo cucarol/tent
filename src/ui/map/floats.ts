@@ -1,7 +1,9 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import { floatingPosition } from "./pointer.js";
+// Panels that step aside for the pointer and for topics in play. The toolbar is not one of them: it stays
+// put, and fitting and selecting keep topics clear of it instead.
 const SELECTOR =
-  ":scope > .map-peek, :scope > .map-hands, :scope > .map-hint, :scope > .map-lens, :scope > .maptools, :scope > .inktools, :scope > .ink-style, :scope > .map-selection-reaction, :scope > .map-tip";
+  ":scope > .map-peek, :scope > .map-hands, :scope > .map-hint, :scope > .map-lens, :scope > .inktools, :scope > .ink-style, :scope > .map-selection-reaction, :scope > .map-tip";
 /** Measure the rendered panels, including late file previews, before placing them. */
 export function useFloatingPanels(root: RefObject<HTMLDivElement | null>, ids: readonly string[]) {
   const currentIds = useRef(ids);

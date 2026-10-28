@@ -73,25 +73,31 @@ export function fitViewport(
   };
 }
 
-/** Pixel scrolling pans; wheel notches and a pinch zoom about the pointer. */
+/** The wheel moves the map; with Ctrl or Cmd, or as a pinch, it zooms about the pointer. */
 export function wheelViewport(
   view: { x: number; y: number; zoom: number },
   at: { x: number; y: number },
-  event: Pick<WheelEvent, "deltaX" | "deltaY" | "deltaMode" | "ctrlKey">,
+  event: Pick<WheelEvent, "deltaX" | "deltaY" | "deltaMode" | "ctrlKey" | "metaKey" | "shiftKey">,
   limits: { min: number; max: number },
 ) {
-  // Wheel events do not name their device. Fine or fractional pixel deltas are
-  // trackpad scrolling; a Ctrl-wheel event is the browser's pinch gesture.
-  const pan =
-    !event.ctrlKey &&
-    event.deltaMode === 0 &&
-    (event.deltaX !== 0 || Math.abs(event.deltaY) < 50 || !Number.isInteger(event.deltaY));
-  if (pan) return { ...view, x: view.x - event.deltaX, y: view.y - event.deltaY };
-  const delta = event.deltaY * (event.deltaMode === 1 ? 16 : 1);
-  const zoom = Math.max(
-    limits.min,
-    Math.min(limits.max, view.zoom * Math.exp(-delta * (event.ctrlKey ? 0.01 : 0.002))),
-  );
+  // As in Excalidraw and Canva: the wheel and two fingers move the map, Shift turns the wheel sideways,
+  // and Ctrl or Cmd with the wheel zooms, which is also what a trackpad pinch sends.
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
+  const dx = event.deltaX * unit,
+    dy = event.deltaY * unit;
+  if (!event.ctrlKey && !event.metaKey) {
+    if (event.shiftKey && dx === 0) return { ...view, x: view.x - dy };
+    return { ...view, x: view.x - dx, y: view.y - dy };
+  }
+  // A wheel notch (about 100px, or lines) is one 10% step; a pinch sends small steps and follows the
+  // fingers. No single event moves more than one step and a half, whatever the device reports.
+  const notch =
+    event.deltaMode !== 0 || (Number.isInteger(event.deltaY) && Math.abs(event.deltaY) >= 50);
+  const one = Math.log(1.1);
+  const step = notch
+    ? Math.sign(-dy) * one * Math.min(1.5, Math.max(1, Math.abs(dy) / 100))
+    : Math.max(-1.5 * one, Math.min(1.5 * one, -dy * 0.01));
+  const zoom = Math.max(limits.min, Math.min(limits.max, view.zoom * Math.exp(step)));
   const ratio = zoom / view.zoom;
   return { x: at.x - (at.x - view.x) * ratio, y: at.y - (at.y - view.y) * ratio, zoom };
 }

@@ -174,6 +174,9 @@ export function beginDrag(
   };
   const lift = () => {
     active = true;
+    // Held only once the press is a drag: a plain click keeps its own target, so the card still hears it.
+    capture.setPointerCapture(pointerId);
+    capture.addEventListener("lostpointercapture", lost);
     document.body.classList.add("is-dragging");
     window.getSelection()?.removeAllRanges();
     ghost = document.createElement("div");
@@ -318,8 +321,6 @@ export function beginDrag(
     }
   };
   cancelOwner = () => finish(false);
-  capture.setPointerCapture(pointerId);
-  capture.addEventListener("lostpointercapture", lost);
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
   window.addEventListener("pointercancel", cancel);

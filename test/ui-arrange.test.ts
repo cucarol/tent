@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SnapshotNode } from "../src/ui/data/types.js";
-import { arrange, CENTRE, type Arranged } from "../src/ui/map/arrange.js";
+import { arrange, CENTRE, listed, TOPIC, type Arranged } from "../src/ui/map/arrange.js";
 import { rectOf, type Rect } from "../src/ui/map/layout.js";
 
 const kids = (parent: string, n: number) => Array.from({ length: n }, (_, i) => `${parent}.${i}`);
@@ -9,12 +9,17 @@ const treeOf = (spec: Record<string, string[]>) => (id: string | null) =>
   (spec[id ?? ""] ?? []).map((c) => ({ id: c }) as SnapshotNode);
 const meet = (a: Rect, b: Rect) =>
   a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+/** Nothing overlaps, closed counts included, and no line runs through a title or a count. */
 function check(layout: Arranged) {
-  const all = [...layout.placed.values(), ...layout.summaries.map((s) => s.at)];
-  if (!layout.placed.has(layout.centre.id)) all.push(layout.centre);
+  const placed = [...layout.placed.values(), ...layout.summaries.map((s) => s.at)];
+  if (!layout.placed.has(layout.centre.id)) placed.push(layout.centre);
+  const all = [
+    ...placed.map((p) => ({ id: p.id, r: rectOf(p) })),
+    ...[...layout.forks].map(([id, r]) => ({ id: `count of ${id}`, r })),
+  ];
   for (let i = 0; i < all.length; i++)
     for (let j = i + 1; j < all.length; j++)
-      assert.ok(!meet(rectOf(all[i]!), rectOf(all[j]!)), `${all[i]!.id} overlaps ${all[j]!.id}`);
+      assert.ok(!meet(all[i]!.r, all[j]!.r), `${all[i]!.id} overlaps ${all[j]!.id}`);
   for (const line of layout.lines) {
     const [a, b, c, d] = line.points;
     const others = all.filter((p) => p.id !== line.source && p.id !== line.target);
@@ -23,11 +28,10 @@ function check(layout: Arranged) {
         u = 1 - t;
       const x = u ** 3 * a![0] + 3 * u ** 2 * t * b![0] + 3 * u * t ** 2 * c![0] + t ** 3 * d![0];
       const y = u ** 3 * a![1] + 3 * u ** 2 * t * b![1] + 3 * u * t ** 2 * c![1] + t ** 3 * d![1];
-      for (const p of others) {
-        const r = rectOf(p);
+      for (const { id, r } of others) {
         assert.ok(
           !(x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h),
-          `${line.id} crosses ${p.id}`,
+          `${line.id} crosses ${id}`,
         );
       }
     }
@@ -130,6 +134,25 @@ test("long sibling lists show eleven topics and one count, then open in full", (
   check(full);
 });
 
+test("the whole map lists every top-level topic, however many, while a topic entered still counts", () => {
+  const roots = kids("r", 13);
+  const spec = { "": roots, ...Object.fromEntries(roots.map((r) => [r, kids(r, 2)])) };
+  const whole = arrange({ kidsOf: treeOf(spec), closed: new Set() });
+  assert.deepEqual(
+    roots.filter((r) => whole.placed.has(r)),
+    roots,
+  );
+  assert.ok(roots.every((r) => whole.topics.get(r)!.depth === 1));
+  assert.equal(whole.summaries.length, 0);
+  check(whole);
+  // Entered, the same thirteen are children of the centre and the usual limit holds.
+  const inside = arrange({ kidsOf: treeOf({ ...spec, p: roots }), focus: "p", closed: new Set() });
+  assert.deepEqual(
+    inside.summaries.map((s) => [s.kind, s.count]),
+    [["more", 2]],
+  );
+});
+
 test("result outputs share one topic and opening them does not change branch sides", () => {
   const spec = { "": ["a", "b"], a: ["a.0", "a.out1", "a.out2"], b: kids("b", 2) };
   const input = {
@@ -160,6 +183,42 @@ test("focus uses the selected topic as centre and excludes the rest of the tree"
   check(laid);
 });
 
+test("inside a topic the tree reads left to right in outline order; the whole map keeps two sides", () => {
+  const spec = {
+    "": ["p", "q"],
+    p: ["p.0", "p.1", "p.2", "p.3"],
+    "p.0": kids("p.0", 3),
+    "p.2": kids("p.2", 2),
+    q: kids("q", 20),
+  };
+  const inside = arrange({ kidsOf: treeOf(spec), focus: "p", closed: new Set() });
+  check(inside);
+  const centre = rectOf(inside.centre);
+  for (const [id, topic] of inside.topics) {
+    if (id === "p") continue;
+    assert.equal(topic.side, 1, id);
+    assert.ok(inside.placed.get(id)!.x >= centre.x + centre.w, `${id} sits right of the topic`);
+  }
+  const firsts = spec.p.map((id) => inside.placed.get(id)!.y);
+  assert.deepEqual(
+    [...firsts].sort((a, b) => a - b),
+    firsts,
+  );
+  // Counts and summaries go to the right with the rest.
+  const long = arrange({ kidsOf: treeOf(spec), focus: "q", closed: new Set() });
+  check(long);
+  assert.equal(long.summaries[0]?.topic.side, 1);
+  assert.ok([...long.topics.values()].every((topic) => topic.side === 1));
+  const whole = arrange({
+    kidsOf: treeOf({ ...spec, "": spec.p }),
+    closed: new Set(),
+  });
+  assert.deepEqual(
+    new Set([...whole.topics.values()].map((topic) => topic.side)),
+    new Set([1, -1]),
+  );
+});
+
 test("all opening states leave room for different title widths and file previews", () => {
   const spec = {
     "": ["a", "b", "c"],
@@ -178,6 +237,7 @@ test("all opening states leave room for different title widths and file previews
         kidsOf: treeOf(spec),
         closed,
         grown: (id) => (id === "a.1" ? 160 : id === "b.1" ? 120 : 0),
+        foldWidth: (id) => 40 + id.length,
         measure: (id, depth) => ({
           w: id.endsWith("1") ? 296 : depth ? 144 : 176,
           h: depth ? 30 : 52,
@@ -243,7 +303,7 @@ test("a focused centre with a tall preview leaves both sides and their lines cle
     grown: (id) => (id === "p" ? 200 : 0),
   });
   check(layout);
-  assert.equal(layout.centre.h, 252);
+  assert.equal(layout.centre.h, 240);
 });
 
 test("a one-level default packs the visible roots and keeps expansion on its side", () => {
@@ -263,4 +323,148 @@ test("a one-level default packs the visible roots and keeps expansion on its sid
   for (const [id, topic] of before.topics)
     if (topic.side === -1) assert.deepEqual(after.placed.get(id), before.placed.get(id));
   check(after);
+});
+
+test("inside a topic the tree packs: a short branch tucks in beside a long branch's children", () => {
+  const spec = { "": ["p"], p: ["p.0", "p.1"], "p.0": kids("p.0", 10) };
+  const inside = arrange({ kidsOf: treeOf(spec), focus: "p", closed: new Set() });
+  check(inside);
+  const short = rectOf(inside.placed.get("p.1")!);
+  const bottom = Math.max(
+    ...spec["p.0"].map((id) => rectOf(inside.placed.get(id)!)).map((r) => r.y + r.h),
+  );
+  assert.ok(short.y < bottom, "p.1 sits beside the children of p.0, not under them");
+});
+
+test("a closed topic shows its count past its title, away from its parent, and never moves a title", () => {
+  const spec = {
+    "": ["a", "b", "c", "d"],
+    a: kids("a", 3),
+    b: kids("b", 2),
+    c: kids("c", 3),
+    d: kids("d", 2),
+    "a.1": kids("a.1", 4),
+    "d.0": kids("d.0", 4),
+  };
+  const input = { kidsOf: treeOf(spec), closed: new Set(["a.1", "d.0"]), foldWidth: () => 48 };
+  const laid = arrange(input);
+  check(laid);
+  assert.deepEqual([...laid.forks.keys()].sort(), ["a.1", "d.0"]);
+  assert.deepEqual([laid.topics.get("a.1")!.side, laid.topics.get("d.0")!.side], [1, -1]);
+  const right = rectOf(laid.placed.get("a.1")!),
+    left = rectOf(laid.placed.get("d.0")!);
+  assert.deepEqual(laid.forks.get("a.1"), {
+    x: right.x + right.w + TOPIC.fork,
+    y: right.y,
+    w: 48,
+    h: right.h,
+  });
+  assert.deepEqual(laid.forks.get("d.0"), {
+    x: left.x - TOPIC.fork - 48,
+    y: left.y,
+    w: 48,
+    h: left.h,
+  });
+  assert.deepEqual(arrange({ ...input, foldWidth: () => 0 }).placed, laid.placed);
+  // Inside a topic the room is kept too, where branches pack closer.
+  const inside = arrange({
+    kidsOf: treeOf({ ...spec, p: ["p.0", "p.1"], "p.0": ["p.0.0"], "p.1": kids("p.1", 6) }),
+    focus: "p",
+    closed: new Set(["p.0"]),
+    foldWidth: () => 160,
+  });
+  check(inside);
+  assert.ok(inside.forks.has("p.0"));
+});
+
+test("a count of more topics or of outputs is as wide as its words", () => {
+  const spec = { "": ["p", "q"], p: kids("p", 20), q: ["q.0", "q.out"] };
+  const laid = arrange({
+    kidsOf: treeOf(spec),
+    closed: new Set<string>(),
+    results: (_, nodes) => nodes.filter((n) => n.id.includes(".out")).map((n) => n.id),
+    summaryWidth: (kind, count) => (kind === "more" ? 50 : 70) + count,
+  });
+  check(laid);
+  assert.deepEqual(
+    laid.summaries.map((s) => [s.kind, s.at.w]),
+    [
+      ["more", 59],
+      ["outputs", 71],
+    ],
+  );
+});
+
+test("Role faces take room past the title and any count, and lines to the children leave after them", () => {
+  const spec = {
+    "": ["a", "b", "c", "d"],
+    a: kids("a", 3),
+    b: kids("b", 2),
+    c: kids("c", 3),
+    d: kids("d", 2),
+  };
+  // a is open on the right, d open on the left, b closed with a count; each carries faces 38px wide.
+  const input = {
+    kidsOf: treeOf(spec),
+    closed: new Set(["b"]),
+    open: new Set(["a", "d"]),
+    defaultDepth: 1,
+    foldWidth: () => 30,
+    handsWidth: (id: string) => (["a", "b", "d"].includes(id) ? 38 : 0),
+  };
+  const laid = arrange(input);
+  check(laid);
+  const a = rectOf(laid.placed.get("a")!),
+    b = rectOf(laid.placed.get("b")!),
+    d = rectOf(laid.placed.get("d")!);
+  assert.deepEqual([laid.topics.get("a")!.side, laid.topics.get("d")!.side], [1, -1]);
+  assert.deepEqual(laid.forks.get("a"), { x: a.x + a.w + TOPIC.fork, y: a.y, w: 38, h: a.h });
+  assert.equal(laid.forks.get("b")!.w, 30 + TOPIC.fork + 38);
+  assert.deepEqual(laid.forks.get("d"), { x: d.x - TOPIC.fork - 38, y: d.y, w: 38, h: d.h });
+  for (const line of laid.lines.filter((l) => l.source === "a"))
+    assert.equal(line.points[0]![0], a.x + a.w + TOPIC.fork + 38);
+  for (const line of laid.lines.filter((l) => l.source === "d"))
+    assert.equal(line.points[0]![0], d.x - TOPIC.fork - 38);
+  assert.ok(b.w > 0);
+  // Faces never move a title row, nor settle which side a branch takes.
+  const bare = arrange({ ...input, handsWidth: () => 0 });
+  for (const id of ["a", "b", "c", "d"])
+    assert.equal(bare.topics.get(id)!.side, laid.topics.get(id)!.side);
+  // Inside a topic the entered topic keeps room for its own faces, and its lines leave after them.
+  const inside = arrange({
+    ...input,
+    focus: "a",
+    handsWidth: (id: string) => (id === "a" ? 38 : 0),
+  });
+  check(inside);
+  const centre = rectOf(inside.centre);
+  for (const line of inside.lines)
+    assert.equal(line.points[0]![0], centre.x + centre.w + TOPIC.fork + 38);
+});
+
+test("what the layout will show is known before measuring, whatever is open, closed or entered", () => {
+  const spec = {
+    "": ["p", "q", "r"],
+    p: kids("p", 20),
+    q: ["q.0", "q.out"],
+    r: kids("r", 3),
+    "r.1": kids("r.1", 4),
+    "p.3": kids("p.3", 2),
+  };
+  const results = (_id: string, list: { id: string }[]) =>
+    list.filter((n) => n.id.endsWith(".out")).map((n) => n.id);
+  const cases = [
+    { closed: new Set<string>() },
+    { closed: new Set(["r"]) },
+    { closed: new Set<string>(), open: new Set(["p"]), openOutputs: new Set(["q"]) },
+    { closed: new Set(["r.1"]), focus: "r" },
+    { closed: new Set<string>(), focus: "p", open: new Set(["p"]) },
+  ];
+  for (const c of cases) {
+    const input = { kidsOf: treeOf(spec), results, ...c };
+    const laid = arrange(input);
+    const shown = listed(input);
+    assert.deepEqual([...shown.keys()].sort(), [...laid.placed.keys()].sort());
+    for (const [id, depth] of shown) assert.equal(depth, laid.topics.get(id)!.depth);
+  }
 });

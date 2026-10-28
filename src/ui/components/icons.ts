@@ -100,6 +100,7 @@ export const ICON_SVG = {
     '<path d="M10.6 3.6a2 2 0 0 1 2.8 0l7 7a2 2 0 0 1 0 2.8l-7 7a2 2 0 0 1-2.8 0l-7-7a2 2 0 0 1 0-2.8z"/>',
   ellipse: '<circle cx="12" cy="12" r="8.5"/>',
   arrow: '<path d="M4 12h16"/><path d="m14 6 6 6-6 6"/>',
+  back: '<path d="M20 12H4"/><path d="m10 6-6 6 6 6"/>',
   line: '<path d="M4 12h16"/>',
   eraser:
     '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',

@@ -1,6 +1,7 @@
 import { keepUnchanged, useSteady } from "./stable.js";
 import { DetailsContext, useWantDetails } from "../data/details.js";
 import {
+  Fragment,
   createContext,
   memo,
   useCallback,
@@ -32,7 +33,7 @@ import "@xyflow/react/dist/style.css";
 import { primaryOf, type Graph, type Hand, type Primary } from "../data/store.js";
 import type { SnapshotCommit, SnapshotRef } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
-import { FileGlyph, Icon, TypeGlyph } from "../components/Glyph.js";
+import { FileGlyph, Icon, TypeGlyph, type IconName } from "../components/Glyph.js";
 import { fileOf, infoOf, previewOf, useFiles } from "../data/files.js";
 import type { LocalFile } from "../panel/FileView.js";
 import { CardPreview, previewHeight } from "./CardPreview.js";
@@ -95,8 +96,9 @@ import {
 } from "./drawings.js";
 import { useCanvas, type Picks } from "./useCanvas.js";
 import { emptyCanvas, withPending, type Fold } from "./canvas.js";
-import { arrange as arrangeMap, CENTRE, TOPIC, type Topic } from "./arrange.js";
+import { arrange as arrangeMap, CENTRE, listed, taper, TOPIC, type Topic } from "./arrange.js";
 import { selectionLines, type CodeEdge, type SelectionLineKind } from "./relations.js";
+import { focusOf, placeMarks } from "./focus.js";
 import {
   beginLens,
   foldInLens,
@@ -148,12 +150,21 @@ const READABLE = 0.9;
 const COMFORT = 56;
 // Room kept clear around fitted cards; the bottom leaves space for the toolbar.
 const PAD = { top: 48, right: 48, bottom: 84, left: 48 };
+// Title type by level: the centre, the first level, the second, then everything further out.
+const TITLE = [
+  { px: 22, weight: 700, icon: 20 },
+  { px: 15, weight: 700, icon: 14 },
+  { px: 13, weight: 400, icon: 13 },
+  { px: 12.5, weight: 400, icon: 13 },
+] as const;
+const titleAt = (depth: number) => TITLE[Math.min(depth, TITLE.length - 1)]!;
+// Zoomed out, the centre and the first level grow to stay 12px on screen.
+const scaleAt = (zoom: number) => Math.max(1, 12 / (TITLE[1].px * zoom));
 
 type CardData = {
   graph: Graph;
   topic: Topic;
   head: number;
-  branchColor: string;
   id: string;
   h: number;
   w: number;
@@ -161,14 +172,18 @@ type CardData = {
   preview: { file: LocalFile; open: boolean } | null;
   /** In the tree, this card's result outputs: folded into a count, or opened as children. */
   fold: { ids: string[]; open: boolean } | null;
-  /** Its reference to or from the selected Node. */
-  rel: "cites" | "citedBy" | null;
+  /** How it stands to the topic in focus, and where that is written beside it. */
+  mark: { text: string; dx: number; dy: number } | null;
   dim: boolean;
   selected: boolean;
   /** Picked with the box or with Shift / Ctrl, to move together. */
   picked: boolean;
   top: boolean;
   folded: number;
+  /** Room past the title row for its count while it is closed. */
+  count: number;
+  /** All the room past the title row: the count, then the faces; its lines leave after it. */
+  room: number;
   /** Shown cards hanging from it. */
   kids: number;
   touched: boolean;
@@ -180,17 +195,16 @@ type CardData = {
   hands: { doing: string[]; waiting: string[] } | null;
 };
 type LinkData = {
-  kind: "tree" | "ref";
+  kind: "tree";
   dim: boolean;
-  hot: boolean;
   color?: string;
   weight?: number;
+  /** A first-level branch is filled, narrowing from the first width to the second. */
+  taper?: readonly [number, number];
   from: Rect;
   to: Rect;
   /** Four control points for the layout's cubic tree curve. */
   points?: readonly (readonly [number, number])[];
-  /** References share the selected-line route, while tree branches keep their layout geometry. */
-  route?: ReturnType<typeof selectionPath>;
 };
 type SelectionLineData = {
   kind: SelectionLineKind;
@@ -206,7 +220,6 @@ const HANDS_W = 340;
 // Zoom buttons and keys answer at once; an eased step reads as lag.
 const ZOOM_NOW = { duration: 0 };
 // Held while dragging blank space, these draw the box instead of moving the map.
-const BOX_KEYS = ["Control", "Meta", "Shift"];
 /** Card controls that act without selecting the card. */
 type Actions = {
   onFold: (id: string) => void;
@@ -278,12 +291,16 @@ function Handles() {
   );
 }
 
-const BRANCH_COLORS = ["#779987", "#a58dba", "#b28790", "#9b9a72", "#8d9c9a", "#929388"];
-const branchColor = (id: string) => {
-  let hash = 0;
-  for (const ch of id) hash = (hash * 31 + ch.codePointAt(0)!) >>> 0;
-  return BRANCH_COLORS[hash % BRANCH_COLORS.length]!;
-};
+// Pencil lines, lighter and finer with each level; the type icons carry the colour. First-level
+// branches narrow from the centre's base line to their 2px underline. Summaries take the faintest line.
+const lineTo = (depth: number, summary: boolean): Pick<LinkData, "color" | "weight" | "taper"> =>
+  summary
+    ? { color: "var(--map-faint)", weight: 1 }
+    : depth <= 1
+      ? { color: "var(--map-first)", taper: [4, 2] }
+      : depth === 2
+        ? { color: "var(--map-second)", weight: 1.2 }
+        : { color: "var(--map-far)", weight: 1 };
 const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
   const { onFold, onOutputs, onPreview, onHands } = useContext(MapActions);
   const files = useFiles();
@@ -298,7 +315,14 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
     <div
       className={
         "mind-topic" +
-        (depth === 0 ? " is-centre" : depth === 1 ? " is-first" : " is-deeper") +
+        (depth === 0
+          ? " is-centre"
+          : depth === 1
+            ? " is-first"
+            : depth === 2
+              ? " is-deeper"
+              : " is-deeper is-far") +
+        (data.folded ? " is-folded" : "") +
         (data.dim ? " is-dim" : "") +
         (data.selected ? " is-selected" : "") +
         (data.picked ? " is-picked" : "") +
@@ -311,20 +335,24 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
         {
           width: data.w,
           height: data.h,
-          "--branch": data.branchColor,
           "--head": data.head + "px",
+          "--count": data.count + "px",
+          "--fork": (data.topic.side > 0 ? data.room : 0) + "px",
+          "--fork-left": (data.topic.side < 0 ? data.room : 0) + "px",
         } as CSSProperties
       }
     >
       <Handles />
       <div className="mind-title" style={{ height: data.head }} title={n.name}>
-        {data.pin > 0 && (
-          <span className="mind-pin" title={t.side.draftSource(data.pin)}>
-            {data.pin}
-          </span>
-        )}
-        <TypeGlyph type={n.type} size={depth === 0 ? 20 : 14} />
-        <span className="mind-name">{n.name}</span>
+        <span className="mind-label">
+          {data.pin > 0 && (
+            <span className="mind-pin" title={t.side.draftSource(data.pin)}>
+              {data.pin}
+            </span>
+          )}
+          <TypeGlyph type={n.type} size={titleAt(depth).icon} />
+          <span className="mind-name">{n.name}</span>
+        </span>
         {local && (
           <button
             type="button"
@@ -339,6 +367,7 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
             <FileGlyph show={local.show} missing={missing} size={14} kind={primaryOf(n.type)} />
           </button>
         )}
+        {state.deprecated && <span className="mind-mark">{t.map.status.archived}</span>}
         {(n.invalid || missing) && (
           <span
             className="mind-error"
@@ -367,50 +396,60 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
             {data.fold.ids.length}
           </button>
         )}
-        {data.kids > 0 && (
-          <button
-            type="button"
-            className={"mind-control mind-fold nopan nodrag" + (data.folded ? " is-folded" : "")}
-            aria-label={
-              data.folded
-                ? t.map.expandChildren(n.name, data.folded)
-                : t.map.collapseChildren(n.name)
-            }
-            onClick={(e) => {
-              e.stopPropagation();
-              onFold(data.id);
-            }}
-          >
-            {data.folded ? t.map.foldedTopics(data.folded) : <Icon name="minus" size={10} />}
-          </button>
-        )}
-        {data.hands && (
-          // Outside the box: faces arriving with the Cards never move a topic.
-          <span
-            className="mind-hands nopan nodrag"
-            role="button"
-            tabIndex={-1}
-            aria-label={t.map.handling.label}
-            onPointerEnter={(e) => onHands(data.id, e.currentTarget)}
-            onPointerLeave={() => onHands(null)}
-            onClick={(e) => {
-              e.stopPropagation();
-              onHands(data.id, e.currentTarget);
-            }}
-          >
-            <Hands doing={data.hands.doing} waiting={data.hands.waiting} />
-          </span>
-        )}
       </div>
+      {data.kids > 0 && (
+        // On the fork, where the line leaves for the children: a dot while they are shown, a count when closed.
+        <button
+          type="button"
+          className={"mind-fork nopan nodrag" + (data.folded ? " is-folded" : "")}
+          aria-label={
+            data.folded ? t.map.expandChildren(n.name, data.folded) : t.map.collapseChildren(n.name)
+          }
+          onClick={(e) => {
+            e.stopPropagation();
+            onFold(data.id);
+          }}
+        >
+          {data.folded ? t.map.foldedTopics(data.folded) : null}
+        </button>
+      )}
+      {data.hands && (
+        // Outside the box: faces arriving with the Cards never move a topic.
+        <span
+          className="mind-hands nopan nodrag"
+          role="button"
+          tabIndex={-1}
+          aria-label={t.map.handling.label}
+          onPointerEnter={(e) => onHands(data.id, e.currentTarget)}
+          onPointerLeave={() => onHands(null)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onHands(data.id, e.currentTarget);
+          }}
+        >
+          <Hands doing={data.hands.doing} waiting={data.hands.waiting} />
+        </span>
+      )}
+      {data.mark && (
+        // Where the layout left room for it, beside the title row; it never moves the topic.
+        <span className="mind-near" style={{ left: data.mark.dx, top: data.mark.dy }}>
+          {data.mark.text}
+        </span>
+      )}
       {open && data.preview && <CardPreview file={data.preview.file} graph={data.graph} />}
     </div>
   );
 });
-type SummaryData = { kind: "more" | "outputs"; parent: string; count: number; color: string };
+type SummaryData = {
+  kind: "more" | "outputs";
+  parent: string;
+  count: number;
+  w: number;
+};
 function SummaryTopic({ data }: NodeProps<Node<SummaryData>>) {
   const { onOutputs, onMore } = useContext(MapActions);
   return (
-    <div className="mind-summary" style={{ "--branch": data.color } as CSSProperties}>
+    <div className="mind-summary" style={{ width: data.w }}>
       <Handles />
       <button
         className="nopan nodrag"
@@ -423,28 +462,31 @@ function SummaryTopic({ data }: NodeProps<Node<SummaryData>>) {
     </div>
   );
 }
+/** The project's name standing on the base line the first-level branches grow from. */
 function CentreTopic({ data }: NodeProps<Node<{ name: string; w: number; h: number }>>) {
   return (
     <div className="mind-topic is-centre" style={{ width: data.w, height: data.h }}>
       <Handles />
-      <div className="mind-title" title={data.name}>
-        {data.name}
+      <div className="mind-title" style={{ height: data.h }} title={data.name}>
+        <span className="mind-label">
+          <span className="mind-name">{data.name}</span>
+        </span>
       </div>
     </div>
   );
 }
 
 function LinkEdge({ id, sourceX, sourceY, targetX, targetY, data }: EdgeProps<Edge<LinkData>>) {
-  const state = `${data?.dim ? " is-dim" : ""}${data?.hot ? " is-hot" : ""}`;
-  if (data?.kind === "ref") {
-    const { path, arrow } = data.route!;
+  const state = data?.dim ? " is-dim" : "";
+  if (data?.points && data.taper)
     return (
-      <>
-        <BaseEdge id={id} path={path} className={`link link-ref${state}`} />
-        <path d={arrow} className={`link-arrow${state}`} />
-      </>
+      <BaseEdge
+        id={id}
+        path={taper(data.points, ...data.taper)}
+        style={{ fill: data.color, stroke: "none" }}
+        className={`link link-tree${state}`}
+      />
     );
-  }
   if (data?.points)
     return (
       <BaseEdge
@@ -776,12 +818,11 @@ function MapContent({
   const handsTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(handsTimer.current), []);
   const [keyOpen, setKeyOpen] = useState(false);
-  // The toolbar starts as zoom and fit; the rest is one click away and stays open once opened.
-  const [toolsOpen, setToolsOpen] = useState(() => readStored("tent-map-tools-open", false));
-  const showTools = (open: boolean) => {
-    setToolsOpen(open);
-    writeStored("tent-map-tools-open", open);
-  };
+  // Space held: the hand. Whether the map moved while it was held, so letting go does not also fold.
+  const [hand, setHand] = useState(false);
+  const handHeld = useRef(false);
+  const handUsed = useRef(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [lens, setLensSession] = useState<LensSession | null>(null);
   const lensReturn = useRef<Viewport | null>(null);
   const revealTarget = useRef<string | null>(null);
@@ -829,12 +870,28 @@ function MapContent({
   const range = useRef<HTMLInputElement>(null);
   const flow = useReactFlow();
   useEffect(() => writeStored("tent-map-filters-v2", filters), [filters]);
+  // Archived Nodes and everything under them stay off the map and out of its numbers; the sidebar
+  // still lists them.
+  const archived = useMemo(() => {
+    const out = new Set<string>();
+    const walk = (id: string) => {
+      out.add(id);
+      graph.nodes.get(id)?.childIds.forEach(walk);
+    };
+    for (const [id, state] of graph.states) if (state.deprecated && !out.has(id)) walk(id);
+    return out;
+  }, [graph]);
+  const typeCounts = useMemo(() => {
+    const out: Record<Primary, number> = { goal: 0, prompt: 0, output: 0 };
+    for (const n of graph.snapshot.nodes) if (!archived.has(n.id)) out[primaryOf(n.type)]++;
+    return out;
+  }, [graph, archived]);
   const visible = useCallback(
     (id: string) => {
       const n = graph.nodes.get(id);
-      return !!n && filters.types[primaryOf(n.type)];
+      return !!n && !archived.has(id) && filters.types[primaryOf(n.type)];
     },
-    [graph, filters.types],
+    [graph, archived, filters.types],
   );
   // The tree with switched-off types taken out: everything below lays out, folds and counts on this.
   const shown = useMemo(() => shownTree(graph, visible), [graph, visible]);
@@ -901,9 +958,6 @@ function MapContent({
     if (timeOpen) range.current?.focus();
   }, [timeOpen]);
 
-  // One focus at a time, and only it dims the map. A lane hovered in 分工 comes first: what its Cards
-  // carried. Then the selection: a Node with its neighbours, a Role with what its Cards carried and the
-  // Nodes it watches, or a Card with its sources, numbered in order.
   const card = selected?.kind === "card" ? graph.cards.get(selected.id) : undefined;
   const sources = useMemo(() => {
     if (!card) return null;
@@ -916,16 +970,6 @@ function MapContent({
     });
     return { ids: new Set(order.keys()), order };
   }, [card, draft]);
-  const focus = hotLane === null && selected?.kind === "node" ? selected.id : null;
-  const lit = useMemo<ReadonlySet<string> | null>(() => {
-    if (time !== null) return null;
-    if (hotLane !== null) return carriedBy(hotLane);
-    if (sources) return sources.ids;
-    if (selected?.kind === "role")
-      return new Set([...carriedBy(selected.id), ...graph.neighbours(selected.id)]);
-    if (selected?.kind === "node") return graph.neighbours(selected.id);
-    return null;
-  }, [hotLane, carriedBy, sources, selected?.kind, selected?.id, graph, time === null]);
   const pins = useMemo(
     () => new Map((time === null ? draft : []).map((id, i) => [id, i + 1] as const)),
     [draft, time === null],
@@ -1049,6 +1093,10 @@ function MapContent({
     else if (lens) setLensSession({ ...lens, focus: id });
     else setTreeFocus(id);
   });
+  /** One level up from the topic entered: its nearest shown parent, or the whole map. */
+  const focusUp = treeFocus
+    ? ([...graph.ancestors(treeFocus)].reverse().find((n) => visible(n.id))?.id ?? null)
+    : null;
   useEffect(() => {
     if (
       (time === null || pastTree) &&
@@ -1078,8 +1126,9 @@ function MapContent({
   const opened = time !== null ? pastFolds.open : lens ? lens.open : canvas.open;
   const shut = time !== null ? pastFolds.shut : lens ? lens.shut : canvas.shut;
   const [defaultDepth, setDefaultDepth] = useState(2);
-  const topicScale = useStore((s) => Math.max(1, 12 / (14 * s.transform[2])));
-  const distant = useStore((s) => 12 * s.transform[2] < 10);
+  const topicScale = useStore((s) => scaleAt(s.transform[2]));
+  // Second-level names under 10px on screen give way to their lines.
+  const distant = useStore((s) => TITLE[2].px * s.transform[2] < 10);
   const fittingAll = useRef(false);
   // Two levels show by default; cards opened past them or closed within them are kept in the canvas file.
   // Only a change in what is closed makes a new layout.
@@ -1102,17 +1151,6 @@ function MapContent({
     watch.observe(el);
     return () => watch.disconnect();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  // How many topics each branch holds, itself included.
-  const branchCounts = useMemo(() => {
-    const out = new Map<string, number>();
-    const count = (id: string): number => {
-      const n = shown.kidsOf(id).reduce((sum, k) => sum + count(k.id), 1);
-      out.set(id, n);
-      return n;
-    };
-    for (const root of shown.kidsOf(null)) count(root.id);
-    return out;
-  }, [shown]);
   const textWidth = useMemo(() => {
     const ctx = document.createElement("canvas").getContext("2d")!;
     const family = getComputedStyle(document.body).fontFamily;
@@ -1125,47 +1163,97 @@ function MapContent({
     (id: string, depth: number) => {
       const n = graph.nodes.get(id);
       const name = n?.name ?? graph.snapshot.workspace.name;
-      const font = depth === 0 ? 18 * topicScale : depth === 1 ? 14 * topicScale : 12;
-      const letters = textWidth(name, font, depth === 0 ? 650 : depth === 1 ? 600 : 400);
-      const count = branchCounts.get(id);
-      // Match the title's actual flex items, including gaps and the widest fold count.
-      // Reserving that count keeps a clicked title fixed while its children open.
+      const type = titleAt(depth),
+        scale = depth < 2 ? topicScale : 1;
+      const font = type.px * scale;
+      const letters = textWidth(name, font, type.weight);
+      // The title row as drawn: the underlined icon and name, then only the marks this topic has.
+      // Nothing is kept for a mark it lacks; the fold switch sits outside, on the fork.
       const parts = [letters];
-      if (n) parts.push(depth < 2 ? (depth === 0 ? 20 : 14) * topicScale : 14);
-      // The map-first response omits materials. Reserve file/error slots before
-      // its full snapshot arrives, including for a currently unknown resource.
-      if (n) parts.push(18);
-      if (shown.kidsOf(id).length)
-        parts.push(
-          Math.max(17, 4 + textWidth(t.map.foldedTopics(Math.max(0, (count ?? 1) - 1)), 10.5)),
-        );
-      if (openOutputs.has(id)) {
-        const results = shown.kidsOf(id).filter((child) => isResult(graph, child.id)).length;
-        if (results)
-          parts.push(
-            17 + textWidth(String(results), font, depth === 0 ? 650 : depth === 1 ? 600 : 400),
-          );
-      }
+      if (n) parts.push(type.icon * scale);
+      const local = n && fileOf(n);
+      const file = local?.kind === "file" ? local : null;
+      if (file) parts.push(18);
+      if (n && graph.states.get(id)?.deprecated) parts.push(textWidth(t.map.status.archived, 11));
+      if (n?.invalid) parts.push(textWidth(t.map.status.invalid, 10.5));
+      else if (file && infoOf(files, file.path) === null)
+        parts.push(textWidth(t.map.status.missing, 10.5));
       const source = sources?.order?.get(id);
       if (source)
         parts.push(
           Math.max(17, 8 + textWidth(`${source.n}${source.changed ? "*" : ""}`, 10.5, 700)),
         );
-      if (n)
-        parts.push(
-          Math.max(textWidth(t.map.status.invalid, 10.5), textWidth(t.map.status.missing, 10.5)),
-        );
+      if (openOutputs.has(id)) {
+        const results = shown.kidsOf(id).filter((child) => isResult(graph, child.id)).length;
+        if (results) parts.push(17 + textWidth(String(results), font, type.weight));
+      }
+      // The underline reaches 5px past the icon and name, the centre's base line 6px.
       return {
         w: Math.ceil(
-          parts.reduce((a, b) => a + b, 0) + (parts.length - 1) * 5 + (depth === 0 ? 30 : 11),
+          parts.reduce((a, b) => a + b, 0) + (parts.length - 1) * 5 + (depth === 0 ? 13 : 11),
         ),
         h: Math.max(
           depth === 0 ? TOPIC.centre : depth === 1 ? TOPIC.first : TOPIC.deeper,
-          Math.ceil(font + (depth === 0 ? 18 : 8)),
+          Math.ceil(font + (depth === 0 ? 14 : 8)),
         ),
       };
     },
-    [graph, shown, branchCounts, textWidth, openOutputs, sources, topicScale],
+    [graph, shown, textWidth, openOutputs, sources, topicScale, files],
+  );
+  // A "n more" or "n outputs" item: its words, the output icon, and the button padding.
+  const measureSummary = useCallback(
+    (kind: "more" | "outputs", count: number) =>
+      Math.ceil(
+        14 +
+          (kind === "outputs" ? 16 : 0) +
+          textWidth(kind === "outputs" ? t.map.resultTopics(count) : t.map.moreTopics(count), 12.5),
+      ),
+    [textWidth],
+  );
+  // The count a closed topic shows on its fork: plain small words, with the underline running on below.
+  const measureFold = useCallback(
+    (id: string) => Math.ceil(4 + textWidth(t.map.foldedTopics(descendants(shown.kidsOf, id)), 11)),
+    [shown, textWidth],
+  );
+  // What the map lists, known before anything is measured, so the faces can be measured into the layout.
+  const listing = useMemo(
+    () =>
+      listed({
+        kidsOf: shown.kidsOf,
+        closed: folded,
+        results: (_id, kids) => kids.filter((c) => isResult(graph, c.id)).map((c) => c.id),
+        openOutputs,
+        open: new Set(opened),
+        focus: treeFocus,
+      }),
+    [graph, shown, folded, openOutputs, opened, treeFocus],
+  );
+  // Each Card on the cards that show its Nodes: a folded, summed up or switched-off Node passes its Cards
+  // to the nearest card shown above it, so work under a fold stays in sight.
+  const handsAt = useMemo(
+    () =>
+      time !== null
+        ? new Map<string, Handling[]>()
+        : handlingOnTopics(
+            handling,
+            shown.upOf,
+            (id) => listing.has(id) && visible(id) && !(distant && listing.get(id)! >= 2),
+            exists,
+          ),
+    [handling, listing, shown, visible, exists, distant, time === null],
+  );
+  // At most two faces and "+n", as Hands draws them: 18px rings 2px apart.
+  const measureHands = useCallback(
+    (id: string) => {
+      const list = handsAt.get(id);
+      if (!list) return 0;
+      const { doing, waiting } = handsOf(list);
+      const lanes = doing.length + waiting.length,
+        faces = Math.min(2, lanes);
+      const more = lanes > 2 ? 3 + textWidth(t.map.handling.more(lanes - 2), 10) : 0;
+      return Math.ceil(faces * 18 + (faces - 1) * 2 + more);
+    },
+    [handsAt, textWidth],
   );
   const laid = useMemo(
     () =>
@@ -1178,6 +1266,9 @@ function MapContent({
         focus: treeFocus,
         anchor: foldAnchor.current,
         measure: measureTopic,
+        foldWidth: measureFold,
+        handsWidth: measureHands,
+        summaryWidth: measureSummary,
         grown,
         aspect,
         defaultDepth,
@@ -1192,6 +1283,9 @@ function MapContent({
       treeFocus,
       opened,
       measureTopic,
+      measureFold,
+      measureHands,
+      measureSummary,
       defaultDepth,
     ],
   );
@@ -1517,19 +1611,90 @@ function MapContent({
       if (ids.length > 1) out.set(rid, reactionsIn(graph, compared, ids.filter(visible), timed));
     return out;
   }, [members, graph, compared, visible, timed]);
-  // The selected Node's references, marked on the cards at either end instead of drawn as lines.
-  const rel = useMemo(() => {
-    const n = focus ? graph.nodes.get(focus) : undefined;
-    const out = new Map<string, "cites" | "citedBy">();
-    if (!n) return out;
-    for (const i of n.incoming) if (i.from.kind === "node") out.set(i.from.id, "citedBy");
-    for (const l of n.links)
-      if (l.ref?.kind === "node" && l.ref.id !== n.parentId && !n.childIds.includes(l.ref.id))
-        out.set(l.ref.id, "cites");
-    for (const m of n.materials) if (m.kind === "node" && m.id) out.set(m.id, "cites");
-    out.delete(n.id);
+  // One focus at a time, and only it dims the map. A lane hovered in 分工 comes first: what its Cards
+  // carried. Then a Card with its sources, numbered in order, or a Role with what its Cards carried and
+  // the Nodes it watches. Otherwise a topic: the one the pointer rests on, else the selected one while it
+  // is on the map. What it cites and what cites it are marked on those topics, not drawn as lines.
+  const onMap = useCallback(
+    (id: string) => base.placed.has(id) && visible(id) && exists(id),
+    [base, visible, exists],
+  );
+  const [rested, setRested] = useState<string | null>(null);
+  useEffect(() => {
+    if (!hover) {
+      setRested(null);
+      return;
+    }
+    const timer = setTimeout(() => setRested(hover), 160);
+    return () => clearTimeout(timer);
+  }, [hover]);
+  const byTopic =
+    time === null && !lensId && hotLane === null && !sources && selected?.kind !== "role";
+  const chosen = byTopic && selected?.kind === "node" && onMap(selected.id) ? selected.id : null;
+  const pointed = byTopic && rested && rested !== chosen && onMap(rested) ? rested : null;
+  const chosenNear = useMemo(
+    () => (chosen ? focusOf(graph, chosen, onMap, visible) : null),
+    [graph, chosen, onMap, visible],
+  );
+  const pointedNear = useMemo(
+    () => (pointed ? focusOf(graph, pointed, onMap, visible) : null),
+    [graph, pointed, onMap, visible],
+  );
+  const near = pointedNear ?? chosenNear;
+  const focus = pointed ?? chosen;
+  const laneLit = useMemo<ReadonlySet<string> | null>(() => {
+    if (time !== null) return null;
+    if (hotLane !== null) return carriedBy(hotLane);
+    if (sources) return sources.ids;
+    if (selected?.kind === "role")
+      return new Set([...carriedBy(selected.id), ...graph.neighbours(selected.id)]);
+    return null;
+  }, [hotLane, carriedBy, sources, selected?.kind, selected?.id, graph, time === null]);
+  const lit = laneLit ?? near?.lit ?? null;
+  // A topic as marks and relation lines must see it: its title row and, past it, its count and faces.
+  const reach = useCallback(
+    (p: Placed): Rect => {
+      const r = rectOf(p),
+        f = base.placed.get(p.id) === p ? base.forks.get(p.id) : undefined;
+      if (!f) return r;
+      const x = Math.min(r.x, f.x);
+      return { ...r, x, w: Math.max(r.x + r.w, f.x + f.w) - x };
+    },
+    [base],
+  );
+  const marks = useMemo(() => {
+    const out = new Map<string, { text: string; dx: number; dy: number }>();
+    if (laneLit || !near?.near.size) return out;
+    const texts = new Map(
+      [...near.near].map(
+        ([id, how]) =>
+          [id, typeof how === "object" ? t.map.near.inside(how.inside) : t.map.near[how]] as const,
+      ),
+    );
+    const asks = [...texts].flatMap(([id, text]) => {
+      const p = base.placed.get(id);
+      if (!p) return [];
+      const at = rectOf(p);
+      return [
+        {
+          id,
+          at,
+          row: { ...reach(p), h: p.head ?? p.h },
+          side: base.topics.get(id)?.side ?? 1,
+          w: Math.ceil(textWidth(text, 11, 500)) + 12,
+          h: 18,
+        },
+      ];
+    });
+    const blocks = [
+      ...[...base.placed.values()].filter((p) => onMap(p.id)).map(reach),
+      ...base.summaries.map((s) => rectOf(s.at)),
+      ...(treeFocus ? [] : [rectOf(base.centre)]),
+    ];
+    for (const [id, place] of placeMarks(asks, blocks, base.lines))
+      out.set(id, { text: texts.get(id)!, ...place });
     return out;
-  }, [graph, focus]);
+  }, [laneLit, near, base, reach, onMap, textWidth, treeFocus]);
   const facts = useMemo(() => (lensId ? lensFacts(graph, lensId) : null), [graph, lensId]);
   const relationLines = useMemo(
     () => (facts ? lensLines(graph, facts, base.placed, code) : [...lines.values()].flat()),
@@ -1577,23 +1742,6 @@ function MapContent({
   }, [motion]);
   // Cards that did not change keep their objects, so a change to one card draws only that card.
   const unchanged = useMemo(() => keepUnchanged<Node>(), []);
-  // Each Card on the cards that show its Nodes: a folded, summed up or switched-off Node passes its Cards
-  // to the nearest card shown above it, so work under a fold stays in sight.
-  const handsAt = useMemo(
-    () =>
-      time !== null
-        ? new Map<string, Handling[]>()
-        : handlingOnTopics(
-            handling,
-            shown.upOf,
-            (id) =>
-              view.placed.has(id) &&
-              visible(id) &&
-              !(distant && (base.topics.get(id)?.depth ?? 0) >= 2),
-            exists,
-          ),
-    [handling, base, view, shown, visible, exists, distant, time === null],
-  );
   const nodes = useMemo<Node[]>(() => {
     if (!canvas.ready || !treeReady) return NO_NODES;
     const out: Node[] = [];
@@ -1623,7 +1771,6 @@ function MapContent({
           graph,
           topic: base.topics.get(id) ?? { depth: 1, side: 1, branch: id },
           head: at.head ?? at.h,
-          branchColor: branchColor(base.topics.get(id)?.branch ?? id),
           id,
           h: at.h,
           w: at.w,
@@ -1640,12 +1787,14 @@ function MapContent({
                   open: true,
                 }
               : null,
-          rel: lensId ? null : (rel.get(id) ?? null),
+          mark: marks.get(id) ?? null,
           selected: selected?.id === id,
           picked: picked.has(id),
           touched: touched.has(id),
           dim: facts ? !facts.ids.has(id) : !!lit && id !== focus && !lit.has(id),
           folded: folded.has(id) ? descendants(shown.kidsOf, id) : 0,
+          count: folded.has(id) ? TOPIC.fork + measureFold(id) : 0,
+          room: base.forks.has(id) ? TOPIC.fork + base.forks.get(id)!.w : 0,
           kids: shown.kidsOf(id).length,
           pin: pins.get(id) ?? 0,
           src: sources?.order?.get(id) ?? null,
@@ -1683,7 +1832,7 @@ function MapContent({
             kind: item.kind,
             parent: item.parent,
             count: item.count,
-            color: branchColor(item.topic.branch),
+            w: item.at.w,
           },
         });
     }
@@ -1699,7 +1848,7 @@ function MapContent({
     motion,
     reducedMotion,
     openOutputs,
-    rel,
+    marks,
     visible,
     exists,
     touched,
@@ -1721,8 +1870,8 @@ function MapContent({
     () =>
       [...view.placed.values()]
         .filter((p) => graph.nodes.has(p.id) && visible(p.id) && exists(p.id))
-        .map(rectOf),
-    [view, graph, visible, exists],
+        .map(reach),
+    [view, graph, visible, exists, reach],
   );
   const selectionRoutes = useMemo(() => {
     const routes = new Map<string, { tip: string; route: ReturnType<typeof selectionPath> }>();
@@ -1741,8 +1890,8 @@ function MapContent({
       routes.set(`${l.kind}:${l.from}>${l.to}`, {
         tip,
         route: selectionPath(
-          rectOf(a),
-          rectOf(b),
+          reach(a),
+          reach(b),
           l.kind,
           relationObstacles,
           1,
@@ -1751,76 +1900,23 @@ function MapContent({
       });
     }
     return routes;
-  }, [view, relationObstacles, relationLines, textWidth]);
+  }, [view, relationObstacles, relationLines, textWidth, reach]);
 
   const unchangedEdges = useMemo(() => keepUnchanged<Edge>(), []);
-  // The layout owns tree lines; selected and hovered facts are drawn independently.
-  const treeLines = useMemo(
-    () => new Map(base.lines.map((l) => [l.id, l.points] as const)),
-    [base],
-  );
   const edges = useMemo<Edge[]>(() => {
     if (!canvas.ready || !treeReady) return NO_EDGES;
     const out: Edge<LinkData>[] = [];
-    const seen = new Set<string>();
-    const add = (source: string, target: string, kind: LinkData["kind"]) => {
-      const key = `${source}>${target}`;
-      const a = view.placed.get(source),
-        b = view.placed.get(target);
-      if (
-        source === target ||
-        seen.has(key) ||
-        !a ||
-        !b ||
-        !visible(source) ||
-        !visible(target) ||
-        !exists(source) ||
-        !exists(target)
-      )
-        return;
-      const hovered = !!hover && (source === hover || target === hover);
-      // Lens facts use the same dashed arcs as selection facts, over the unchanged tree.
-      if (lensId || ((kind === "ref" || !treeLines.has(key)) && !hovered)) return;
-      const hot =
-        !!lensId || hovered || [focus].some((id) => id && (source === id || target === id));
-      seen.add(key);
-      const reference = kind === "ref" || (kind === "tree" && !lensId && !treeLines.has(key));
-      out.push({
-        id: key,
-        source,
-        target,
-        type: "link",
-        focusable: false,
-        interactionWidth: 0,
-        sourceHandle: "out",
-        targetHandle: "in",
-        data: {
-          kind: reference ? "ref" : kind,
-          hot,
-          dim: !lensId && !!lit && !hot,
-          from: rectOf(a),
-          to: rectOf(b),
-          ...(reference
-            ? { route: selectionPath(rectOf(a), rectOf(b), "link", relationObstacles) }
-            : {}),
-          ...(treeLines.has(key) ? { points: treeLines.get(key) } : {}),
-        },
-      });
-    };
-
     for (const line of base.lines) {
       if (
         (graph.nodes.has(line.source) && !exists(line.source)) ||
         (graph.nodes.has(line.target) && !exists(line.target))
       )
         continue;
-      const target =
-        base.topics.get(line.target) ?? base.summaries.find((s) => s.at.id === line.target)?.topic;
+      const summary = base.summaries.find((s) => s.at.id === line.target);
+      const target = base.topics.get(line.target) ?? summary?.topic;
       const from = base.placed.get(line.source) ?? base.centre;
-      const to =
-        base.placed.get(line.target) ?? base.summaries.find((s) => s.at.id === line.target)?.at;
+      const to = base.placed.get(line.target) ?? summary?.at;
       if (!to) continue;
-      seen.add(line.id);
       out.push({
         id: line.id,
         source: line.source,
@@ -1832,30 +1928,18 @@ function MapContent({
         targetHandle: "in",
         data: {
           kind: "tree",
-          hot: false,
           dim: facts
             ? !facts.ids.has(line.target) || !facts.ids.has(line.source)
             : !!lit && !lit.has(line.target),
           from: rectOf(from),
           to: rectOf(to),
           points: line.points,
-          color: branchColor(target?.branch ?? line.target),
-          weight: target?.depth === 1 ? 2.5 : 1.5,
+          ...lineTo(target?.depth ?? 1, !!summary),
         },
       });
     }
-    for (const n of graph.snapshot.nodes) {
-      const up = visible(n.id) ? shown.upOf(n.id) : null;
-      if (up) add(up, n.id, "tree");
-    }
-    for (const n of graph.snapshot.nodes) {
-      for (const l of n.links)
-        if (l.ref?.kind === "node" && l.ref.id !== n.parentId && !n.childIds.includes(l.ref.id))
-          add(n.id, l.ref.id, "ref");
-      for (const m of n.materials) if (m.kind === "node" && m.id) add(n.id, m.id, "ref");
-    }
-    // Lines that matter now draw last, above the rest.
-    const sorted: Edge[] = out.sort((x, y) => Number(x.data!.hot) - Number(y.data!.hot));
+    // Selection facts draw last, above the tree.
+    const sorted: Edge[] = out;
     for (const l of relationLines) {
       const a = view.placed.get(l.from),
         b = view.placed.get(l.to);
@@ -1881,17 +1965,10 @@ function MapContent({
     view,
     base,
     facts,
-    lensId,
-    visible,
-    shown,
     exists,
-    focus,
     lit,
-    hover,
-    treeLines,
     relationLines,
     selectionRoutes,
-    relationObstacles,
   ]);
 
   // ---------- viewport ----------
@@ -1998,7 +2075,9 @@ function MapContent({
     (layout: Layout) => [
       ...[...layout.placed.values()].filter((p) => visible(p.id)).map(rectOf),
       ...layout.labels.map((l) => ({ x: l.x, y: l.y, w: CARD.w, h: 20 })),
-      ...(layout === base ? [rectOf(base.centre), ...base.summaries.map((s) => rectOf(s.at))] : []),
+      ...(layout === base
+        ? [rectOf(base.centre), ...base.summaries.map((s) => rectOf(s.at)), ...base.forks.values()]
+        : []),
     ],
     [visible, base],
   );
@@ -2086,7 +2165,7 @@ function MapContent({
       fitRects(rects, 1, { duration: 0 }, 0.8);
       // Font compensation can change the bounds once when the first zoom is set.
       // Show the tree only after its saved folds and final measured bounds agree.
-      if (Math.abs(topicScale - Math.max(1, 12 / (14 * zoom))) < 0.0001) {
+      if (Math.abs(topicScale - scaleAt(zoom)) < 0.0001) {
         initialView.current = false;
         setTreeReady(true);
       }
@@ -2278,56 +2357,65 @@ function MapContent({
         });
         // A view the map picks by itself stays readable; the hint brings in whatever is left outside.
         if (rects.some((r) => !inView(r))) fitRects(rects, 1, undefined, READABLE);
-      } else if (selected?.kind === "node") {
-        // A result folded into its parent's count is brought in by that parent.
+      } else if (selected?.kind === "node" && !archived.has(selected.id)) {
+        // An archived Node opens beside the map and leaves it as it is. A result folded into its parent's
+        // count is brought in by that parent.
         let at: string | null | undefined = selected.id;
         while (at && !base.placed.has(at)) at = graph.nodes.get(at)?.parentId;
         const p = at ? base.placed.get(at) : undefined;
         const n = at ? graph.nodes.get(at) : undefined;
-        // Bring the card in with what it hangs from and what hangs from it, or at least its parent,
-        // centred in the part of the map that no floating panel covers.
-        if (p && n && !inView(rectOf(p), COMFORT)) {
-          const rectsOf = (ids: (string | null)[]) =>
-            ids.flatMap((id) => {
-              const q = id ? base.placed.get(id) : undefined;
-              return q && visible(q.id) ? [rectOf(q)] : [];
-            });
-          const el = box.current!;
-          const fits = (rects: Rect[]) => {
-            const w = Math.max(...rects.map((r) => r.x + r.w)) - Math.min(...rects.map((r) => r.x));
-            const h = Math.max(...rects.map((r) => r.y + r.h)) - Math.min(...rects.map((r) => r.y));
-            return Math.min(
-              (clearWidth() - PAD.left - PAD.right) / w,
-              (el.clientHeight - PAD.top - PAD.bottom) / h,
-            );
-          };
-          // The most of its family that still fits at a readable size; at least the card itself.
-          const up = shown.upOf(n.id),
-            kids = shown.kidsOf(n.id).map((c) => c.id);
-          const rects =
-            [
+        if (!p || !n) return;
+        const rectsOf = (ids: (string | null)[]) =>
+          ids.flatMap((id) => {
+            const q = id ? base.placed.get(id) : undefined;
+            return q && visible(q.id) ? [rectOf(q)] : [];
+          });
+        const up = shown.upOf(n.id),
+          kids = shown.kidsOf(n.id).map((c) => c.id);
+        // The card stays whole between the sidebar and the details panel, and its open children with it
+        // where they fit; when they do not, the card itself comes first.
+        const selfIn = inView(rectOf(p), COMFORT);
+        if (selfIn && rectsOf(kids).every((r) => inView(r))) return;
+        const el = box.current!;
+        const fits = (rects: Rect[]) => {
+          const w = Math.max(...rects.map((r) => r.x + r.w)) - Math.min(...rects.map((r) => r.x));
+          const h = Math.max(...rects.map((r) => r.y + r.h)) - Math.min(...rects.map((r) => r.y));
+          return Math.min(
+            (clearWidth() - PAD.left - PAD.right) / w,
+            (el.clientHeight - PAD.top - PAD.bottom) / h,
+          );
+        };
+        // The most of its family that still fits at a readable size; at least the card itself.
+        const groups = selfIn
+          ? [[n.id, ...kids]]
+          : [
               [up, n.id, ...kids],
               [n.id, ...kids],
               [up, n.id],
-            ]
-              .map(rectsOf)
-              .find((r) => fits(r) >= READABLE) ?? rectsOf([n.id]);
-          fitRects(rects, Math.max(flow.getZoom(), READABLE), { duration: 350 }, READABLE);
-        }
+            ];
+        const rects = groups.map(rectsOf).find((r) => fits(r) >= READABLE);
+        if (!rects && selfIn) return;
+        fitRects(
+          rects ?? rectsOf([n.id]),
+          Math.max(flow.getZoom(), READABLE),
+          { duration: 350 },
+          READABLE,
+        );
       }
     }, 140);
     return () => clearTimeout(t);
   }, [selected?.id, ready, lensId, !!lens]);
 
   // Related cards outside the view get a way to bring them in.
+  // What the selection lights, not a topic the pointer passes over.
   const related = useMemo(() => {
-    if (!lit || lensId) return [];
-    const ids = focus ? [focus, ...lit] : [...lit];
-    return ids.flatMap((id) => {
+    const ids = laneLit ?? chosenNear?.lit;
+    if (!ids || lensId) return [];
+    return [...ids].flatMap((id) => {
       const p = base.placed.get(id);
       return p && visible(id) ? [rectOf(p)] : [];
     });
-  }, [focus, lit, lensId, base, visible]);
+  }, [laneLit, chosenNear, lensId, base, visible]);
   const countOutside = useCallback(() => {
     setOutside(related.filter((r) => !inView(r)).length);
     const ids = [...(facts?.ids ?? [])].filter((id) => {
@@ -2514,8 +2602,46 @@ function MapContent({
         setPicked(new Set([...view.placed.keys()].filter(visible)));
         return;
       }
+      // Zoom keys as in Excalidraw and Canva; the browser would otherwise zoom the whole page.
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && ["=", "+", "-", "0"].includes(e.key)) {
+        e.preventDefault();
+        initialView.current = false;
+        fittingAll.current = false;
+        if (e.key === "0") void flow.zoomTo(1, ZOOM_NOW);
+        else if (e.key === "-") void flow.zoomOut(ZOOM_NOW);
+        else void flow.zoomIn(ZOOM_NOW);
+        return;
+      }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const onControl = !!el.closest("button, a, [role=radio]");
+      // Shift 1 shows everything, Shift 2 what is selected.
+      if (e.shiftKey && (e.code === "Digit1" || e.code === "Digit2")) {
+        e.preventDefault();
+        initialView.current = false;
+        fittingAll.current = e.code === "Digit1";
+        if (e.code === "Digit1") return latest.current.overview({ duration: 0 }, ZOOM.min);
+        const ids = picked.size ? [...picked] : selected?.kind === "node" ? [selected.id] : [];
+        const shownIds = ids.filter((id) => view.placed.has(id) && visible(id));
+        if (shownIds.length)
+          void flow.fitView({
+            nodes: shownIds.map((id) => ({ id })),
+            padding: 0.25,
+            maxZoom: 1.5,
+            duration: 0,
+          });
+        return;
+      }
+      // Space held is the hand: dragging then moves the map. Pressed and let go alone, it folds or opens
+      // the selected topic.
+      if (e.key === " " && !onControl) {
+        e.preventDefault();
+        if (!handHeld.current) {
+          handHeld.current = true;
+          handUsed.current = false;
+          setHand(true);
+        }
+        return;
+      }
       const node = selected?.kind === "node" ? graph.nodes.get(selected.id) : undefined;
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       const act = (f: () => void) => {
@@ -2537,10 +2663,6 @@ function MapContent({
       if (key === "t")
         return act(() => (timeOpen ? latest.current.closeTime() : latest.current.openTime()));
       if (key === "p") return !timeOpen && act(() => setInkTool("select"));
-      if (key === " " && node && !lensId && !onControl)
-        return act(() => {
-          if (!e.repeat && shown.kidsOf(node.id).length) fold(node.id);
-        });
       if (key === "?") return act(() => setKeyOpen((o) => !o));
       if (key === "b" && node && !lensId)
         return act(() => {
@@ -2578,8 +2700,26 @@ function MapContent({
       const next = nearest(view, here, dir, visible);
       if (next) onSelect({ kind: "node", id: next });
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== " " || !handHeld.current) return;
+      handHeld.current = false;
+      setHand(false);
+      const { selected, lensId, fold, shown } = latest.current;
+      const node = selected?.kind === "node" ? selected.id : null;
+      if (!handUsed.current && node && !lensId && shown.kidsOf(node).length) fold(node);
+    };
+    const letGo = () => {
+      handHeld.current = false;
+      setHand(false);
+    };
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    window.addEventListener("blur", letGo);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+      window.removeEventListener("blur", letGo);
+    };
   }, [keys, treeReady, graph, onSelect, onExpand, flow]);
 
   // ---------- the pointer: dragging empty space picks with a box, dragging a card moves it ----------
@@ -2669,7 +2809,8 @@ function MapContent({
     fittingAll.current = false;
     const el = box.current;
     const target = e.target as HTMLElement;
-    if (e.button !== 0 || !el || inking || lensId || moment) return;
+    if (hand) handUsed.current = true;
+    if (e.button !== 0 || hand || !el || inking || lensId || moment) return;
     if (target.closest("button, a, input, textarea, .panel")) return;
     const card = target.closest<HTMLElement>(".react-flow__node-node");
     if (card) {
@@ -2694,11 +2835,10 @@ function MapContent({
       );
       return;
     }
-    // Anywhere else on the map, lines included, a plain drag moves the map; with Ctrl it draws the box,
-    // and with Shift the box adds to what is picked.
+    // Anywhere else on the map, lines included, a drag draws the box, as in Excalidraw and Canva; with
+    // Shift the box adds to what is picked. Space or the middle button moves the map instead.
     if (!target.closest(".react-flow")) return;
     const add = e.shiftKey;
-    if (!add && !e.ctrlKey && !e.metaKey) return;
     const r = el.getBoundingClientRect();
     const from = { x: e.clientX - r.left, y: e.clientY - r.top };
     track(
@@ -2819,7 +2959,7 @@ function MapContent({
 
   return (
     <div
-      className={`map${lensId ? " is-lens" : ""}${morphing || motion ? " is-morphing" : ""}${motion ? ` motion-${motion.phase}` : ""}${timeOpen ? " is-time" : ""}${distant ? " is-distant" : ""}`}
+      className={`map${hand ? " is-hand" : ""}${lensId ? " is-lens" : ""}${morphing || motion ? " is-morphing" : ""}${motion ? ` motion-${motion.phase}` : ""}${timeOpen ? " is-time" : ""}${distant ? " is-distant" : ""}`}
       style={{ "--topic-scale": topicScale } as CSSProperties}
       ref={box}
       inert={!treeReady}
@@ -2848,10 +2988,10 @@ function MapContent({
           nodeClickDistance={5}
           paneClickDistance={5}
           disableKeyboardA11y
-          panOnDrag={[0, 1]}
-          selectionKeyCode={BOX_KEYS}
-          panActivationKeyCode={null}
-          noPanClassName="nopan"
+          panOnDrag={[1]}
+          selectionKeyCode={null}
+          panActivationKeyCode="Space"
+          noPanClassName={hand ? "map-hand-pans-all" : "nopan"}
           onInit={() => setReady(true)}
           onMoveStart={(event) => {
             if (event) {
@@ -2900,15 +3040,34 @@ function MapContent({
       </MapActions.Provider>
 
       {treeFocus && !lensId && (
+        // Back goes up one level, from the first to the whole map; the trail after it goes to any level.
         <nav className="map-focus-path" aria-label={t.map.topicPath}>
-          <button onClick={() => enterFocus(null)}>{graph.snapshot.workspace.name}</button>
-          {graph.ancestors(treeFocus).map((n) => (
-            <span key={n.id}>
-              {" "}
-              / <button onClick={() => enterFocus(n.id)}>{n.name}</button>
-            </span>
-          ))}
-          <span> / {graph.nodes.get(treeFocus)?.name}</span>
+          <button
+            type="button"
+            className="map-back"
+            onClick={() => enterFocus(focusUp)}
+            data-tip={t.map.backTo(
+              focusUp ? graph.name({ kind: "node", id: focusUp }) : graph.snapshot.workspace.name,
+            )}
+          >
+            <Icon name="back" size={14} />
+            {t.map.back}
+          </button>
+          <span className="map-crumbs">
+            <button type="button" onClick={() => enterFocus(null)}>
+              {graph.snapshot.workspace.name}
+            </button>
+            {graph.ancestors(treeFocus).map((n) => (
+              <Fragment key={n.id}>
+                <span className="map-crumb-sep">/</span>
+                <button type="button" onClick={() => enterFocus(n.id)}>
+                  {n.name}
+                </button>
+              </Fragment>
+            ))}
+            <span className="map-crumb-sep">/</span>
+            <span className="map-crumb-here">{graph.nodes.get(treeFocus)?.name}</span>
+          </span>
         </nav>
       )}
       {focusMenu && (
@@ -3141,97 +3300,45 @@ function MapContent({
       )}
 
       <div className="panel maptools" role="toolbar" aria-label={t.map.tools}>
-        {/* Something in use keeps its tool in view: a lens, time, the pen, a hidden type or the legend. */}
-        {(toolsOpen ||
-          !!lensId ||
-          timeOpen ||
-          inking ||
-          keyOpen ||
-          !Object.values(filters.types).every(Boolean)) && (
-          <>
-            {!!graph.nodes.size &&
-              (["goal", "prompt", "output"] as const).map((type) => (
-                <button
-                  key={type}
-                  type="button"
-                  className="tool"
-                  aria-pressed={filters.types[type]}
-                  onClick={() => toggleType(type)}
-                  aria-label={t.map.toggleType(filters.types[type], type)}
-                  data-tip={t.map.toggleType(filters.types[type], type)}
-                >
-                  <TypeGlyph type={type} size={15} />
-                  <span>{graph.counts[type]}</span>
-                </button>
-              ))}
-            {!!graph.nodes.size && <span className="tool-sep" />}
+        {!!graph.nodes.size &&
+          (["goal", "prompt", "output"] as const).map((type) => (
             <button
+              key={type}
               type="button"
-              className="tool tool-lens"
-              aria-pressed={!!lensId}
-              disabled={timeOpen || selected?.kind !== "node"}
-              onClick={() => {
-                setInkTool(null);
-                setLens((l) => !l);
-              }}
-              aria-label={t.map.lens}
-              data-tip={selected?.kind === "node" ? t.map.lensTitle : t.map.lensNeedsNode}
-              data-key={selected?.kind === "node" ? "L" : undefined}
+              className="tool"
+              aria-pressed={filters.types[type]}
+              onClick={() => toggleType(type)}
+              aria-label={t.map.toggleType(filters.types[type], type)}
+              data-tip={t.map.toggleType(filters.types[type], type)}
             >
-              <Icon name="lens" size={15} />
-              <span className="lbl">{t.map.lens}</span>
+              <TypeGlyph type={type} size={15} />
+              <span>{typeCounts[type]}</span>
             </button>
-            <button
-              type="button"
-              className="tool tool-time"
-              aria-pressed={timeOpen}
-              onClick={() => (timeOpen ? closeTime() : openTime())}
-              aria-label={t.map.time}
-              data-tip={t.map.timeTitle}
-            >
-              <Icon name="clock" size={15} />
-              <span className="lbl">{t.map.time}</span>
-            </button>
-            <button
-              type="button"
-              className="tool tool-ink"
-              aria-pressed={inking}
-              disabled={!inkShown || !ink.ready}
-              onClick={() => setInkTool((tool) => (tool ? null : "select"))}
-              aria-label={t.ink.draw}
-              data-tip={t.ink.drawTitle}
-            >
-              <Icon name="pen" size={15} />
-              <span className="lbl">{t.ink.draw}</span>
-            </button>
-            <span className="tool-sep" />
-            <button
-              type="button"
-              className="tool sq"
-              disabled={timeOpen || !!lens || !canvas.canUndo}
-
-              onClick={undo}
-              aria-label={t.ink.undo}
-              data-tip={t.ink.undo}
-              data-key="Ctrl Z"
-            >
-              <Icon name="undo" size={15} />
-            </button>
-            <button
-              type="button"
-              className="tool sq"
-              disabled={timeOpen || !!lens || !canvas.canRedo}
-
-              onClick={redo}
-              aria-label={t.ink.redo}
-              data-tip={t.ink.redo}
-              data-key="Ctrl Shift Z"
-            >
-              <Icon name="redo" size={15} />
-            </button>
-            <span className="tool-sep" />
-          </>
-        )}
+          ))}
+        {!!graph.nodes.size && <span className="tool-sep" />}
+        <button
+          type="button"
+          className="tool sq is-roomy"
+          disabled={timeOpen || !!lens || !canvas.canUndo}
+          onClick={undo}
+          aria-label={t.ink.undo}
+          data-tip={t.ink.undo}
+          data-key="Ctrl Z"
+        >
+          <Icon name="undo" size={15} />
+        </button>
+        <button
+          type="button"
+          className="tool sq is-roomy"
+          disabled={timeOpen || !!lens || !canvas.canRedo}
+          onClick={redo}
+          aria-label={t.ink.redo}
+          data-tip={t.ink.redo}
+          data-key="Ctrl Shift Z"
+        >
+          <Icon name="redo" size={15} />
+        </button>
+        <span className="tool-sep is-roomy" />
         <button
           type="button"
           className="tool sq zoom-step"
@@ -3264,46 +3371,153 @@ function MapContent({
         >
           <Icon name="fit" size={15} />
         </button>
-        {(toolsOpen || keyOpen) && (
-          <>
-            <span className="tool-sep" />
-            <button
-              type="button"
-              className={`tool sq${pictureFailed ? " is-failed" : ""}`}
-              aria-busy={picturing}
-              disabled={picturing}
-              onClick={() => void exportPicture()}
-              aria-label={t.map.picture}
-              data-tip={pictureFailed ? t.map.pictureFailed : t.map.pictureTip}
-            >
-              <Icon name="download" size={15} />
-            </button>
-            <button
-              type="button"
-              className="tool sq"
-              aria-expanded={keyOpen}
-              onClick={() => setKeyOpen((o) => !o)}
-              aria-label={t.map.legend}
-              data-tip={keyOpen ? undefined : t.map.legend}
-              data-tip-end=""
-            >
-              <Icon name="help" size={15} />
-            </button>
-          </>
-        )}
-        <button
-          type="button"
-          className="tool sq"
-          aria-expanded={toolsOpen}
-          onClick={() => showTools(!toolsOpen)}
-          aria-label={toolsOpen ? t.map.toolsLess : t.map.toolsMore}
-          data-tip={toolsOpen ? t.map.toolsLess : t.map.toolsMore}
-          data-tip-end=""
-        >
-          <Icon name={toolsOpen ? "close" : "working"} size={15} />
-        </button>
+        <span className="tool-sep" />
+        <ToolMenu
+          open={toolsOpen}
+          onOpen={setToolsOpen}
+          items={[
+            {
+              icon: "lens",
+              label: t.map.lens,
+              note: selected?.kind === "node" ? "L" : t.map.lensNeedsNode,
+              checked: !!lensId,
+              disabled: timeOpen || selected?.kind !== "node",
+              run: () => {
+                setInkTool(null);
+                setLens((l) => !l);
+              },
+            },
+            {
+              icon: "clock",
+              label: t.map.time,
+              checked: timeOpen,
+              run: () => (timeOpen ? closeTime() : openTime()),
+            },
+            {
+              icon: "pen",
+              label: t.ink.draw,
+              checked: inking,
+              disabled: !inkShown || !ink.ready,
+              run: () => setInkTool((tool) => (tool ? null : "select")),
+            },
+            {
+              icon: "undo",
+              label: t.ink.undo,
+              note: "Ctrl Z",
+              tight: true,
+              apart: true,
+              disabled: timeOpen || !!lens || !canvas.canUndo,
+              run: undo,
+            },
+            {
+              icon: "redo",
+              label: t.ink.redo,
+              note: "Ctrl Shift Z",
+              tight: true,
+              disabled: timeOpen || !!lens || !canvas.canRedo,
+              run: redo,
+            },
+            {
+              icon: "download",
+              label: t.map.picture,
+              note: pictureFailed ? t.map.pictureFailed : undefined,
+              apart: true,
+              disabled: picturing,
+              run: () => void exportPicture(),
+            },
+            {
+              icon: "help",
+              label: t.map.legend,
+              note: "?",
+              checked: keyOpen,
+              run: () => setKeyOpen((o) => !o),
+            },
+          ]}
+        />
         {keyOpen && <MapKey />}
       </div>
+    </div>
+  );
+}
+
+type ToolItem = {
+  icon: IconName;
+  label: string;
+  /** Its key, or why it is off. */
+  note?: string;
+  /** A mode: shows whether it is on. */
+  checked?: boolean;
+  disabled?: boolean;
+  /** Only here while the bar is too narrow to show it. */
+  tight?: boolean;
+  /** Set apart from the items above it. */
+  apart?: boolean;
+  run: () => void;
+};
+/** The toolbar's ···: the paused modes, export and the legend, and what a narrow bar leaves out. */
+function ToolMenu({
+  open,
+  onOpen,
+  items,
+}: {
+  open: boolean;
+  onOpen: (open: boolean) => void;
+  items: ToolItem[];
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as globalThis.Node)) onOpen(false);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onOpen(false);
+    };
+    window.addEventListener("pointerdown", away);
+    window.addEventListener("keydown", key, true);
+    return () => {
+      window.removeEventListener("pointerdown", away);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, [open, onOpen]);
+  return (
+    <div className="more tool-more" ref={box}>
+      <button
+        type="button"
+        className="tool sq"
+        aria-label={t.manage.more}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        data-tip={open ? undefined : t.manage.more}
+        data-tip-end=""
+        onClick={() => onOpen(!open)}
+      >
+        <Icon name="working" size={15} />
+      </button>
+      {open && (
+        <div className="more-pop" role="menu">
+          {items.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+              aria-checked={item.checked}
+              disabled={item.disabled}
+              className={`more-item tool-item${item.tight ? " is-tight" : ""}${item.apart ? " is-apart" : ""}`}
+              onClick={() => {
+                onOpen(false);
+                item.run();
+              }}
+            >
+              <Icon name={item.icon} size={15} />
+              <span>{item.label}</span>
+              {item.note && <small>{item.note}</small>}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

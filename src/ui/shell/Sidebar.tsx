@@ -473,6 +473,7 @@ function Tree({
           <TypeGlyph type={n.type} size={12} />
         </span>
         <span className="t">{n.name}</span>
+        {state.deprecated && <span className="row-mark">{t.map.status.archived}</span>}
         <FileMark node={n} size={12} />
         {state.recent && !marks.length && !active && (
           <i className="new-dot" title={t.node.recent} />

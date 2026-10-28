@@ -242,13 +242,14 @@ test("unchanged topics keep coordinates when an earlier sibling disappears; new 
   for (const id of ["node-parent", "node-keep"])
     assert.deepEqual(layout.placed.get(id), first.placed.get(id));
   const all = new Map([...layout.placed, [CENTRE, layout.centre]]);
+  // Lines leave from the bottom of the parent's title row, the centre's base line included.
   for (const line of layout.lines) {
     const from = all.get(line.source)!,
       to = all.get(line.target)!;
     const side = layout.topics.get(line.target)!.side;
     assert.deepEqual(line.points[0], [
       side > 0 ? from.x + from.w : from.x,
-      line.source === CENTRE ? from.y : rectOf(from).y + (from.head ?? from.h),
+      rectOf(from).y + (from.head ?? from.h),
     ]);
     assert.deepEqual(line.points.at(-1), [
       side > 0 ? to.x : to.x + to.w,

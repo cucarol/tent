@@ -83,7 +83,7 @@ export function historyLayout(
       to = all.get(line.target)!;
     const side =
       topics.get(line.target)?.side ?? summaries.find((s) => s.at.id === line.target)!.topic.side;
-    return topicLine(from, to, side, line.source === centre.id);
+    return topicLine(from, to, side);
   });
   return { ...layout, placed, centre, topics, summaries, lines };
 }
