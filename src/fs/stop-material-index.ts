@@ -33,6 +33,7 @@ const indexSchema = z.strictObject({
       names: z.array(z.string()),
       type: z.string().optional(),
       moduleCoverage: z.array(coverageSchema),
+      materialFiles: z.array(z.strictObject({ path: z.string(), heading: z.string().optional() })),
     }),
   ),
 });
@@ -56,7 +57,7 @@ const directorySchema = z.strictObject({
 });
 const headerSchema = z.strictObject({ state: stateSchema, content: z.string() });
 const cacheSchema = z.strictObject({
-  schema: z.literal(8),
+  schema: z.literal(9),
   rootMarkerDigest: z.string().regex(/^[a-f0-9]{64}$/),
   rejectedRootMarkers: z.array(
     z.strictObject({ root: z.string(), digest: z.string().regex(/^[a-f0-9]{64}$/) }),
@@ -273,7 +274,7 @@ export async function loadStopMaterialIndex(
       await fs.writeFile(
         temp,
         JSON.stringify({
-          schema: 8,
+          schema: 9,
           rootMarkerDigest: markerDigest,
           rejectedRootMarkers,
           workspaceRoot,

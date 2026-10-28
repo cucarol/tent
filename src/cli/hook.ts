@@ -5,6 +5,7 @@ import { NodeFs } from "../fs/node-fs.js";
 import { observeTentSystemRoot } from "../core/workspace/status.js";
 import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import { loadStopMaterialIndex } from "../fs/stop-material-index.js";
+import { recordSectionFingerprints } from "../fs/section-fingerprint-baseline.js";
 import { readBuildIdentity, formatBuildIdentity, sourceBuildMismatch } from "./build-identity.js";
 
 export const hookHelp =
@@ -55,7 +56,12 @@ export async function runHookCommand(
       } finally {
         await adapter.close();
       }
-      await loadStopMaterialIndex(systemRoot, workspaceRoot, discovery.rejectedRootMarkers);
+      const index = await loadStopMaterialIndex(
+        systemRoot,
+        workspaceRoot,
+        discovery.rejectedRootMarkers,
+      );
+      await recordSectionFingerprints(systemRoot, workspaceRoot, index);
       const command = `node ${JSON.stringify(path.join(options.packageRoot, "cli.mjs"))}`;
       const identity = await readBuildIdentity(options.packageRoot);
       const mismatch = await sourceBuildMismatch(workspaceRoot, identity);

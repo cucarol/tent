@@ -4,21 +4,27 @@ import { setTimeout } from "node:timers/promises";
 
 type GuardOwner = { token: string; pid: number };
 
+export class FileLockGuardBusyError extends Error {}
+
 /**
- * Serialize mutation.lock bookkeeping with an exclusive directory.
+ * Serialize work on one path with an exclusive directory, such as mutation.lock bookkeeping.
  * A dead PID permits reclaim; PID reuse can keep a crashed guard busy, so
- * uncertain ownership fails closed after the timeout.
+ * uncertain ownership fails closed after the timeout. A disposable record can skip the flush.
  */
-export async function withFileLockGuard<T>(lockPath: string, action: () => Promise<T>): Promise<T> {
+export async function withFileLockGuard<T>(
+  lockPath: string,
+  action: () => Promise<T>,
+  { waitMs = 10_000, flush = true }: { waitMs?: number; flush?: boolean } = {},
+): Promise<T> {
   const guardPath = `${lockPath}.guard`;
   const owner: GuardOwner = { token: randomUUID(), pid: process.pid };
-  const deadline = performance.now() + 10_000;
+  const deadline = performance.now() + waitMs;
 
   for (;;) {
     // Publish a complete owner record atomically.
     const pending = await fs.mkdtemp(`${guardPath}.pending-`);
     try {
-      await fs.writeFile(`${pending}/owner.json`, JSON.stringify(owner), { flush: true });
+      await fs.writeFile(`${pending}/owner.json`, JSON.stringify(owner), { flush });
       await fs.rename(pending, guardPath);
       break;
     } catch (error) {
@@ -39,7 +45,7 @@ export async function withFileLockGuard<T>(lockPath: string, action: () => Promi
       }
     }
     if (performance.now() >= deadline) {
-      throw new Error(
+      throw new FileLockGuardBusyError(
         `Lock bookkeeping guard is still busy: ${guardPath}. Manual cleanup is safe only after all Tent writers have stopped.`,
       );
     }

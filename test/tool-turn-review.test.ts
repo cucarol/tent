@@ -12,7 +12,12 @@ import {
   materialCoverageContains,
 } from "../src/core/base/material-coverage.js";
 import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
-import { modulesForIndexedTurn } from "../src/core/return/tool-turn-review.js";
+import { modulesForIndexedTurn, sectionsForTurn } from "../src/core/return/tool-turn-review.js";
+import {
+  sectionFingerprint,
+  sectionFingerprints,
+  sectionKey,
+} from "../src/core/return/section-fingerprint.js";
 import {
   type StopMaterialIndex,
   buildStopMaterialIndex,
@@ -170,7 +175,7 @@ test("material index excludes draft module coverage while retaining stable modul
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 8);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 9);
   assert.equal(await adapter.readFile("Core/Core.md"), draftRaw);
   await adapter.writeFile("Core/Core.md", original);
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), stable);
@@ -225,7 +230,7 @@ test("material index excludes unknown lifecycle from modules and ordinary materi
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 8);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 9);
   assert.deepEqual(modulesForIndexedTurn(expected, event(["unknown/a.ts"])), []);
   await fs.writeFile(
     path.join(systemRoot, unknownModulePath),
@@ -356,6 +361,7 @@ test("written file coverage ranks distinct writes and ignores reads before remin
       path: `.tent/${i}/${i}.md`,
       names: [`M${i}`],
       moduleCoverage: [{ kind: "directory", prefix: `src/${i}/` }],
+      materialFiles: [],
     })),
   };
   const addresses = [
@@ -375,5 +381,65 @@ test("written file coverage ranks distinct writes and ignores reads before remin
   assert.deepEqual(
     modulesForIndexedTurn(index, event).map((m) => m.nodeId),
     ["node-6", "node-5", "node-0", "node-1", "node-2", "node-3", "node-4"],
+  );
+});
+
+test("file materials name every linking Node, sections only when changed, untracked directories never", async (t) => {
+  const { root, adapter, node } = await fixture(t);
+  await node("Spec", "node-spec", "../../docs/SPEC.md", false);
+  await node("Rule", "node-rule", "../../docs/SPEC.md#Hooks", false);
+  await node("Bundle", "node-bundle", "/Spec/Spec.md", false);
+  const index = buildStopMaterialIndex(await loadNodeCatalog(adapter), root);
+  const files = (id: string) => index.nodes.find((node) => node.nodeId === id)!.materialFiles;
+  assert.deepEqual(files("node-spec"), [{ path: "docs/SPEC.md" }]);
+  assert.deepEqual(files("node-rule"), [{ path: "docs/SPEC.md", heading: "Hooks" }]);
+  assert.deepEqual(files("node-bundle"), []);
+  assert.deepEqual(files("node-evidence"), []);
+  const written = event(["docs/SPEC.md"]);
+  assert.deepEqual(
+    modulesForIndexedTurn(index, written).map((module) => module.nodeId),
+    ["node-spec"],
+  );
+  const hooks = sectionKey("docs/SPEC.md", "Hooks");
+  assert.deepEqual([...sectionsForTurn(index, ["docs/SPEC.md"]).keys()], [hooks]);
+  assert.deepEqual([...sectionsForTurn(index, ["docs/other.md"]).keys()], []);
+  assert.deepEqual(
+    modulesForIndexedTurn(index, { ...written, changedSections: new Set([hooks]) }).map(
+      (module) => module.nodeId,
+    ),
+    ["node-rule", "node-spec"],
+  );
+  assert.deepEqual(
+    modulesForIndexedTurn(index, event(["src/core/other.ts"])).map((module) => module.nodeId),
+    ["node-core"],
+  );
+});
+
+test("section fingerprints follow one section and its subsections, outside fences and frontmatter", () => {
+  const doc = (a: string, b: string, c: string) =>
+    `---\ntitle: "# A"\n---\n# A\n${a}\n## B ##\n${b}\n\`\`\`\n# C\n\`\`\`\n# C\n${c}\n`;
+  const base = doc("one", "two", "three");
+  const at = (raw: string | undefined, heading: string) => sectionFingerprint(raw, { heading });
+  assert.notEqual(at(base, "A"), at(doc("one", "2", "three"), "A"));
+  assert.equal(at(base, "A"), at(doc("one", "two", "3"), "A"));
+  assert.equal(at(base, "C"), at(doc("1", "2", "three"), "C"));
+  assert.notEqual(at(base, "B"), at(doc("one", "2", "three"), "B"));
+  assert.match(at("# **Bold**\nx\n", "Bold"), /^[a-f0-9]{64}$/);
+  assert.match(at("# [Hooks](https://example.test)\nx\n", "Hooks"), /^[a-f0-9]{64}$/);
+  assert.equal(at("# A\n# A\n", "A"), "ambiguous");
+  assert.equal(at(base, "D"), "missing");
+  assert.equal(at(undefined, "A"), "absent");
+  assert.match(at(base.replaceAll("\n", "\r\n"), "C"), /^[a-f0-9]{64}$/);
+  // The heading line Core recorded selects exactly, where plain text would be ambiguous.
+  const twins = "# A\none\n# [A](x)\ntwo\n";
+  assert.equal(at(twins, "A"), "ambiguous");
+  assert.equal(
+    sectionFingerprint(twins, { heading: "A", line: "  # [A](x)\r" }),
+    sectionFingerprint("# [A](x)\ntwo\n", { heading: "A" }),
+  );
+  // A recorded line that is gone falls back to the plain heading and reports the line it found.
+  assert.deepEqual(
+    sectionFingerprints("## A ##\ntwo\n", [{ heading: "A", line: "# [A](x)" }]),
+    new Map([["A", { fingerprint: at("## A ##\ntwo\n", "A"), line: "## A ##" }]]),
   );
 });

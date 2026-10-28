@@ -1,6 +1,7 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
@@ -10,6 +11,9 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 import { runHookCommand } from "../src/cli/hook.js";
 import { runToolHook } from "../src/cli/tool-hook.js";
 import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
+import { recordSectionFingerprints } from "../src/fs/section-fingerprint-baseline.js";
+import { changedSections, settleSections } from "../src/fs/section-fingerprints.js";
+import { sectionKey } from "../src/core/return/section-fingerprint.js";
 import { toolReviewOutput } from "../src/cli/hook-adapter.js";
 import { successfulWritePaths } from "../src/cli/tool-write-event.js";
 import { ANSWER_REVIEW, TOOL_REVIEW_ACTION } from "../src/core/return/tool-turn-review.js";
@@ -445,4 +449,160 @@ test("claim competition rebudgets both capped projections before claiming newly 
     assert.equal(seen.size, 5);
     assert.equal(await f.tool(), "{}\n");
   }
+});
+
+test("material links name a file's Nodes, and a linked section only after that section changes", async (t) => {
+  const { root, systemRoot, tool } = await fixture(t);
+  for (const [name, id, resource] of [
+    ["Spec", "node-spec", "../../docs/README.md"],
+    ["Rule", "node-rule", "../../docs/SPEC.md#Hooks"],
+  ]) {
+    await fs.mkdir(path.join(systemRoot, name!));
+    await fs.writeFile(
+      path.join(systemRoot, name!, name + ".md"),
+      `---\nid: ${id}\ntype: prompt\nsources:\n  - resource: ${resource}\n---\nRule\n`,
+    );
+  }
+  await fs.mkdir(path.join(root, "docs"));
+  const spec = (hooks: string, other: string) =>
+    fs.writeFile(path.join(root, "docs/SPEC.md"), `# Hooks\n${hooks}\n# Other\n${other}\n`);
+  await spec("old", "old");
+  await fs.writeFile(path.join(root, "docs/README.md"), "readme");
+  await recordSectionFingerprints(systemRoot, root, await loadStopMaterialIndex(systemRoot, root));
+  await spec("old", "new");
+  assert.equal(await tool(["docs/SPEC.md"], { turn_id: "t1" }), "{}\n");
+  await spec("new", "new");
+  assert.match(await tool(["docs/SPEC.md"], { turn_id: "t2" }), /node-rule/);
+  assert.equal(await tool(["docs/SPEC.md"], { turn_id: "t3" }), "{}\n");
+  await spec("new", "newer");
+  assert.equal(await tool(["docs/SPEC.md"], { turn_id: "t4" }), "{}\n");
+  assert.match(
+    await tool(["docs/README.md", "src/a.ts"], { turn_id: "t5" }),
+    /node-spec[\s\S]*node-module|node-module[\s\S]*node-spec/,
+  );
+  // Without a record the section is unknown: recorded quietly, named on its next change.
+  await fs.rm(path.join(systemRoot, "temp/section-fingerprints"), { recursive: true });
+  await spec("newest", "newer");
+  assert.equal(await tool(["docs/SPEC.md"], { turn_id: "t6" }), "{}\n");
+  await spec("again", "newer");
+  assert.match(await tool(["docs/SPEC.md"], { turn_id: "t7" }), /node-rule/);
+});
+
+test("a linked heading is followed through inline Markdown and a respelling", async (t) => {
+  const { root, systemRoot, tool } = await fixture(t);
+  await fs.mkdir(path.join(systemRoot, "Rule"));
+  await fs.writeFile(
+    path.join(systemRoot, "Rule/Rule.md"),
+    "---\nid: node-rule\ntype: prompt\nsources:\n  - resource: ../../docs/SPEC.md#Hooks\n---\nRule\n",
+  );
+  await fs.mkdir(path.join(root, "docs"));
+  const spec = (heading: string, hooks: string) =>
+    fs.writeFile(path.join(root, "docs/SPEC.md"), `${heading}\n${hooks}\n# Other\nx\n`);
+  await spec("# [Hooks](https://example.test)", "old");
+  await recordSectionFingerprints(systemRoot, root, await loadStopMaterialIndex(systemRoot, root));
+  await spec("# [Hooks](https://example.test)", "new");
+  assert.match(await tool(["docs/SPEC.md"], { turn_id: "t1" }), /node-rule/);
+  assert.equal(await tool(["docs/SPEC.md"], { turn_id: "t2" }), "{}\n");
+  // The recorded line is gone after a respelling; the plain heading finds the section again.
+  await spec("## Hooks ##", "new");
+  assert.match(await tool(["docs/SPEC.md"], { turn_id: "t3" }), /node-rule/);
+  await spec("## Hooks ##", "newer");
+  assert.match(await tool(["docs/SPEC.md"], { turn_id: "t4" }), /node-rule/);
+  assert.equal(await tool(["docs/SPEC.md"], { turn_id: "t5" }), "{}\n");
+});
+
+test("a slower hook never settles an older version over a newer one, and parallel settles both land", async (t) => {
+  const { root, systemRoot } = await fixture(t);
+  await fs.mkdir(path.join(systemRoot, "Rule"));
+  await fs.writeFile(
+    path.join(systemRoot, "Rule/Rule.md"),
+    "---\nid: node-rule\ntype: prompt\nsources:\n  - resource: ../../docs/SPEC.md#A\n  - resource: ../../docs/SPEC.md#B\n---\nRule\n",
+  );
+  await fs.mkdir(path.join(root, "docs"));
+  const spec = (a: string, b: string) =>
+    fs.writeFile(path.join(root, "docs/SPEC.md"), `# A\n${a}\n# B\n${b}\n`);
+  const sections = new Map(
+    ["A", "B"].map((heading) => [
+      sectionKey("docs/SPEC.md", heading),
+      { path: "docs/SPEC.md", heading },
+    ]),
+  );
+  const changed = () => changedSections(systemRoot, root, sections);
+  await spec("0", "0");
+  await recordSectionFingerprints(systemRoot, root, await loadStopMaterialIndex(systemRoot, root));
+  await spec("1", "0");
+  const slow = await changed();
+  await spec("2", "0");
+  await settleSections(systemRoot, root, await changed());
+  await settleSections(systemRoot, root, slow);
+  assert.deepEqual([...(await changed()).keys()], []);
+  // A late settle of what a hook saw earlier leaves a newer, unsettled version named.
+  await spec("3", "0");
+  const seen = await changed();
+  await spec("4", "0");
+  const unsettled = await changed();
+  await settleSections(systemRoot, root, seen);
+  assert.deepEqual([...(await changed()).keys()], [...unsettled.keys()]);
+  await spec("5", "5");
+  const [a, b] = [new Map(), new Map()];
+  for (const [key, section] of await changed()) (section.heading === "A" ? a : b).set(key, section);
+  await Promise.all([settleSections(systemRoot, root, a), settleSections(systemRoot, root, b)]);
+  assert.deepEqual([...(await changed()).keys()], []);
+});
+
+test("the record keeps the order a linked file was read in, even when a read is held", async (t) => {
+  const { root, systemRoot, tool } = await fixture(t);
+  await fs.mkdir(path.join(systemRoot, "Rule"));
+  await fs.writeFile(
+    path.join(systemRoot, "Rule/Rule.md"),
+    "---\nid: node-rule\ntype: prompt\nsources:\n  - resource: ../../doc.md#A\n---\nRule\n",
+  );
+  const file = path.join(root, "doc.md");
+  const version = (value: string) => fs.writeFile(file, `# A\n${value}\n`);
+  await version("0");
+  await recordSectionFingerprints(systemRoot, root, await loadStopMaterialIndex(systemRoot, root));
+  // The first hook starts reading version 1 but its read lands only after version 2 is written.
+  const readFile = fs.readFile;
+  let held!: () => void;
+  let release!: () => void;
+  const holding = new Promise<void>((resolve) => (held = resolve));
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let reads = 0;
+  fs.readFile = (async (...args: unknown[]) => {
+    if (args[0] === file && ++reads === 1) {
+      held();
+      await gate;
+    }
+    return (readFile as (...values: unknown[]) => Promise<unknown>)(...args);
+  }) as typeof readFile;
+  syncBuiltinESMExports();
+  try {
+    await version("1");
+    const first = tool(["doc.md"], { turn_id: "first" });
+    await holding;
+    assert.match(await tool(["doc.md"], { turn_id: "second" }), /node-rule/);
+    await version("2");
+    release();
+    assert.match(await first, /node-rule/);
+  } finally {
+    release();
+    fs.readFile = readFile;
+    syncBuiltinESMExports();
+  }
+  assert.equal(await tool(["doc.md"], { turn_id: "third" }), "{}\n");
+  // A guard left by a hook that exited is reclaimed.
+  const records = path.join(systemRoot, "temp/section-fingerprints");
+  const guard = path.join(
+    records,
+    (await fs.readdir(records)).find((name) => !name.includes("."))! + ".guard",
+  );
+  await fs.mkdir(guard);
+  const exited = spawnSync(process.execPath, ["-e", "0"]).pid;
+  await fs.writeFile(
+    path.join(guard, "owner.json"),
+    JSON.stringify({ token: "gone", pid: exited }),
+  );
+  await version("3");
+  assert.match(await tool(["doc.md"], { turn_id: "fourth" }), /node-rule/);
+  assert.equal(await tool(["doc.md"], { turn_id: "fifth" }), "{}\n");
 });

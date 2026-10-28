@@ -209,7 +209,7 @@ test("main schema 7 coverage cannot stand in for schema 8 marker preparation", a
   assert.equal(await f.tool(), "{}\n");
   assert.equal(await fs.readFile(f.cache, "utf8"), raw);
   await f.prepare();
-  assert.equal(JSON.parse(await fs.readFile(f.cache, "utf8")).schema, 8);
+  assert.equal(JSON.parse(await fs.readFile(f.cache, "utf8")).schema, 9);
   assert.match(await f.tool(f.root, "prepared-v8"), /node-proof/);
 });
 

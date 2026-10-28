@@ -1,18 +1,55 @@
 import { materialCoverageContains } from "../base/material-coverage-match.js";
-import type { StopMaterialIndex } from "./stop-material-index.js";
+import { sectionKey } from "./section-fingerprint.js";
+import type { StopMaterialFile, StopMaterialIndex } from "./stop-material-index.js";
 
 export type TurnReviewModule = { nodeId: string; path: string; names: string[]; files: string[] };
+
+const samePath = (a: string, b: string) =>
+  process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+
+/** Linked Markdown sections in the written files; the caller decides which of them changed. */
+export function sectionsForTurn(
+  index: StopMaterialIndex,
+  written: readonly string[],
+): Map<string, Required<StopMaterialFile>> {
+  const sections = new Map<string, Required<StopMaterialFile>>();
+  for (const node of index.nodes)
+    for (const file of node.materialFiles)
+      if (file.heading !== undefined && written.some((address) => samePath(address, file.path)))
+        sections.set(sectionKey(file.path, file.heading), {
+          path: file.path,
+          heading: file.heading,
+        });
+  return sections;
+}
+
+/** Nodes that link any of these sections. */
+export function nodesLinkingSections(
+  index: StopMaterialIndex,
+  sections: ReadonlySet<string>,
+): Set<string> {
+  return new Set(
+    index.nodes
+      .filter((node) =>
+        node.materialFiles.some(
+          (file) => file.heading !== undefined && sections.has(sectionKey(file.path, file.heading)),
+        ),
+      )
+      .map((node) => node.nodeId),
+  );
+}
 
 export function modulesForIndexedTurn(
   index: StopMaterialIndex,
   event: {
     files: { kind: "provided" | "read" | "written"; address: string }[];
     cancelled?: true;
+    changedSections?: ReadonlySet<string>;
   },
 ): TurnReviewModule[] {
   if (event.cancelled) return [];
   const modules = index.nodes
-    .filter((node) => node.moduleCoverage.length)
+    .filter((node) => node.moduleCoverage.length || node.materialFiles.length)
     .map((node) => ({ node, coverage: node.moduleCoverage, files: new Set<string>() }));
   for (const file of event.files.filter((file) => file.kind === "written")) {
     const matches = modules.flatMap((module) => {
@@ -26,6 +63,17 @@ export function modulesForIndexedTurn(
     const mostSpecific = Math.max(...matches.map((match) => match.specificity));
     for (const match of matches)
       if (match.specificity === mostSpecific) match.module.files.add(file.address);
+    // Every Node resting on the file is named, beside the most specific module.
+    for (const module of modules)
+      if (
+        module.node.materialFiles.some(
+          (material) =>
+            samePath(material.path, file.address) &&
+            (material.heading === undefined ||
+              !!event.changedSections?.has(sectionKey(material.path, material.heading))),
+        )
+      )
+        module.files.add(file.address);
   }
   return modules
     .filter((module) => module.files.size)

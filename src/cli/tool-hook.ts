@@ -2,7 +2,13 @@ import path from "node:path";
 import { createTurnPathResolver } from "../core/workspace/git-checkout.js";
 import { findPreparedHookWorkspace } from "../fs/hook-material-index.js";
 import { claimStopReview, hasStopReviewClaim } from "../fs/stop-review-claim.js";
-import { ANSWER_REVIEW, modulesForIndexedTurn } from "../core/return/tool-turn-review.js";
+import { changedSections, settleSections } from "../fs/section-fingerprints.js";
+import {
+  ANSWER_REVIEW,
+  modulesForIndexedTurn,
+  nodesLinkingSections,
+  sectionsForTurn,
+} from "../core/return/tool-turn-review.js";
 import { toolReviewOutput } from "./hook-adapter.js";
 import { answeredQuestion, successfulWritePaths } from "./tool-write-event.js";
 
@@ -60,27 +66,49 @@ export async function runToolHook(
           ),
         ),
     );
+    const written = addresses.flatMap((address) =>
+      address &&
+      !address
+        .split("/")
+        .some((part) =>
+          [".tent", ".git", ".scratch", "node_modules", ".venv"].includes(
+            process.platform === "win32" ? part.toLowerCase() : part,
+          ),
+        )
+        ? [address]
+        : [],
+    );
+    const changed = await changedSections(
+      systemRoot,
+      workspaceRoot,
+      sectionsForTurn(index, written),
+    );
     const modules = modulesForIndexedTurn(index, {
-      files: addresses.flatMap((address) =>
-        address &&
-        !address
-          .split("/")
-          .some((part) =>
-            [".tent", ".git", ".scratch", "node_modules", ".venv"].includes(
-              process.platform === "win32" ? part.toLowerCase() : part,
-            ),
-          )
-          ? [{ kind: "written" as const, address }]
-          : [],
-      ),
+      files: written.map((address) => ({ kind: "written" as const, address })),
+      changedSections: new Set(changed.keys()),
     });
     if (!modules.length) return silent;
+    // A changed section stays unsettled while a Node linking it is left unnamed.
+    const settle = async (unnamed: Set<string>) => {
+      const named = new Map(
+        [...changed].filter(
+          ([section]) =>
+            ![...nodesLinkingSections(index, new Set([section]))].some((nodeId) =>
+              unnamed.has(nodeId),
+            ),
+        ),
+      );
+      await settleSections(systemRoot, workspaceRoot, named).catch(() => undefined);
+    };
     const key = (nodeId: string) => JSON.stringify([turnId, "node", nodeId]);
     const pending = [];
     for (const module of modules)
       if (!(await hasStopReviewClaim(systemRoot, host, event.session_id, key(module.nodeId))))
         pending.push(module);
-    if (!pending.length) return silent;
+    if (!pending.length) {
+      await settle(new Set());
+      return silent;
+    }
     let candidates = pending;
     const owned = new Set<string>();
     for (;;) {
@@ -95,7 +123,16 @@ export async function runToolHook(
       }
       // Keep the complete rendered projection, including Nodes omitted by either
       // byte budget or count. They were not claimed and may be named by a later tool.
-      if (!competing.size) return output.stdout;
+      if (!competing.size) {
+        await settle(
+          new Set(
+            candidates
+              .filter((module) => !output.nodeIds.includes(module.nodeId))
+              .map((module) => module.nodeId),
+          ),
+        );
+        return output.stdout;
+      }
       // Another hook owns these Nodes. Rebudget without them and claim any newly
       // visible Nodes before delivering; keep this process's existing claims.
       candidates = candidates.filter((module) => !competing.has(module.nodeId));
