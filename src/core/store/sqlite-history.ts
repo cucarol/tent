@@ -4,7 +4,15 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import * as fs from "node:fs/promises";
+import { scopedRead, forgetScopedRead } from "../../fs/file-state-cache.js";
 import { durableMkdir, syncDirectory } from "../../fs/durable-file.js";
+import {
+  SqliteHistoryIndex,
+  HistoryIndexDamage,
+  indexValue,
+  readIndexValue,
+} from "./sqlite-history-index.js";
+import { canonicalSha256 } from "../base/canonical-digest.js";
 import { unifiedLineDiff } from "./line-diff.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { nodeBasisRecordSchema, type NodeBasisRecord } from "../base/node-basis-record.js";
@@ -71,6 +79,11 @@ export class SqliteDocumentHistory implements DocumentHistory {
   private closed = false;
   private database?: DatabaseSync;
   private opening?: Promise<DatabaseSync>;
+  private availability?: Promise<boolean>;
+  private readonly availabilityScope = `sqlite-history-availability:${path.resolve(this.systemRoot)}`;
+  private readonly index = new SqliteHistoryIndex(this.systemRoot);
+  private indexing?: Promise<DatabaseSync>;
+  private repairing?: Promise<void>;
   private observer = new AsyncLocalStorage<Observer>();
   private async hasLegacyHistory() {
     return (
@@ -95,11 +108,8 @@ export class SqliteDocumentHistory implements DocumentHistory {
     if (this.database) return this.database;
     if (this.opening) return this.opening;
     this.opening = (async () => {
-      if (await this.hasLegacyHistory())
-        throw new Error(
-          "This Workspace has legacy Git history; migrate an offline copy before opening it with SQLite",
-        );
-      if (!create && !(await this.available()))
+      const available = await this.available();
+      if (!create && !available)
         throw new Error("Tent SQLite history is unavailable; initialize or migrate this Workspace");
       await durableMkdir(path.join(this.systemRoot, ".git"));
       const db = new DatabaseSync(path.join(this.systemRoot, ".git", "history.sqlite"));
@@ -121,6 +131,10 @@ export class SqliteDocumentHistory implements DocumentHistory {
           CREATE TABLE IF NOT EXISTS unportable_records(id TEXT PRIMARY KEY) STRICT;`);
         if (create) db.exec("PRAGMA user_version=1");
         this.database = db;
+        if (create) {
+          forgetScopedRead(this.availabilityScope);
+          this.availability = Promise.resolve(true);
+        }
         return db;
       } catch (error) {
         db.close();
@@ -138,9 +152,13 @@ export class SqliteDocumentHistory implements DocumentHistory {
   }
   async close() {
     if (this.opening) await this.opening.catch(() => undefined);
+    if (this.indexing) await this.indexing.catch(() => undefined);
+    if (this.repairing) await this.repairing.catch(() => undefined);
+    this.index.close();
     this.database?.close();
     this.database = undefined;
     this.closed = true;
+    forgetScopedRead(this.availabilityScope);
   }
   private async all(sql: string, ...args: SQLInputValue[]): Promise<Row[]> {
     return (await this.db()).prepare(sql).all(...args) as Row[];
@@ -170,15 +188,32 @@ export class SqliteDocumentHistory implements DocumentHistory {
   }
   async available() {
     if (this.closed) throw new Error("Tent history connection is closed");
-    if (await this.hasLegacyHistory())
-      throw new Error(
-        "This Workspace has legacy Git history; migrate an offline copy before opening it with SQLite",
+    if (this.availability) return this.availability;
+    const pending = scopedRead(this.availabilityScope, async () => {
+      const present = await fs.access(path.join(this.systemRoot, ".git/history.sqlite")).then(
+        () => true,
+        () => false,
       );
-    return fs.access(path.join(this.systemRoot, ".git/history.sqlite")).then(
-      () => true,
-      () => false,
-    );
+      if (present) return true;
+      if (await this.hasLegacyHistory())
+        throw new Error(
+          "This Workspace has legacy Git history; migrate an offline copy before opening it with SQLite",
+        );
+      return false;
+    });
+    this.availability = pending;
+    try {
+      const present = await pending;
+      // Another process may initialize an unopened workspace. A negative result
+      // belongs to this read request only, while an existing history is stable.
+      if (!present && this.availability === pending) this.availability = undefined;
+      return present;
+    } catch (error) {
+      if (this.availability === pending) this.availability = undefined;
+      throw error;
+    }
   }
+
   async currentCommit(): Promise<string | null> {
     return (
       ((await this.all("SELECT id FROM events ORDER BY seq DESC LIMIT 1"))[0]?.id as string) ?? null
@@ -394,18 +429,15 @@ export class SqliteDocumentHistory implements DocumentHistory {
     return result;
   }
   async nodeRecords(): Promise<Record<string, NodeBasisRecord | null>> {
-    return Object.fromEntries(
-      (
-        await this.all(
-          "SELECT r.id,r.value FROM records r WHERE r.event=(SELECT MAX(x.event) FROM records x WHERE x.id=r.id)",
-        )
-      ).map((r) => {
-        const value = JSON.parse(String(r.value));
-        return [
-          String(r.id),
-          value === null || hasLocalMachinePath(value) ? null : nodeBasisRecordSchema.parse(value),
-        ];
-      }),
+    return this.projection(
+      (index) =>
+        Object.fromEntries(
+          index
+            .prepare("SELECT id,value FROM records")
+            .all()
+            .map((r) => [String(r.id), readIndexValue<NodeBasisRecord | null>(r.value)]),
+        ),
+      "records",
     );
   }
   async unportableNodeRecordIds() {
@@ -475,81 +507,265 @@ export class SqliteDocumentHistory implements DocumentHistory {
         : [],
     );
   }
-  async derived<T>(
-    _name: string,
-    _schemaVersion: number,
-    compute: (head: string | null) => Promise<T>,
+  async identityVersions() {
+    return this.projection((index) => this.index.identities(index));
+  }
+
+  private async projection<T>(
+    read: (index: DatabaseSync) => T | Promise<T>,
+    kind: "events" | "records" = "events",
   ): Promise<T> {
-    return compute(await this.currentCommit());
+    try {
+      return await read(await this.historyIndex(kind));
+    } catch (error) {
+      if (!(error instanceof HistoryIndexDamage)) throw error;
+      if (!this.repairing) {
+        this.repairing = this.index.rebuild().finally(() => {
+          this.repairing = undefined;
+        });
+      }
+      await this.repairing;
+      return await read(await this.historyIndex(kind));
+    }
+  }
+
+  private async historyIndex(kind: "events" | "records"): Promise<DatabaseSync> {
+    if (this.repairing) await this.repairing;
+    const previous = this.indexing;
+    const pending = (async () => {
+      if (previous) await previous.catch(() => undefined);
+      return this.updateIndex(kind);
+    })();
+    this.indexing = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.indexing === pending) this.indexing = undefined;
+    }
+  }
+
+  private async updateIndex(kind: "events" | "records"): Promise<DatabaseSync> {
+    const events = kind === "events";
+    const source = await this.db(),
+      index = await this.index.open();
+    const stat = await fs.stat(path.join(this.systemRoot, ".git/history.sqlite"), { bigint: true });
+    const stamp = [stat.size, stat.mtimeNs, stat.ctimeNs, stat.dev, stat.ino].join(":");
+    const head = source.prepare("SELECT seq,id FROM events ORDER BY seq DESC LIMIT 1").get();
+    const to = Number(head?.seq ?? 0);
+    index.exec("BEGIN IMMEDIATE");
+    try {
+      const state = Object.fromEntries(
+        index
+          .prepare("SELECT key,value FROM state")
+          .all()
+          .map((r) => [String(r.key), readIndexValue<string>(r.value)]),
+      );
+      let from = Number(state.seq ?? 0);
+      if (!Number.isSafeInteger(from) || from < 0)
+        throw new HistoryIndexDamage("Invalid history projection position");
+      const anchor = from ? source.prepare("SELECT id FROM events WHERE seq=?").get(from)?.id : "";
+      if (
+        state.version !== "1" ||
+        from > to ||
+        anchor !== (state.head ?? "") ||
+        (from === to && state.stamp !== stamp)
+      ) {
+        this.index.reset(index);
+        from = 0;
+      }
+      const cursor = events ? "identitySeq" : "recordsSeq";
+      const processed = from === 0 ? 0 : Number(state[cursor] ?? 0);
+      if (!Number.isSafeInteger(processed) || processed < 0 || processed > from)
+        throw new HistoryIndexDamage("Invalid history projection position");
+      if (processed < to && events) {
+        const affected = new Set<string>();
+        const batch = this.index.batch(index);
+        const knownIdentity = index.prepare("SELECT id FROM identities WHERE digest=?");
+        const putIdentity = index.prepare("INSERT INTO identities VALUES(?,?)");
+        const readBlob = source.prepare("SELECT raw FROM blobs WHERE digest=?");
+        const readChanges = source.prepare("SELECT * FROM changes WHERE event=? ORDER BY path");
+        const identity = (digest: string | null): string | undefined => {
+          if (digest === null) return undefined;
+          const known = knownIdentity.get(digest);
+          if (known) return readIndexValue<string | null>(known.id) ?? undefined;
+          const raw = readBlob.get(digest)?.raw;
+          if (typeof raw !== "string" || sqliteContentFingerprint(raw) !== digest)
+            throw new Error(`Damaged SQLite content: ${digest}`);
+          const id = objectId(raw);
+          putIdentity.run(digest, indexValue(id ?? null));
+          return id;
+        };
+        for (const row of source
+          .prepare("SELECT * FROM events WHERE seq>? AND seq<=? ORDER BY seq")
+          .all(processed, to)) {
+          const event = this.projectEvent(
+            row as unknown as Event,
+            readChanges.all(row.seq) as Row[],
+            identity,
+          );
+          batch.add(Number(row.seq), event, affected);
+        }
+        batch.finish(affected);
+      }
+      if (processed < to && !events) {
+        const latest = new Map<string, string>();
+        const putRecord = index.prepare("INSERT OR REPLACE INTO records VALUES(?,?)");
+        for (const row of source
+          .prepare("SELECT id,value FROM records WHERE event>? AND event<=? ORDER BY event,rowid")
+          .all(processed, to)) {
+          latest.delete(String(row.id));
+          latest.set(String(row.id), String(row.value));
+        }
+        for (const [id, raw] of latest) {
+          const value = JSON.parse(raw);
+          const clean =
+            value === null || hasLocalMachinePath(value)
+              ? null
+              : nodeBasisRecordSchema.parse(value);
+          putRecord.run(id, indexValue(clean));
+        }
+      }
+      const putState = index.prepare("INSERT OR REPLACE INTO state VALUES(?,?)");
+      for (const [key, value] of Object.entries({
+        version: "1",
+        seq: String(to),
+        head: String(head?.id ?? ""),
+        stamp,
+        [cursor]: String(to),
+      }))
+        putState.run(key, indexValue(value));
+      index.exec("COMMIT");
+      return index;
+    } catch (error) {
+      try {
+        if (index.isTransaction) index.exec("ROLLBACK");
+      } catch {
+        /* Preserve the original authority/cache failure. */
+      }
+      throw error;
+    }
+  }
+
+  private projectEvent(
+    event: Event,
+    rows: readonly Row[],
+    identity: (digest: string | null) => string | undefined,
+  ): HistoryCommit {
+    const metadata = JSON.parse(event.metadata) as CaptureMetadata,
+      changes: HistoryChange[] = [],
+      byId = new Map<string, HistoryChange>(),
+      objectIds = new Set(metadata.objectIds ?? []);
+    for (const c of rows) {
+      const file = String(c.path),
+        before = c.before_digest === null ? undefined : { commit: event.parent!, path: file },
+        after = c.after_digest === null ? undefined : { commit: event.id, path: file },
+        oldId = identity(c.before_digest as string | null),
+        nextId = identity(c.after_digest as string | null),
+        a = isHistoryDocument(file) ? oldId : undefined,
+        b = isHistoryDocument(file) ? nextId : undefined;
+      const add = (
+        id: string | undefined,
+        before: DocumentVersion | undefined,
+        after: DocumentVersion | undefined,
+      ) => {
+        if (id) objectIds.add(id);
+        const current = id ? byId.get(id) : undefined;
+        if (current) {
+          if (before) current.before = before;
+          if (after) current.after = after;
+        } else {
+          const change = {
+            ...(id ? { objectId: id } : {}),
+            ...(before ? { before } : {}),
+            ...(after ? { after } : {}),
+          };
+          changes.push(change);
+          if (id) byId.set(id, change);
+        }
+      };
+      if (a && b && a !== b) {
+        add(a, before, undefined);
+        add(b, undefined, after);
+      } else add(b ?? a, before, after);
+    }
+    return {
+      commit: event.id,
+      time: event.time,
+      ...(event.parent ? { parent: event.parent } : {}),
+      operation: metadata.operation,
+      objectIds: [...objectIds].sort(),
+      entry: metadata.entry,
+      changes,
+    };
+  }
+  private async checkedHistory(items: HistoryCommit[]): Promise<HistoryCommit[]> {
+    const versions = new Map<string, DocumentVersion>();
+    for (const event of items)
+      for (const change of event.changes)
+        for (const version of [change.before, change.after])
+          if (version) versions.set(`${version.commit}:${version.path}`, version);
+    const checked = new Set<string>();
+    for (const version of versions.values()) {
+      const digest = await this.digestAt((await this.event(version.commit)).seq, version.path);
+      if (!digest) throw new Error(`Document absent at SQLite event: ${version.path}`);
+      if (!checked.has(digest)) {
+        // Cached identities never replace validation of the selected authority
+        // bytes. This checks only returned events and never reparses their YAML.
+        await this.raw(digest);
+        checked.add(digest);
+      }
+    }
+    return items;
   }
   async changesInRange(range: { from?: string; to?: string } = {}): Promise<HistoryCommit[]> {
     const from = range.from ? (await this.event(range.from)).seq : 0,
       to = range.to ? (await this.event(range.to)).seq : Number.MAX_SAFE_INTEGER;
     if (from > to) throw new Error("Invalid SQLite history range");
-    const result: HistoryCommit[] = [];
-    for (const row of await this.all(
-      "SELECT * FROM events WHERE seq>? AND seq<=? ORDER BY seq",
-      from,
-      to,
-    )) {
-      const event = row as unknown as Event,
-        metadata = JSON.parse(event.metadata) as CaptureMetadata,
-        changes: HistoryChange[] = [],
-        byId = new Map<string, HistoryChange>(),
-        objectIds = new Set(metadata.objectIds ?? []);
-      for (const c of await this.all(
-        "SELECT * FROM changes WHERE event=? ORDER BY path",
-        event.seq,
-      )) {
-        const file = String(c.path),
-          old = c.before_digest === null ? null : await this.raw(String(c.before_digest)),
-          raw = c.after_digest === null ? null : await this.raw(String(c.after_digest));
-        const before = old === null ? undefined : { commit: event.parent!, path: file },
-          after = raw === null ? undefined : { commit: event.id, path: file };
-        const a = isHistoryDocument(file) ? objectId(old) : undefined,
-          b = isHistoryDocument(file) ? objectId(raw) : undefined;
-        const add = (
-          id: string | undefined,
-          before: DocumentVersion | undefined,
-          after: DocumentVersion | undefined,
-        ) => {
-          if (id) objectIds.add(id);
-          const current = id ? byId.get(id) : undefined;
-          if (current) {
-            if (before) current.before = before;
-            if (after) current.after = after;
-          } else {
-            const change = {
-              ...(id ? { objectId: id } : {}),
-              ...(before ? { before } : {}),
-              ...(after ? { after } : {}),
-            };
-            changes.push(change);
-            if (id) byId.set(id, change);
-          }
-        };
-        if (a && b && a !== b) {
-          add(a, before, undefined);
-          add(b, undefined, after);
-        } else add(b ?? a, before, after);
-      }
-      result.push({
-        commit: event.id,
-        time: event.time,
-        ...(event.parent ? { parent: event.parent } : {}),
-        operation: metadata.operation,
-        objectIds: [...objectIds].sort(),
-        entry: metadata.entry,
-        changes,
-      });
-    }
-    return result;
+    return this.projection((index) =>
+      this.checkedHistory(
+        index
+          .prepare("SELECT value FROM events WHERE seq>? AND seq<=? ORDER BY seq")
+          .all(from, to)
+          .map((row) => readIndexValue<HistoryCommit>(row.value)),
+      ),
+    );
   }
   async nodeVersions(nodeId: string) {
     if (!isNodeId(nodeId)) throw new Error("Invalid Node id");
-    return (await this.changesInRange()).flatMap((e) => {
-      const changes = e.changes.filter((c) => c.objectId === nodeId);
-      return changes.length ? [{ ...e, changes }] : [];
+    return this.projection((index) =>
+      this.checkedHistory(
+        index
+          .prepare("SELECT value FROM node_events WHERE id=? ORDER BY seq")
+          .all(nodeId)
+          .map((row) => readIndexValue<HistoryCommit>(row.value)),
+      ),
+    );
+  }
+  async nodeVersionPage(nodeId: string, start: number, limit: number) {
+    if (!isNodeId(nodeId)) throw new Error("Invalid Node id");
+    if (
+      !Number.isSafeInteger(start) ||
+      start < 0 ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 100
+    )
+      throw new Error("Invalid history page");
+    return this.projection(async (index) => {
+      const row = index.prepare("SELECT value FROM nodes WHERE id=?").get(nodeId);
+      const summary = row
+        ? readIndexValue<{ revision: string; total: number }>(row.value)
+        : undefined;
+      return {
+        revision: String(summary?.revision ?? canonicalSha256([])),
+        total: Number(summary?.total ?? 0),
+        items: await this.checkedHistory(
+          index
+            .prepare("SELECT value FROM node_events WHERE id=? ORDER BY seq LIMIT ? OFFSET ?")
+            .all(nodeId, limit, start)
+            .map((row) => readIndexValue<HistoryCommit>(row.value)),
+        ),
+      };
     });
   }
   async commitChanges(commit: string) {

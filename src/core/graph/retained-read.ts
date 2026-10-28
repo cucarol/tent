@@ -1,6 +1,6 @@
 import { hasDocumentHistory } from "../store/history-port.js";
 import { createHash } from "node:crypto";
-import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
+import { readOnlyFs, type FsAdapter, type DocumentHeaderObservation } from "../store/adapter.js";
 import { isHistoryDocument } from "../store/document-history.js";
 import { documentHeader } from "./node-catalog.js";
 import { CANVAS_PATH, isOperationalPath, SYSTEM_REGISTRY_FILES } from "../base/paths.js";
@@ -11,9 +11,10 @@ export async function uncapturedChecker(fs: FsAdapter) {
     fs.history && (await hasDocumentHistory(fs))
       ? await fs.history.documentBlobs()
       : new Map<string, string>();
-  return (path: string, raw: string): boolean => {
+  return (path: string, raw: string | Pick<DocumentHeaderObservation, "fingerprint">): boolean => {
     const blob = blobs.get(path);
     if (!blob) return true;
+    if (typeof raw !== "string") return raw.fingerprint !== blob;
     const bytes = Buffer.from(raw, "utf8");
     return (
       createHash(blob.length === 64 ? "sha256" : "sha1")
@@ -61,7 +62,7 @@ export async function retainedDocumentFs(fs: FsAdapter): Promise<FsAdapter> {
     get(target, key) {
       if (key === "invalidNodeEdits") return undefined;
       if (key === "readFile") return read;
-      if (key === "readContentDigest") return undefined;
+      if (key === "readContentDigest" || key === "readFrontmatterWithFingerprint") return undefined;
       if (key === "readBinary")
         return async (path: string) =>
           isHistoryDocument(path) ? Buffer.from(await read(path), "utf8") : target.readBinary(path);

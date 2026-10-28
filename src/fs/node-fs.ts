@@ -3,13 +3,13 @@ import { hasDocumentHistory, type DocumentHistory } from "../core/store/history-
 
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
-import type { FsAdapter, Clock } from "../core/store/adapter.js";
+import type { FsAdapter, Clock, DocumentHeaderObservation } from "../core/store/adapter.js";
 import { withFileMutationLock } from "./mutation-lock.js";
 import { constants } from "node:fs";
 import { checkedSourceFile, checkedSourceDirectory } from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CaptureMetadata } from "../core/store/history-port.js";
-import { SqliteDocumentHistory } from "../core/store/sqlite-history.js";
+import { SqliteDocumentHistory, sqliteContentFingerprint } from "../core/store/sqlite-history.js";
 import { isHistoryDocument, isHistoryFile } from "../core/store/document-history.js";
 import { durableMkdir, durableReplace, syncDirectory } from "./durable-file.js";
 import { observeMaterialResource, readStructureSource } from "./source-observation.js";
@@ -53,6 +53,9 @@ import { withDocumentHeaderCache } from "./document-header-cache.js";
 
 type ObservedBytes = { bytes: Buffer; state: FileState };
 type ObservedPrefix = { header: string; state: FileState; bytes?: Buffer };
+type ObservedDocumentHeader = { value: DocumentHeaderObservation; state: FileState };
+
+let nextReadyScope = 0;
 
 export class NodeFs implements FsAdapter {
   private root: string;
@@ -65,6 +68,7 @@ export class NodeFs implements FsAdapter {
   private readonly transactionBypass = new AsyncLocalStorage<boolean>();
   private readonly boundaryReady = new AsyncLocalStorage<boolean>();
   private opening?: Promise<void>;
+  private readonly readyScope = `node-fs-ready:${nextReadyScope++}`;
   recoveryConflicts: readonly string[] = [];
 
   async prepareFileTransaction(
@@ -90,6 +94,7 @@ export class NodeFs implements FsAdapter {
 
   /** The owner closes its adapter after all requests/mutations have finished. */
   close(): Promise<void> {
+    forgetScopedRead(this.readyScope);
     return this.history.close();
   }
 
@@ -163,7 +168,7 @@ export class NodeFs implements FsAdapter {
     )
       return;
     if (this.opening) return this.opening;
-    this.opening = (async () => {
+    this.opening = scopedRead(this.readyScope, async () => {
       await this.history.available();
       const pending = await fs.access(this.abs(TRANSACTION_PATH)).then(
         () => true,
@@ -174,7 +179,7 @@ export class NodeFs implements FsAdapter {
       );
       if (pending) await this.withLock("mutation.lock", async () => undefined);
       this.recoveryConflicts = await this.raw(() => readTransactionConflicts(this));
-    })();
+    });
     try {
       await this.opening;
     } finally {
@@ -328,6 +333,53 @@ export class NodeFs implements FsAdapter {
 
   async readFrontmatter(path: string): Promise<string> {
     return (await this.readFrontmatterObservation(path)).content;
+  }
+
+  async readFrontmatterWithFingerprint(path: string): Promise<DocumentHeaderObservation> {
+    await this.ready();
+    return withFileReadScope(async () => {
+      const filename = this.abs(path);
+      const state = fileState(await fs.stat(filename, { bigint: true }));
+      const key = `document-header:${filename}`;
+      const previous = peekScopedRead<ObservedDocumentHeader>(key);
+      if (previous) {
+        const observed = await previous;
+        if (sameFileState(observed.state, state)) return observed.value;
+        forgetScopedRead(key);
+      }
+      const observed = await scopedRead(key, async () => {
+        const cache = await this.readCacheFile();
+        const cached = await cachedFileValue(
+          cache,
+          key,
+          state,
+          (value): value is DocumentHeaderObservation =>
+            !!value &&
+            typeof value === "object" &&
+            typeof (value as DocumentHeaderObservation).content === "string" &&
+            typeof (value as DocumentHeaderObservation).fingerprint === "string" &&
+            /^[a-f0-9]{64}$/.test((value as DocumentHeaderObservation).fingerprint),
+        );
+        if (cached) return { value: cached, state };
+        const read = await this.readBytes(path, false);
+        // Match readFile's UTF-8 replacement/BOM semantics, not a raw-byte digest.
+        const raw = read.bytes.toString("utf8");
+        let content: string;
+        try {
+          content = documentHeader(raw);
+        } catch {
+          // Preserve malformed-header diagnostics without persisting a whole body.
+          return {
+            value: { content: raw, fingerprint: sqliteContentFingerprint(raw) },
+            state: read.state,
+          };
+        }
+        const value = { content, fingerprint: sqliteContentFingerprint(raw) };
+        await rememberFileValue(cache, key, read.state, value);
+        return { value, state: read.state };
+      });
+      return observed.value;
+    });
   }
 
   /** A derived cache must retain the identity of the observation that supplied its content. */

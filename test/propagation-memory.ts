@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { FsAdapter } from "../src/core/store/adapter.js";
 import {
   type DocumentHistory,
+  type DocumentVersion,
   type CaptureMetadata,
   type DocumentChange,
   type HistoryCommit,
@@ -163,7 +164,19 @@ export class PropagationMemoryFs implements FsAdapter {
           to ? events.findIndex((x) => x.commit === to) + 1 : undefined,
         ),
       );
-    history.derived = async (_name, _version, compute) => compute(head());
+    history.identityVersions = async () => {
+      const first: Record<string, DocumentVersion> = {},
+        latest: Record<string, DocumentVersion> = {};
+      for (const event of events)
+        for (const change of event.changes) {
+          if (!change.objectId) continue;
+          if (change.after) {
+            first[change.objectId] ??= change.after;
+            latest[change.objectId] = change.after;
+          } else delete latest[change.objectId];
+        }
+      return { first, latest };
+    };
     const times = async (files: readonly string[], latest: boolean) =>
       new Map(
         files.flatMap((file) => {

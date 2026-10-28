@@ -115,34 +115,37 @@ export async function readNodeForEdit(
   options: { capture?: boolean; uncaptured?: boolean; changes?: boolean } = {},
 ) {
   if (!isNodeId(nodeId)) throw new ReaderError("INVALID_INPUT", "Expected a canonical Node id");
-  const node = (await loadNodeCatalog(fs)).byId.get(nodeId);
-  if (!node) throw new ReaderError("NOT_FOUND", `Node not found: ${nodeId}`);
-  const document = await readCatalogDocument(fs, node);
-  const { data, body } = parseFrontmatter(document.raw);
-  const version = options.capture
-    ? await captureReadDocument(fs, nodeNotePath(node.path), document.raw)
-    : undefined;
-  const changedSince =
-    options.changes && isOutputNode(data) ? await readOutputChanges(fs, nodeId) : undefined;
-  return {
-    nodeId,
-    path: node.path,
-    name: node.name,
-    type: node.type,
-    ...documentLifecycle(data),
-    archived: node.archived,
-    body,
-    raw: document.raw,
-    etag: document.etag,
-    frontmatter: data,
-    ...(changedSince ? { changedSince } : {}),
-    ...(options.uncaptured &&
-    !options.capture &&
-    (await uncapturedChecker(fs))(nodeNotePath(node.path), document.raw)
-      ? { uncaptured: true as const }
-      : {}),
-    ...(version ? { version } : {}),
+  const read = async () => {
+    const node = (await loadNodeCatalog(fs)).byId.get(nodeId);
+    if (!node) throw new ReaderError("NOT_FOUND", `Node not found: ${nodeId}`);
+    const document = await readCatalogDocument(fs, node);
+    const { data, body } = parseFrontmatter(document.raw);
+    const version = options.capture
+      ? await captureReadDocument(fs, nodeNotePath(node.path), document.raw)
+      : undefined;
+    const changedSince =
+      options.changes && isOutputNode(data) ? await readOutputChanges(fs, nodeId) : undefined;
+    return {
+      nodeId,
+      path: node.path,
+      name: node.name,
+      type: node.type,
+      ...documentLifecycle(data),
+      archived: node.archived,
+      body,
+      raw: document.raw,
+      etag: document.etag,
+      frontmatter: data,
+      ...(changedSince ? { changedSince } : {}),
+      ...(options.uncaptured &&
+      !options.capture &&
+      (await uncapturedChecker(fs))(nodeNotePath(node.path), document.raw)
+        ? { uncaptured: true as const }
+        : {}),
+      ...(version ? { version } : {}),
+    };
   };
+  return fs.observationScope ? fs.observationScope(read) : read();
 }
 
 /** Without type or tag filters a list shows direct children; filters search the whole subtree. */

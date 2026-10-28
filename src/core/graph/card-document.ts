@@ -1069,11 +1069,16 @@ export async function listCardDocumentHeaders(
         const path = cardPath(id);
         let uncaptured = false;
         try {
+          const observed =
+            isUncaptured && fs.readFrontmatterWithFingerprint
+              ? await fs.readFrontmatterWithFingerprint(path)
+              : undefined;
           const raw =
-            !isUncaptured && fs.readFrontmatter
+            observed?.content ??
+            (!isUncaptured && fs.readFrontmatter
               ? await fs.readFrontmatter(path)
-              : await fs.readFile(path);
-          uncaptured = isUncaptured?.(path, raw) ?? false;
+              : await fs.readFile(path));
+          uncaptured = isUncaptured?.(path, observed ?? raw) ?? false;
           const data = parseFrontmatter(raw).data;
           validateCardHeader(id, data);
           if (options.unfinishedOnly && completedCard(data)) continue;
@@ -1169,13 +1174,16 @@ export async function listCardDocuments(
   options: Parameters<typeof listCardDocumentHeaders>[1] & { retainedState?: boolean } = {},
   currentHeaders?: Awaited<ReturnType<typeof listCardDocumentHeaders>>,
 ) {
-  const { items: visible } =
-    currentHeaders ??
-    (await listCardDocumentHeaders(fs, {
-      ...options,
-      uncaptured: options.retainedState || options.uncaptured,
-    }));
-  return { revision: canonicalSha256(visible), items: visible };
+  const read = async () => {
+    const { items: visible } =
+      currentHeaders ??
+      (await listCardDocumentHeaders(fs, {
+        ...options,
+        uncaptured: options.retainedState || options.uncaptured,
+      }));
+    return { revision: canonicalSha256(visible), items: visible };
+  };
+  return fs.observationScope ? fs.observationScope(read) : read();
 }
 
 export type ReceivedCardSourceChange = {
@@ -1240,19 +1248,7 @@ export async function inspectReceivedCardSourceChanges(
     );
     const history = await historyOf(readonly);
     // One identity/history scan and two source batches serve the whole query.
-    const identities = await history.derived("identity-versions", 1, async () => {
-      const first: Record<string, DocumentVersion> = {};
-      const latest: Record<string, DocumentVersion> = {};
-      for (const commit of await history.changesInRange())
-        for (const change of commit.changes) {
-          if (!change.objectId) continue;
-          if (change.after) {
-            first[change.objectId] ??= change.after;
-            latest[change.objectId] = change.after;
-          } else delete latest[change.objectId];
-        }
-      return { first, latest };
-    });
+    const identities = await history.identityVersions();
     const first = new Map(Object.entries(identities.first));
     const latest = new Map(Object.entries(identities.latest));
     const requested = candidates.flatMap((item) => {

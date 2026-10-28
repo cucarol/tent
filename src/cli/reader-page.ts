@@ -199,10 +199,34 @@ function offset(cursor: string | undefined, scope: string, revision: string) {
     throw new ReaderError("SOURCE_CHANGED", "Reader source changed; restart the query");
   return result.data.position;
 }
+export function itemPageStart(cursor: string | undefined, operation: string, limit = 20) {
+  let start = 0;
+  if (cursor) {
+    const scope = canonicalSha256({ operation, source: "cli", input: undefined });
+    // pageItems checks the revision against the selected history snapshot before
+    // publishing any records; only the position is needed for the SQL query.
+    let revision: string;
+    try {
+      revision = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")).revision;
+    } catch {
+      throw new PageError("INVALID_CURSOR", "Invalid reader cursor; restart the query");
+    }
+    start = offset(cursor, scope, revision);
+  }
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+    throw new ReaderError("INVALID_INPUT", "Invalid page limit");
+  return start;
+}
 export function pageItems<T extends { items: unknown[]; revision?: string }>(
   result: T,
   operation: string,
-  options: { limit?: number; cursor?: string; start?: number; expectedRevision?: string } = {},
+  options: {
+    limit?: number;
+    cursor?: string;
+    start?: number;
+    expectedRevision?: string;
+    window?: { start: number; total: number };
+  } = {},
 ) {
   const revision = result.revision ?? canonicalSha256(result);
   const scope = canonicalSha256({
@@ -224,16 +248,18 @@ export function pageItems<T extends { items: unknown[]; revision?: string }>(
   const limit = options.limit ?? 20;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
     throw new ReaderError("INVALID_INPUT", "Invalid page limit");
-  if (!Number.isSafeInteger(start) || start < 0 || start > result.items.length)
+  const total = options.window?.total ?? result.items.length;
+  const windowStart = options.window?.start ?? 0;
+  if (!Number.isSafeInteger(start) || start < 0 || start > total)
     throw new PageError("INVALID_CURSOR", "Reader cursor position is invalid");
   if (options.expectedRevision && options.expectedRevision !== revision)
     throw new ReaderError("SOURCE_CHANGED", "List changed; restart the query");
   const make = (end: number) => ({
     ...base,
-    items: compacted.slice(start, end),
+    items: compacted.slice(start - windowStart, end - windowStart),
     page: {
-      hasMore: end < result.items.length,
-      ...(end < result.items.length
+      hasMore: end < total,
+      ...(end < total
         ? {
             nextCursor: encode(scope, revision, end),
             next: { start: end, expectedRevision: revision },
@@ -242,10 +268,10 @@ export function pageItems<T extends { items: unknown[]; revision?: string }>(
         : {}),
     },
   });
-  let end = Math.min(start + limit, result.items.length);
+  let end = Math.min(start + limit, total);
   while (end > start && !fits(make(end))) end--;
   const page = make(end);
-  if ((end === start && start < result.items.length) || !fits(page))
+  if ((end === start && start < total) || !fits(page))
     throw new PageError("PAGE_TOO_LARGE", "Record exceeds CLI page budget");
   return page;
 }

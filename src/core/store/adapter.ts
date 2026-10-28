@@ -6,6 +6,9 @@ import { recoverPendingNodeMoveUnlocked } from "./node-move-recovery.js";
 import { recoverPendingDeleteUnlocked } from "./delete-recovery.js";
 import type { CaptureMetadata } from "./history-port.js";
 
+/** Prefix and decoded-text blob fingerprint from one current document observation. */
+export type DocumentHeaderObservation = { content: string; fingerprint: string };
+
 export interface FsAdapter {
   /** Available for adapters rooted at a Workspace's .tent directory. */
   readonly workspaceRoot?: string;
@@ -47,6 +50,8 @@ export interface FsAdapter {
   readFile(path: string): Promise<string>;
   /** Read the original Markdown frontmatter prefix, or an empty string without an opening fence. */
   readFrontmatter?(path: string): Promise<string>;
+  /** Current Markdown prefix and full decoded-text SHA-256 blob fingerprint. */
+  readFrontmatterWithFingerprint?(path: string): Promise<DocumentHeaderObservation>;
   writeFile(path: string, content: string): Promise<void>;
   /**
    * Read raw bytes, including non-UTF-8 payloads.

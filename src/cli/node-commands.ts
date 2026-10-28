@@ -55,13 +55,13 @@ import { readerFlags } from "./reader-flags.js";
 import { readerBatchSchema } from "../core/read/reader-batch.js";
 import {
   pageItems,
+  itemPageStart,
   pageText,
   formatTextPage,
   uncapturedNotice,
   compactItem,
   incompleteNodeRead,
 } from "./reader-page.js";
-import { canonicalSha256 } from "../core/base/canonical-digest.js";
 import { inspectNodeSync, confirmNodeSync, linkNodeOutput } from "../core/graph/node-sync.js";
 import { goalContextText } from "./goal-context.js";
 import { retainedDocumentFs } from "../core/graph/retained-read.js";
@@ -347,14 +347,15 @@ async function runNodeCommandOpened(
         );
         if (typeof target !== "string") return target;
         const nodeId = nodeRef(target);
-        const items = await (
-          fs.history as typeof fs.history & { nodeVersions(nodeId: string): Promise<unknown[]> }
-        ).nodeVersions(nodeId);
-        const result = pageItems(
-          { items, revision: canonicalSha256(items) },
-          `node.history:${nodeId}`,
-          { limit: numberFlag(flags, "limit"), cursor: flags.cursor },
-        );
+        const operation = `node.history:${nodeId}`;
+        const limit = numberFlag(flags, "limit") ?? 20;
+        const start = itemPageStart(flags.cursor, operation, limit);
+        const { items, revision, total } = await fs.history!.nodeVersionPage(nodeId, start, limit);
+        const result = pageItems({ items, revision }, operation, {
+          limit,
+          cursor: flags.cursor,
+          window: { start, total },
+        });
         return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
       }
       case "list": {

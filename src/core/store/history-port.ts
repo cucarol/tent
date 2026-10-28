@@ -72,11 +72,15 @@ export interface DocumentHistory {
     files: readonly string[],
   ): Promise<{ published: Map<string, string>; returned: Map<string, string> }>;
   completedCardPaths(completed: (file: string, raw: string) => boolean): Promise<Set<string>>;
-  derived<T>(
-    name: string,
-    schemaVersion: number,
-    compute: (head: string | null) => Promise<T>,
-  ): Promise<T>;
+  identityVersions(): Promise<{
+    first: Record<string, DocumentVersion>;
+    latest: Record<string, DocumentVersion>;
+  }>;
+  nodeVersionPage(
+    nodeId: string,
+    start: number,
+    limit: number,
+  ): Promise<{ revision: string; total: number; items: HistoryCommit[] }>;
   changesInRange(range?: { from?: string; to?: string }): Promise<HistoryCommit[]>;
   nodeVersions(nodeId: string): Promise<HistoryCommit[]>;
   commitChanges(commit: string): Promise<{
