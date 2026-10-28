@@ -35,7 +35,7 @@ No edit clears behind; only `confirm` does. More: [saving](../../skill-resources
 
 ## How to write
 
-One Node per separately used fact, under the Node it narrows; link instead of retelling. Example:
+One Node per separately used fact, under the Node it narrows; link instead of retelling. Name it for what it holds, in a few words the user would say; Tent's history already keeps when and who. Example:
 
 ```markdown
 Sign-in rules; follow them when changing login.
