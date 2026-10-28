@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fileKind, fileOf, filePaths, fileSize, infoOf, previewOf } from "../src/ui/data/files.js";
+import {
+  fileKind,
+  fileMarkOf,
+  fileOf,
+  filePaths,
+  fileSize,
+  infoOf,
+  previewOf,
+} from "../src/ui/data/files.js";
 import type { Snapshot, SnapshotMaterial, SnapshotNode } from "../src/ui/data/types.js";
 
 const node = (id: string, type: string, materials: SnapshotMaterial[]) =>
@@ -98,4 +106,22 @@ test("a card offers a preview of any file a note could embed, when it is there a
   assert.equal(previewOf(own("out/note.wav"), files)?.show, "audio");
   for (const path of ["out/model.bin", "out/huge.png", "out/gone.png", "out/unknown.png"])
     assert.equal(previewOf(own(path), files), null, path);
+});
+
+test("map file-mark facts win without inventing materials, previews or file reads", () => {
+  const first = { ...node("node-first", "prompt", []), resourceKind: "file" as const };
+  assert.equal(fileMarkOf(first), "file");
+  assert.equal(fileOf(first), null);
+  assert.equal(previewOf(first, {}), null);
+  assert.deepEqual(filePaths({ nodes: [first] } as Snapshot), []);
+  const detailed = node("node-first", "prompt", [
+    { kind: "file", resource: "../../a.png", workspacePath: "a.png", field: "resource" },
+  ]);
+  assert.equal(fileMarkOf(detailed), "file", "A full-only view uses its existing material details");
+  assert.equal(
+    fileMarkOf({ ...detailed, resourceKind: null }),
+    null,
+    "A new native declaration clears stale file details",
+  );
+  assert.equal(fileMarkOf({ ...detailed, resourceKind: "uri" }), "uri");
 });

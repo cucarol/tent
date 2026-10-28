@@ -242,8 +242,8 @@ function diagnostics(
 
 /**
  * The map as a snapshot to draw the first screen with: every Node in tree order with its name, type, tags,
- * place, explicit expiry and header diagnosis, and the module lines. Bodies, links, materials, history,
- * Cards and Roles come with the full snapshot, read only when something asks for them; the map's own
+ * place, own-resource kind, explicit expiry and header diagnosis, and the module lines. Bodies, links,
+ * materials, history, Cards and Roles come with the full snapshot, read only when something asks for them; the map's own
  * revision stands in until then and is never compared with the full one.
  */
 export function mapSnapshot(map: WorkspaceMap): Snapshot {
@@ -265,6 +265,7 @@ export function mapSnapshot(map: WorkspaceMap): Snapshot {
       childIds: n.childIds,
       links: [],
       materials: [],
+      resourceKind: n.resourceKind,
       incoming: [],
       history: [],
       ...diagnostics(n),
@@ -297,6 +298,7 @@ export function withMap(full: Snapshot, map: WorkspaceMap): Snapshot {
         tags: n.tags,
         status: n.status,
         archived: n.archived,
+        resourceKind: n.resourceKind,
         parentId: n.parentId,
         childIds: n.childIds,
         stale: n.stale,

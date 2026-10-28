@@ -34,7 +34,7 @@ import { primaryOf, type Graph, type Hand, type Primary } from "../data/store.js
 import type { SnapshotCommit, SnapshotRef } from "../data/types.js";
 import { isDraft } from "../data/drafts.js";
 import { FileGlyph, Icon, TypeGlyph, type IconName } from "../components/Glyph.js";
-import { fileOf, infoOf, previewOf, useFiles } from "../data/files.js";
+import { fileMarkOf, fileOf, infoOf, previewOf, useFiles } from "../data/files.js";
 import type { LocalFile } from "../panel/FileView.js";
 import { CardPreview, previewHeight } from "./CardPreview.js";
 import {
@@ -308,7 +308,8 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
   const n = data.graph.nodes.get(data.id)!;
   const state = data.graph.states.get(data.id)!;
   const file = fileOf(n);
-  const local = file?.kind === "file" ? file : null;
+  const marked = fileMarkOf(n) === "file";
+  const local = marked && file?.kind === "file" ? file : null;
   const missing = !!local && infoOf(files, local.path) === null;
   const depth = data.topic.depth;
   const open = !!data.preview?.open;
@@ -354,18 +355,23 @@ const NodeCard = memo(function NodeCard({ data }: NodeProps<Node<CardData>>) {
           <TypeGlyph type={n.type} size={titleAt(depth).icon} />
           <span className="mind-name">{n.name}</span>
         </span>
-        {local && (
+        {marked && (
           <button
             type="button"
             className="mind-file nopan nodrag"
-            disabled={!data.preview}
+            disabled={!local || !data.preview}
             aria-label={open ? t.map.closePreview : t.map.openPreview}
             onClick={(e) => {
               e.stopPropagation();
               onPreview(data.id);
             }}
           >
-            <FileGlyph show={local.show} missing={missing} size={14} kind={primaryOf(n.type)} />
+            <FileGlyph
+              show={local?.show ?? "other"}
+              missing={missing}
+              size={14}
+              kind={primaryOf(n.type)}
+            />
           </button>
         )}
         {state.deprecated && <span className="mind-mark">{t.map.status.archived}</span>}
@@ -1185,8 +1191,9 @@ function MapContent({
       const parts = [letters];
       if (n) parts.push(type.icon * scale);
       const local = n && fileOf(n);
-      const file = local?.kind === "file" ? local : null;
-      if (file) parts.push(18);
+      const marked = n && fileMarkOf(n) === "file";
+      const file = marked && local?.kind === "file" ? local : null;
+      if (marked) parts.push(18);
       if (n && graph.states.get(id)?.deprecated) parts.push(textWidth(t.map.status.archived, 11));
       if (n?.invalid) parts.push(textWidth(t.map.status.invalid, 10.5));
       else if (file && infoOf(files, file.path) === null)

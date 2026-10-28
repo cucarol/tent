@@ -85,6 +85,8 @@ export type SnapshotNode = {
   childIds: string[];
   links: SnapshotLink[];
   materials: SnapshotMaterial[];
+  /** Header-only map classification, before material details arrive. */
+  resourceKind?: "file" | "uri" | null;
   incoming: SnapshotIncoming[];
   history: string[];
   /** Earliest valid generation or verification time in the current output, normalized to UTC ISO. */

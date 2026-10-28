@@ -35,6 +35,11 @@ export function fileOf(node: SnapshotNode): NodeFile | null {
   return own ? localFile(own) : null;
 }
 
+/** A map's header fact wins over retained details; a full-only view already has its materials. */
+export function fileMarkOf(node: SnapshotNode): "file" | "uri" | null {
+  return node.resourceKind === undefined ? (fileOf(node)?.kind ?? null) : node.resourceKind;
+}
+
 function localFile(m: SnapshotMaterial): Extract<NodeFile, { kind: "file" }> | null {
   if (m.kind !== "file" || !m.workspacePath) return null;
   // A folder (written with a closing slash) is where the Node's code lives, not a file it can show.

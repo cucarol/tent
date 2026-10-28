@@ -6,6 +6,7 @@ import { test } from "node:test";
 import ts from "typescript";
 import type { WorkspaceMap, WorkspaceMapNode } from "../src/core/read/workspace-map.js";
 import { buildGraph, mapSnapshot, withMap } from "../src/ui/data/store.js";
+import { fileMarkOf, fileOf, infoOf } from "../src/ui/data/files.js";
 import { detailLoader } from "../src/ui/data/details.js";
 import { setLang, t } from "../src/ui/i18n.js";
 import { NodeFs } from "../src/fs/node-fs.js";
@@ -33,6 +34,7 @@ function mapNode(
     childIds: [],
     stale: false,
     invalid: false,
+    resourceKind: null,
     ...extra,
   };
 }
@@ -40,9 +42,13 @@ function mapNode(
 const map: WorkspaceMap = {
   workspace: { id: "ws-map", name: "map", revision: "map-r1", generatedAt: "" },
   nodes: [
-    mapNode("g", null, "goal", { childIds: ["o", "p", "x"], tags: ["direction"] }),
+    mapNode("g", null, "goal", {
+      childIds: ["o", "p", "x"],
+      tags: ["direction"],
+      resourceKind: "file",
+    }),
     mapNode("o", "g", "output", { status: "deprecated" }),
-    mapNode("p", "g", "prompt", { stale: true }),
+    mapNode("p", "g", "prompt", { stale: true, resourceKind: "uri" }),
     mapNode("x", "g", "prompt", { invalid: true, invalidReason: "bad header" }),
   ],
   modules: {
@@ -121,6 +127,7 @@ test("the full snapshot keeps what only the map carries", () => {
     delete n.stale;
     delete n.invalid;
     delete n.invalidReason;
+    delete n.resourceKind;
   }
   const merged = withMap(full, map);
   assert.equal(merged.workspace.revision, "full-r9");
@@ -128,6 +135,8 @@ test("the full snapshot keeps what only the map carries", () => {
   assert.equal(byId.get("p")!.stale, true);
   assert.equal(byId.get("x")!.invalidReason, "bad header");
   assert.equal(merged.modules?.edges.length, 1);
+  assert.equal(byId.get("g")!.resourceKind, "file");
+  assert.equal(byId.get("p")!.resourceKind, "uri");
 });
 
 test("fresh Core expiry removes an old snapshot's completion without changing the full revision", async (t) => {
@@ -379,4 +388,97 @@ test("the page reads the map first and the snapshot only where a view needs it",
   assert.equal(view.match(/if \(!graph\.detailed\) return out;/g)?.length, 1);
   // Selection reactions say only what Tent holds while their relations arrive.
   assert.doesNotMatch(view, /map-region-none/);
+});
+
+test("actual topic measurement keeps map-first file widths when full details arrive", () => {
+  const view = readFileSync(new URL("../src/ui/map/MapView.tsx", import.meta.url), "utf8");
+  const source = ts.createSourceFile(
+    "MapView.tsx",
+    view,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  let callback: ts.ArrowFunction | undefined;
+  const visit = (n: ts.Node) => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      n.name.getText(source) === "measureTopic" &&
+      n.initializer &&
+      ts.isCallExpression(n.initializer)
+    ) {
+      const first = n.initializer.arguments[0];
+      if (first && ts.isArrowFunction(first)) callback = first;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(source);
+  assert.ok(callback, "Exercise the actual MapView measurement callback");
+  const javascript = ts.transpileModule(`const measure = ${callback.getText(source)};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText;
+  const measure = (snapshot: ReturnType<typeof mapSnapshot>) => {
+    const graph = buildGraph(snapshot);
+    const env = {
+      graph,
+      fileMarkOf,
+      fileOf,
+      infoOf,
+      files: {},
+      topicScale: 1,
+      titleAt: () => ({ px: 15, icon: 18, weight: 600 }),
+      textWidth: (text: string) => text.length * 7,
+      t,
+      sources: null,
+      openOutputs: new Set(),
+      shown: { kidsOf: graph.childrenOf },
+      TOPIC: { centre: 30, first: 24, deeper: 22 },
+    };
+    return new Function(...Object.keys(env), `${javascript}\nreturn measure;`)(
+      ...Object.values(env),
+    ) as (id: string, depth: number) => { w: number; h: number };
+  };
+  const first = mapSnapshot(map);
+  const full = structuredClone(first);
+  for (const n of full.nodes) delete n.resourceKind;
+  full.nodes.find((n) => n.id === "g")!.materials = [
+    { kind: "file", resource: "../../a.png", workspacePath: "a.png", field: "resource" },
+  ];
+  full.nodes.find((n) => n.id === "p")!.materials = [
+    {
+      kind: "uri",
+      resource: "https://example.com/a",
+      uri: "https://example.com/a",
+      field: "resource",
+    },
+  ];
+  const after = withMap(full, map);
+  for (const n of first.nodes)
+    assert.deepEqual(measure(first)(n.id, n.depth), measure(after)(n.id, n.depth), n.id);
+  const noFile = mapSnapshot({
+    ...map,
+    nodes: map.nodes.map((n) => ({ ...n, resourceKind: null })),
+  });
+  assert.equal(
+    measure(first)("g", 0).w - measure(noFile)("g", 0).w,
+    23,
+    "One actual18px file glyph plus5px gap, no extra slot",
+  );
+  assert.equal(
+    measure(first)("p", 1).w,
+    measure(noFile)("p", 1).w,
+    "URI retains the current map style without a glyph",
+  );
+  assert.match(view, /const marked = fileMarkOf\(n\) === "file"/);
+  assert.match(view, /\{marked && \(/, "Rendering uses the same declared flag as measurement");
+  const currentNative = withMap(full, {
+    ...map,
+    nodes: map.nodes.map((n) => ({ ...n, resourceKind: null })),
+  });
+  assert.equal(fileMarkOf(currentNative.nodes.find((n) => n.id === "g")!), null);
+  assert.deepEqual(
+    currentNative.nodes.find((n) => n.id === "g")!.materials,
+    full.nodes.find((n) => n.id === "g")!.materials,
+    "Header projection does not rewrite retained material details",
+  );
 });

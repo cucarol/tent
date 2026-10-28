@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { nodeIsStale } from "../base/node-provenance.js";
 import { nodeNotePath } from "../base/paths.js";
 import type { Node } from "../base/types.js";
+import { isDirectoryMaterial, isPrefixMaterial, materialLocator } from "../base/material.js";
 import {
   readModuleDependencies,
   type ModuleDependencies,
@@ -25,6 +26,8 @@ export type WorkspaceMapNode = {
   stale: boolean;
   invalid: boolean;
   invalidReason?: string;
+  /** Declared own Workspace file, URI, or no ordinary file mark; never an existence check. */
+  resourceKind: "file" | "uri" | null;
 };
 
 export type WorkspaceMap = {
@@ -32,6 +35,26 @@ export type WorkspaceMap = {
   nodes: WorkspaceMapNode[];
   modules: ModuleDependencies;
 };
+
+/** Only the already-read resource declaration, not sources, file bytes or native document validity. */
+function resourceKind(node: Node): WorkspaceMapNode["resourceKind"] {
+  if (node.invalid || node.fm.resource === undefined) return null;
+  try {
+    const locator = materialLocator(node.fm.resource, nodeNotePath(node.path));
+    if (locator.kind === "uri") return "uri";
+    if (
+      locator.kind === "path" &&
+      locator.target.startsWith("../") &&
+      !isDirectoryMaterial(locator) &&
+      !isPrefixMaterial(locator)
+    )
+      return "file";
+  } catch {
+    // Material detail reads retain their own errors; a bad declaration is no ordinary file mark.
+  }
+  // Addresses inside .tent keep the native protocol even when missing or damaged.
+  return null;
+}
 
 /** First-screen topology and module lines; no document bodies, Cards or retained history. */
 export async function readWorkspaceMap(
@@ -62,6 +85,7 @@ export async function readWorkspaceMap(
       childIds: node.children.map((child) => child.id),
       stale: !node.invalid && nodeIsStale(node.fm, now),
       invalid: node.invalid,
+      resourceKind: resourceKind(node),
       ...(node.invalidReason ? { invalidReason: node.invalidReason } : {}),
     });
     for (const child of node.children) visit(child, depth + 1);
