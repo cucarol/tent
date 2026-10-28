@@ -117,7 +117,7 @@ const zh = {
     opening: "正在打开…",
     notWorkspace: "这个文件夹里没有 Tent 工作区",
     fullPath: "请填写完整路径",
-    unsavedNodes: "还有未保存的 Node 正文，请先保存或取消编辑。",
+    unsavedNodes: "还有没保存的修改，请先保存或取消编辑。",
     portBusy: (port: number) =>
       `它平时用的端口 ${port} 被占用了（可能在别的窗口开着），这次会用临时地址，浏览器里存的主题、已读等偏好暂时用不上。`,
     openAnyway: "仍然打开",
@@ -792,6 +792,22 @@ const zh = {
     sandboxed: "沙箱预览：页面脚本不运行",
     truncated: (shown: string) => `只显示开头 ${shown}，文件后面还有。`,
   },
+  agents: {
+    /** The row on top of the Role list, and its page's title. */
+    title: "所有会话",
+    what: "AGENTS.md，每个会话开场都会读",
+    rowTip: "仓库根目录的 AGENTS.md，每个会话开场都会读；Role 是各类会话自己的说明",
+    missing: "仓库根目录还没有 AGENTS.md。写好保存，就会创建它。",
+    file: "文件",
+    fileValue: "仓库根目录的 AGENTS.md",
+    versions: "版本",
+    versionsValue: "由 Git 记录，不进 Tent 历史",
+    editLabel: "编辑 AGENTS.md",
+    created: "已创建 AGENTS.md。",
+    updated: "AGENTS.md 刚在别处改过，现在显示的是新内容。",
+    changedWhileEditing: "你编辑的时候，AGENTS.md 在别处被改了。保存不会覆盖它。",
+    conflict: "AGENTS.md 在你打开之后被改过，这次没有保存，也没有覆盖它。",
+  },
   palette: {
     label: "搜索",
     placeholder: "搜索 Node、Role、Card，名字或正文里的词",
@@ -901,7 +917,7 @@ const en: Messages = {
     opening: "Opening…",
     notWorkspace: "There is no Tent workspace in this folder",
     fullPath: "Give the full path",
-    unsavedNodes: "A Node still has unsaved text. Save or cancel its edit before switching.",
+    unsavedNodes: "Some text is still unsaved. Save or cancel the edit before switching.",
     portBusy: (port: number) =>
       `Its usual port ${port} is taken (perhaps open in another window), so a temporary address is used; preferences saved in the browser, such as theme and read marks, are unavailable there.`,
     openAnyway: "Open anyway",
@@ -1595,6 +1611,24 @@ const en: Messages = {
     preview: (name) => `Preview of ${name}`,
     sandboxed: "Sandboxed preview: page scripts do not run",
     truncated: (shown) => `Showing the first ${shown}; the file goes on.`,
+  },
+  agents: {
+    title: "All sessions",
+    what: "AGENTS.md, read at the start of every session",
+    rowTip:
+      "AGENTS.md at the repository root, read at the start of every session; Roles hold what each kind of session adds",
+    missing: "There is no AGENTS.md at the repository root yet. Write it and save to create it.",
+    file: "File",
+    fileValue: "AGENTS.md at the repository root",
+    versions: "Versions",
+    versionsValue: "Kept by Git, not in Tent history",
+    editLabel: "Edit AGENTS.md",
+    created: "Created AGENTS.md.",
+    updated: "AGENTS.md just changed elsewhere; you're seeing the new text.",
+    changedWhileEditing:
+      "AGENTS.md changed elsewhere while you were editing. Saving won't overwrite it.",
+    conflict:
+      "AGENTS.md changed after you opened it, so nothing was saved and it wasn't overwritten.",
   },
   palette: {
     label: "Search",

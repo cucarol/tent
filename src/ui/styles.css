@@ -735,6 +735,22 @@ kbd {
 .pet.is-tray.is-compact .p-paper {
   stroke-width: 3.4;
 }
+.pet.is-sheet .p-paper,
+.pet.is-sheet .p-fold {
+  fill: var(--bg);
+  stroke: var(--tray-line);
+  stroke-width: 2.6;
+  stroke-linejoin: round;
+}
+.pet.is-sheet .p-fold {
+  fill: none;
+}
+.pet.is-sheet .p-tray {
+  fill: var(--tray);
+}
+.pet.is-sheet.is-compact :is(.p-paper, .p-fold) {
+  stroke-width: 3.4;
+}
 .face {
   display: grid;
   flex: none;
@@ -1799,6 +1815,19 @@ body.is-dragging .row .acts {
   transition:
     background 0.15s,
     box-shadow 0.15s;
+}
+/* All sessions sits above the Roles, set off by a hairline. */
+.lane.is-everyone {
+  position: relative;
+  margin-bottom: 5px;
+}
+.lane.is-everyone::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: -4px;
+  left: 8px;
+  border-bottom: 1px solid var(--border);
 }
 .lane.is-over {
   background: var(--accent-soft);
@@ -4573,6 +4602,11 @@ button.pg-crumb:hover {
   box-shadow:
     0 0 0 3px var(--bg),
     0 0 0 5px var(--accent);
+}
+/* AGENTS.md has a face to look at, not one to turn. */
+.hero-sheet {
+  display: block;
+  flex: none;
 }
 .page-title {
   margin: 4px 0 0;

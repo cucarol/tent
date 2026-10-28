@@ -336,6 +336,15 @@ export const readDirectory = (path: string, signal?: AbortSignal) =>
 export const workspaceText = (path: string, signal?: AbortSignal) =>
   call<NodeText>(`/api/files/text?path=${encodeURIComponent(path)}`, { signal });
 
+/**
+ * The workspace's AGENTS.md, which every session reads first. A missing file is empty text with a null
+ * ETag; saving over a version that changed on disk is ETAG_CONFLICT with `current` in its details.
+ */
+export type AgentsFile = { path: string; exists: boolean; etag: string | null; text: string };
+export const agentsFile = () => call<AgentsFile>("/api/agents");
+export const saveAgentsFile = (baseEtag: string | null, text: string) =>
+  call<AgentsFile & { changed: boolean }>("/api/agents", send("PUT", { baseEtag, text }));
+
 /** A workspace file's bytes; <iframe>, <video> and <audio> cannot send the token themselves. */
 export async function workspaceBlob(workspacePath: string, signal?: AbortSignal): Promise<Blob> {
   const response = await fetch(`/api/files?path=${encodeURIComponent(workspacePath)}`, {

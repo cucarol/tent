@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
+import ts from "typescript";
 import type { WorkspaceMap, WorkspaceMapNode } from "../src/core/read/workspace-map.js";
 import { buildGraph, mapSnapshot, withMap } from "../src/ui/data/store.js";
 import { detailLoader } from "../src/ui/data/details.js";
@@ -318,11 +319,47 @@ test("the page reads the map first and the snapshot only where a view needs it",
   );
   // An empty link opens nothing, even beside a Node listed under the empty id.
   assert.match(app, /const ref: SnapshotRef \| null = !id\s*\?\s*null/);
-  // Each view that shows what the snapshot holds asks for it.
-  assert.match(
+  // Evaluate the Reader's actual request condition: Node details and the plain
+  // AGENTS.md file have their own readers; Roles and Cards need the snapshot.
+  const reader = ts.createSourceFile(
+    "Reader.tsx",
     src("../src/ui/panel/Reader.tsx"),
-    /useWantDetails\(target\.kind !== "node" && !graph\.detailed\)/,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
   );
+  const component = reader.statements.find(
+    (statement): statement is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(statement) && statement.name?.text === "Reader",
+  );
+  assert.ok(component?.body);
+  const calls = component.body.statements.flatMap((statement) => {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression))
+      return [];
+    const call = statement.expression;
+    return ts.isIdentifier(call.expression) && call.expression.text === "useWantDetails"
+      ? [call]
+      : [];
+  });
+  assert.equal(calls.length, 1, "Reader registers its details need unconditionally");
+  assert.equal(calls[0]!.arguments.length, 1);
+  const needsDetails = new Function(
+    "target",
+    "graph",
+    `return (${calls[0]!.arguments[0]!.getText(reader)});`,
+  );
+  for (const [kind, needsSnapshot] of [
+    ["node", false],
+    ["agents", false],
+    ["role", true],
+    ["card", true],
+  ] as const)
+    for (const detailed of [false, true])
+      assert.equal(
+        needsDetails({ kind }, { detailed }),
+        needsSnapshot && !detailed,
+        `${kind}, detailed=${detailed}`,
+      );
   assert.match(src("../src/ui/panel/Overlays.tsx"), /useWantDetails\(!graph\.detailed\)/);
   assert.match(
     src("../src/ui/shell/Dock.tsx"),

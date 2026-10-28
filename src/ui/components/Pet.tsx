@@ -210,6 +210,31 @@ export function Tray({
 }
 
 /**
+ * The face of all sessions: the AGENTS.md sheet every one of them reads first, drawn on the robot's grid in the
+ * tray's colours so it sits in the same column. It has no moods and takes no Cards.
+ */
+export function Sheet({ size = 28, className }: { size?: number; className?: string }) {
+  return (
+    <svg
+      className={`pet is-sheet${size >= 20 ? "" : " is-compact"}${className ? ` ${className}` : ""}`}
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      aria-hidden="true"
+    >
+      <path
+        className="p-paper"
+        d="M19 8h18l12 12v30a6 6 0 0 1-6 6H19a6 6 0 0 1-6-6V14a6 6 0 0 1 6-6z"
+      />
+      <path className="p-fold" d="M37 8v8a4 4 0 0 0 4 4h8" />
+      <rect className="p-tray" x="20" y="29" width="20" height="4" rx="2" />
+      <rect className="p-tray" x="20" y="37" width="24" height="4" rx="2" />
+      <rect className="p-tray" x="20" y="45" width="14" height="4" rx="2" />
+    </svg>
+  );
+}
+
+/**
  * What a robot is up to, drawn around its face and never on it. doing: a line of light passes down the screen
  * and the antenna glows on and off; waiting: a sealed letter is held up beside it; gone (a deleted Role): grey,
  * no antenna, a `—` on the screen; off (tent ui cannot be reached): a `—` and an unplugged cord; loading: `…`.

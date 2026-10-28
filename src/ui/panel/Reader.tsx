@@ -15,7 +15,14 @@ import { useWantDetails } from "../data/details.js";
 import { LiveRevisionContext, useHeldSection, useNodeSection } from "../data/node-details.js";
 import { handlingFromNodeCards, useHandling } from "../data/handling.js";
 import { HandlingRows } from "../components/Handling.js";
-import { api, ApiError, describe } from "../data/api.js";
+import {
+  agentsFile,
+  api,
+  ApiError,
+  describe,
+  saveAgentsFile,
+  type AgentsFile,
+} from "../data/api.js";
 import { cardTitle, primaryOf, type Graph } from "../data/store.js";
 import type {
   CodeFacts,
@@ -29,12 +36,12 @@ import type {
 } from "../data/types.js";
 import { editDraft, isDraft, useDraft, type Draft } from "../data/drafts.js";
 import { cardStage, cardStateLabel, resultParts } from "../data/card-state.js";
-import { nodeDrafts as drafts } from "../data/node-drafts.js";
+import { agentsDraft, nodeDrafts as drafts } from "../data/node-drafts.js";
 import { Icon, TypeGlyph, TypeTile } from "../components/Glyph.js";
 import { DirectoryView, FileView } from "./FileView.js";
 import { fileOf, filesOf, FilesContext, infoOf, useFileInfoRead } from "../data/files.js";
 import { materialFacts } from "../data/materials.js";
-import { Tray, Pet, turnPet } from "../components/Pet.js";
+import { Tray, Pet, Sheet, turnPet } from "../components/Pet.js";
 import { Markdown } from "../components/Markdown.js";
 import {
   FileDiff,
@@ -60,10 +67,13 @@ import { historicalGraph, readHistoricalNode } from "../data/history-tree.js";
 // The editor loads only when someone starts editing.
 const MarkdownEditor = lazy(() => import("../components/MarkdownEditor.js"));
 
+/** AGENTS.md, opened in the place of an object: a plain file beside the graph, not part of it. */
+export const AGENTS_PAGE = { kind: "agents", id: "AGENTS.md" } as const;
+
 type Props = {
   historical?: HistoricalSelection;
   graph: Graph;
-  target: SnapshotRef;
+  target: SnapshotRef | typeof AGENTS_PAGE;
   work: Work;
   startEditing: boolean;
   /** A page over the map, or a panel docked beside it. */
@@ -117,7 +127,7 @@ function useWidth(box: RefObject<HTMLElement | null>) {
 export function Reader(props: Props) {
   const { graph, target } = props;
   // A page shows links, versions and Cards: opening one is what reads them.
-  useWantDetails(target.kind !== "node" && !graph.detailed);
+  useWantDetails(target.kind !== "node" && target.kind !== "agents" && !graph.detailed);
   const box = useRef<HTMLElement>(null);
   const narrow = useWidth(box) < NARROW;
   const historical =
@@ -182,9 +192,10 @@ export function Reader(props: Props) {
         node && <NodePage {...page} node={node} key={node.id} />
       )}
       {role && <RolePage {...page} role={role} key={role.id} />}
+      {target.kind === "agents" && <AgentsPage {...page} />}
       {card && isDraft(card) && <DraftPage {...page} card={card} key={card.id} />}
       {card && !isDraft(card) && <CardPage {...page} card={card} key={card.id} />}
-      {!historical && !node && !role && !card && (
+      {!historical && !node && !role && !card && target.kind !== "agents" && (
         <>
           <PageTop {...props} crumbs={[]} />
           <p className="empty pg-missing" role="status">
@@ -1583,6 +1594,283 @@ function RolePage(props: PageProps & { role: SnapshotRole }) {
           <Section title={t.page.versions} count={role.history.length}>
             <History graph={graph} id={role.id} path={role.path} hashes={role.history} />
           </Section>
+        }
+      />
+    </>
+  );
+}
+
+/** Where AGENTS.md sits, from the Tent folder that Markdown links resolve against. */
+const AGENTS_PATH = "../AGENTS.md";
+
+/**
+ * AGENTS.md, which every session reads first, read and edited as plain Markdown and saved back to the file
+ * (Tent Node "界面", 所有会话). It is read again when the page comes back into view; a save never writes over a
+ * version that changed on disk after it was opened, and a missing file is empty until the first save makes it.
+ */
+function AgentsPage(props: PageProps) {
+  const { graph, narrow, startEditing, onOpen, onExpand, onToast } = props;
+  const panel = props.mode === "panel";
+  const kept = agentsDraft.current;
+  const [file, setFile] = useState<AgentsFile | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(() => startEditing || !!kept?.editing);
+  const [draft, setDraft] = useState<string | null>(() => kept?.text ?? null);
+  const [base, setBase] = useState<AgentsFile | null>(() => kept?.base ?? null);
+  const [conflict, setConflict] = useState<AgentsFile | null>(null);
+  const [showDiff, setShowDiff] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editorKey, setEditorKey] = useState(0);
+  // The latest text, even before React has rendered it: Ctrl+S can follow a keystroke at once.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const change = (text: string) => {
+    draftRef.current = text;
+    setDraft(text);
+  };
+  useEffect(() => {
+    agentsDraft.current =
+      draft === null ? null : { text: draft, editing, base, dirty: draft !== base?.text };
+  }, [draft, editing, base]);
+
+  // Read on opening and whenever the page comes back into view: the file changes outside Tent.
+  const shown = useRef<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    const read = () =>
+      agentsFile().then(
+        (next) => {
+          if (!live) return;
+          if (shown.current !== null && shown.current !== next.etag && draftRef.current === null)
+            onToast(t.agents.updated);
+          shown.current = next.etag;
+          setFile(next);
+          setError(null);
+        },
+        (failure) => live && setError(describe(failure)),
+      );
+    const visible = () => {
+      if (document.visibilityState === "visible") void read();
+    };
+    void read();
+    addEventListener("focus", visible);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      live = false;
+      removeEventListener("focus", visible);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, []);
+  // Editing starts from the version read last; the save names it.
+  useEffect(() => {
+    if (!editing || base || !file) return;
+    setBase(file);
+    if (draftRef.current === null) {
+      setDraft(file.text);
+      setEditorKey((k) => k + 1);
+    }
+  }, [editing, base, file]);
+
+  const stopEditing = () => {
+    setDraft(null);
+    setBase(null);
+    setConflict(null);
+    setShowDiff(false);
+    setEditing(false);
+  };
+  const save = async () => {
+    const text = draftRef.current;
+    if (text === null || !base || saving) return;
+    setSaving(true);
+    try {
+      const saved = await saveAgentsFile(base.etag, text);
+      shown.current = saved.etag;
+      setFile(saved);
+      stopEditing();
+      onToast(
+        saved.changed ? (base.exists ? t.reader.saved : t.agents.created) : t.reader.unchanged,
+      );
+    } catch (failure) {
+      const current =
+        failure instanceof ApiError && failure.code === "ETAG_CONFLICT"
+          ? (failure.details?.current as AgentsFile | undefined)
+          : undefined;
+      if (current) {
+        setConflict(current);
+        shown.current = current.etag;
+        setFile(current);
+      } else onToast(describe(failure));
+    } finally {
+      setSaving(false);
+    }
+  };
+  // There is no writing over a newer file: the way on starts again from what is on disk now.
+  const loadTheirs = () => {
+    if (!conflict) return;
+    setDraft(conflict.text);
+    setBase(conflict);
+    setConflict(null);
+    setShowDiff(false);
+    setEditorKey((k) => k + 1);
+  };
+  const edit = () => {
+    // Beside the map the text is narrow; editing opens the page.
+    if (panel) return onExpand?.(true);
+    setEditing(true);
+  };
+  const [live, setLive] = useState(() => readStored("tent-editor-live-v1", true));
+  const chooseLive = (next: boolean) => {
+    setLive(next);
+    writeStored("tent-editor-live-v1", next);
+  };
+  const staleBase = editing && !!base && !!file && !conflict && file.etag !== base.etag;
+  const text = draft ?? file?.text ?? "";
+  const actions = editing ? (
+    <>
+      <span className="muted pg-hint">{t.reader.baseVersion}</span>
+      <div className="seg" role="radiogroup" aria-label={t.reader.mode}>
+        <button type="button" role="radio" aria-checked={live} onClick={() => chooseLive(true)}>
+          {t.reader.live}
+        </button>
+        <button type="button" role="radio" aria-checked={!live} onClick={() => chooseLive(false)}>
+          {t.reader.source}
+        </button>
+      </div>
+      <button type="button" className="btn plain" onClick={stopEditing}>
+        {t.app.cancel}
+      </button>
+      <button
+        type="button"
+        className="btn primary"
+        onClick={() => void save()}
+        disabled={saving || !base}
+      >
+        {saving ? t.reader.saving : t.reader.save}
+        <kbd>Ctrl S</kbd>
+      </button>
+    </>
+  ) : (
+    <button
+      type="button"
+      className={narrow ? "icon-btn" : "btn plain"}
+      onClick={edit}
+      disabled={!file}
+      aria-label={t.agents.editLabel}
+      data-tip={narrow ? t.agents.editLabel : undefined}
+      data-tip-end=""
+    >
+      <Icon name="edit" size={narrow ? 16 : 15} />
+      {!narrow && t.sheet.edit}
+    </button>
+  );
+  return (
+    <>
+      <PageTop
+        {...props}
+        title={t.agents.title}
+        glyph={<Sheet size={16} />}
+        crumbs={[<Crumb key="agents">{t.agents.title}</Crumb>]}
+        actions={actions}
+      />
+      <PageBody
+        lead={props.directoryPanel}
+        narrow={narrow}
+        head={
+          <>
+            <Hero
+              icon={
+                <span className="hero-sheet">
+                  <Sheet size={narrow ? 44 : 56} />
+                </span>
+              }
+              eyebrow={<span>{t.agents.what}</span>}
+              title={t.agents.title}
+            />
+            {draft !== null && !editing && draft !== base?.text && (
+              <div className="banner">
+                {t.reader.unsaved}
+                <span className="banner-actions">
+                  <button type="button" onClick={edit}>
+                    {t.reader.resume}
+                  </button>
+                  <button type="button" onClick={stopEditing}>
+                    {t.reader.undo}
+                  </button>
+                </span>
+              </div>
+            )}
+            {staleBase && <div className="banner">{t.agents.changedWhileEditing}</div>}
+            {conflict && (
+              <>
+                <div className="banner">
+                  {t.agents.conflict}
+                  <span className="banner-actions">
+                    <button type="button" onClick={() => setShowDiff((open) => !open)}>
+                      {showDiff ? t.reader.hideDiff : t.reader.showDiff}
+                    </button>
+                    <button type="button" onClick={loadTheirs}>
+                      {t.reader.loadTheirs}
+                    </button>
+                  </span>
+                </div>
+                {showDiff && (
+                  <div className="conflict-diff">
+                    <p className="muted">{t.reader.diffLegend}</p>
+                    <Patch patch={lineDiff(conflict.text, draft ?? "")} />
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        }
+        props={
+          <dl className="props">
+            <PropRow label={t.agents.file}>
+              <span className="prop-text">{t.agents.fileValue}</span>
+            </PropRow>
+            <PropRow label={t.agents.versions}>
+              <span className="prop-text">{t.agents.versionsValue}</span>
+            </PropRow>
+          </dl>
+        }
+        main={
+          <div className="pg-doc">
+            {editing && draft !== null ? (
+              <Suspense fallback={<div className="md-editor is-loading" />}>
+                <MarkdownEditor
+                  key={editorKey}
+                  value={draft}
+                  fromPath={AGENTS_PATH}
+                  graph={graph}
+                  label={t.agents.editLabel}
+                  live={live}
+                  onChange={change}
+                  onSave={() => void save()}
+                  onOpen={onOpen}
+                  onDirectory={props.onDirectory}
+                  onToast={onToast}
+                />
+              </Suspense>
+            ) : error ? (
+              <p className="empty" role="alert">
+                {error}
+              </p>
+            ) : !file ? (
+              <p className="empty">{t.page.reading}</p>
+            ) : text.trim() ? (
+              <Markdown
+                body={text}
+                fromPath={AGENTS_PATH}
+                graph={graph}
+                onOpen={onOpen}
+                onToast={onToast}
+                onDirectory={props.onDirectory}
+                onFile={props.onFileIn}
+              />
+            ) : (
+              <p className="empty">{file.exists ? t.node.noBody : t.agents.missing}</p>
+            )}
+          </div>
         }
       />
     </>

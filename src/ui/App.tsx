@@ -24,7 +24,7 @@ import { FirstRun } from "./shell/FirstRun.js";
 import { Sidebar, type ThemePref } from "./shell/Sidebar.js";
 import { StageBar } from "./shell/StageBar.js";
 import { Dock } from "./shell/Dock.js";
-import { Reader } from "./panel/Reader.js";
+import { AGENTS_PAGE, Reader } from "./panel/Reader.js";
 import { Palette } from "./panel/Overlays.js";
 import { loadLocalDrafts, useDraftCards } from "./data/drafts.js";
 import { FilesContext, useFileInfo } from "./data/files.js";
@@ -109,6 +109,8 @@ export function App() {
     readStored("tent-theme-pref", "system"),
   );
   const [selected, setSelected] = useState<SnapshotRef | null>(null);
+  // AGENTS.md is no object of the graph: it opens in the same place, instead of a selection.
+  const [agents, setAgents] = useState(false);
   const [historical, setHistorical] = useState<HistoricalSelection | undefined>();
   // The tree folds on its own (cuca 2026-10-21); it starts from what the map had folded.
   const [treeFolded, setTreeFolded] = useState<Set<string>>(
@@ -280,6 +282,7 @@ export function App() {
     (ref: SnapshotRef | null, historical?: HistoricalSelection) => {
       if (ref && ref.kind !== "node") wantDetails();
       setSelected(ref);
+      setAgents(false);
       setHistorical(historical);
       setEditOnExpand(false);
       if (!ref) setExpanded(false);
@@ -327,8 +330,13 @@ export function App() {
 
   // Deep links select an object; ?mode=doc opens it expanded, falling back to the first goal.
   useEffect(() => {
-    if (!graph || selected) return;
+    if (!graph || selected || agents) return;
     const id = decodeURIComponent(location.hash.slice(1));
+    if (id === AGENTS_PAGE.id) {
+      setAgents(true);
+      setExpanded(true);
+      return;
+    }
     // A Role or Card named in the link is known once the snapshot is in.
     if (!graph.detailed && id && !graph.nodes.has(id)) {
       // The id names the page before its slower details arrive, so the Reader can say it is loading.
@@ -380,7 +388,7 @@ export function App() {
         setPinnedLane(null);
         if (overlay) setOverlay(null);
         else if (expanded) setExpanded(false);
-        else if (selected) open(null);
+        else if (selected || agents) open(null);
       } else if (e.key === "Escape" && overlay) setOverlay(null);
       else if (!typing && e.key === "/") {
         e.preventDefault();
@@ -400,7 +408,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [overlay, expanded, selected, open, work, historical]);
+  }, [overlay, expanded, selected, agents, open, work, historical]);
 
   useEffect(() => {
     if (!toast) return;
@@ -533,7 +541,19 @@ export function App() {
     setEditOnExpand(false);
     setExpanded(true);
   };
-  const reading = expanded && !!selected;
+  /** AGENTS.md opens as a page too, with its name in the address like an object's id. */
+  const openAgents = () => {
+    open(null);
+    setAgents(true);
+    setExpanded(true);
+    try {
+      history.replaceState(null, "", `${location.search}#${AGENTS_PAGE.id}`);
+    } catch {
+      /* ignore */
+    }
+  };
+  const opened = agents ? AGENTS_PAGE : selected;
+  const reading = expanded && !!opened;
   // One set of robots: in the map's bar, or in a page's bar while the page covers the map.
   const dock = (
     <Dock
@@ -548,6 +568,8 @@ export function App() {
       onPin={setPinnedLane}
       onOpen={open}
       onPage={openPage}
+      agentsOpen={agents}
+      onAgents={openAgents}
     />
   );
   /** Fold or unfold a Node's children in the tree only; `deep` takes every Node under it along. */
@@ -602,7 +624,7 @@ export function App() {
             />
 
             <div
-              className={`surface${selected && !reading ? " has-detail" : ""}${reading ? " is-reading" : ""}`}
+              className={`surface${opened && !reading ? " has-detail" : ""}${reading ? " is-reading" : ""}`}
               style={{ "--detail-w": `${detailWidth}px` } as CSSProperties}
             >
               <main className="stage" aria-hidden={reading || undefined}>
@@ -638,7 +660,7 @@ export function App() {
                 </div>
               </main>
 
-              {selected && !reading && (
+              {opened && !reading && (
                 <aside className="detail">
                   <div
                     className="detail-resize"
@@ -651,7 +673,7 @@ export function App() {
                     mode="panel"
                     historical={historical}
                     graph={graph}
-                    target={selected}
+                    target={opened}
                     startEditing={false}
                     onOpen={open}
                     onClose={() => open(null)}
@@ -693,7 +715,7 @@ export function App() {
                   historical={historical}
                   roles={dock}
                   graph={graph}
-                  target={selected!}
+                  target={opened!}
                   startEditing={editOnExpand}
                   onOpen={open}
                   onClose={() => open(null)}

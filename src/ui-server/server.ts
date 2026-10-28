@@ -58,6 +58,7 @@ import {
 } from "../core/read/workspace-directory.js";
 import { validationIssueText } from "../core/base/validation-message.js";
 import { NodeFs, SystemClock } from "../fs/node-fs.js";
+import { durableReplace } from "../fs/durable-file.js";
 import { createModuleDependencyRepositoryReader } from "../fs/module-dependencies.js";
 import { readModuleMapRepository } from "../fs/workspace-scan.js";
 import { buildSnapshot } from "./snapshot.js";
@@ -106,6 +107,8 @@ const FILE_TYPES: Record<string, string> = {
 };
 /** How many paths one file-info request may ask about. */
 const INFO_LIMIT = 2000;
+/** The one file outside Tent the page edits: what every session reads first. */
+const AGENTS_FILE = "AGENTS.md";
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -628,6 +631,13 @@ async function createWorkspaceServer(
         ...(other.portTaken === undefined ? {} : { portTaken: other.portTaken }),
       });
     }
+    if (route === "GET /api/agents") return json(res, 200, view(await agentsFile()));
+    if (route === "PUT /api/agents") {
+      const input = record(await readJson(req, BODY_LIMIT.document));
+      const baseEtag = input.baseEtag === null ? null : requiredString(input.baseEtag, "baseEtag");
+      const text = requiredString(input.text, "text");
+      return json(res, 200, await serial(() => saveAgents(baseEtag, text)));
+    }
     if (route === "GET /api/directories")
       return json(res, 200, await directory(url.searchParams.get("path") ?? ""));
     if (route === "GET /api/files/text")
@@ -838,6 +848,66 @@ async function createWorkspaceServer(
     }
   }
 
+  /**
+   * The workspace's AGENTS.md, which every session reads first. It stays a plain file: no Tent header or
+   * history, Git keeps its versions. A missing file is null; one that is not UTF-8 text is refused.
+   */
+  async function agentsFile() {
+    let real: string;
+    try {
+      real = (await workspaceFile(AGENTS_FILE)).real;
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) return null;
+      throw error;
+    }
+    const bytes = await fsp.readFile(real);
+    if (bytes.length > BODY_LIMIT.document)
+      throw new HttpError(413, "TOO_LARGE", `${AGENTS_FILE} is larger than 2 MB`);
+    let text: string;
+    try {
+      if (bytes.includes(0)) throw new Error("NUL");
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new HttpError(415, "NOT_TEXT", `${AGENTS_FILE} is not UTF-8 text`);
+    }
+    return { real, bytes, text };
+  }
+
+  /** What the page sees: the text with \n line ends, and the ETag of the bytes on disk. */
+  const view = (file: Awaited<ReturnType<typeof agentsFile>>) => ({
+    path: AGENTS_FILE,
+    exists: !!file,
+    etag: file ? fileEtag(file.bytes) : null,
+    text: file ? file.text.replaceAll("\r\n", "\n") : "",
+  });
+
+  /**
+   * Writes the page's text over the version it opened, never over a newer one: a changed file, or one
+   * created since a missing file was opened, is a 409 with what is there now. Unchanged text leaves the
+   * bytes alone; changed text keeps the file's BOM and CRLF line ends. Nothing is written that the page
+   * could not open again.
+   */
+  async function saveAgents(baseEtag: string | null, text: string) {
+    if (text.includes("\0"))
+      throw new HttpError(415, "NOT_TEXT", `${AGENTS_FILE} cannot hold a NUL character`);
+    const file = await agentsFile();
+    const current = view(file);
+    if (current.etag !== baseEtag)
+      throw new HttpError(409, "ETAG_CONFLICT", `${AGENTS_FILE} changed since it was opened`, {
+        current,
+      });
+    if (file && text === current.text) return { ...current, changed: false };
+    const crlf = !!file?.text.includes("\r\n");
+    const bom =
+      !!file && file.bytes[0] === 0xef && file.bytes[1] === 0xbb && file.bytes[2] === 0xbf;
+    const bytes = Buffer.from(
+      (bom ? "﻿" : "") + (crlf ? text.replace(/\r?\n/g, "\r\n") : text),
+      "utf8",
+    );
+    await durableReplace(file?.real ?? path.join(workspaceRoot, AGENTS_FILE), bytes);
+    return { ...view({ real: "", bytes, text: new TextDecoder().decode(bytes) }), changed: true };
+  }
+
   /** Size and modification time of workspace files; null for a missing file or a refused path. */
   async function fileInfo(paths: string[]) {
     if (paths.length > INFO_LIMIT)
@@ -1001,6 +1071,11 @@ function listen(server: ReturnType<typeof createServer>, port: number) {
       resolve((server.address() as { port: number }).port);
     });
   });
+}
+
+/** A file's ETag: the start of its bytes' SHA-256, so any change on disk shows. */
+function fileEtag(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex").slice(0, 24);
 }
 
 /** Only a missing path is "not found"; other filesystem failures reach httpError. */

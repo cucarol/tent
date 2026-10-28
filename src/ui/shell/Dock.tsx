@@ -10,7 +10,7 @@ import type { SnapshotCard, SnapshotRef } from "../data/types.js";
 import { isDraft, editDraft, useDraft, type Draft } from "../data/drafts.js";
 import { cardStateLabel } from "../data/card-state.js";
 import { Icon, TypeGlyph } from "../components/Glyph.js";
-import { Tray, Pet } from "../components/Pet.js";
+import { Tray, Pet, Sheet } from "../components/Pet.js";
 import { t } from "../i18n.js";
 import { ago, readStored, writeStored } from "../util.js";
 import { beginDrag, useDragState } from "./drag.js";
@@ -30,6 +30,9 @@ type Props = {
   onPin: (lane: string | null) => void;
   onOpen: (ref: SnapshotRef) => void;
   onPage: (ref: SnapshotRef) => void;
+  /** AGENTS.md is open, as a page or beside the map. */
+  agentsOpen: boolean;
+  onAgents: () => void;
 };
 
 /** Whether a robot has anything in hand. */
@@ -146,6 +149,16 @@ export function Dock(props: Props) {
     waiting = sum("waiting") + sum("returned");
   const q = filter.trim().toLowerCase();
   const listed = q ? lanes.filter((l) => work.laneName(l).toLowerCase().includes(q)) : lanes;
+  const everyone = (
+    // Opening it goes to its page, so the list folds out of the way.
+    <Everyone
+      active={props.agentsOpen}
+      onOpen={() => {
+        show(false);
+        props.onAgents();
+      }}
+    />
+  );
   // One Agent and no Card yet: the robots are only a face that says what they are for, and how to get one.
   const alone = roles === 0 && graph.cards.size === 0 && !writing;
 
@@ -235,6 +248,7 @@ export function Dock(props: Props) {
               <Icon name="close" size={13} />
             </button>
           </div>
+          {everyone}
           <div className="dock-alone">
             <p>{t.work.noRolesBody}</p>
             <p>{t.work.noRolesHow}</p>
@@ -279,6 +293,7 @@ export function Dock(props: Props) {
             />
           )}
           <div className="dock-rows">
+            {(!q || `${t.agents.title} agents.md`.toLowerCase().includes(q)) && everyone}
             {listed.map((lane) => (
               <Lane
                 key={lane || "public"}
@@ -296,6 +311,35 @@ export function Dock(props: Props) {
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+/**
+ * The row above the Roles: AGENTS.md, which every session reads first, while each Role is what one kind of
+ * session adds. It opens the file; nothing dropped on it starts a Card.
+ */
+function Everyone({ active, onOpen }: { active: boolean; onOpen: () => void }) {
+  return (
+    <div className={`lane is-everyone${active ? " is-active" : ""}`}>
+      <div className="lane-head">
+        <button
+          type="button"
+          className="who"
+          onClick={onOpen}
+          aria-label={`${t.agents.title} · ${t.agents.what}`}
+          data-tip={t.agents.rowTip}
+          data-tip-end=""
+        >
+          <span className="face">
+            <Sheet size={30} />
+          </span>
+          <span className="who-text">
+            <span className="n">{t.agents.title}</span>
+            <span className="tally">AGENTS.md</span>
+          </span>
+        </button>
+      </div>
     </div>
   );
 }
