@@ -86,10 +86,14 @@ export function successfulWritePaths(host: string, event: Event): string[] {
       result.cancelled === true)
   )
     return [];
-  if (typeof output !== "string" || !output.startsWith("Success. Updated the following files:\n"))
-    return [];
+  if (typeof output !== "string") return [];
+  // Codex 0.162 reports a patch the way it reports a command: exit code, wall time, then output.
+  const shell = /^Exit code: (\d+)\nWall time: [^\n]*\nOutput:\n/.exec(output);
+  if (shell && shell[1] !== "0") return [];
+  const text = shell ? output.slice(shell[0].length) : output;
+  if (!text.startsWith("Success. Updated the following files:\n")) return [];
   // The result lists paths the native patch actually published, including renames/deletions.
-  const lines = output.trimEnd().split("\n").slice(1);
+  const lines = text.trimEnd().split("\n").slice(1);
   if (!lines.length || lines.some((line) => !/^[AMD] .+$/.test(line))) return [];
   return lines.map((line) => line.slice(2));
 }

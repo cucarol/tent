@@ -45,7 +45,7 @@ async function fixture(t: TestContext) {
     tool_use_id: "call",
     tool_name: "apply_patch",
     tool_input: { command: "*** Begin Patch\n*** End Patch" },
-    tool_response: `Success. Updated the following files:\n${files.map((file) => "M " + file).join("\n")}\n`,
+    tool_response: `Exit code: 0\nWall time: 1.4 seconds\nOutput:\nSuccess. Updated the following files:\n${files.map((file) => "M " + file).join("\n")}\n`,
     ...extra,
   });
   const tool = (files?: string[], extra?: Record<string, unknown>) =>
@@ -86,6 +86,10 @@ test("failure, cancellation, reads, no identity, uncovered and Tent maintenance 
         output: "Success. Updated the following files:\nM src/code.ts\n",
         metadata: { exit_code: 1 },
       }),
+    },
+    {
+      tool_response:
+        "Exit code: 1\nWall time: 0.2 seconds\nOutput:\nSuccess. Updated the following files:\nM src/code.ts\n",
     },
     { tool_name: "Read" },
     { turn_id: undefined },
@@ -295,6 +299,11 @@ test("Codex successful patch output is the path authority, including deletion an
     }),
     ["new.ts", "moved.ts", "removed.ts"],
   );
+  for (const tool_response of [output, `Exit code: 0\nWall time: 1.4 seconds\nOutput:\n${output}`])
+    assert.deepEqual(
+      successfulWritePaths("codex", { tool_name: "apply_patch", tool_input: input, tool_response }),
+      ["new.ts", "moved.ts", "removed.ts"],
+    );
   assert.deepEqual(
     successfulWritePaths("codex", {
       tool_name: "apply_patch",

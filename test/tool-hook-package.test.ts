@@ -89,7 +89,7 @@ test(
           host === "codex" ? { command: "*** Begin Patch\n*** End Patch" } : { file_path: file },
         tool_response:
           host === "codex"
-            ? "Success. Updated the following files:\nM src/code.ts\n"
+            ? "Exit code: 0\nWall time: 1.4 seconds\nOutput:\nSuccess. Updated the following files:\nM src/code.ts\n"
             : { type: "update", filePath: file },
       });
       assert.match(JSON.parse(output).hookSpecificOutput.additionalContext, /node-packaged/);
