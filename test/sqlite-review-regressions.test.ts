@@ -41,6 +41,9 @@ async function legacy(t: TestContext) {
   await fs.mkdir(path.join(source, "Goal"), { recursive: true });
   await git(source, "init", "--quiet", "--initial-branch=main", "--template=");
   await git(source, "config", "core.autocrlf", "false");
+  // Keep the byte inventory stable after commit; background Git housekeeping owns transient locks.
+  await git(source, "config", "maintenance.auto", "false");
+  await git(source, "config", "gc.auto", "0");
   const raw = "---\nid: node-goal\ntype: prompt\n---\nRetained bytes\n";
   await fs.writeFile(path.join(source, "Goal/Goal.md"), raw);
   await git(source, "add", ".");
