@@ -123,6 +123,15 @@ export class NodeBatchWriteError extends Error {
   }
 }
 
+/** Validates a created item's name, naming the item when it is not a portable file name. */
+export function validateBatchItemName(ref: string, name: string, parentPath: string): string {
+  try {
+    return validateNodeName(name, parentPath);
+  } catch (error) {
+    throw new Error(`Batch item @${ref}: ${(error as Error).message}`);
+  }
+}
+
 /** One lock, all-item preflight, one selected-document capture. No intermediate batch state is retained. */
 export function writeNodesBatch(
   env: OpsEnv,
@@ -193,7 +202,7 @@ async function writeNodesBatchUnlocked(
       parentPath = node.path;
       entry.parentId = node.nodeId;
     }
-    const name = validateNodeName(entry.item.name, parentPath);
+    const name = validateBatchItemName(ref, entry.item.name, parentPath);
     entry.path = parentPath ? `${parentPath}/${name}` : name;
     visiting.delete(ref);
     return entry.path;

@@ -20,6 +20,7 @@ import {
   writeNodesBatch,
   nodeWriteBatchInputSchema,
   NodeBatchWriteError,
+  validateBatchItemName,
 } from "../core/write/node-write-batch.js";
 import { NodeFs, SystemClock } from "../fs/node-fs.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
@@ -311,7 +312,7 @@ async function runNodeCommandOpened(
           if (visiting.has(ref)) throw new Error(`Cyclic batch parent: ${ref}`);
           visiting.add(ref);
           const parent = item.parent ? await locate(item.parent) : "";
-          const name = validateNodeName(item.name, parent);
+          const name = validateBatchItemName(item.ref, item.name, parent);
           const result = parent ? `${parent}/${name}` : name;
           visiting.delete(ref);
           paths.set(ref, result);

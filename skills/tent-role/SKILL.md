@@ -1,6 +1,6 @@
 ---
 name: tent-role
-description: "Takes on, creates or maintains a Tent Role, a continuing work direction that receives Cards. Use when told to work as a Role or to set one up."
+description: "Takes on, creates or maintains a Tent Role, the standing brief for one kind of session, like an AGENTS.md for it; a Role can also receive Cards. Use when told to work as a Role or to set one up."
 ---
 
 # Tent Role

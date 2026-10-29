@@ -160,9 +160,10 @@ test("create, rename and write-many reject invalid names with one diagnostic and
         globals,
       ),
     ];
+    assert.match(results[2]!.stderr, /^Batch item @x: /, name);
     for (const result of results) {
       assert.equal(result.exitCode, 1, name);
-      assert.match(result.stderr, /^Node name /, name);
+      assert.match(result.stderr, /^(?:Batch item @x: )?Node name /, name);
       assert.equal(result.stderr.trim().split("\n").length, 2, name);
       assert.match(result.stderr.trim().split("\n")[1]!, /^Next: tent node /);
       assert.doesNotMatch(result.stderr, RAW_FAILURE, name);
@@ -193,9 +194,14 @@ test("create, rename and write-many reject superscript COM and LPT device names 
         globals,
       ),
     ];
+    assert.match(results[2]!.stderr, /^Batch item @x: /, name);
     for (const result of results) {
       assert.equal(result.exitCode, 1, name);
-      assert.match(result.stderr, /^Node name .* is a reserved Windows device name /, name);
+      assert.match(
+        result.stderr,
+        /^(?:Batch item @x: )?Node name .* is a reserved Windows device name /,
+        name,
+      );
       assert.equal(result.stderr.trim().split("\n").length, 2, name);
       assert.match(result.stderr.trim().split("\n")[1]!, /^Next: tent node /);
       assert.doesNotMatch(result.stderr, RAW_FAILURE, name);

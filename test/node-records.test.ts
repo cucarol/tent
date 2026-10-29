@@ -161,6 +161,26 @@ test("single save, confirm, creation and new output roll back files and records 
   assert.deepEqual(await adapter.history.nodeRecords(), records);
 });
 
+test("a batch names the item whose Node name is not a portable file name", async (t) => {
+  const { adapter, env, resource } = await fixture(t);
+  await assert.rejects(
+    writeNodesBatch(env, {
+      items: [
+        { op: "create", ref: "fine", name: "Fine", type: "goal", resource },
+        {
+          op: "create",
+          ref: "match",
+          name: "Match: best of three",
+          type: "prompt",
+          parent: "@fine",
+        },
+      ],
+    }),
+    /Batch item @match: Node name cannot contain the character :/,
+  );
+  assert.equal(await adapter.exists("Fine"), false);
+});
+
 test("batch capture failure retains exact preimages and all baseline records", async (t) => {
   const { adapter, env, resource } = await fixture(t);
   const id = await createNode(env, { parentPath: "", name: "Fact", type: "prompt", resource });

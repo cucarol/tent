@@ -90,8 +90,9 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
     message = `Card not found: ${target!.id}.`;
     next = ["tent", "card", "list"];
   } else if (
+    // A batch ref is the caller's own word; it must not pick the next command.
     /etag|changed|reread|read:|complete.*read|another Role|addressed to|lock.*busy|waiting.*seconds/i.test(
-      message,
+      message.replace(/^Batch item @[A-Za-z][\w-]*: /, ""),
     )
   ) {
     if (command.endsWith(" create")) next = ["tent", "workspace", "brief"];

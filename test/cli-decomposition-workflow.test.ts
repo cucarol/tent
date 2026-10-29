@@ -85,6 +85,25 @@ test("CLI writes a mutually linked batch from stdin and rejects a failed mixed b
   assert.equal(await adapter.readFile("Parent/Parent.md"), original);
   assert.equal(await adapter.exists("Broken"), false);
   assert.equal(await historyHead(systemRoot), head);
+  const unportable = await runNodeCommand("write-many", ["--input-json", "-"], {
+    ...globals,
+    stdin: JSON.stringify({
+      items: [
+        { op: "create", ref: "fine", name: "Fine", type: "goal" },
+        {
+          op: "create",
+          ref: "read",
+          parent: "@fine",
+          name: "Match: best of three",
+          type: "prompt",
+        },
+      ],
+    }),
+  });
+  assert.equal(unportable.exitCode, 1);
+  assert.match(unportable.stderr, /^Batch item @read: Node name cannot contain the character :/);
+  assert.match(unportable.stderr, /\nNext: tent node write-many --help/);
+  assert.equal(await adapter.exists("Fine"), false);
   const saved = await runNodeCommand(
     "write-many",
     [
