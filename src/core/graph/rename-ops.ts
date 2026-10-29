@@ -5,7 +5,7 @@ import type { FsAdapter } from "../store/adapter.js";
 import { parseFrontmatter, serializeFrontmatter, syncNodeTitle } from "../base/frontmatter.js";
 import { buildNodeIndex, resolveNode, type OkfNode } from "../base/okf.js";
 import { normalizeTarget, resolveTargetPath } from "../base/link-target.js";
-import { rewriteMaterialPaths } from "../base/material.js";
+import { materialLocator, rewriteMaterialPaths } from "../base/material.js";
 import { rewriteMarkdownDestinations } from "../base/links.js";
 import {
   executeNodeMoveUnlocked,
@@ -307,7 +307,7 @@ export type RewriteNodeLinksOptions = {
   /** Pre-rename concept index (name resolution uses Tent's unique-match rules). */
   conceptIndex: Map<string, OkfNode[]>;
   /**
-   * Note path used when restyling `./` and `../` destinations after a tree move.
+   * Note path used when restyling document-relative destinations after a tree move.
    * Resolve still uses `fromNotePath` (pre-move disk location). When the note itself
    * moves, pass the post-move note path so relatives stay valid at the write location.
    * Defaults to `fromNotePath`.
@@ -349,7 +349,7 @@ export async function rewriteRoleAndNoteLinks(
  * Rewrite Markdown destinations that targeted a moved path.
  * Unqualified name targets rewrite only when resolution uniquely targets the renamed node.
  *
- * Relative (`./` / `../`) links are resolved against `fromNotePath`, then restyled from
+ * Document-relative links are resolved against `fromNotePath`, then restyled from
  * `opts.restyleFromNotePath` (post-move when the source note moves). Outbound relatives to
  * unmoved targets are restyled when source depth/path changes even if the target is outside pathMap.
  */
@@ -394,10 +394,32 @@ function mapLinkTarget(
 
   const restyleFrom = opts?.restyleFromNotePath ?? fromNotePath;
   const sourceMoved = restyleFrom.replace(/\\/g, "/") !== fromNotePath.replace(/\\/g, "/");
-  const isRelativeForm = pathPart.startsWith("./") || pathPart.startsWith("../");
+  let isRelativeForm = pathPart.startsWith("./") || pathPart.startsWith("../");
 
   // Resolve against the pre-move note path (link text was authored there).
-  const targetPath = resolveTargetPath(pathPart, fromNotePath);
+  let targetPath = resolveTargetPath(pathPart, fromNotePath);
+  if (
+    opts &&
+    !isRelativeForm &&
+    !pathPart.startsWith("/") &&
+    !resolveNode(opts.conceptIndex, targetPath)
+  ) {
+    // Readers prefer a resolved Node root shorthand, then check the destination
+    // as a document-relative file. Keep the same precedence during rewriting.
+    try {
+      const locator = materialLocator(pathPart, fromNotePath);
+      if (
+        locator.kind === "path" &&
+        locator.anchor === "document" &&
+        resolveNode(opts.conceptIndex, locator.target)
+      ) {
+        targetPath = locator.target;
+        isRelativeForm = true;
+      }
+    } catch {
+      // Unsupported local destinations keep their original bytes.
+    }
+  }
   const normalized = targetPath.replace(/\.md$/i, "");
   const mapped =
     normalized === ".." || normalized.startsWith("../")
@@ -413,7 +435,7 @@ function mapLinkTarget(
   // A pathMap value is a Node stem; an unmapped material keeps its exact filename.
   const absTarget =
     mapped === undefined ? targetPath : /\.md$/i.test(targetPath) ? `${mapped}.md` : mapped;
-  const styled = restyleRelative(pathPart, restyleFrom, absTarget);
+  const styled = restyleRelative(pathPart, restyleFrom, absTarget, isRelativeForm);
   if (styled === pathPart) return undefined;
   return styled + tail;
 }
@@ -483,14 +505,25 @@ function restyleRelative(
   originalPathPart: string,
   fromNotePath: string,
   absoluteNext: string,
+  documentRelative: boolean,
 ): string {
   const orig = originalPathPart.replace(/\\/g, "/");
-  if (orig.startsWith("./") || orig.startsWith("../")) {
+  const escape = (value: string) =>
+    /%[\da-f]{2}/i.test(orig)
+      ? value.split("/").map(encodeURIComponent).join("/")
+      : value.replace(/[%?#]/g, (character) => encodeURIComponent(character));
+  if (documentRelative) {
     const rel = relativeMarkdownPath(fromNotePath, absoluteNext);
-    return rel.replace(/[%?#]/g, (character) => encodeURIComponent(character));
+    if (!orig.startsWith("./") && !orig.startsWith("../")) {
+      // Keep an unchanged bare relative, but make a changed destination explicit:
+      // its new spelling may collide with an existing root shorthand.
+      const bare = rel.replace(/^\.\//, "");
+      if (resolveTargetPath(orig) === bare) return originalPathPart;
+    }
+    return escape(rel);
   }
   // Absolute-from-system-root style path
-  const escaped = absoluteNext.replace(/[%?#]/g, (character) => encodeURIComponent(character));
+  const escaped = escape(absoluteNext);
   return orig.startsWith("/") ? `/${escaped}` : escaped;
 }
 
