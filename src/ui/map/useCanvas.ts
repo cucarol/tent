@@ -10,18 +10,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, describe } from "../data/api.js";
 import {
   afterSave,
+  canvasBase,
   emptyCanvas,
   inverseOf,
   laidOver,
   hasPending,
+  foldEdit,
   noPending,
-  readCanvas,
   withPending,
   type CanvasFile,
+  type CanvasBase,
   type CanvasInitial,
   type Fold,
   type Pending,
 } from "./canvas.js";
+import { loadCanvas } from "./canvas-api.js";
 import { inkChanges, inkOf, type Ink } from "./drawings.js";
 
 /** The drawings picked before and after a step, given back when it is undone or redone. */
@@ -46,8 +49,10 @@ export type CanvasStore = InkStore & {
   /** Cards opened past the default depth, and cards closed within it. */
   open: string[];
   shut: string[];
+  /** The saved bytes were rejected; the current page began from the default view. */
+  unreadable: boolean;
   /** Open or close topics as one step of undo; null restores the default fold. */
-  arrange: (change: { folds?: Record<string, Fold | null> }) => void;
+  arrange: (change: { folds?: Record<string, Fold | null> }, userAction?: boolean) => void;
 };
 
 /** Quiet time before changes are written. */
@@ -63,6 +68,7 @@ type Held = {
   pending: Pending;
   ready: boolean;
   memory: Pending;
+  unreadable: boolean;
 };
 
 export function useCanvas(
@@ -77,9 +83,12 @@ export function useCanvas(
     pending: noPending(),
     ready: false,
     memory: noPending(),
+    unreadable: false,
   });
   const [held, setHeld] = useState<Held>(() =>
-    "file" in initial ? { ...blank(), file: initial.file, ready: true } : blank(),
+    "file" in initial
+      ? { ...blank(), file: initial.file, ready: true, unreadable: !!initial.unreadable }
+      : blank(),
   );
   // Another workspace's canvas is never shown or written here: until this one is read, it is empty.
   const state = held.workspace === workspace ? held : blank();
@@ -89,6 +98,8 @@ export function useCanvas(
   const opening = useRef<{ workspace: string; revision: string } | null>({ workspace, revision });
   const openingErrorShown = useRef(false);
   const saving = useRef(false);
+  // An unreadable concurrent file has no entries to merge. Only another real edit may replace it.
+  const saveBlocked = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notice = useRef(onNotice);
   notice.current = onNotice;
@@ -99,16 +110,27 @@ export function useCanvas(
     setHeld(next);
   }, []);
 
+  const pause = useCallback(
+    (base: CanvasBase) => {
+      saveBlocked.current = true;
+      etag.current = base.etag;
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
+      hold({ ...live.current, file: base.file, unreadable: true });
+    },
+    [hold],
+  );
+
   const flush = useCallback(async () => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
     // A write on its way picks up whatever changed meanwhile before it finishes.
-    if (saving.current) return;
+    if (saving.current || saveBlocked.current) return;
     if (!live.current.ready || !hasPending(live.current.pending)) return;
     saving.current = true;
     let tries = 0;
     try {
-      while (hasPending(live.current.pending) && tries < RETRIES) {
+      while (!saveBlocked.current && hasPending(live.current.pending) && tries < RETRIES) {
         const sent = live.current.pending;
         const memory = live.current.memory;
         const file = withPending(live.current.file, laidOver(sent, memory));
@@ -117,6 +139,7 @@ export function useCanvas(
           hold({
             ...live.current,
             file,
+            unreadable: false,
             pending: afterSave(live.current.pending, sent),
             memory: afterSave(live.current.memory, memory),
           });
@@ -125,9 +148,13 @@ export function useCanvas(
           const current = error instanceof ApiError ? error.details?.current : undefined;
           if (error instanceof ApiError && error.code === "ETAG_CONFLICT" && current) {
             // Saved from elsewhere: theirs is the new base, and what this page changed goes over it.
-            const theirs = current as { etag?: string | null; canvas?: unknown };
-            etag.current = theirs.etag ?? null;
-            hold({ ...live.current, file: readCanvas(theirs.canvas) });
+            const theirs = canvasBase(current as { etag: string | null; canvas?: unknown });
+            if (theirs.unreadable) {
+              pause(theirs);
+              break;
+            }
+            etag.current = theirs.etag;
+            hold({ ...live.current, file: theirs.file, unreadable: !!theirs.unreadable });
             tries++;
           } else {
             notice.current(describe(error));
@@ -138,9 +165,10 @@ export function useCanvas(
     } finally {
       saving.current = false;
     }
-  }, [hold]);
+  }, [hold, pause]);
 
   const schedule = useCallback(() => {
+    if (saveBlocked.current) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => void flush(), SAVE_AFTER);
   }, [flush]);
@@ -150,23 +178,28 @@ export function useCanvas(
   useEffect(() => {
     const leave = () => {
       const state = live.current;
-      if (!state.ready || !hasPending(state.pending)) return;
+      if (saveBlocked.current || !state.ready || !hasPending(state.pending)) return;
       const pending = laidOver(state.pending, state.memory);
       const save = async () => {
         let file = state.file;
         let baseEtag = etag.current;
-        for (let tries = 0; tries < RETRIES; tries++) {
+        for (let tries = 0; !saveBlocked.current && tries < RETRIES; tries++) {
           try {
             await api.saveCanvas(baseEtag, withPending(file, pending), true);
             return;
           } catch (error) {
             const current =
               error instanceof ApiError && error.code === "ETAG_CONFLICT"
-                ? (error.details?.current as { etag: string | null; canvas: unknown } | undefined)
+                ? (error.details?.current as { etag: string | null; canvas?: unknown } | undefined)
                 : undefined;
             if (!current) return;
+            const theirs = canvasBase(current);
+            if (theirs.unreadable) {
+              pause(theirs);
+              return;
+            }
             baseEtag = current.etag;
-            file = readCanvas(current.canvas);
+            file = theirs.file;
           }
         }
       };
@@ -180,9 +213,12 @@ export function useCanvas(
       window.removeEventListener("pagehide", leave);
       void flush();
     };
-  }, [flush]);
+  }, [flush, pause]);
 
-  useEffect(() => setSteps({ past: [], future: [] }), [workspace]);
+  useEffect(() => {
+    saveBlocked.current = false;
+    setSteps({ past: [], future: [] });
+  }, [workspace]);
   // Read on open and whenever the workspace moves on, unless our own write is on its way.
   useEffect(() => {
     if (saving.current) return;
@@ -195,17 +231,26 @@ export function useCanvas(
     }
     opening.current = null;
     let current = true;
-    api
-      .canvas()
+    loadCanvas()
       .then((r) => {
         if (!current || saving.current) return;
+        if ("error" in r) {
+          notice.current(r.error);
+          return;
+        }
         if (live.current.ready && r.etag === etag.current) return;
+        // A refresh is no more consent to replace new unreadable bytes than a conflict is.
+        if (r.unreadable && live.current.ready && hasPending(live.current.pending)) {
+          pause(r);
+          return;
+        }
         etag.current = r.etag;
         hold({
           ...live.current,
           workspace,
-          file: readCanvas(r.canvas),
+          file: r.file,
           ready: true,
+          unreadable: !!r.unreadable,
           memory: { folds: live.current.memory.folds, drawings: new Map() },
         });
         if (hasPending(live.current.pending)) schedule();
@@ -214,7 +259,7 @@ export function useCanvas(
     return () => {
       current = false;
     };
-  }, [workspace, revision, hold, schedule, initial]);
+  }, [workspace, revision, hold, pause, schedule, initial]);
 
   const shown = useMemo(
     () => withPending(state.file, laidOver(state.pending, state.memory)),
@@ -257,6 +302,7 @@ export function useCanvas(
       if (after === before) return;
       const redo = onlyDrawings(inkChanges(before, after));
       if (!hasPending(redo)) return;
+      saveBlocked.current = false;
       step(redo, picks);
       change((p) => laidOver(p, redo));
     },
@@ -285,13 +331,19 @@ export function useCanvas(
   }, [change, steps]);
 
   const arrange = useCallback<CanvasStore["arrange"]>(
-    ({ folds = {} }) => {
-      const redo: Pending = {
-        ...noPending(),
-        folds: new Map(Object.entries(folds)),
-      };
-      step(redo, undefined, false);
-      change((p) => laidOver(p, redo), false);
+    ({ folds = {} }, userAction = true) => {
+      if (!live.current.ready) return;
+      const { change: redo, persist: firstUnreadableEdit } = foldEdit(
+        shownNow.current,
+        folds,
+        live.current.unreadable,
+        userAction,
+      );
+      if (!hasPending(redo)) return;
+      const persist = firstUnreadableEdit || (userAction && saveBlocked.current);
+      if (userAction) saveBlocked.current = false;
+      step(redo, undefined, persist);
+      change((p) => laidOver(p, redo), persist);
     },
     [change, step],
   );
@@ -299,6 +351,7 @@ export function useCanvas(
   return {
     ink,
     ready: state.ready,
+    unreadable: state.unreadable,
     commit,
     keep,
     undo,

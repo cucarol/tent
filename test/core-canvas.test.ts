@@ -16,6 +16,7 @@ import {
 import { readDocumentDiff, readDocumentVersion } from "../src/core/read/document-diff.js";
 import { readWorkspaceRevision } from "../src/core/workspace/workspace-revision.js";
 import { MUTATION_LOCK_PATH } from "../src/core/base/paths.js";
+import { contentEtag } from "../src/core/base/etag.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { exportGraph } from "../src/fs/graph-export.js";
@@ -142,10 +143,91 @@ test("invalid canvas input, corrupt existing files and oversized UTF-8 leave byt
     await adapter.writeFile("canvas.json", bad);
     await assert.rejects(readCanvasDocument(adapter), { code: "INVALID_INPUT" });
     await assert.rejects(writeCanvasDocument(adapter, { baseEtag: first.etag, canvas: empty() }), {
-      code: "INVALID_INPUT",
+      code: "ETAG_CONFLICT",
+    });
+    await assert.rejects(writeCanvasDocument(adapter, { baseEtag: null, canvas: empty() }), {
+      code: "ETAG_CONFLICT",
     });
     assert.equal(await adapter.readFile("canvas.json"), bad);
   }
+});
+
+test("rejected canvas reads expose only the original ETag; a matching v3 save retains the bad preimage", async (t) => {
+  const { adapter } = await fixture(t);
+  const original =
+    '{"version":2,"positions":{"node-old":[3,4]},"drawings":["private old content"]}';
+  await adapter.writeFile("canvas.json", original);
+  const head = await adapter.history.currentCommit();
+  await assert.rejects(readCanvasDocument(adapter), (error: unknown) => {
+    assert.ok(error instanceof CanvasError);
+    assert.equal(error.code, "INVALID_INPUT");
+    assert.deepEqual(error.details, { current: { etag: contentEtag(original) } });
+    return true;
+  });
+  assert.equal(await adapter.history.currentCommit(), head);
+  assert.equal(await adapter.readFile("canvas.json"), original);
+  const canvas = { ...empty(), open: ["node-opened"] };
+  await writeCanvasDocument(adapter, { baseEtag: contentEtag(original), canvas });
+  assert.deepEqual((await readCanvasDocument(adapter)).canvas, canvas);
+  const events = await adapter.history.changesInRange({ ...(head ? { from: head } : {}) });
+  const refs = events.flatMap((event) =>
+    event.changes.flatMap((change) =>
+      [change.before, change.after].filter((version) => version?.path === "canvas.json"),
+    ),
+  );
+  const retained = await Promise.all(refs.map((version) => adapter.history.read(version!)));
+  assert.ok(retained.includes(original), "invalid external bytes remain in retained history");
+  assert.ok(events.every((event) => event.objectIds.length === 0));
+});
+
+test("canvas CAS rejects stale observations across unreadable, valid and missing replacements", async (t) => {
+  const { adapter } = await fixture(t);
+  const bad = '{"version":2}',
+    otherBad = "{",
+    valid = JSON.stringify(empty()) + "\n";
+  for (const [observed, replacement] of [
+    [bad, otherBad],
+    [bad, valid],
+    [bad, null],
+    [valid, bad],
+  ] as const) {
+    await adapter.writeFile("canvas.json", observed);
+    if (replacement === null) await adapter.remove("canvas.json");
+    else await adapter.writeFile("canvas.json", replacement);
+    await assert.rejects(
+      writeCanvasDocument(adapter, {
+        baseEtag: contentEtag(observed),
+        canvas: { ...empty(), shut: ["node-x"] },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CanvasError);
+        assert.equal(error.code, "ETAG_CONFLICT");
+        assert.deepEqual(
+          error.details?.current,
+          replacement === null
+            ? { etag: null, canvas: null }
+            : replacement === valid
+              ? { etag: contentEtag(valid), canvas: empty() }
+              : { etag: contentEtag(replacement) },
+        );
+        return true;
+      },
+    );
+    assert.equal(await adapter.exists("canvas.json"), replacement !== null);
+    if (replacement !== null) assert.equal(await adapter.readFile("canvas.json"), replacement);
+  }
+});
+
+test("canvas read I/O failures keep their original failure instead of becoming rejected-content metadata", async () => {
+  const failure = Object.assign(new Error("unreadable file"), { code: "EACCES" });
+  await assert.rejects(
+    readCanvasDocument({
+      readFile: async () => {
+        throw failure;
+      },
+    } as unknown as NodeFs),
+    (error: unknown) => error === failure,
+  );
 });
 
 test("canvas uses the workspace lock and detects another writer's saved ETag", async (t) => {

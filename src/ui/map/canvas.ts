@@ -16,7 +16,8 @@ export type CanvasFile = {
 };
 
 /** The opening read, shared with the map's initial topology read. */
-export type CanvasInitial = { file: CanvasFile; etag: string | null } | { error: string };
+export type CanvasBase = { file: CanvasFile; etag: string | null; unreadable?: true };
+export type CanvasInitial = CanvasBase | { error: string };
 
 export const emptyCanvas = (): CanvasFile => ({
   version: 3,
@@ -24,6 +25,13 @@ export const emptyCanvas = (): CanvasFile => ({
   shut: [],
   drawings: [],
 });
+
+/** A strict document or only the unreadable file's ETag; old contents never enter the UI. */
+export function canvasBase(current: { etag: string | null; canvas?: unknown }): CanvasBase {
+  if ("canvas" in current) return { file: readCanvas(current.canvas), etag: current.etag };
+  if (typeof current.etag !== "string") throw new Error("Unreadable canvas has no ETag");
+  return { file: emptyCanvas(), etag: current.etag, unreadable: true };
+}
 
 const isIds = (v: unknown): v is string[] =>
   Array.isArray(v) && v.every((id) => typeof id === "string");
@@ -89,6 +97,22 @@ function over<T extends { id: string }>(list: readonly T[], pending: Map<string,
 /** How a card is folded in the file: opened, closed, or as the default depth has it. */
 export const foldOf = (file: CanvasFile, id: string): Fold | null =>
   file.open.includes(id) ? "open" : file.shut.includes(id) ? "shut" : null;
+
+/** Automatic reveals stay in memory; only a real edit may replace an unreadable saved view. */
+export function foldEdit(
+  file: CanvasFile,
+  folds: Record<string, Fold | null>,
+  unreadable: boolean,
+  userAction: boolean,
+): { change: Pending; persist: boolean } {
+  return {
+    change: {
+      folds: new Map(Object.entries(folds).filter(([id, fold]) => foldOf(file, id) !== fold)),
+      drawings: new Map(),
+    },
+    persist: unreadable && userAction,
+  };
+}
 
 /** The file as it will be once this page's pending changes are written over `file`. */
 export function withPending(file: CanvasFile, pending: Pending): CanvasFile {

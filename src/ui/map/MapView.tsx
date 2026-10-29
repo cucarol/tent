@@ -94,7 +94,8 @@ import {
   type Sizes,
   aabb,
 } from "./drawings.js";
-import { useCanvas, type Picks } from "./useCanvas.js";
+import { useCanvas, type Picks, type CanvasStore } from "./useCanvas.js";
+import { CanvasNotice } from "./CanvasNotice.js";
 import { emptyCanvas, withPending, type Fold } from "./canvas.js";
 import { arrange as arrangeMap, CENTRE, listed, taper, TOPIC, type Topic } from "./arrange.js";
 import { selectionLines, type CodeEdge, type SelectionLineKind } from "./relations.js";
@@ -735,8 +736,24 @@ type MapProps = {
 export function MapView(props: MapProps) {
   return (
     <ReactFlowProvider key={props.graph.snapshot.workspace.id}>
-      <MapContent {...props} />
+      <CanvasSession {...props} />
     </ReactFlowProvider>
+  );
+}
+
+/** The notice owns a row outside the map, so it cannot cover a topic or a map control. */
+function CanvasSession(props: MapProps) {
+  const canvas = useCanvas(
+    props.graph.snapshot.workspace.id,
+    props.graph.snapshot.workspace.revision,
+    props.onNotice,
+    props.initialCanvas,
+  );
+  return (
+    <div className="canvas-stage">
+      {canvas.unreadable && <CanvasNotice onNotice={props.onNotice} />}
+      <MapContent {...props} canvas={canvas} />
+    </div>
   );
 }
 
@@ -744,7 +761,7 @@ function MapContent({
   graph: currentGraph,
   factsEpoch,
   onFirstLayout,
-  initialCanvas,
+  canvas,
 
   selected,
   draft,
@@ -755,7 +772,7 @@ function MapContent({
 
   onExpand,
   onNotice,
-}: MapProps) {
+}: MapProps & { canvas: CanvasStore }) {
   // null means now; otherwise an index into the retained commits, oldest first.
   const [time, setTime] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -982,12 +999,6 @@ function MapContent({
 
   // ---------- drawing ----------
   // Drawings stay out of relationship reading and past moments. null: drawing is off.
-  const canvas = useCanvas(
-    graph.snapshot.workspace.id,
-    graph.snapshot.workspace.revision,
-    onNotice,
-    initialCanvas,
-  );
   const ink = canvas;
   const [inkTool, setInkTool] = useState<InkTool | null>(null);
   const [inkLocked, setInkLocked] = useState(false);
@@ -1110,19 +1121,21 @@ function MapContent({
   }, [treeFocus, graph, visible, enterFocus, lens, time === null, pastTree]);
   const foldAnchor = useRef<{ id: string; at: [number, number] } | undefined>(undefined);
   const currentAnchor = useRef<typeof foldAnchor.current>(undefined);
-  const arrange = useSteady((change: { folds?: Record<string, Fold | null> }) => {
-    if (time !== null) {
-      setPastFolds((file) =>
-        withPending(file, {
-          folds: new Map(Object.entries(change.folds ?? {})),
-          drawings: new Map(),
-        }),
-      );
-      return;
-    }
-    if (lens) setLensSession(foldInLens(lens, change.folds ?? {}));
-    else canvas.arrange(change);
-  });
+  const arrange = useSteady(
+    (change: { folds?: Record<string, Fold | null> }, userAction: boolean = true) => {
+      if (time !== null) {
+        setPastFolds((file) =>
+          withPending(file, {
+            folds: new Map(Object.entries(change.folds ?? {})),
+            drawings: new Map(),
+          }),
+        );
+        return;
+      }
+      if (lens) setLensSession(foldInLens(lens, change.folds ?? {}));
+      else canvas.arrange(change, userAction);
+    },
+  );
   const opened = time !== null ? pastFolds.open : lens ? lens.open : canvas.open;
   const shut = time !== null ? pastFolds.shut : lens ? lens.shut : canvas.shut;
   const [defaultDepth, setDefaultDepth] = useState(2);
@@ -2150,7 +2163,7 @@ function MapContent({
           ? graph.ancestors(selected.id).filter((a) => folded.has(a.id))
           : [];
       if (over.length) {
-        arrange({ folds: Object.fromEntries(over.map((a) => [a.id, "open"])) });
+        arrange({ folds: Object.fromEntries(over.map((a) => [a.id, "open"])) }, false);
         return;
       }
       const rects = viewRects(base);
@@ -2215,12 +2228,14 @@ function MapContent({
     return () => clearTimeout(t);
   }, [filters.types]);
 
-  // Keep the selected title inside the remaining map area as either side panel changes size.
-  const keepSelectionVisible = useSteady((moved: number) => {
+  // Preserve screen positions when panels or the saved-view notice move the map's origin.
+  const mapOrigin = useRef<{ left: number; top: number } | null>(null);
+  const keepSelectionVisible = useSteady((moved: number, movedDown: number = 0) => {
     const el = box.current;
     if (!el) return;
     const v = { ...flow.getViewport() };
     v.x -= moved;
+    v.y -= movedDown;
     const p = selected?.kind === "node" ? view.placed.get(selected.id) : undefined;
     if (p) {
       const r = rectOf(p);
@@ -2270,21 +2285,23 @@ function MapContent({
     if (Math.abs(old.x - v.x) > 0.1 || Math.abs(old.y - v.y) > 0.1 || old.zoom !== v.zoom)
       void flow.setViewport(v, { duration: 0 });
   });
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    let left = el.getBoundingClientRect().left;
-    const observer = new ResizeObserver(() => {
-      const now = el.getBoundingClientRect().left,
-        moved = now - left;
-      left = now;
-      keepSelectionVisible(moved);
-    });
+    const follow = () => {
+      const { left, top } = el.getBoundingClientRect();
+      const before = mapOrigin.current;
+      mapOrigin.current = { left, top };
+      if (before) keepSelectionVisible(left - before.left, top - before.top);
+    };
+    // The notice can disappear in this commit; compensate before the browser paints it.
+    follow();
+    const observer = new ResizeObserver(follow);
     observer.observe(el);
     const panel = document.querySelector(".detail");
     if (panel) observer.observe(panel);
     return () => observer.disconnect();
-  }, [keepSelectionVisible, selected?.id]);
+  }, [keepSelectionVisible, selected?.id, canvas.unreadable]);
 
   // A dock opening or growing changes the usable map, even without a side-panel resize.
   const uncoverTopics = useSteady(() => {
@@ -2533,9 +2550,12 @@ function MapContent({
     const over = graph.ancestors(selected.id).filter((a) => folded.has(a.id));
     if (!over.length) return;
     pinTopic(selected.id);
-    arrange({
-      folds: Object.fromEntries(over.map((a) => [a.id, "open"])),
-    });
+    arrange(
+      {
+        folds: Object.fromEntries(over.map((a) => [a.id, "open"])),
+      },
+      false,
+    );
   }, [selected?.kind, selected?.id, canvas.ready, treeReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------- keyboard ----------

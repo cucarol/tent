@@ -24,12 +24,14 @@ const canvasSchema = z
   .refine((canvas) => !canvas.open.some((id) => canvas.shut.includes(id)));
 export type Canvas = z.infer<typeof canvasSchema>;
 export type CanvasDocument = { etag: string; canvas: Canvas } | { etag: null; canvas: null };
+/** An unreadable file exposes its existing CAS identity, never its invalid contents. */
+export type CanvasCurrent = CanvasDocument | { etag: string };
 
 export class CanvasError extends Error {
   constructor(
     readonly code: "INVALID_INPUT" | "ETAG_CONFLICT",
     message: string,
-    readonly details?: { current: CanvasDocument },
+    readonly details?: { current: CanvasCurrent },
   ) {
     super(message);
     this.name = "CanvasError";
@@ -58,14 +60,19 @@ async function readRaw(fs: FsAdapter): Promise<string | null> {
 
 function document(raw: string | null): CanvasDocument {
   if (raw === null) return { etag: null, canvas: null };
-  checkSize(raw);
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new CanvasError("INVALID_INPUT", "canvas.json is not valid JSON");
+    checkSize(raw);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new CanvasError("INVALID_INPUT", "canvas.json is not valid JSON");
+    }
+    return { etag: contentEtag(raw), canvas: validate(parsed) };
+  } catch (error) {
+    if (!(error instanceof CanvasError)) throw error;
+    throw new CanvasError(error.code, error.message, { current: { etag: contentEtag(raw) } });
   }
-  return { etag: contentEtag(raw), canvas: validate(parsed) };
 }
 
 /** Reads never create, repair, prune, or capture the UI's layout file. */
@@ -84,9 +91,17 @@ export function writeCanvasDocument(fs: FsAdapter, input: { baseEtag: unknown; c
     fs,
     async () => {
       const before = await readRaw(fs);
-      const current = document(before);
-      if (input.baseEtag !== current.etag)
+      const etag = before === null ? null : contentEtag(before);
+      if (input.baseEtag !== etag) {
+        let current: CanvasCurrent;
+        try {
+          current = document(before);
+        } catch (error) {
+          if (!(error instanceof CanvasError) || error.code !== "INVALID_INPUT") throw error;
+          current = { etag: etag! };
+        }
         throw new CanvasError("ETAG_CONFLICT", "Canvas changed; reread before saving", { current });
+      }
       if (raw !== before) await fs.writeFile(CANVAS_PATH, raw);
       const version =
         fs.history && (await hasDocumentHistory(fs))

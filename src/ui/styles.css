@@ -2549,6 +2549,43 @@ body.is-dragging * {
 }
 
 /* ---------- map ---------- */
+.canvas-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+.canvas-stage > .map {
+  position: relative;
+  inset: auto;
+  flex: 1;
+  min-height: 0;
+}
+.canvas-read-notice {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 20px;
+}
+.canvas-read-notice > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.canvas-read-notice > button {
+  flex: none;
+  padding: 0;
+  color: var(--text);
+  text-decoration: underline;
+}
 .map {
   position: absolute;
   inset: 0;

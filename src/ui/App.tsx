@@ -30,7 +30,8 @@ import { loadLocalDrafts, useDraftCards } from "./data/drafts.js";
 import { FilesContext, useFileInfo } from "./data/files.js";
 import { carried, sourceIds, useWork, type Work } from "./shell/work.js";
 import { HandlingContext, handlingOf } from "./data/handling.js";
-import { readCanvas, type CanvasInitial } from "./map/canvas.js";
+import type { CanvasInitial } from "./map/canvas.js";
+import { loadCanvas } from "./map/canvas-api.js";
 import type { Graph } from "./data/store.js";
 import type { HistoricalSelection } from "./data/history-tree.js";
 import { readStored, writeStored } from "./util.js";
@@ -81,7 +82,7 @@ export function App() {
   const [initialCanvas, setInitialCanvas] = useState<CanvasInitial | null>(null);
   const [layoutReady, setLayoutReady] = useState(false);
   const firstLayout = useCallback(() => setLayoutReady(true), []);
-  // A failed canvas cannot finish layout; let a restored open Dock retain its detail-read recovery.
+  // Transport/read errors can still prevent layout; an unreadable saved view uses the default map.
   const detailsReady = layoutReady || (initialCanvas !== null && "error" in initialCanvas);
   const [full, setFull] = useState<Snapshot | null>(null);
   const [liveRevision, setLiveRevision] = useState<string | undefined>(undefined);
@@ -160,10 +161,7 @@ export function App() {
   // The first screen: the map read alone.
   useEffect(() => {
     let live = true;
-    const canvas = api
-      .canvas()
-      .then((r): CanvasInitial => ({ file: readCanvas(r.canvas), etag: r.etag }))
-      .catch((error): CanvasInitial => ({ error: describe(error) }));
+    const canvas = loadCanvas();
     loadMap().then(
       async (m) => {
         const opened = await canvas;
