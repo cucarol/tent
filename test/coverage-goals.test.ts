@@ -61,8 +61,8 @@ async function fixture(t: TestContext) {
     removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
   await git(workspace, "init", "-b", "main");
-  await fs.appendFile(path.join(workspace, ".git/info/exclude"), "\n/.tent/\n");
   await scaffoldInWorkspace(openTestFs(workspace), { name: "Coverage" });
+  await fs.writeFile(path.join(workspace, ".tent/.gitignore"), "*\n");
   const system = path.join(workspace, ".tent");
   await initializeFixtureHistory(system);
   await fs.mkdir(path.join(workspace, "src"));

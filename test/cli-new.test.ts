@@ -10,6 +10,7 @@ import test from "node:test";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { isValidTentIndexMarker, tentIndexMarker } from "../src/core/store/scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
+import { loadTent } from "../src/core/store/tree.js";
 
 const execute = promisify(execFile);
 const cli = path.resolve("src/cli/tent.ts");
@@ -57,6 +58,40 @@ test("existing Git ignore entries and structural markers remain valid", async (t
 
 test("retired agent commands remain unavailable", async () => {
   await assert.rejects(run("agent", "session-start"), /Unknown command: tent agent/);
+});
+
+test("new's local ignore file is neither a Node nor a workspace check issue", async (t) => {
+  const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "new-local-ignore-"));
+  t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
+  await run("new", "--workspace", workspace);
+  assert.equal(await fs.readFile(path.join(workspace, ".tent/.gitignore"), "utf8"), "*\n");
+  const created = JSON.parse(
+    (
+      await run(
+        "node",
+        "create",
+        "Fact",
+        "--type",
+        "prompt",
+        "--body",
+        "Kept",
+        "--workspace",
+        workspace,
+        "--json",
+      )
+    ).stdout,
+  );
+  const shown = JSON.parse(
+    (await run("node", "get", created.node.nodeId, "--workspace", workspace, "--json")).stdout,
+  );
+  assert.equal(shown.text.trim(), "Kept");
+  assert.equal((await loadTent(openTestFs(path.join(workspace, ".tent")))).byId.size, 1);
+  const checked = JSON.parse(
+    (await run("workspace", "check", "--workspace", workspace, "--json")).stdout,
+  );
+  assert.deepEqual(checked.issues, []);
+  assert.deepEqual(checked.errors, []);
+  assert.deepEqual(checked.notices, []);
 });
 
 test("new accepts workspace selection by flag or an equivalent positional path", async (t) => {

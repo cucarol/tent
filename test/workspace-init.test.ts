@@ -8,10 +8,23 @@ import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import test from "node:test";
-import { initializeTentWorkspace, ensureWorkspaceGitExclude } from "../src/fs/workspace-init.js";
+import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { loadTent } from "../src/core/store/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
+
+async function directoryContents(root: string, prefix = ""): Promise<Record<string, string>> {
+  const contents: Record<string, string> = {};
+  for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+    const file = path.join(root, entry.name),
+      relative = prefix + entry.name;
+    if (entry.isDirectory()) {
+      contents[relative + "/"] = "";
+      Object.assign(contents, await directoryContents(file, relative + "/"));
+    } else contents[relative] = (await fs.readFile(file)).toString("hex");
+  }
+  return contents;
+}
 
 test("direct CLI initializes and writes SQLite history when Git is absent from PATH", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "init-without-git-"));
@@ -45,6 +58,7 @@ test("direct CLI initializes and writes SQLite history when Git is absent from P
     return result.stdout;
   };
   invoke(["new", workspace]);
+  assert.equal(await fs.readFile(path.join(workspace, ".tent/.gitignore"), "utf8"), "*\n");
   const receipt = JSON.parse(
     invoke([
       "node",
@@ -90,7 +104,7 @@ test("direct CLI initializes and writes SQLite history when Git is absent from P
   assert.ok(material.reason, "missing Git leaves ignore-dependent observation explicitly unknown");
 });
 
-test("initialization creates SQLite without Nodes, events or changes to outer project history", async (t) => {
+test("initialization preserves all outer Git bytes even when Git metadata writes are denied", async (t) => {
   const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "init-git-"));
@@ -98,12 +112,44 @@ test("initialization creates SQLite without Nodes, events or changes to outer pr
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", workspace, ...args], { encoding: "utf8", windowsHide: true });
   git("init", "--quiet");
-  const userIgnore = Buffer.from("# User ignore\r\n*.tmp\r\n.tent/\r\n");
+  const userIgnore = Buffer.from("# User ignore\r\n*.tmp\r\n");
   const userExclude = Buffer.from("# Local rules\r\ncache/\r\n");
   await fs.writeFile(path.join(workspace, ".gitignore"), userIgnore);
   await fs.writeFile(path.join(workspace, ".git/info/exclude"), userExclude);
   const outerConfig = await fs.readFile(path.join(workspace, ".git/config"), "utf8");
-  await initializeTentWorkspace(workspace);
+  const gitRoot = path.join(workspace, ".git");
+  const before = await directoryContents(gitRoot);
+  const denied = (file: unknown) =>
+    typeof file === "string" && (file === gitRoot || file.startsWith(gitRoot + path.sep));
+  const originalMkdir = fsPromises.mkdir,
+    originalWrite = fsPromises.writeFile;
+  const mkdirMock = t.mock.method(
+    fsPromises,
+    "mkdir",
+    async (...args: Parameters<typeof originalMkdir>) => {
+      if (denied(args[0]))
+        throw Object.assign(new Error("Git metadata is protected"), { code: "EPERM" });
+      return originalMkdir(...args);
+    },
+  );
+  const writeMock = t.mock.method(
+    fsPromises,
+    "writeFile",
+    async (...args: Parameters<typeof originalWrite>) => {
+      if (denied(args[0]))
+        throw Object.assign(new Error("Git metadata is protected"), { code: "EPERM" });
+      return originalWrite(...args);
+    },
+  );
+  syncBuiltinESMExports();
+  try {
+    await initializeTentWorkspace(workspace);
+  } finally {
+    mkdirMock.mock.restore();
+    writeMock.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.deepEqual(await directoryContents(gitRoot), before);
   const systemRoot = path.join(workspace, ".tent");
   const history = openTestFs(systemRoot);
   try {
@@ -127,12 +173,11 @@ test("initialization creates SQLite without Nodes, events or changes to outer pr
   );
   assert.equal((await loadTent(openTestFs(systemRoot))).byId.size, 0);
   assert.equal(await fs.readFile(path.join(workspace, ".git/config"), "utf8"), outerConfig);
-  assert.equal(git("check-ignore", ".tent/").trim(), ".tent/");
+  assert.equal(await fs.readFile(path.join(systemRoot, ".gitignore"), "utf8"), "*\n");
+  assert.equal(git("check-ignore", ".tent/settings.json").trim(), ".tent/settings.json");
+  assert.equal(git("ls-files", "--others", "--exclude-standard", "--", ".tent"), "");
   assert.deepEqual(await fs.readFile(path.join(workspace, ".gitignore")), userIgnore);
-  assert.deepEqual(
-    await fs.readFile(path.join(workspace, ".git/info/exclude")),
-    Buffer.concat([userExclude, Buffer.from(".tent/\n")]),
-  );
+  assert.deepEqual(await fs.readFile(path.join(workspace, ".git/info/exclude")), userExclude);
   assert.equal(await openTestFs(systemRoot).exists("attachments"), false);
   const settings = await fs.readFile(path.join(systemRoot, "settings.json"), "utf8");
   await assert.rejects(initializeTentWorkspace(workspace), /already has a Tent/);
@@ -276,7 +321,7 @@ for (const code of ["EIO", "EPERM"]) {
   );
 }
 
-test("worktree initialization uses the shared exclude file and preserves existing rules", async (t) => {
+test("main and linked worktree initialization leave shared Git metadata untouched", async (t) => {
   const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const fixture = await fs.mkdtemp(path.join(scratch, "init-worktree-"));
@@ -308,41 +353,61 @@ test("worktree initialization uses the shared exclude file and preserves existin
   );
   const original = Buffer.from("# User exclude\r\nlocal-cache/");
   await fs.writeFile(excludePath, original);
+  const before = await directoryContents(path.join(main, ".git"));
+  const worktreeGit = await fs.readFile(path.join(worktree, ".git"));
   await initializeTentWorkspace(worktree);
-  const excluded = Buffer.concat([original, Buffer.from("\n.tent/\n")]);
-  assert.deepEqual(await fs.readFile(excludePath), excluded);
-  assert.equal(git(worktree, "check-ignore", ".tent/"), ".tent/");
+  assert.deepEqual(await directoryContents(path.join(main, ".git")), before);
+  assert.deepEqual(await fs.readFile(path.join(worktree, ".git")), worktreeGit);
+  assert.deepEqual(await fs.readFile(excludePath), original);
+  assert.equal(git(worktree, "check-ignore", ".tent/settings.json"), ".tent/settings.json");
   await initializeTentWorkspace(main);
-  assert.deepEqual(await fs.readFile(excludePath), excluded);
-  assert.equal(git(main, "check-ignore", ".tent/"), ".tent/");
+  assert.deepEqual(await directoryContents(path.join(main, ".git")), before);
+  assert.deepEqual(await fs.readFile(excludePath), original);
+  assert.equal(git(main, "check-ignore", ".tent/settings.json"), ".tent/settings.json");
+  for (const root of [main, worktree]) {
+    assert.equal(await fs.readFile(path.join(root, ".tent/.gitignore"), "utf8"), "*\n");
+    assert.equal(git(root, "ls-files", "--others", "--exclude-standard", "--", ".tent"), "");
+  }
   await assert.rejects(fs.stat(path.join(main, ".gitignore")), { code: "ENOENT" });
   await assert.rejects(fs.stat(path.join(worktree, ".gitignore")), { code: "ENOENT" });
 });
 
-test("non-Git exclude discovery writes no project files and preserves the user's gitignore", async (t) => {
+test("initialization always writes its own ignore file and preserves the user's gitignore", async (t) => {
   const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "init-nongit-"));
   t.after(() => removeTestFixture(root, { recursive: true, force: true }));
-  const raw = Buffer.from("# User rules\r\n.tent/\r\n");
+  const raw = Buffer.from("# User rules\r\n*.tmp\r\n");
   await fs.writeFile(path.join(root, ".gitignore"), raw);
-  const calls: string[][] = [];
-  await ensureWorkspaceGitExclude(root, async (args) => {
-    calls.push(args);
-    throw Object.assign(new Error("not a git repository"), {
-      code: 128,
-      stderr: "fatal: not a git repository (or any of the parent directories): .git",
-    });
-  });
-  assert.deepEqual(calls, [["-C", root, "rev-parse", "--git-path", "info/exclude"]]);
-  assert.deepEqual(await fs.readdir(root), [".gitignore"]);
+  await initializeTentWorkspace(root);
+  assert.deepEqual((await fs.readdir(root)).sort(), [".gitignore", ".tent"]);
   assert.deepEqual(await fs.readFile(path.join(root, ".gitignore")), raw);
-  await fs.unlink(path.join(root, ".gitignore"));
-  await ensureWorkspaceGitExclude(root, async () => {
-    throw Object.assign(new Error("not a git repository"), {
-      code: 128,
-      stderr: "not a git repository",
-    });
-  });
-  assert.deepEqual(await fs.readdir(root), []);
+  assert.equal(await fs.readFile(path.join(root, ".tent/.gitignore"), "utf8"), "*\n");
+});
+
+test("ignore preparation failure publishes no Tent and remains retryable", async (t) => {
+  const root = await fs.mkdtemp(path.join(testScratchRoot(), "init-ignore-failure-"));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, "user.txt"), "keep");
+  const original = fsPromises.writeFile;
+  const failure = Object.assign(new Error("ignore write denied"), { code: "EIO" });
+  const mocked = t.mock.method(
+    fsPromises,
+    "writeFile",
+    async (...args: Parameters<typeof original>) => {
+      if (typeof args[0] === "string" && path.basename(args[0]) === ".gitignore") throw failure;
+      return original(...args);
+    },
+  );
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(initializeTentWorkspace(root), (error) => error === failure);
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.deepEqual(await fs.readdir(root), ["user.txt"]);
+  assert.equal(await fs.readFile(path.join(root, "user.txt"), "utf8"), "keep");
+  await initializeTentWorkspace(root);
+  assert.equal(await fs.readFile(path.join(root, ".tent/.gitignore"), "utf8"), "*\n");
 });
