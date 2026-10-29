@@ -4,6 +4,7 @@ import { withTentMutation } from "../store/adapter.js";
 import type { FsAdapter } from "../store/adapter.js";
 import { parseFrontmatter, serializeFrontmatter, syncNodeTitle } from "../base/frontmatter.js";
 import { buildNodeIndex, resolveNode, type OkfNode } from "../base/okf.js";
+import { buildOkfNodeIndex } from "../base/okf-index.js";
 import { normalizeTarget, resolveTargetPath } from "../base/link-target.js";
 import { materialLocator, rewriteMaterialPaths } from "../base/material.js";
 import { rewriteMarkdownDestinations } from "../base/links.js";
@@ -363,9 +364,22 @@ export function rewriteNodeLinks(
 ): { body: string; changed: boolean } {
   if (pathMap.size === 0) return { body, changed: false };
   const oldPaths = [...pathMap.keys()].sort((a, b) => b.length - a.length);
+  let afterIndex: Map<string, OkfNode[]> | undefined;
+  const postMoveIndex = opts
+    ? () => (afterIndex ??= movedNodeIndex(opts.conceptIndex, pathMap))
+    : undefined;
   const next = rewriteMarkdownDestinations(body, (url) => {
     if (isExternalOrAnchor(url)) return undefined;
-    return mapLinkTarget(url, fromNotePath, pathMap, oldPaths, oldName, newName, opts);
+    return mapLinkTarget(
+      url,
+      fromNotePath,
+      pathMap,
+      oldPaths,
+      oldName,
+      newName,
+      opts,
+      postMoveIndex,
+    );
   });
   return { body: next, changed: next !== body };
 }
@@ -384,6 +398,7 @@ function mapLinkTarget(
   oldName: string,
   newName: string,
   opts?: RewriteNodeLinksOptions,
+  postMoveIndex?: () => Map<string, OkfNode[]>,
 ): string | undefined {
   const { pathPart, tail } = splitDestTail(raw);
   if (!pathPart) return undefined;
@@ -395,6 +410,7 @@ function mapLinkTarget(
   const restyleFrom = opts?.restyleFromNotePath ?? fromNotePath;
   const sourceMoved = restyleFrom.replace(/\\/g, "/") !== fromNotePath.replace(/\\/g, "/");
   let isRelativeForm = pathPart.startsWith("./") || pathPart.startsWith("../");
+  let localNode: OkfNode | undefined;
 
   // Resolve against the pre-move note path (link text was authored there).
   let targetPath = resolveTargetPath(pathPart, fromNotePath);
@@ -402,19 +418,18 @@ function mapLinkTarget(
     opts &&
     !isRelativeForm &&
     !pathPart.startsWith("/") &&
-    !resolveNode(opts.conceptIndex, targetPath)
+    !resolveIndexDocument(opts.conceptIndex, targetPath)
   ) {
     // Readers prefer a resolved Node root shorthand, then check the destination
     // as a document-relative file. Keep the same precedence during rewriting.
     try {
       const locator = materialLocator(pathPart, fromNotePath);
-      if (
-        locator.kind === "path" &&
-        locator.anchor === "document" &&
-        resolveNode(opts.conceptIndex, locator.target)
-      ) {
-        targetPath = locator.target;
-        isRelativeForm = true;
+      if (locator.kind === "path" && locator.anchor === "document") {
+        localNode = resolveIndexDocument(opts.conceptIndex, locator.target);
+        if (localNode) {
+          targetPath = locator.target;
+          isRelativeForm = true;
+        }
       }
     } catch {
       // Unsupported local destinations keep their original bytes.
@@ -425,19 +440,82 @@ function mapLinkTarget(
     normalized === ".." || normalized.startsWith("../")
       ? undefined
       : resolveMappedPath(normalized, pathMap, oldPaths);
+  const needsDisambiguation =
+    localNode !== undefined &&
+    postMoveIndex !== undefined &&
+    resolveDocumentNode(postMoveIndex(), pathPart, restyleFrom)?.nodeId !== localNode.nodeId;
 
   // Absolute / multi-segment system-root paths only rewrite on pathMap hits.
   // Relative forms also restyle when the source note itself moved (depth/path change).
-  if (!mapped && !(isRelativeForm && sourceMoved)) {
+  // A new root alias may shadow a local Node even when neither endpoint moved.
+  if (!mapped && !(isRelativeForm && sourceMoved) && !needsDisambiguation) {
     return undefined;
   }
 
   // A pathMap value is a Node stem; an unmapped material keeps its exact filename.
   const absTarget =
     mapped === undefined ? targetPath : /\.md$/i.test(targetPath) ? `${mapped}.md` : mapped;
-  const styled = restyleRelative(pathPart, restyleFrom, absTarget, isRelativeForm);
+  const styled = restyleRelative(
+    pathPart,
+    restyleFrom,
+    absTarget,
+    isRelativeForm,
+    needsDisambiguation,
+  );
   if (styled === pathPart) return undefined;
   return styled + tail;
+}
+
+/** Project the same Node identities and aliases at their planned write locations. */
+function movedNodeIndex(
+  before: Map<string, OkfNode[]>,
+  pathMap: Map<string, string>,
+): Map<string, OkfNode[]> {
+  const nodes = new Map<string, OkfNode>();
+  for (const matches of before.values()) {
+    for (const node of matches) {
+      if (nodes.has(node.nodeId)) continue;
+      const nextPath = pathMap.get(node.path);
+      const notePath = nextPath === undefined ? node.notePath : nodeNotePath(nextPath);
+      nodes.set(
+        node.nodeId,
+        nextPath === undefined
+          ? node
+          : {
+              ...node,
+              path: nextPath,
+              notePath,
+              id: notePath.replace(/\.md$/i, ""),
+              name: nextPath.slice(nextPath.lastIndexOf("/") + 1),
+            },
+      );
+    }
+  }
+  return buildOkfNodeIndex(nodes.values());
+}
+
+/** Match the reader's index-first, then exact identity-document lookup. */
+function resolveIndexDocument(index: Map<string, OkfNode[]>, target: string): OkfNode | undefined {
+  return (
+    resolveNode(index, target) ??
+    index.get(target)?.find((node) => node.notePath === target) ??
+    index.get(`${target}.md`)?.find((node) => node.notePath === `${target}.md`)
+  );
+}
+
+function resolveDocumentNode(
+  index: Map<string, OkfNode[]>,
+  destination: string,
+  owner: string,
+): OkfNode | undefined {
+  const direct = resolveIndexDocument(index, resolveTargetPath(destination, owner));
+  if (direct) return direct;
+  try {
+    const locator = materialLocator(destination, owner);
+    return locator.kind === "path" ? resolveIndexDocument(index, locator.target) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function mapUnqualifiedName(
@@ -506,6 +584,7 @@ function restyleRelative(
   fromNotePath: string,
   absoluteNext: string,
   documentRelative: boolean,
+  forceExplicitRelative: boolean,
 ): string {
   const orig = originalPathPart.replace(/\\/g, "/");
   const escape = (value: string) =>
@@ -518,7 +597,7 @@ function restyleRelative(
       // Keep an unchanged bare relative, but make a changed destination explicit:
       // its new spelling may collide with an existing root shorthand.
       const bare = rel.replace(/^\.\//, "");
-      if (resolveTargetPath(orig) === bare) return originalPathPart;
+      if (!forceExplicitRelative && resolveTargetPath(orig) === bare) return originalPathPart;
     }
     return escape(rel);
   }

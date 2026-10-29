@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { checkGraph } from "../src/core/check/graph-check.js";
-import { buildNodeIndex } from "../src/core/base/okf.js";
+import { buildNodeIndex, resolveNode } from "../src/core/base/okf.js";
+import { materialLocator } from "../src/core/base/material.js";
 import { resolveOutLink } from "../src/core/base/links.js";
 import { createNode, renameNode } from "../src/core/graph/ops.js";
 import { scaffoldTent } from "../src/core/store/scaffold.js";
@@ -131,3 +132,52 @@ test("renameNode keeps root shorthand precedence over a colliding local child pa
   assert.equal((await resolve()).targetNodeId, root);
   assert.deepEqual(await checkLinks(), []);
 });
+
+for (const moveOwner of [false, true]) {
+  for (const childName of ["Child", "孩子"]) {
+    test(`renameNode disambiguates new root shadow with ${moveOwner ? "moved" : "unmoved"} owner and ${childName} target`, async (t) => {
+      const { adapter, env, create, write, checkLinks } = await fixture(t);
+      const owner = await create("", "Owner");
+      const child = await create("Owner", childName);
+      const other = await create("", "Other");
+      await create("Owner", "Safe");
+      const encodedName = encodeURIComponent(childName);
+      const destination = `${encodedName}/${encodedName}.md?view=read#%70art`;
+      const untouched = "[Unchanged](Safe/Safe.md)";
+      await write(
+        "Owner/Owner.md",
+        owner,
+        `[Child](${destination})\n${untouched}\n\n[Reference][ref]\n\n[ref]: <${destination}> "Keep title"\n`,
+      );
+      assert.deepEqual(await checkLinks(), []);
+      const before = await loadTent(adapter);
+      const locator = materialLocator(destination, "Owner/Owner.md");
+      assert.equal(locator.kind, "path");
+      if (locator.kind !== "path") throw new Error("Expected a local path");
+      assert.equal(
+        resolveNode(buildNodeIndex(before.byPath.values()), locator.target)?.nodeId,
+        child,
+      );
+
+      const result = await renameNode(env, moveOwner ? owner : other, childName);
+
+      const after = await loadTent(adapter);
+      const author = after.byId.get(owner)!;
+      const raw = author.body.match(/\[Child\]\(([^)]+)\)/)![1]!;
+      assert.equal(
+        resolveOutLink(
+          buildNodeIndex(after.byPath.values()),
+          { raw, kind: "md" },
+          `${author.path}/${author.name}.md`,
+        ).targetNodeId,
+        child,
+        "the original child identity must survive a new root shadow",
+      );
+      assert.equal(raw, `./${destination}`);
+      assert.ok(author.body.includes(`[ref]: <./${destination}> "Keep title"`));
+      assert.ok(author.body.includes(untouched), "unaffected bare local links keep their bytes");
+      assert.ok(result.rewrittenNotes.includes(author.path));
+      assert.deepEqual(await checkLinks(), []);
+    });
+  }
+}
