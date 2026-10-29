@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, open, readFile, realpath, unlink } from "node:fs/promises";
 import path from "node:path";
 import { isTentWorkspacePath } from "../core/base/material-coverage.js";
 import type { WorkspaceScanRepository } from "../core/check/workspace-scan.js";
@@ -8,12 +8,18 @@ import type { WorkspaceModuleMapRepository } from "../core/check/workspace-modul
 import { selectSection } from "../core/base/markdown-section.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { readRepositorySources } from "./repository-sources.js";
+import {
+  workspaceDraftReportPath,
+  type WorkspaceDraftSummary,
+} from "../core/check/workspace-draft.js";
+import { serializeWorkspaceDraftReport } from "../core/check/workspace-draft-report.js";
 
 /** The explicit draft is a new editable file, never a replacement for live collaboration state. */
 export async function writeWorkspaceDraft(
   workspaceRoot: string,
   destination: string,
   batch: unknown,
+  summary: WorkspaceDraftSummary,
 ) {
   const filename = path.resolve(workspaceRoot, destination);
   const parent = await realpath(path.dirname(filename));
@@ -26,12 +32,39 @@ export async function writeWorkspaceDraft(
     throw new Error(
       "Draft must be outside .tent; use a new file in the Workspace scratch directory",
     );
-  await writeFile(
-    path.join(parent, path.basename(filename)),
-    JSON.stringify(batch, null, 2) + "\n",
-    { flag: "wx" },
-  );
-  return filename;
+  const report = workspaceDraftReportPath(filename);
+  const files = [
+    { filename, content: JSON.stringify(batch, null, 2) + "\n" },
+    {
+      filename: report,
+      content: serializeWorkspaceDraftReport(summary, { draft: filename, report }),
+    },
+  ];
+  const created: string[] = [];
+  try {
+    for (const file of files) {
+      const target = path.join(parent, path.basename(file.filename));
+      const handle = await open(target, "wx");
+      created.push(target);
+      try {
+        await handle.writeFile(file.content, "utf8");
+      } finally {
+        await handle.close();
+      }
+    }
+  } catch (error) {
+    const cleanup = await Promise.allSettled(created.map((file) => unlink(file)));
+    const failures = cleanup.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length)
+      throw new AggregateError(
+        [error, ...failures],
+        "Draft publication failed; could not remove newly created files",
+      );
+    throw error;
+  }
+  return { draft: filename, report };
 }
 
 async function git(root: string, args: string[]): Promise<string> {

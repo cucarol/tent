@@ -12,7 +12,11 @@ import { resolveWorkspacePaths } from "./workspace-path.js";
 import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
 import { checkGraph } from "../core/check/graph-check.js";
 import { scanWorkspace, formatWorkspaceScan } from "../core/check/workspace-scan.js";
-import { prepareWorkspaceDraft, formatWorkspaceDraft } from "../core/check/workspace-draft.js";
+import {
+  prepareWorkspaceDraft,
+  formatWorkspaceDraft,
+  workspaceDraftExitCode,
+} from "../core/check/workspace-draft.js";
 import { formatModuleImportIssues } from "../core/check/module-map.js";
 import {
   readWorkspaceScanRepository,
@@ -44,7 +48,7 @@ export const workspaceHelpText = `tent workspace — the whole Workspace at once
 brief: where to start. Counts, invalid Nodes and waiting Cards; for ahead and behind Nodes only their counts, since drift lists them. Every other list shows up to 10 items, then its total and the command that lists the rest. --role keeps only that Role's Cards.
 check: broken links, invalid or missing materials, missing Markdown sections, and Node files whose disk and Tent history presence differ after valid native edits are collected. Exits 1 when it finds any; JSON still goes to stdout.
 drift: every ahead and behind Node, in pages.
-scan: drafts a module map from the code; --draft saves it as a write-many batch.
+scan: drafts a module map from the code; --draft saves an editable write-many batch and a sibling .report.json evidence snapshot. Both text and JSON print a receipt of at most 4 KiB.
 check-modules: checks the module map for coverage, size, imports and files that change together. Prints nothing when the map is clean.
 export: copies the context graph and its SQLite history to a new directory.
 When a behind Node still holds, run tent node confirm after reviewing it; Tent records the versions itself.
@@ -172,20 +176,20 @@ async function runWorkspaceCommandOpened(
           draftRepository?.commits ?? [],
           repository.sources.files,
         );
-        const filename = await writeWorkspaceDraft(roots.workspaceRoot, values.draft, draft.batch);
-        const summary = { draft: filename, ...draft.summary };
+        const files = await writeWorkspaceDraft(
+          roots.workspaceRoot,
+          values.draft,
+          draft.batch,
+          draft.summary,
+        );
+        const summary = draft.summary;
         return {
-          exitCode:
-            summary.issues.length ||
-            summary.inspectionErrors.length ||
-            summary.unassignedImports.length
-              ? 1
-              : 0,
-          stdout:
-            (values.json || globals.json
-              ? JSON.stringify(summary)
-              : `draft-file ${JSON.stringify(filename)}\n${formatWorkspaceDraft(draft.summary)}`) +
-            "\n",
+          exitCode: workspaceDraftExitCode(summary),
+          stdout: formatWorkspaceDraft(
+            summary,
+            { workspaceRoot: roots.workspaceRoot, ...files },
+            values.json || globals.json,
+          ),
           stderr: "",
         };
       }

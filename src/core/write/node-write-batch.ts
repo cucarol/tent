@@ -53,6 +53,7 @@ const nodeId = requiredString("nodeId").refine(isNodeId, "Expected a canonical n
 const createItem = z.strictObject({
   op: z.literal("create"),
   ref: localRef,
+  id: nodeId.optional(),
   parent: z
     .union([nodeId, z.string().regex(/^@[A-Za-z][A-Za-z0-9_-]*$/)])
     .nullable()
@@ -137,6 +138,11 @@ export function writeNodesBatch(
   env: OpsEnv,
   input: NodeWriteBatchInput,
 ): Promise<NodeWriteBatchResult> {
+  return withNodeBatchMutation(env, () => writeNodesBatchUnlocked(env, input));
+}
+
+/** Shared batch mutation boundary; recovery precedes draft identity replay decisions. */
+export function withNodeBatchMutation<T>(env: OpsEnv, operation: () => Promise<T>): Promise<T> {
   // Batch owns rollback and capture; the automatic write finalizer would capture
   // intermediate preimages and turn a capture failure into a partial batch save.
   const fs = env.fs;
@@ -150,12 +156,12 @@ export function writeNodesBatch(
     if (env.fs.withDocumentHistory)
       await env.fs.withDocumentHistory(recover, { operation: "workspace.recovery" });
     else await recover();
-    return writeNodesBatchUnlocked(env, input);
+    return operation();
   };
   return fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, action) : action();
 }
 
-async function writeNodesBatchUnlocked(
+export async function writeNodesBatchUnlocked(
   env: OpsEnv,
   input: NodeWriteBatchInput,
 ): Promise<NodeWriteBatchResult> {
@@ -171,7 +177,8 @@ async function writeNodesBatchUnlocked(
   for (const item of items) {
     if (item.op === "create") {
       if (creates.has(item.ref)) throw new Error(`Duplicate batch ref: @${item.ref}`);
-      const id = makeUniqueNodeId(ids, env.rand);
+      const id = item.id ?? makeUniqueNodeId(ids, env.rand);
+      if (ids.has(id)) throw new Error(`Node id already exists: ${id}.`);
       ids.add(id);
       creates.set(item.ref, { item, nodeId: id });
     } else {
@@ -417,6 +424,7 @@ async function writeNodesBatchUnlocked(
   const attempted: PlannedNode[] = [],
     directories: string[] = [];
   let orderAttempted = false;
+  const history = fs.history && (await hasDocumentHistory(fs)) ? fs.history : undefined;
   try {
     for (const path of [...createdPaths].sort(
       (a, b) => a.split("/").length - b.split("/").length,
@@ -443,15 +451,19 @@ async function writeNodesBatchUnlocked(
       await fs.writeFile(ORDER_PATH, afterOrder);
     }
     for (const node of planned) await check(node, node.raw);
-    const captured =
-      fs.history && (await hasDocumentHistory(fs))
-        ? await fs.history.captureUnlocked(
-            planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
-            { operation: "node.write-many", nodeRecords },
-          )
-        : undefined;
+    const results = planned.map((n) => ({
+      nodeId: n.nodeId,
+      path: n.path,
+      etag: contentEtag(n.raw),
+    }));
+    const captured = history
+      ? await history.captureUnlocked(
+          planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
+          { operation: "node.write-many", nodeRecords },
+        )
+      : undefined;
     return {
-      results: planned.map((n) => ({ nodeId: n.nodeId, path: n.path, etag: contentEtag(n.raw) })),
+      results,
       ...(captured?.commit ? { commit: captured.commit } : {}),
       ...(warnings.length ? { warnings } : {}),
     };

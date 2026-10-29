@@ -5,6 +5,9 @@ import { contextExcerpt, originalContextBytes } from "../core/read/agent-context
 import { formatCliTime } from "./time-text.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
+import path from "node:path";
+import { openNodeDraft } from "../fs/node-draft-consumption.js";
+import { writeNodesDraft } from "../core/write/node-write-draft.js";
 import { linkOutputResource, workspaceMaterialFields } from "./material-input.js";
 import { validateNodeName } from "../core/store/scaffold.js";
 import { nodeActorSchema } from "../core/base/node-provenance.js";
@@ -178,6 +181,8 @@ async function runNodeCommandOpened(
       return usage("Historical versions require node get without --full");
     if (flags["input-json"] !== undefined && !["write", "write-many"].includes(sub))
       return usage("--input-json is only valid for node write or write-many");
+    if (flags.draft !== undefined && sub !== "write-many")
+      return usage("--draft is only valid for node write-many");
     if (flags["read-back"] !== undefined && sub !== "write")
       return usage("--read-back is only valid for node write");
     if (
@@ -282,63 +287,85 @@ async function runNodeCommandOpened(
         );
       }
       case "write-many": {
-        if (positionals.length || flags["input-json"] === undefined)
+        if (
+          positionals.length ||
+          (flags["input-json"] === undefined) === (flags.draft === undefined)
+        )
           return usage(nodeHelpText("write-many"));
-        if (Object.keys(flags).some((key) => !["input-json", "json", "workspace"].includes(key)))
+        if (
+          Object.keys(flags).some(
+            (key) => !["input-json", "draft", "json", "workspace"].includes(key),
+          )
+        )
           return usage(nodeHelpText("write-many"));
-        const supplied = JSON.parse(
-          flags["input-json"] === "-"
-            ? (globals.stdin ?? (await readStdin()))
-            : flags["input-json"],
-        );
+        if (flags.draft !== undefined && !flags.draft.trim())
+          return usage("--draft requires a file path");
+        const draft =
+          flags.draft === undefined
+            ? undefined
+            : await openNodeDraft(path.resolve(workspaceRoot, flags.draft), systemRoot);
+        const supplied = draft
+          ? draft.input
+          : JSON.parse(
+              flags["input-json"] === "-"
+                ? (globals.stdin ?? (await readStdin()))
+                : flags["input-json"],
+            );
         if (Array.isArray(supplied?.items))
           for (const item of supplied.items)
             if (item?.by !== undefined) validateActor(item.by, "by");
-        const input = nodeWriteBatchInputSchema.parse(supplied);
-        const paths = new Map<string, string>();
-        const creates = new Map(
-          input.items.filter((item) => item.op === "create").map((item) => [item.ref, item]),
-        );
-        const visiting = new Set<string>();
-        async function locate(ref: string): Promise<string> {
-          if (paths.has(ref)) return paths.get(ref)!;
-          if (!ref.startsWith("@")) {
-            const result = await selectedPath(fs, ref);
+        const prepareInput = async (input: ReturnType<typeof nodeWriteBatchInputSchema.parse>) => {
+          const paths = new Map<string, string>();
+          const creates = new Map(
+            input.items.filter((item) => item.op === "create").map((item) => [item.ref, item]),
+          );
+          const visiting = new Set<string>();
+          async function locate(ref: string): Promise<string> {
+            if (paths.has(ref)) return paths.get(ref)!;
+            if (!ref.startsWith("@")) {
+              const result = await selectedPath(fs, ref);
+              paths.set(ref, result);
+              return result;
+            }
+            const item = creates.get(ref.slice(1));
+            if (!item) throw new Error(`Unknown batch ref: ${ref}`);
+            if (visiting.has(ref)) throw new Error(`Cyclic batch parent: ${ref}`);
+            visiting.add(ref);
+            const parent = item.parent ? await locate(item.parent) : "";
+            const name = validateBatchItemName(item.ref, item.name, parent);
+            const result = parent ? `${parent}/${name}` : name;
+            visiting.delete(ref);
             paths.set(ref, result);
             return result;
           }
-          const item = creates.get(ref.slice(1));
-          if (!item) throw new Error(`Unknown batch ref: ${ref}`);
-          if (visiting.has(ref)) throw new Error(`Cyclic batch parent: ${ref}`);
-          visiting.add(ref);
-          const parent = item.parent ? await locate(item.parent) : "";
-          const name = validateBatchItemName(item.ref, item.name, parent);
-          const result = parent ? `${parent}/${name}` : name;
-          visiting.delete(ref);
-          paths.set(ref, result);
-          return result;
-        }
-        for (const item of input.items) {
-          if (item.op === "create")
-            Object.assign(
-              item,
-              await workspaceMaterialFields(
+          for (const item of input.items) {
+            if (item.op === "create")
+              Object.assign(
                 item,
-                nodeNotePath(await locate(`@${item.ref}`)),
+                await workspaceMaterialFields(
+                  item,
+                  nodeNotePath(await locate(`@${item.ref}`)),
+                  workspaceRoot,
+                ),
+              );
+            else if (item.frontmatter !== undefined) {
+              const previous = await readNodeForEdit(fs, item.nodeId);
+              item.frontmatter = await workspaceMaterialFields(
+                item.frontmatter,
+                nodeNotePath(previous.path),
                 workspaceRoot,
-              ),
-            );
-          else if (item.frontmatter !== undefined) {
-            const previous = await readNodeForEdit(fs, item.nodeId);
-            item.frontmatter = await workspaceMaterialFields(
-              item.frontmatter,
-              nodeNotePath(previous.path),
-              workspaceRoot,
-              previous.frontmatter,
-            );
+                previous.frontmatter,
+              );
+            }
           }
-        }
-        const result = await writeNodesBatch(env, input);
+          return input;
+        };
+        const result = draft
+          ? await writeNodesDraft(env, supplied, draft.store, prepareInput)
+          : await writeNodesBatch(
+              env,
+              await prepareInput(nodeWriteBatchInputSchema.parse(supplied)),
+            );
         return mutationPrint(result, json, (value) =>
           value.results.map((item) => `${item.nodeId}  ${item.path}  ${item.etag}`).join("\n"),
         );
@@ -904,7 +931,10 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
     "tent node write <nodeId> --input-json <JSON>|- [--json]",
   ],
   append: ["tent node append <nodeId> --body <text|-> [--heading <title>] [--by <actor>] [--json]"],
-  "write-many": ["tent node write-many --input-json <JSON|-> [--json]"],
+  "write-many": [
+    "tent node write-many --input-json <JSON|-> [--json]",
+    "tent node write-many --draft <file> [--json]",
+  ],
   rename: ["tent node rename <nodeId> <new-name> [--json]"],
   move: ["tent node move <nodeId> --parent <nodeId|root> [--json]"],
   archive: ["tent node archive <nodeId> [--json]"],
@@ -1069,6 +1099,7 @@ function parseFlags(args: string[]): {
           "base-etag",
           "archive-commit",
           "input-json",
+          "draft",
         ].map((name) => [name, { type: "string" as const }]),
       ),
     },

@@ -24,7 +24,6 @@ import {
 } from "./workspace-draft-groups.js";
 import {
   checkModuleMap,
-  formatModuleImportIssues,
   isModuleProductionSource,
   type ModuleMapCommit,
   type ModuleMapMaterial,
@@ -324,17 +323,20 @@ export async function prepareWorkspaceDraft(
   return {
     batch: draft.batch,
     summary: {
-      modules: check.modules.map(({ id, path, name, productionFiles, testedBy, coChanges }) => ({
-        ref: id,
-        path,
-        name,
-        ...(draft.nodes.find((node) => node.id === id)?.parentId
-          ? { parent: draft.nodes.find((node) => node.id === id)!.parentId }
-          : {}),
-        productionFiles,
-        testedBy,
-        coChanges,
-      })),
+      modules: check.modules.map(
+        ({ id, path, name, files, productionFiles, testedBy, coChanges }) => ({
+          ref: id,
+          path,
+          name,
+          files,
+          ...(draft.nodes.find((node) => node.id === id)?.parentId
+            ? { parent: draft.nodes.find((node) => node.id === id)!.parentId }
+            : {}),
+          productionFiles,
+          testedBy,
+          coChanges,
+        }),
+      ),
       guidanceFiles: scan.guidanceFiles,
       warnings: draft.warnings,
       issues: check.issues,
@@ -350,29 +352,17 @@ export async function prepareWorkspaceDraft(
       unassignedImports: check.unassignedImports,
       trackedFiles: check.trackedFiles,
       historyCommits: check.historyCommits,
+      head: scan.head,
+      history: commits,
+      imports: scan.imports,
+      testImports,
     },
   };
 }
 
-export function formatWorkspaceDraft(
-  summary: Awaited<ReturnType<typeof prepareWorkspaceDraft>>["summary"],
-) {
-  const safe = (value: unknown) => JSON.stringify(value);
-  return [
-    `draft ${summary.modules.length} modules; ${summary.trackedFiles} tracked files; ${summary.historyCommits} history commits`,
-    ...summary.modules.flatMap((module) => [
-      `${module.ref} ${safe(module.path)} ${module.productionFiles} production files${module.parent ? ` parent @${module.parent}` : ""}`,
-      ...(module.testedBy.length ? [`  tested-by ${safe(module.testedBy)}`] : []),
-      ...(module.coChanges.length ? [`  co-changes ${safe(module.coChanges)}`] : []),
-    ]),
-    `guidance ${safe(summary.guidanceFiles.slice(0, 10))}${summary.guidanceFiles.length > 10 ? `; +${summary.guidanceFiles.length - 10} more in --json` : ""}`,
-    ...summary.warnings.map((warning) => `review ${safe(warning)}`),
-    ...summary.issues.map(
-      (issue) =>
-        `${issue.code} ${safe(issue.object)} ${safe(Object.fromEntries(Object.entries(issue.facts).map(([key, value]) => [key, Array.isArray(value) && value.length > 5 ? { count: value.length, examples: value.slice(0, 5) } : value])))} fix: ${issue.fix}`,
-    ),
-    ...summary.inspectionErrors.map((issue) => `inspection ${safe(issue)}`),
-    ...(summary.importIssues.length ? [formatModuleImportIssues(summary.importIssues.length)] : []),
-    ...summary.unassignedImports.map((issue) => `unassigned ${safe(issue)}`),
-  ].join("\n");
-}
+export type WorkspaceDraftSummary = Awaited<ReturnType<typeof prepareWorkspaceDraft>>["summary"];
+export {
+  formatWorkspaceDraft,
+  workspaceDraftReportPath,
+  workspaceDraftExitCode,
+} from "./workspace-draft-receipt.js";
