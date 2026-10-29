@@ -105,6 +105,15 @@ function condense(units: Unit[], files: string[], imports: readonly RepositoryIm
       );
       return {
         key: group[0]!,
+        ...(group.length === 1
+          ? byKey.get(group[0]!)!.name
+            ? { name: byKey.get(group[0]!)!.name }
+            : {}
+          : {
+              name: ordered(
+                group.map((key) => byKey.get(key)!.name ?? path.posix.basename(key)),
+              ).join(" and "),
+            }),
         materials: group.flatMap((key) => byKey.get(key)!.materials),
         ...(parent ? { parentKey: mergedKeys.get(parent) } : {}),
       };
@@ -255,7 +264,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
     const parent = unit.parentKey
       ? addUnit(units.find((candidate) => candidate.key === unit.parentKey)!)
       : undefined;
-    const name = nameOf(parent ? path.posix.basename(unit.key) : unit.key);
+    const name = nameOf(unit.name ?? (parent ? path.posix.basename(unit.key) : unit.key));
     const node: ModuleMapNode = {
       id: `m${nodes.length + 1}`,
       path: parent ? `${parent.path}/${name}` : name,

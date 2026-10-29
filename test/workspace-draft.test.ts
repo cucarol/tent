@@ -214,6 +214,115 @@ test("draft groups a flat directory by imports, keeps the actual cycle and creat
   );
 });
 
+test("flat imports separate a shared shell and each entry before filename fallback", () => {
+  const entries = ["amber", "blue", "cyan", "dark"];
+  const files = ["pages/shared-adapter.js", "pages/shared-core.js"];
+  const edges = [edge("pages/shared-adapter.js", "pages/shared-core.js")];
+  for (const entry of entries) {
+    files.push(`pages/${entry}.js`, `pages/${entry}-view.js`, `pages/${entry}-state.js`);
+    edges.push(
+      edge(`pages/${entry}.js`, "pages/shared-adapter.js"),
+      edge(`pages/${entry}.js`, `pages/${entry}-view.js`),
+      edge(`pages/${entry}-view.js`, `pages/${entry}-state.js`),
+    );
+  }
+  // Import evidence wins over the apparent amber filename family.
+  files.push("pages/amber-private.js");
+  edges.push(edge("pages/blue.js", "pages/amber-private.js"));
+  const { draft, check: report } = check(scan(files, edges));
+  const owning = (file: string) => report.modules.find((module) => module.files.includes(file))!;
+  assert.deepEqual(owning("pages/shared-core.js").files, [
+    "pages/shared-adapter.js",
+    "pages/shared-core.js",
+  ]);
+  assert.equal(owning("pages/shared-core.js").name, "Shared dependencies");
+  for (const entry of entries) {
+    const module = owning(`pages/${entry}.js`);
+    assert.equal(module.name, entry);
+    assert.ok(module.files.includes(`pages/${entry}-view.js`));
+    assert.ok(module.files.includes(`pages/${entry}-state.js`));
+  }
+  assert.equal(owning("pages/amber-private.js").name, "blue");
+  assert.deepEqual(report.issues, []);
+  assert.deepEqual(
+    draftWorkspaceModules(scan([...files].reverse(), [...edges, ...edges].reverse())).batch,
+    draft.batch,
+  );
+});
+
+test("a single importing entry keeps its ordinary dependency chain out of Shared dependencies", () => {
+  const files = ["lib/entry.js", ...Array.from({ length: 14 }, (_, i) => `lib/helper${i}.js`)];
+  const edges = files.slice(0, -1).map((file, i) => edge(file, files[i + 1]!));
+  const { check: report } = check(scan(files, edges));
+  assert.ok(!report.modules.some((module) => module.name.startsWith("Shared dependencies")));
+  assert.equal(report.modules.filter((module) => module.productionFiles).length, 2);
+  assert.deepEqual(report.modules.flatMap((module) => module.files).sort(), files.sort());
+  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+});
+
+test("flat filename fallback joins a base stem with its prefixed helpers without size packing", () => {
+  const files = [
+    "lib/roulette.js",
+    "lib/roulette-hud.js",
+    "lib/roulette_state.js",
+    ...Array.from({ length: 11 }, (_, i) => `lib/independent${i}.js`),
+  ];
+  const { check: report } = check(scan(files));
+  const roulette = report.modules.find((module) => module.files.includes("lib/roulette.js"))!;
+  assert.equal(roulette.name, "roulette");
+  assert.deepEqual(roulette.files, [
+    "lib/roulette-hud.js",
+    "lib/roulette.js",
+    "lib/roulette_state.js",
+  ]);
+  assert.equal(report.modules.filter((module) => module.productionFiles).length, 12);
+  assert.ok(
+    report.modules
+      .filter((module) => module !== roulette)
+      .every((module) => module.productionFiles <= 1),
+  );
+});
+
+test("half of the importing entries and repeated imports do not make a shared dependency", () => {
+  const files = [
+    "lib/common.js",
+    "lib/pair.js",
+    ...["one", "two", "three", "four"].flatMap((entry) => [
+      `lib/${entry}.js`,
+      `lib/${entry}-view.js`,
+      `lib/${entry}-state.js`,
+    ]),
+  ];
+  const edges = ["one", "two", "three", "four"].flatMap((entry) => [
+    edge(`lib/${entry}.js`, "lib/common.js"),
+    edge(`lib/${entry}.js`, `lib/${entry}-view.js`),
+    edge(`lib/${entry}-view.js`, `lib/${entry}-state.js`),
+  ]);
+  edges.push(
+    ...Array.from({ length: 8 }, () => edge("lib/one.js", "lib/pair.js")),
+    edge("lib/two.js", "lib/pair.js"),
+  );
+  const { check: report } = check(scan(files, edges));
+  assert.deepEqual(report.modules.find((module) => module.name === "Shared dependencies")!.files, [
+    "lib/common.js",
+  ]);
+  const pair = report.modules.find((module) => module.files.includes("lib/pair.js"))!;
+  assert.equal(pair.name, "one and two");
+  assert.equal(pair.productionFiles, 7);
+});
+
+test("entry names do not collide with a real sibling directory", () => {
+  const files = [
+    "lib/page.js",
+    "lib/page/view.js",
+    ...Array.from({ length: 11 }, (_, i) => `lib/other${i}.js`),
+  ];
+  const { check: report } = check(scan(files));
+  assert.deepEqual(report.modules.flatMap((module) => module.files).sort(), files.sort());
+  assert.ok(report.modules.find((module) => module.files.includes("lib/page.js")));
+  assert.ok(report.modules.find((module) => module.files.includes("lib/page/view.js")));
+});
+
 test("draft splits a large dense import cycle without losing files or suppressing cross-part facts", () => {
   const files = Array.from({ length: 53 }, (_, i) => `lib/part-${String(i).padStart(2, "0")}.py`);
   files.push("lib/test_part-00.py");

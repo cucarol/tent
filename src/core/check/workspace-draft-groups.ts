@@ -7,6 +7,7 @@ import type { ModuleMapMaterial } from "./module-map.js";
 export const DRAFT_CODE_FILES = 10;
 export type DraftUnit = {
   key: string;
+  name?: string;
   materials: ModuleMapMaterial[];
   parentKey?: string;
 };
@@ -20,10 +21,14 @@ export const draftMaterial = (value: string, structure = true): ModuleMapMateria
 export const draftPrefix = (file: string) =>
   file.slice(0, file.length - path.posix.extname(file).length).replace(/\.pb$/, "") + ".";
 
-/** Prefer topological packing, but split an oversized cycle instead of abandoning the size target. */
-function flatGroups(files: string[], imports: readonly RepositoryImport[]): string[][] {
+type FlatGroup = { files: string[]; name: string };
+const stemOf = (file: string) => path.posix.basename(draftPrefix(file)).slice(0, -1);
+const familyOf = (file: string) => stemOf(file).split(/[-_]|(?<=[a-z])(?=[A-Z])/)[0]!;
+
+/** Cut shared dependencies before following each entry, never pack unrelated entries together. */
+function flatGroups(files: string[], imports: readonly RepositoryImport[]): FlatGroup[] {
   const buckets = new Map<string, string[]>();
-  for (const file of files) {
+  for (const file of ordered(files)) {
     const key = draftPrefix(file).replace(/_pb\.$/, ".");
     buckets.set(key, [...(buckets.get(key) ?? []), file]);
   }
@@ -34,73 +39,103 @@ function flatGroups(files: string[], imports: readonly RepositoryImport[]): stri
       to = edge.kind === "file" && owner.get(edge.to);
     if (from && to && from !== to) outgoing.get(from)!.add(to);
   }
-  for (const cycle of dependencyCycles(outgoing)) {
-    if (cycle.reduce((count, key) => count + buckets.get(key)!.length, 0) > DRAFT_CODE_FILES)
-      continue;
-    const key = cycle[0]!;
-    buckets.set(
-      key,
-      cycle.flatMap((member) => buckets.get(member)!),
-    );
-    for (const member of cycle.slice(1)) buckets.delete(member);
-    for (const file of buckets.get(key)!) owner.set(file, key);
-  }
-  const graph = new Map([...buckets.keys()].map((key) => [key, new Set<string>()]));
-  const incoming = new Map([...buckets.keys()].map((key) => [key, 0]));
-  for (const edge of imports) {
-    const from = owner.get(edge.from),
-      to = edge.kind === "file" && owner.get(edge.to);
-    if (from && to && from !== to && !graph.get(from)!.has(to)) {
-      graph.get(from)!.add(to);
-      incoming.set(to, incoming.get(to)! + 1);
+  const cycles = dependencyCycles(outgoing);
+  const cyclic = new Set(cycles.flat());
+  const components = [
+    ...cycles,
+    ...[...buckets.keys()].filter((key) => !cyclic.has(key)).map((key) => [key]),
+  ];
+  const componentOf = new Map(
+    components.flatMap((component, i) => component.map((key) => [key, i] as const)),
+  );
+  const graph = components.map(() => new Set<number>());
+  const incoming = components.map(() => new Set<number>());
+  for (const [from, targets] of outgoing)
+    for (const to of targets) {
+      const a = componentOf.get(from)!,
+        b = componentOf.get(to)!;
+      if (a !== b) {
+        graph[a]!.add(b);
+        incoming[b]!.add(a);
+      }
+    }
+  const roots = components.flatMap((_, i) => (!incoming[i]!.size && graph[i]!.size ? [i] : []));
+  const reachedBy = components.map(() => new Set<number>());
+  for (const root of roots) {
+    const pending = [...graph[root]!];
+    while (pending.length) {
+      const current = pending.pop()!;
+      if (reachedBy[current]!.has(root)) continue;
+      reachedBy[current]!.add(root);
+      pending.push(...graph[current]!);
     }
   }
-  const ready = new Set([...incoming].filter(([, count]) => count === 0).map(([key]) => key));
-  const remaining = new Set(buckets.keys());
-  const groups: string[][] = [];
-  let group: string[] = [],
-    keys: string[] = [];
-  const affinity = (key: string) => keys.filter((member) => graph.get(member)!.has(key)).length;
-  const filenameGroup = (key: string) => {
-    const members = buckets.get(key)!;
-    if (!members.every((file) => /\.(go|java)$/.test(file))) return undefined;
-    return path.posix
-      .basename(members[0]!)
-      .replace(/\.[^.]+$/, "")
-      .split(/[-_]|(?<=[a-z])(?=[A-Z])/)[0];
+  // A strict majority of entry components reaches these dependencies. Count each entry once,
+  // including through intermediate helpers; duplicate imports must not turn a helper into a hub.
+  const shared = new Set(
+    components.flatMap((_, i) =>
+      roots.length > 1 && reachedBy[i]!.size > roots.length / 2 ? [i] : [],
+    ),
+  );
+  const membersOf = (ids: number[]) =>
+    ordered(ids.flatMap((i) => components[i]!.flatMap((key) => buckets.get(key)!)));
+  const groups: FlatGroup[] = [];
+  const add = (ids: number[], name: string) => {
+    const members = membersOf(ids);
+    if (members.length <= DRAFT_CODE_FILES) {
+      groups.push({ files: members, name });
+      return;
+    }
+    // Preserve bounded cycles and generated-source families. An oversized cycle is split,
+    // but size splitting stays within this evidenced group rather than borrowing other entries.
+    const units = ids
+      .flatMap((i) => {
+        const keys = components[i]!;
+        return membersOf([i]).length <= DRAFT_CODE_FILES ? [keys] : keys.map((key) => [key]);
+      })
+      .sort((a, b) => comparePaths(a[0]!, b[0]!));
+    let chunk: string[] = [];
+    const chunks: string[][] = [];
+    for (const keys of units) {
+      const next = keys.flatMap((key) => buckets.get(key)!);
+      if (chunk.length && chunk.length + next.length > DRAFT_CODE_FILES) {
+        chunks.push(chunk);
+        chunk = [];
+      }
+      chunk.push(...next);
+    }
+    if (chunk.length) chunks.push(chunk);
+    chunks.forEach((chunk, i) => groups.push({ files: ordered(chunk), name: `${name} ${i + 1}` }));
   };
+  if (shared.size) add([...shared], "Shared dependencies");
+  const remaining = new Set(components.map((_, i) => i).filter((i) => !shared.has(i)));
+  const fallback = new Map<string, number[]>();
   while (remaining.size) {
-    // A large SCC has no ready vertex. Break it deterministically, keeping import neighbours close.
-    const candidates = [...(ready.size ? ready : remaining)].sort(
-      (a, b) =>
-        affinity(b) - affinity(a) || incoming.get(a)! - incoming.get(b)! || comparePaths(a, b),
-    );
-    const key = candidates[0]!,
-      members = buckets.get(key)!;
-    const named = filenameGroup(key),
-      previous = keys.length ? filenameGroup(keys[0]!) : undefined;
-    if (
-      group.length &&
-      (group.length + members.length > DRAFT_CODE_FILES ||
-        (named && previous && named !== previous))
-    ) {
-      groups.push(group);
-      group = [];
-      keys = [];
+    const start = remaining.values().next().value!;
+    const connected: number[] = [],
+      pending = [start];
+    while (pending.length) {
+      const current = pending.pop()!;
+      if (!remaining.delete(current)) continue;
+      connected.push(current);
+      pending.push(...graph[current]!, ...incoming[current]!);
+    }
+    const members = membersOf(connected);
+    const linked = connected.length > 1 || components[start]!.length > 1;
+    if (!linked) {
+      const family = familyOf(members[0]!);
+      fallback.set(family, [...(fallback.get(family) ?? []), start]);
       continue;
     }
-    group.push(...members);
-    keys.push(key);
-    ready.delete(key);
-    remaining.delete(key);
-    for (const next of graph.get(key)!) {
-      if (!remaining.has(next)) continue;
-      incoming.set(next, incoming.get(next)! - 1);
-      if (!incoming.get(next)) ready.add(next);
-    }
+    const entries = connected.filter(
+      (i) => ![...incoming[i]!].some((from) => connected.includes(from)),
+    );
+    const entryFiles = membersOf(entries.length ? entries : connected);
+    add(connected, ordered(entryFiles.map(stemOf)).join(" and "));
   }
-  if (group.length) groups.push(group);
-  return groups.map(ordered);
+  // With no separating import evidence, merge prefix-related stems (foo plus foo-hud).
+  for (const [name, ids] of fallback) add(ids, name);
+  return groups.sort((a, b) => comparePaths(a.name, b.name));
 }
 
 /** Keep real directory layers; only a large directory's direct code needs import grouping. */
@@ -141,8 +176,8 @@ export function draftDirectoryUnits(
   ];
 }
 
-function draftFlatUnits(groups: string[][], files: string[], parentKey: string): DraftUnit[] {
-  return groups.map((members): DraftUnit => {
+function draftFlatUnits(groups: FlatGroup[], files: string[], parentKey: string): DraftUnit[] {
+  return groups.map(({ files: members, name }): DraftUnit => {
     const prefixes = ordered(members.map(draftPrefix));
     const materials: ModuleMapMaterial[] = prefixes.map((prefix) => draftMaterial(prefix));
     // Nearby Python/Go/JS tests stay with their source even when their names use an underscore.
@@ -159,7 +194,7 @@ function draftFlatUnits(groups: string[][], files: string[], parentKey: string):
       if (stems.has(stem) && !prefixes.some((prefix) => file.startsWith(prefix)))
         materials.push({ path: file, kind: "file" });
     }
-    return { key: members[0]!, materials, parentKey };
+    return { key: members[0]!, name, materials, parentKey };
   });
 }
 
