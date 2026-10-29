@@ -416,9 +416,42 @@ test("canvas API queues CAS writes and exposes current state, history and securi
   assert.notEqual(fresh.etag, saved.etag);
   assert.equal(await tent.history.currentCommit(), retained);
   await tent.writeFile("canvas.json", "broken");
-  assert.equal((await call("GET", target)).status, 422);
-  assert.equal((await call("PUT", target, { json: { baseEtag: saved.etag, canvas } })).status, 422);
+  const unreadable = await call("GET", target);
+  assert.equal(unreadable.status, 422);
+  const opaque = { etag: contentEtag("broken") };
+  assert.deepEqual(
+    json<{ error: { code: string; details: { current: unknown } } }>(unreadable).error.details,
+    { current: opaque },
+  );
+  const stale = await call("PUT", target, { json: { baseEtag: saved.etag, canvas } });
+  assert.equal(stale.status, 409);
+  assert.deepEqual(json<{ error: { code: string; details: unknown } }>(stale).error, {
+    code: "ETAG_CONFLICT",
+    message: "Canvas changed; reread before saving",
+    details: { current: opaque },
+  });
   assert.equal(await tent.readFile("canvas.json"), "broken");
+  assert.equal(await tent.history.currentCommit(), retained);
+  const invalidReplacement = await call("PUT", target, {
+    json: { baseEtag: opaque.etag, canvas: { version: 2, positions: {}, drawings: [] } },
+  });
+  assert.equal(invalidReplacement.status, 422);
+  assert.equal(await tent.readFile("canvas.json"), "broken");
+  assert.equal(await tent.history.currentCommit(), retained);
+  const replacement = await call("PUT", target, { json: { baseEtag: opaque.etag, canvas } });
+  assert.equal(replacement.status, 200);
+  const replaced = json<{ etag: string }>(replacement);
+  assert.deepEqual(json(await call("GET", target)), { etag: replaced.etag, canvas });
+  assert.ok(retained);
+  const preimage = (await tent.history.changesInRange({ from: retained }))
+    .filter((event) => event.operation === "document.external-capture")
+    .flatMap((event) => event.changes)
+    .map((change) => change.after)
+    .find((version) => version?.path === "canvas.json");
+  assert.ok(preimage, "an explicit replacement retains the unreadable external preimage");
+  const old = await call("GET", `/api/history/document?at=${preimage.commit}:${preimage.path}`);
+  assert.equal(old.status, 200);
+  assert.equal(json<{ raw: string }>(old).raw, "broken");
 });
 
 test("canvas API reports a busy workspace lock without writing", async (t) => {

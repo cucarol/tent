@@ -317,6 +317,8 @@ test(
       "node-main",
     );
     await pages[0]!.close();
+    const remaining = pages[1]!;
+    const moveHint = remaining.frames.length + 1;
     const moved = await cli(
       workspaceRoot,
       "node",
@@ -332,14 +334,27 @@ test(
       topology.nodes.find((node: { id: string }) => node.id === "node-main").parentId,
       "node-destination",
     );
-    const remaining = pages[1]!;
-    await delay(100);
+    const movedChild = path.join(destination, "During/Child");
+    // Separate monitor setup and its move hint from the independent edit's hint.
+    if (process.platform !== "win32") {
+      await t.waitFor(
+        () =>
+          assert.ok(
+            observed.directories.some(
+              (directory, index) =>
+                directory === movedChild && !observed.stopped.has(observed.watchers[index]!),
+            ),
+            "the moved child directory has an active monitor before its independent edit",
+          ),
+        { timeout: 5_000 },
+      );
+    }
+    await remaining.wait(moveHint);
     const next = remaining.frames.length + 1;
-    await fs.appendFile(
-      path.join(destination, "During/Child/Child.md"),
-      "Editor after subtree move\n",
-    );
+    await fs.appendFile(path.join(movedChild, "Child.md"), "Editor after subtree move\n");
     await remaining.wait(next);
+    const edited = await (await read(server, "/api/nodes/node-child")).json();
+    assert.match(edited.body, /Editor after subtree move/);
     await Promise.all(pages.map((page) => page.close()));
     await delay(50);
     assert.equal(observed.stopped.size, observed.watchers.length);
