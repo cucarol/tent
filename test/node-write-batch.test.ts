@@ -2,6 +2,8 @@ import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import fileSystem from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -116,6 +118,80 @@ test("batch creates forward parents and mutual links, updates, and captures once
   assert.equal(commits[0]!.commit, result.commit);
   assert.equal(commits[0]!.operation, "node.write-many");
   assert.equal(commits[0]!.changes.length, 4);
+});
+
+test("batch material preparation shares workspace metadata and the next batch observes edits", async (t) => {
+  const { env, fs, root } = await fixture(t);
+  const workspace = path.dirname(root);
+  const git = (...args: string[]) => promisify(execFile)("git", ["-C", workspace, ...args]);
+  await writeFile(path.join(workspace, ".gitignore"), ".tent/\n");
+  for (const folder of ["a", "b", "out", "next"]) await mkdir(path.join(workspace, folder));
+  for (const folder of ["a", "b"])
+    await writeFile(path.join(workspace, folder, "main.ts"), 'import "../out/old.js";\n');
+  await writeFile(path.join(workspace, "out/old.ts"), "export const old = 1;\n");
+  await writeFile(path.join(workspace, "next/new.ts"), "export const next = 1;\n");
+  const unrelated = path.join(workspace, "outside.txt");
+  await writeFile(unrelated, "unrelated listing metadata");
+  await git("init", "--quiet");
+  await git("add", ".");
+  const lstat = fileSystem.lstat;
+  let unrelatedStats = 0;
+  const mocked = t.mock.method(fileSystem, "lstat", (...args: Parameters<typeof lstat>) => {
+    if (String(args[0]) === unrelated) unrelatedStats++;
+    return lstat(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  const saved = await writeNodesBatch(env, {
+    items: ["a", "b"].map((folder) => ({
+      op: "create" as const,
+      ref: folder,
+      name: folder.toUpperCase(),
+      type: "goal",
+      sources: [{ resource: `../../${folder}/`, track: "structure" as const }],
+    })),
+  });
+  assert.equal(unrelatedStats, 1, "one preparation shares the full-workspace metadata pass");
+  const records = await fs.history.nodeRecords();
+  for (const result of saved.results)
+    assert.deepEqual(records[result.nodeId]?.materials[0].structureDependencies, ["out/"]);
+
+  await writeFile(path.join(workspace, "a/main.ts"), 'import "../next/new.js";\n');
+  const selected = await readNodeForEdit(fs, saved.results[0].nodeId);
+  await writeNodesBatch(env, {
+    items: [{ op: "update", nodeId: selected.nodeId, baseEtag: selected.etag, confirm: true }],
+  });
+  const fresh = await fs.history.nodeRecords();
+  assert.deepEqual(fresh[selected.nodeId]?.materials[0].structureDependencies, ["next/"]);
+  assert.deepEqual(fresh[saved.results[1].nodeId]?.materials[0].structureDependencies, ["out/"]);
+});
+
+test("batch leaves material observation before checking an external document edit", async (t) => {
+  const { env, fs, root, existing } = await fixture(t);
+  const before = await fs.history.currentCommit();
+  const scope = fs.observationScope.bind(fs);
+  const external = serializeFrontmatter(existing.frontmatter, "external edit after preparation");
+  let edited = false;
+  fs.observationScope = async (action, options) => {
+    const result = await scope(action, options);
+    if (options?.forceContent) {
+      edited = true;
+      await writeFile(path.join(root, existing.path, "Existing.md"), external);
+    }
+    return result;
+  };
+  await assert.rejects(
+    writeNodesBatch(env, {
+      items: [{ op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "ours" }],
+    }),
+    /Node changed during batch save/,
+  );
+  assert.equal(edited, true);
+  assert.equal(await fs.readFile("Existing/Existing.md"), external);
+  assert.equal(await fs.history.currentCommit(), before);
 });
 
 test("raw update rewrites only parsed reference positions and preserves arbitrary metadata/prose", async (t) => {

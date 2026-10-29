@@ -48,7 +48,12 @@ export function changeHints(workspaceRoot: string) {
   }
 
   async function addDirectory(relative: string, current: number): Promise<void> {
-    if (current !== generation || watchers.has(relative)) return;
+    if (current !== generation) return;
+    if (watchers.has(relative)) {
+      // An ancestor's rename hint can be the only wakeup for a move into this subtree.
+      if (!nativeRecursive) await refreshDirectory(relative, current);
+      return;
+    }
     let watcher: FSWatcher;
     try {
       watcher = watch(

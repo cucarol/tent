@@ -118,3 +118,137 @@ test("a nonrecursive topology rescan finishes before its coalesced hint is publi
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+for (const filename of ["During", null])
+  test(`an ancestor ${filename === null ? "null" : "named"} rename discovers moved descendants under existing monitors`, async (t) => {
+    // These are controlled nonrecursive inputs, independent of native OS event ordering.
+    const root = path.join(testScratchRoot(), "ancestor-rescan-virtual");
+    const tree = new Map<string, string[]>([
+      ["", [".tent", ".git", "node_modules", ".worktrees", ".scratch", "linked"]],
+      [
+        ".tent",
+        [
+          "During",
+          "Destination",
+          "temp",
+          ".git",
+          "mutation.lock.guard",
+          "mutation.lock.stale-test",
+        ],
+      ],
+      [".tent/During", ["Child"]],
+      [".tent/During/Child", []],
+      [".tent/Destination", []],
+    ]);
+    const active = new Map<string, nodeFs.FSWatcher>();
+    const listeners = new Map<string, (event: string, filename: string | null) => void>();
+    const scanned: string[] = [];
+    let blockScans = false;
+    let entered!: () => void, release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const resumed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const relative = (value: unknown) => path.relative(root, String(value)).replaceAll("\\", "/");
+    t.mock.method(nodeFs, "watch", (...args: unknown[]) => {
+      const name = relative(args[0]);
+      assert.ok(tree.has(name), `no monitor reaches an ignored directory: ${name}`);
+      const watcher = new EventEmitter() as nodeFs.FSWatcher;
+      watcher.unref = () => watcher;
+      watcher.close = () => {
+        if (active.get(name) === watcher) {
+          active.delete(name);
+          listeners.delete(name);
+        }
+        watcher.emit("close");
+      };
+      active.set(name, watcher);
+      listeners.set(name, args[2] as (event: string, filename: string | null) => void);
+      return watcher;
+    });
+    t.mock.method(fs, "readdir", async (...args: unknown[]) => {
+      const name = relative(args[0]);
+      scanned.push(name);
+      if (name === ".tent" && blockScans) {
+        entered();
+        await resumed;
+      }
+      const children = tree.get(name);
+      assert.ok(children, `no scan reaches an ignored directory: ${name}`);
+      return children.map((name) => ({
+        name,
+        isDirectory: () => name !== "linked",
+      }));
+    });
+    syncBuiltinESMExports();
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    let hints: ReturnType<typeof changeHints>;
+    try {
+      Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+      hints = changeHints(root);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+    t.after(() => {
+      release();
+      hints.close();
+      assert.equal(active.size, 0, "all monitor handles are released");
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    });
+    const events = new EventEmitter();
+    const response = Object.assign(events, {
+      destroyed: false,
+      writeHead() {},
+      flushHeaders() {},
+      write() {
+        return true;
+      },
+      destroy() {
+        events.emit("close");
+      },
+    });
+    await hints.subscribe(response as unknown as ServerResponse);
+    const rootMonitor = active.get("");
+    const destinationMonitor = active.get(".tent/Destination");
+    tree.set(".tent", [
+      "Destination",
+      "temp",
+      ".git",
+      "mutation.lock.guard",
+      "mutation.lock.stale-test",
+    ]);
+    tree.delete(".tent/During");
+    tree.delete(".tent/During/Child");
+    tree.set(".tent/Destination", ["During"]);
+    tree.set(".tent/Destination/During", ["Child"]);
+    tree.set(".tent/Destination/During/Child", []);
+    // An ancestor rename alone must reconcile descendants, including its null-filename fallback.
+    listeners.get(".tent")!("rename", filename);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(active.has(".tent/Destination/During/Child"));
+    assert.ok(!active.has(".tent/During/Child"));
+    assert.equal(active.get(""), rootMonitor);
+    assert.equal(active.get(".tent/Destination"), destinationMonitor);
+    assert.ok(scanned.every((name) => tree.has(name) || name.startsWith(".tent/During")));
+    const scannedBeforeIgnored = scanned.length;
+    listeners.get(".tent")!("rename", "temp");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(scanned.length, scannedBeforeIgnored, "ignored events do not trigger scans");
+    tree.set(".tent", []);
+    listeners.get(".tent")!("rename", "Destination");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual([...active.keys()].sort(), ["", ".tent"]);
+    tree.set(".tent", ["Late"]);
+    tree.set(".tent/Late", ["Child"]);
+    tree.set(".tent/Late/Child", []);
+    blockScans = true;
+    listeners.get(".tent")!("rename", "Late");
+    await blocked;
+    hints.close();
+    release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(active.size, 0, "a rescan completing after shutdown cannot recreate monitors");
+  });

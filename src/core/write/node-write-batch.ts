@@ -340,27 +340,34 @@ async function writeNodesBatchUnlocked(
     });
   }
   const basisRecords = await retainedNodeRecords(fs);
-  for (const node of [...planned].sort(
-    (a, b) =>
-      Number(isOutputNode(parseFrontmatter(a.raw).data)) -
-      Number(isOutputNode(parseFrontmatter(b.raw).data)),
-  )) {
-    const prepared = await prepareNodeSyncSave(fs, nodeNotePath(node.path), node.raw, {
-      now,
-      created: node.before === null,
-      previousRaw: node.before ?? undefined,
-      confirm: node.confirm,
-      by: node.by,
-      nodes,
-      finalDocuments,
-      records: basisRecords,
-    });
-    node.raw = prepared.raw;
-    if (prepared.record) {
-      nodeRecords[node.nodeId] = prepared.record;
-      basisRecords[node.nodeId] = prepared.record;
+  const prepareBases = async () => {
+    for (const node of [...planned].sort(
+      (a, b) =>
+        Number(isOutputNode(parseFrontmatter(a.raw).data)) -
+        Number(isOutputNode(parseFrontmatter(b.raw).data)),
+    )) {
+      const prepared = await prepareNodeSyncSave(fs, nodeNotePath(node.path), node.raw, {
+        now,
+        created: node.before === null,
+        previousRaw: node.before ?? undefined,
+        confirm: node.confirm,
+        by: node.by,
+        nodes,
+        finalDocuments,
+        records: basisRecords,
+      });
+      node.raw = prepared.raw;
+      if (prepared.record) {
+        nodeRecords[node.nodeId] = prepared.record;
+        basisRecords[node.nodeId] = prepared.record;
+      }
     }
-  }
+  };
+  // All final documents are known, but none has been published. Share one fresh
+  // material inspection, then leave it before the live CAS and physical writes.
+  if (fs.observationScope)
+    await fs.observationScope(prepareBases, { forceContent: true, nodePaths });
+  else await prepareBases();
   const beforeOrder = (await fs.exists(ORDER_PATH)) ? await fs.readFile(ORDER_PATH) : null;
   const warnings: string[] = [];
   const warningFs = {

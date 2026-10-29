@@ -922,7 +922,9 @@ export class NodeFs implements FsAdapter {
             acquireFailedMessage: "Cannot acquire the Tent mutation lock.",
           },
         );
-      return await locked();
+      // Reuse exact-header parses during mutation and capture. The lock callback
+      // still discards file/structure observations before inspecting live state.
+      return await withDocumentHeaderCache(this.root, locked);
     } finally {
       forgetScopedReads();
     }

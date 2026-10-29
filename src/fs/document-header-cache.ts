@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { deserialize, serialize } from "node:v8";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   validFrontmatterCache,
   withFrontmatterCache,
@@ -13,14 +14,18 @@ import { withPersistedMarkdownSyntax } from "./markdown-syntax-cache.js";
 import { withPersistedSemanticContent } from "./semantic-content-cache.js";
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest();
+const activeRoot = new AsyncLocalStorage<string>();
 
-/** A brief shares validated file observations and parsed headers, never a complete result. */
+/** Share exact header/syntax parses and scoped observations, never a complete result. */
 export async function withDocumentHeaderCache<T>(systemRoot: string, action: () => Promise<T>) {
-  return withFileReadScope(() =>
-    withPersistedMarkdownSyntax(systemRoot, () =>
-      withPersistedSemanticContent(systemRoot, () => withParsedHeaders(systemRoot, action)),
-    ),
-  );
+  return withFileReadScope(() => {
+    if (activeRoot.getStore() === systemRoot) return action();
+    return activeRoot.run(systemRoot, () =>
+      withPersistedMarkdownSyntax(systemRoot, () =>
+        withPersistedSemanticContent(systemRoot, () => withParsedHeaders(systemRoot, action)),
+      ),
+    );
+  });
 }
 
 async function withParsedHeaders<T>(systemRoot: string, action: () => Promise<T>) {

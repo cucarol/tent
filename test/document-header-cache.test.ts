@@ -4,6 +4,8 @@ import { historyHead } from "./scratch.js";
 import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
+import fileSystem from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import {
@@ -151,6 +153,85 @@ test("without Tent Git the scope performs no cache writes", async (t) => {
   const root = await fixture(t);
   await withDocumentHeaderCache(root, async () => parseFrontmatter(prefix));
   assert.deepEqual(await fs.readdir(root), []);
+});
+
+test("mutation shares nested header caches but discards surrounding live observations", async (t) => {
+  const root = await fixture(t);
+  await scaffoldInWorkspace(openTestFs(root), {
+    name: "Cache",
+    nodes: [{ id: "node-cachetest", name: "Fact", type: "prompt", body: "old body" }],
+  });
+  const system = path.join(root, ".tent");
+  await initializeFixtureHistory(system);
+  await captureFixtureDocuments(system);
+  const adapter = openTestFs(system);
+  t.after(() => adapter.close());
+  const filename = path.join(system, "Fact/Fact.md");
+  const original = await fs.readFile(filename, "utf8");
+  const cache = path.join(system, ".git/tent-material-cache/document-headers.bin");
+  const readFile = fileSystem.readFile;
+  let cacheReads = 0;
+  const mocked = t.mock.method(fileSystem, "readFile", (...args: Parameters<typeof readFile>) => {
+    if (String(args[0]) === cache) cacheReads++;
+    return readFile(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  await adapter.withLock("mutation.lock", async () => {
+    parseFrontmatter(original).data.id = "node-localmutation";
+    await adapter.observationScope(
+      async () => {
+        assert.equal(parseFrontmatter(original).data.id, "node-cachetest");
+      },
+      { forceContent: true },
+    );
+  });
+  assert.equal(cacheReads, 1, "nested same-root observations load the header cache once");
+  await adapter.observationScope(async () => {
+    assert.equal(await adapter.readFile("Fact/Fact.md"), original);
+    const edited = original.replace("old body", "new body");
+    await fs.writeFile(filename, edited);
+    await adapter.withLock("mutation.lock", async () => {
+      assert.equal(await adapter.readFile("Fact/Fact.md"), edited);
+    });
+  });
+});
+
+test("warm mutation header parses retain authority identity errors and tolerate cache damage", async (t) => {
+  const root = await fixture(t);
+  await scaffoldInWorkspace(openTestFs(root), {
+    name: "Cache",
+    nodes: [{ id: "node-cachetest", name: "Fact", type: "prompt", body: "original" }],
+  });
+  const system = path.join(root, ".tent");
+  await initializeFixtureHistory(system);
+  await captureFixtureDocuments(system);
+  const adapter = openTestFs(system);
+  t.after(() => adapter.close());
+  const original = await adapter.readFile("Fact/Fact.md");
+  const before = await adapter.history.currentCommit();
+  await adapter.withLock("mutation.lock", async () => {
+    assert.equal(parseFrontmatter(original).data.id, "node-cachetest");
+  });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(
+      adapter.withLock("mutation.lock", () =>
+        adapter.history.captureUnlocked([{ path: "Other/Other.md", raw: original }]),
+      ),
+      /Duplicate historical identity node-cachetest/,
+    );
+    assert.equal(await adapter.history.currentCommit(), before);
+  }
+  await fs.writeFile(path.join(system, ".git/tent-material-cache/document-headers.bin"), "bad");
+  const raw = original.replace("original", "changed body with the same header");
+  const result = await adapter.withLock("mutation.lock", () =>
+    adapter.history.captureUnlocked([{ path: "Fact/Fact.md", raw }]),
+  );
+  assert.ok(result.commit && result.commit !== before);
+  assert.equal(await adapter.history.read({ commit: result.commit, path: "Fact/Fact.md" }), raw);
 });
 
 test("warm brief observes same-size native edits and bad headers without changing authority on a hit", async (t) => {

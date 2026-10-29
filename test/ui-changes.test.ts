@@ -108,6 +108,82 @@ async function stream(t: TestContext, server: UiServer) {
   });
 }
 
+function traceMonitors(t: TestContext) {
+  const trace: unknown[] = [];
+  let nextId = 0,
+    nextRead = 0;
+  const watch = nodeFs.watch;
+  t.mock.method(nodeFs, "watch", (...args: unknown[]) => {
+    const directory = String(args[0]);
+    const id = ++nextId;
+    const listener = args[2] as (event: string, filename: string | Buffer | null) => void;
+    args[2] = (event: string, filename: string | Buffer | null) => {
+      trace.push({
+        operation: "event",
+        id,
+        directory,
+        event,
+        filename: filename?.toString() ?? null,
+      });
+      listener(event, filename);
+    };
+    trace.push({ operation: "watch-start", id, directory });
+    let watcher: nodeFs.FSWatcher;
+    try {
+      watcher = Reflect.apply(watch, nodeFs, args) as nodeFs.FSWatcher;
+    } catch (error) {
+      trace.push({
+        operation: "watch-failed",
+        id,
+        directory,
+        code: (error as NodeJS.ErrnoException).code,
+      });
+      throw error;
+    }
+    trace.push({ operation: "watch-ready", id, directory });
+    const close = watcher.close;
+    t.mock.method(watcher, "close", () => {
+      trace.push({ operation: "close-called", id, directory, stack: new Error().stack });
+      return Reflect.apply(close, watcher, []);
+    });
+    watcher.once("close", () => trace.push({ operation: "closed", id, directory }));
+    watcher.on("error", (error: NodeJS.ErrnoException) =>
+      trace.push({ operation: "watch-error", id, directory, code: error.code }),
+    );
+    return watcher;
+  });
+  const readdir = fs.readdir;
+  t.mock.method(fs, "readdir", async (...args: unknown[]) => {
+    if ((args[1] as { withFileTypes?: boolean } | undefined)?.withFileTypes !== true)
+      return Reflect.apply(readdir, fs, args);
+    const directory = String(args[0]);
+    const id = ++nextRead;
+    trace.push({ operation: "readdir-start", id, directory });
+    try {
+      const entries = await Reflect.apply(readdir, fs, args);
+      trace.push({
+        operation: "readdir-done",
+        id,
+        directory,
+        children: entries
+          .filter((entry: nodeFs.Dirent) => entry.isDirectory())
+          .map((entry: nodeFs.Dirent) => entry.name),
+      });
+      return entries;
+    } catch (error) {
+      trace.push({
+        operation: "readdir-failed",
+        id,
+        directory,
+        code: (error as NodeJS.ErrnoException).code,
+      });
+      throw error;
+    }
+  });
+  syncBuiltinESMExports();
+  return trace;
+}
+
 function observeWatch(t: TestContext) {
   const original = nodeFs.watch;
   const watchers: nodeFs.FSWatcher[] = [];
@@ -298,6 +374,7 @@ test(
     const before = await cli(workspaceRoot, "node", "rename", "node-main", "Before", "--json");
     assert.equal(before.code, 0, before.stderr);
     const observed = observeWatch(t);
+    const trace = traceMonitors(t);
     const pages = await Promise.all(Array.from({ length: 3 }, () => stream(t, server)));
     await Promise.all(pages.map((page) => page.wait(1)));
     if (process.platform === "win32") {
@@ -337,17 +414,34 @@ test(
     const movedChild = path.join(destination, "During/Child");
     // Separate monitor setup and its move hint from the independent edit's hint.
     if (process.platform !== "win32") {
-      await t.waitFor(
-        () =>
-          assert.ok(
-            observed.directories.some(
-              (directory, index) =>
-                directory === movedChild && !observed.stopped.has(observed.watchers[index]!),
+      try {
+        await t.waitFor(
+          () =>
+            assert.ok(
+              observed.directories.some(
+                (directory, index) =>
+                  directory === movedChild && !observed.stopped.has(observed.watchers[index]!),
+              ),
+              "the moved child directory has an active monitor before its independent edit",
             ),
-            "the moved child directory has an active monitor before its independent edit",
-          ),
-        { timeout: 5_000 },
-      );
+          { timeout: 5_000 },
+        );
+      } catch (error) {
+        t.diagnostic(
+          JSON.stringify({
+            platform: process.platform,
+            node: process.version,
+            movedChild,
+            frames: pages.map((page) => page.frames),
+            monitors: observed.directories.map((directory, index) => ({
+              directory,
+              closed: observed.stopped.has(observed.watchers[index]!),
+            })),
+            trace,
+          }),
+        );
+        throw error;
+      }
     }
     await remaining.wait(moveHint);
     const next = remaining.frames.length + 1;
