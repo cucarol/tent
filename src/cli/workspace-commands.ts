@@ -164,7 +164,9 @@ async function runWorkspaceCommandOpened(
     }
     if (sub === "scan") {
       const draftRepository =
-        values.draft !== undefined ? await readModuleMapRepository(roots.workspaceRoot) : undefined;
+        values.draft !== undefined
+          ? await readModuleMapRepository(roots.workspaceRoot, { includeProductManifests: true })
+          : undefined;
       const repository =
         draftRepository ?? (await readWorkspaceScanRepository(roots.workspaceRoot));
       const result = await scanWorkspace(fs, roots.workspaceRoot, repository, scanFileKind);

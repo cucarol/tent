@@ -144,6 +144,7 @@ export function draftDirectoryUnits(
   files: string[],
   imports: readonly RepositoryImport[],
   parentKey?: string,
+  productDirectories: readonly string[] = [],
 ): DraftUnit[] {
   const unit: DraftUnit = {
     key: directory,
@@ -151,15 +152,15 @@ export function draftDirectoryUnits(
     parentKey,
   };
   const sources = files.filter(code);
-  if (sources.length <= DRAFT_CODE_FILES) return [unit];
+  const large = sources.length > DRAFT_CODE_FILES;
   const children = ordered(
-    sources
-      .map((file) => file.slice(directory.length + 1))
-      .filter((file) => file.includes("/"))
-      .map((file) => directory + "/" + file.split("/")[0]),
+    [
+      ...productDirectories.filter((child) => child.startsWith(directory + "/")),
+      ...(large ? sources.filter((file) => path.posix.dirname(file) !== directory) : []),
+    ].map((child) => directory + "/" + child.slice(directory.length + 1).split("/")[0]),
   );
   const direct = sources.filter((file) => path.posix.dirname(file) === directory);
-  const groups = flatGroups(direct, imports);
+  const groups = large ? flatGroups(direct, imports) : [];
   // A single bounded group (or generated-source family) is represented by its directory.
   if (!children.length && groups.length <= 1) return [unit];
   return [
@@ -170,6 +171,7 @@ export function draftDirectoryUnits(
         files.filter((file) => file.startsWith(child + "/")),
         imports,
         unit.key,
+        productDirectories,
       ),
     ),
     ...draftFlatUnits(groups, files, unit.key),

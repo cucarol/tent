@@ -1,5 +1,6 @@
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
+import { isProductManifest } from "../core/base/repository-products.js";
 import {
   isImportConfig,
   isImportSource,
@@ -11,7 +12,7 @@ import {
 export async function readRepositorySources(
   root: string,
   trackedFiles: readonly string[],
-  options: { includeTests?: boolean } = {},
+  options: { includeTests?: boolean; includeProductManifests?: boolean } = {},
 ) {
   const files: RepositorySource[] = [];
   const errors: Array<{ file: string; reason: string }> = [];
@@ -33,6 +34,7 @@ export async function readRepositorySources(
     files.push(source);
     if (!(
       isImportConfig(file) ||
+      (options.includeProductManifests && isProductManifest(file)) ||
       (isImportSource(file) && (options.includeTests || !isTestSource(file)))
     ))
       continue;

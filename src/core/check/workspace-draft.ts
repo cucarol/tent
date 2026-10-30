@@ -133,23 +133,78 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
   const ordinary: ModuleMapMaterial[] = [],
     tests: ModuleMapMaterial[] = [];
   let units: Unit[] = [];
+  const documentation: Unit[] = [];
+  const products = scan.productMaterials;
+  const productDirectories = products
+    .filter((item) => item.kind === "directory")
+    .map((item) => item.path);
+  const productFiles = new Set(
+    products.filter((item) => item.kind === "file").map((item) => item.path),
+  );
   const tops = ordered(
     files.filter((file) => file.includes("/")).map((file) => file.split("/")[0]),
   );
   for (const top of tops) {
     const members = files.filter((file) => file.startsWith(top + "/"));
-    const code = members.filter(isCodeSource);
-    if (!code.length) {
-      ordinary.push(material(top + "/", false));
+    if (top === "docs" || top === "doc") {
+      documentation.push({ key: top, name: "Docs", materials: [material(top + "/")] });
       continue;
     }
-    if (code.every(isTestSource)) {
+    const code = members.filter(isCodeSource);
+    if (!code.length) {
+      const directories = products.filter(
+        (item) =>
+          item.kind === "directory" && (item.path === top || item.path.startsWith(top + "/")),
+      );
+      // Start once at each outer boundary; recursion retains every explicit descendant.
+      for (const item of directories.filter(
+        (item) => !directories.some((parent) => item.path.startsWith(parent.path + "/")),
+      ))
+        units.push(
+          ...draftDirectoryUnits(
+            item.path,
+            members.filter((file) => file.startsWith(item.path + "/")),
+            imports,
+            undefined,
+            productDirectories,
+          ),
+        );
+      // Keep ordinary siblings in Setup without overlapping a selected product directory.
+      const collect = (dir: string, below: string[]) => {
+        if (directories.some((item) => item.path === dir)) return;
+        if (!directories.some((item) => item.path.startsWith(dir + "/"))) {
+          ordinary.push(material(dir + "/", false));
+          return;
+        }
+        for (const file of below.filter((file) => directory(file) === dir))
+          ordinary.push({ path: file, kind: "file" });
+        for (const child of ordered(
+          below
+            .filter((file) => directory(file) !== dir)
+            .map((file) => dir + "/" + file.slice(dir.length + 1).split("/")[0]),
+        ))
+          collect(
+            child,
+            below.filter((file) => file.startsWith(child + "/")),
+          );
+      };
+      collect(top, members);
+      continue;
+    }
+    if (
+      code.every(isTestSource) &&
+      !products.some(
+        (item) =>
+          item.kind === "directory" && (item.path === top || item.path.startsWith(top + "/")),
+      )
+    ) {
       tests.push(material(top + "/", false));
       continue;
     }
     let dir = top;
     // Descend wrappers only when they contain no direct files of any kind.
     for (;;) {
+      if (products.some((item) => item.kind === "directory" && item.path === dir)) break;
       const below = files.filter((file) => file.startsWith(dir + "/"));
       const kids = ordered(below.map((file) => file.slice(dir.length + 1).split("/")[0]));
       if (below.some((file) => directory(file) === dir) || kids.length !== 1) break;
@@ -160,6 +215,8 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
         dir,
         files.filter((file) => file.startsWith(dir + "/")),
         imports,
+        undefined,
+        productDirectories,
       ),
     );
     if (!code.some(isModuleProductionSource) && code.some(isGeneratedSource))
@@ -212,10 +269,13 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
       );
     }
   }
-  for (const file of roots.filter((file) => !rootCode.includes(file)))
-    (isTestSource(file) ? tests : ordinary).push({ path: file, kind: "file" });
+  for (const file of roots.filter((file) => !rootCode.includes(file))) {
+    if (productFiles.has(file))
+      units.push({ key: file, materials: [{ path: file, kind: "file" }] });
+    else (isTestSource(file) ? tests : ordinary).push({ path: file, kind: "file" });
+  }
 
-  units = condense(units, files, imports);
+  units = [...condense(units, files, imports), ...documentation];
   const sizes = checkModuleMap({
     trackedFiles: files,
     imports: [],

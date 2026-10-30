@@ -153,17 +153,20 @@ export async function readWorkspaceScanRepository(
   return {
     head,
     trackedFiles,
-    sources: await readRepositorySources(workspaceRoot, trackedFiles),
+    sources: await readRepositorySources(workspaceRoot, trackedFiles, {
+      includeProductManifests: true,
+    }),
   };
 }
 
 /** Module history follows the mainline rather than counting merged branches twice. */
 export async function readModuleMapRepository(
   workspaceRoot: string,
+  options: { includeProductManifests?: boolean } = {},
 ): Promise<WorkspaceModuleMapRepository> {
   const { root, head, trackedFiles, workspaceFile } = await readRepositoryFiles(workspaceRoot);
   const [sources, log] = await Promise.all([
-    readRepositorySources(workspaceRoot, trackedFiles, { includeTests: true }),
+    readRepositorySources(workspaceRoot, trackedFiles, { includeTests: true, ...options }),
     head
       ? git(root, [
           "log",

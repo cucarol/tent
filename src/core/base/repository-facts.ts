@@ -1,5 +1,6 @@
 import { dependencyCycles } from "./dependency-cycles.js";
 import path from "node:path";
+import { repositoryProductMaterials } from "./repository-products.js";
 import {
   comparePaths,
   extractRepositoryImports,
@@ -99,10 +100,12 @@ export function repositoryFacts(sources: readonly RepositorySource[]) {
     }
   }
   return {
+    productMaterials: repositoryProductMaterials(sources),
     imports,
     dependencies: [1, 2].map((depth) => repositoryDirectoryGraph(imports.edges, files, depth)),
     guidanceFiles: files.filter(
       (file) =>
+        /^(docs|doc)\/.*\.(md|markdown|txt)$/i.test(file) ||
         /(^|\/)(AGENTS|CLAUDE|GEMINI|CONTRIBUTING|ARCHITECTURE|DESIGN|HACKING)(\.md|\.rst|\.txt)?$/i.test(
           file,
         ) ||

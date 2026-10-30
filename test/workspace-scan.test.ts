@@ -248,6 +248,7 @@ test("CLI scan summarizes facts without changing Git/Tent bytes and limits text 
     "head",
     "imports",
     "inspectionErrors",
+    "productMaterials",
   ]);
   assert.ok(
     report.dependencies.every(
