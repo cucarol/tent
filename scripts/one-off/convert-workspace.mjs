@@ -32,7 +32,7 @@
 // then converted the same way; because the run starts only from a clean working
 // tree, they equal the rewritten HEAD, so no extra capture commit is needed.
 //
-// Stop Agents, Hooks and `tent ui` first and keep a copy of `.tent`. The run refuses
+// Stop Agents and Hooks first and keep a copy of `.tent`. The run refuses
 // to start with uncaptured edits, pending operations or any Node document it cannot
 // convert, and exits non-zero listing every such file.
 import { spawn, spawnSync } from "node:child_process";

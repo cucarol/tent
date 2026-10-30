@@ -6,7 +6,7 @@
 
 A code graph shows how the code fits together. Tent keeps what the code cannot hold: your goals, the prompts you give, and the outputs that come of them. Your agents read it before they start and update it as they work. When the code or a document changes under a recorded fact, Tent marks the fact as stale so it gets fixed instead of misleading the next session.
 
-You decide, agents do the work, and Tent keeps the record. It works with Claude Code and Codex, stays on your machine, and you browse it as a map in a local web page.
+You decide, agents do the work, and Tent keeps the record. It works with Claude Code and Codex and stays on your machine as plain Markdown.
 
 ## Quick start
 
@@ -19,7 +19,7 @@ You decide, agents do the work, and Tent keeps the record. It works with Claude 
 
    The agent maps the existing code into Nodes, one per part of the project. Each Node owns that part's code and records the rules a change must keep, what else changes with it, and how to verify it. A project you are halfway through can join this way.
 
-3. **Open the map.** The agent finishes by starting the web page and giving you its address. Later, ask it to open the Tent map again.
+3. **Read it.** Each Node is a Markdown file under `.tent/`, nested under its parent. Open them in any editor, or ask your agent what has gone stale.
 
 ## What Tent keeps
 
@@ -40,18 +40,9 @@ Most work needs no Role and no Card.
 
 Dependencies between parts come from imports in TypeScript, JavaScript, Python, Go, Rust, Java, C#, C, C++ and PHP. Code in other languages is still mapped by directory and by what changes together in Git history.
 
-## The map
-
-The web page shows Nodes as cards on one canvas, linked to their parents and to the parts they depend on. Behind and ahead are marked on the cards.
-
-- Drop one card on another and they form a group. Tent states what it can check from facts it holds, for example whether an output still matches its goal or whether a rule's material changed after it was written. Whether the work is right is for an agent to judge.
-- Roles sit in the top bar as a stack of avatars that opens into a list, with what each one is working on and waiting for. Drag cards onto the stack and drop them on a Role to write it a Card.
-- Edit Nodes in place, and switch between the workspaces you have opened.
-- Follow a body link ending in `/` to browse that Workspace directory in the file panel, one level at a time, and open its files.
-
 ## Install
 
-You need Node.js 22.19+. Git enables project-repository observations, the existing per-directory ignore interpretation and local-exclude initialization step; SQLite history itself does not require Git. Existing private-Git workspaces need the one-shot [migration](docs/MIGRATION.md) on an offline copy.
+You need Node.js 22.19+. Git enables project-repository observations, the existing per-directory ignore interpretation and local-exclude initialization step; SQLite history itself does not require Git. Existing private-Git workspaces need the one-shot [migration](docs/MIGRATION.md) on an offline copy. Workspaces from 0.2.0 run one [cleanup script](docs/MIGRATION.md#map-layout-from-020) after upgrading; where the map was never used it changes nothing.
 
 **Claude Code:**
 
@@ -67,7 +58,7 @@ If your Claude Code has no `--marketplace` option, run `claude plugin marketplac
 codex plugin marketplace add cucarol/tent --ref plugin-dist && codex plugin add tent@tent
 ```
 
-Each plugin bundles four Skills, SessionStart, UserPromptSubmit, PostToolUse and Stop Hooks, the CLI and the web page; it needs no npm install. Claude Code turns the Hooks on with the plugin. Codex asks you to review them. Every command works without them. Details: [docs/PLUGIN.md](docs/PLUGIN.md).
+Each plugin bundles four Skills, SessionStart, UserPromptSubmit, PostToolUse and Stop Hooks and the CLI; it needs no npm install. Claude Code turns the Hooks on with the plugin. Codex asks you to review them. Every command works without them. Details: [docs/PLUGIN.md](docs/PLUGIN.md).
 
 Or give your agent this:
 
@@ -120,7 +111,7 @@ tent node get <prompt-id> --full --json
 tent node confirm <prompt-id> --base-etag <etag>
 ```
 
-Writes that replace content must present the ETag they read, so two sessions cannot silently overwrite each other. The web page runs with `tent ui --workspace <project folder>`; Ctrl+C stops it. The exact rules are in [docs/SPEC.md](docs/SPEC.md).
+Writes that replace content must present the ETag they read, so two sessions cannot silently overwrite each other. The exact rules are in [docs/SPEC.md](docs/SPEC.md).
 
 ## Status
 
@@ -132,7 +123,6 @@ Tent 0.x has one maintainer. The file format and commands may still change; [doc
 npm ci
 npm run build
 npm run test:fast
-npm run ui:dev -- --workspace <project folder>
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

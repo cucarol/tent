@@ -55,13 +55,7 @@ test(
     assert.equal("libc" in manifest, false);
     await assert.rejects(fs.access(path.join(bundle, "node_modules")), { code: "ENOENT" });
     assert.ok((await fs.stat(path.join(bundle, "cli.mjs"))).size > 0);
-    assert.ok((await fs.stat(path.join(bundle, "ui-dist/app.js"))).size > 0);
-    await assert.rejects(fs.access(path.join(bundle, "ui-dist/fonts")), { code: "ENOENT" });
-    assert.doesNotMatch(
-      await fs.readFile(path.join(bundle, "ui-dist/THIRD_PARTY_NOTICES.txt"), "utf8"),
-      /excalidraw/i,
-    );
-    await assert.rejects(fs.access(path.join(bundle, "ui-dist/snapshot.json")), { code: "ENOENT" });
+    await assert.rejects(fs.access(path.join(bundle, "ui-dist")), { code: "ENOENT" });
     const catalogue = JSON.parse(
       await fs.readFile(path.join(distribution, "codex/.agents/plugins/marketplace.json"), "utf8"),
     );
@@ -82,6 +76,18 @@ test("both host packages carry the same common payload and separate native shell
   ]) {
     const bundle = bundleFor(host!);
     await validateHostPackage(bundle, host);
+    const files = await fs.readdir(bundle, { recursive: true });
+    assert.ok(
+      files.every((file) => !/^ui-dist(?:[\\/]|$)/.test(file)),
+      host,
+    );
+    await assert.rejects(
+      run(process.execPath, [path.join(bundle, "cli.mjs"), "ui"], {
+        cwd: root,
+        windowsHide: true,
+      }),
+      /Unknown command: tent ui/,
+    );
     const manifest = JSON.parse(await fs.readFile(path.join(bundle, manifestPath!), "utf8"));
     assert.equal(manifest.version, pkg.version);
     assert.equal(manifest.name, "tent");
@@ -103,7 +109,7 @@ test("both host packages carry the same common payload and separate native shell
     "THIRD_PARTY_NOTICES.txt",
     "LICENSE",
   ];
-  for (const dir of ["ui-dist", "docs", "skill-resources", "skills"]) {
+  for (const dir of ["docs", "skill-resources", "skills"]) {
     const codexFiles = (await fs.readdir(path.join(codex, dir), { recursive: true })).map(
       (f) => `${dir}/${f.replaceAll("\\", "/")}`,
     );

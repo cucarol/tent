@@ -103,16 +103,14 @@ async function readCached(
 ) {
   return withFileReadScope(async () => ({
     header: await adapter.readFrontmatter(relative),
-    digest: await adapter.readContentDigest(relative),
     material: await observeSourceFile(root, filename, cacheDir),
   }));
 }
 
-test("header, digest and material caches persist across requests without reading unchanged source bytes", async (t) => {
+test("header and material caches persist across requests without reading unchanged source bytes", async (t) => {
   const f = await fixture(t);
   const io = sourceIo(t, [f.filename]);
   const cold = await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
-  assert.equal(cold.digest.digest, digest(raw()));
   assert.equal(cold.material.observedVersion, digest(raw()));
   assert.equal(
     io.bytes,
@@ -128,7 +126,6 @@ test("header, digest and material caches persist across requests without reading
     f.cacheDir,
   );
   assert.equal(warm.header, cold.header);
-  assert.deepEqual(warm.digest, cold.digest);
   assert.equal(warm.material.observedVersion, cold.material.observedVersion);
   assert.equal(warm.material.cacheHit, true);
   assert.equal(io.bytes, 0);
@@ -136,7 +133,7 @@ test("header, digest and material caches persist across requests without reading
   assert.equal(io.opens, 0);
 });
 
-test("same-size native edits with restored mtime invalidate header, digest and material caches through ctime", async (t) => {
+test("same-size native edits with restored mtime invalidate header and material caches through ctime", async (t) => {
   const f = await fixture(t);
   await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
   const before = await fs.stat(f.filename, { bigint: true });
@@ -156,7 +153,6 @@ test("same-size native edits with restored mtime invalidate header, digest and m
   const io = sourceIo(t, [f.filename]);
   const observed = await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
   assert.match(observed.header, /id: node-other/);
-  assert.equal(observed.digest.digest, digest(changed));
   assert.equal(observed.material.observedVersion, digest(changed));
   assert.equal(observed.material.cacheHit, false);
   assert.equal(io.bytes, Buffer.byteLength(changed));
@@ -170,7 +166,6 @@ test("racy files are read again even when their recorded file state still matche
   await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
   io.reset();
   const observed = await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
-  assert.equal(observed.digest.digest, digest(raw()));
   assert.equal(observed.material.cacheHit, false);
   assert.equal(io.bytes, Buffer.byteLength(raw()));
 });
@@ -254,14 +249,13 @@ test("deleted, corrupt, obsolete and tampered persisted entries fall back to sou
     io.reset();
     const actual = await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
     assert.equal(actual.header, expected.header);
-    assert.deepEqual(actual.digest, expected.digest);
     assert.equal(actual.material.observedVersion, expected.material.observedVersion);
     assert.equal(actual.material.cacheHit, false);
     assert.equal(io.bytes, Buffer.byteLength(raw()));
   }
 });
 
-test("one request shares prefix and remaining bytes across text, binary, digest and material reads", async (t) => {
+test("one request shares prefix and remaining bytes across text, binary and material reads", async (t) => {
   const f = await fixture(t);
   const io = sourceIo(t, [f.filename]);
   await withFileReadScope(async () => {
@@ -271,7 +265,6 @@ test("one request shares prefix and remaining bytes across text, binary, digest 
     const acquired = io.bytes;
     assert.equal(acquired, Buffer.byteLength(raw()));
     assert.equal(Buffer.from(await f.adapter.readBinary(f.relative)).toString("utf8"), raw());
-    assert.equal((await f.adapter.readContentDigest(f.relative)).digest, digest(raw()));
     assert.equal(
       (await observeSourceFile(f.systemRoot, f.filename, f.cacheDir)).observedVersion,
       digest(raw()),
@@ -652,7 +645,10 @@ test("forced scopes bypass persisted values and a parent request's acquired byte
   const io = sourceIo(t, [f.filename]);
   await withFileReadScope(async () => {
     assert.equal(await f.adapter.readFrontmatter(f.relative), expected.header);
-    assert.equal((await f.adapter.readContentDigest(f.relative)).digest, expected.digest.digest);
+    assert.equal(
+      (await observeSourceFile(f.systemRoot, f.filename, f.cacheDir)).observedVersion,
+      expected.material.observedVersion,
+    );
   }, true);
   assert.equal(io.bytes, Buffer.byteLength(raw()));
   await withFileReadScope(async () => {
@@ -689,20 +685,18 @@ test("single Node sync inspection rechecks material bytes despite a stable persi
 test("concurrent readers in one request acquire source bytes once across header, text, binary and material APIs", async (t) => {
   const f = await fixture(t);
   const io = sourceIo(t, [f.filename]);
-  const [header, text, binary, observed, fingerprint] = await withFileReadScope(() =>
+  const [header, text, binary, observed] = await withFileReadScope(() =>
     Promise.all([
       f.adapter.readFrontmatter(f.relative),
       f.adapter.readFile(f.relative),
       f.adapter.readBinary(f.relative),
       observeSourceFile(f.systemRoot, f.filename, f.cacheDir),
-      f.adapter.readContentDigest(f.relative),
     ]),
   );
   assert.match(header, /id: node-first/);
   assert.equal(text, raw());
   assert.equal(Buffer.from(binary).toString("utf8"), raw());
   assert.equal(observed.observedVersion, digest(raw()));
-  assert.equal(fingerprint.digest, digest(raw()));
   assert.equal(io.bytes, Buffer.byteLength(raw()));
 });
 

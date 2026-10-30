@@ -13,8 +13,6 @@ import { runNodeCommand, nodeHelpText } from "./node-commands.js";
 import { runRoleCommand, roleHelpText } from "./role-commands.js";
 import { runWorkspaceCommand, workspaceHelpText } from "./workspace-commands.js";
 import { runHookCommand } from "./hook.js";
-import { runUiCommand } from "./ui-command.js";
-import { startUiServer } from "../ui-server/server.js";
 import { readBuildIdentity, formatBuildIdentity } from "./build-identity.js";
 import { cliErrorText, unknownCommandError } from "./error-text.js";
 
@@ -97,10 +95,6 @@ async function main() {
     await newTent(target);
     return;
   }
-  if (cmd === "ui") {
-    await runUiCommand(args, { packageRoot: packageRoot(), startServer: startUiServer });
-    return;
-  }
   if (cmd === "card") {
     const [sub, ...rest] = args;
     const result = await runCardCommand(sub, rest);
@@ -139,7 +133,7 @@ async function main() {
 
   return fail(
     cliErrorText(
-      unknownCommandError("tent", cmd, ["new", "node", "card", "role", "workspace", "ui", "hook"]),
+      unknownCommandError("tent", cmd, ["new", "node", "card", "role", "workspace", "hook"]),
       "tent",
     ),
   );
@@ -165,7 +159,6 @@ Run it inside a Workspace, or name one with --workspace <path>.
 
 Start
   tent new <path>                    Create an empty Tent in <path>/.tent with its own SQLite history; --workspace <path> also selects the new root.
-  tent ui [--port <n>] [--no-open]   Open the map in the browser; Ctrl+C stops it.
 
 Read and record
   tent workspace brief               Where to start: what changed and which Cards wait.

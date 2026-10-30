@@ -4,7 +4,7 @@
 
 ## 构建与安装
 
-需要 Node.js 22.19+ 和 Git。一次构建生成 Codex 与 Claude Code 两个完整插件包，共享同一份 CLI、Web UI、四个 Skill、references 与 SPEC；宿主壳只提供清单、Hook 定义和启动脚本、界面描述与该宿主的 Hook 说明。插件运行时只使用 JavaScript、Node 内置模块与静态资源，可在支持的 Windows、macOS 和 Linux 环境运行，无需 npm install。
+需要 Node.js 22.19+ 和 Git。一次构建生成 Codex 与 Claude Code 两个完整插件包，共享同一份 CLI、四个 Skill、references 与 SPEC；宿主壳只提供清单、Hook 定义和启动脚本、界面描述与该宿主的 Hook 说明。插件运行时只使用 JavaScript 与 Node 内置模块，可在支持的 Windows、macOS 和 Linux 环境运行，无需 npm install。
 
 从源码构建时执行：
 
@@ -32,7 +32,6 @@ release/
       tool-hook.mjs
       turn-hook.mjs
       wake.mjs
-      ui-dist/
       docs/
   claude-code/
     .claude-plugin/marketplace.json
@@ -46,11 +45,10 @@ release/
       cli.mjs
       tool-hook.mjs
       turn-hook.mjs
-      ui-dist/
       docs/
 ```
 
-共用源码在 `skills/`、`skill-resources/` 与 `src/`；宿主壳在 `plugins/codex/tent/` 和 `plugins/claude-code/tent/`。构建只编译一次运行时与 UI，再复制到两个包；共用内容逐字节相同。每个壳的 `host-hooks.md` 和 `host-role.md` 原样放入该包的 `skills/tent-init/references/host-hooks.md` 和 `skills/tent-role/references/host-role.md`，Codex 的 `agents/openai.yaml` 由壳提供。`host-role.md` 写各宿主的会话怎么当 Role。Claude Code 在后台命令结束时会唤醒会话，所以空闲时用 `tent card watch` 等 Card；外部进程没有办法把消息送进 Claude Code 会话。Codex 的壳另带 `wake.mjs`：聊天接下 Role 时运行一次，就把这个聊天绑到这个 Role 上。之后它在后台常驻，用 `tent card watch` 等该 Role 的 Card，每批新 Card 用 `codex queue` 往这个聊天投一条消息，同一张 Card 只叫一次。别的会话用 `--tell <role-id>` 可以给绑到该 Role 的每个聊天捎一句话。聊天编号取自 `CODEX_THREAD_ID`，也可以用 `--thread` 指定。绑定记在 `.tent/temp/role-chats/`，后台进程退出就失效。不放系统临时目录，因为 Codex 沙箱有自己的临时目录，别的会话看不到。Windows 上优先用桌面应用自带的 `codex.exe`。版本统一取自 `package.json`。构建不覆盖已有交付，也不注册全局配置。运行依赖随包携带，安装后不依赖源码仓库的 node_modules 或全局 Tent。
+共用源码在 `skills/`、`skill-resources/` 与 `src/`；宿主壳在 `plugins/codex/tent/` 和 `plugins/claude-code/tent/`。构建只编译一次运行时，再复制到两个包；共用内容逐字节相同。每个壳的 `host-hooks.md` 和 `host-role.md` 原样放入该包的 `skills/tent-init/references/host-hooks.md` 和 `skills/tent-role/references/host-role.md`，Codex 的 `agents/openai.yaml` 由壳提供。`host-role.md` 写各宿主的会话怎么当 Role。Claude Code 在后台命令结束时会唤醒会话，所以空闲时用 `tent card watch` 等 Card；外部进程没有办法把消息送进 Claude Code 会话。Codex 的壳另带 `wake.mjs`：聊天接下 Role 时运行一次，就把这个聊天绑到这个 Role 上。之后它在后台常驻，用 `tent card watch` 等该 Role 的 Card，每批新 Card 用 `codex queue` 往这个聊天投一条消息，同一张 Card 只叫一次。别的会话用 `--tell <role-id>` 可以给绑到该 Role 的每个聊天捎一句话。聊天编号取自 `CODEX_THREAD_ID`，也可以用 `--thread` 指定。绑定记在 `.tent/temp/role-chats/`，后台进程退出就失效。不放系统临时目录，因为 Codex 沙箱有自己的临时目录，别的会话看不到。Windows 上优先用桌面应用自带的 `codex.exe`。版本统一取自 `package.json`。构建不覆盖已有交付，也不注册全局配置。运行依赖随包携带，安装后不依赖源码仓库的 node_modules 或全局 Tent。
 
 Codex 安装交付中的 `codex/` marketplace：
 
@@ -110,8 +108,6 @@ Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.ten
 
 需要画草图时，用 Excalidraw 本身保存工作区文件，再由 Node 引用该文件。
 
-包内包含 CLI 与 Web UI 静态资源。运行同包 `cli.mjs ui --workspace <工作区路径>` 可打开界面（例如 `node <插件路径>/cli.mjs ui --workspace <工作区路径>`）；`--no-open` 只打印地址。服务仅在当前终端前台运行，Ctrl+C 退出，不注册 Session。init 使用宿主可见、可停止的后台命令并加 `--idle-timeout 300`，没有成功的已认证页面请求满 5 分钟后自动关闭；页面轮询和从本次启动打开的其他工作区共用续期，退出时关闭所有子服务并清理计时器。CLI 同时打印地址和空闲有效期。不带该参数的普通手动 UI 生命周期不变。其他命令直接读写文档和 Git，无需启动 UI 服务。
-
 ## Node 的维护者说明
 
 Skill 按 `goal`、`prompt`、`output` 三种类型介绍 Node，类型名就是它的含义，Skill 只写每种类型怎么对待；形态与主题由 tags 表达，Skill 列出的预设与 Core 的 `NODE_TAG_PRESETS` 一致，`node tags` 列出在用标签。Agent 自己的结论在用户同意前是 `output`。goal 子树下任何当前 output 都算该 goal 的结果，所以 goal 的开放问题、调研和待决事项放在 `prompt`。`goal` 与 `prompt` 不写提交号、测试数和交付状态，这些由 Git 与 Card 记录；有用的验证写成带日期的 output。
@@ -152,7 +148,7 @@ Card 只记录四种投递状态：`pending`、`consumed`、`returned`、`closed
 
 Node 正文或语义元数据变化时记录 OKF 原生 `generated: {by, at}`；确认时记录 `verified: [{by, at}]`，按 actor 保留最新一项。确认不改正文或生成时间，内容修改也不抹掉既有复核记录。读取、无变化保存和生命周期修改不刷新生成时间。`stale_after` 到期使 Node 落后；`status: deprecated` 的 Node 不进入当前上下文。
 
-写入与确认支持 `--by`，JSON 写入和批量条目支持 `by`。已知身份使用 `human:<id>`、`process:<id>` 或 `<producer>/<version>`；无法取得可靠宿主身份时写实际运行的 `tent/<version>`，不猜模型或冒充人工。只有 `human:` 验证者显示为人工复核，其余是机器确认，无验证者则未验证。Web 保存和确认默认使用本机用户名，可显式覆盖。信任档位由验证记录推导，不是权限控制。
+写入与确认支持 `--by`，JSON 写入和批量条目支持 `by`。已知身份使用 `human:<id>`、`process:<id>` 或 `<producer>/<version>`；无法取得可靠宿主身份时写实际运行的 `tent/<version>`，不猜模型或冒充人工。只有 `human:` 验证者显示为人工复核，其余是机器确认，无验证者则未验证。信任档位由验证记录推导，不是权限控制。
 
 ## Hook 边界
 

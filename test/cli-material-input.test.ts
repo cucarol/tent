@@ -16,7 +16,6 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { git } from "./helpers.js";
-import { buildSnapshot } from "../src/ui-server/snapshot.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(testScratchRoot());
@@ -472,20 +471,12 @@ test("ordinary link-output confirmation preserves completion time", async (t) =>
     "--name",
     "Linked proof",
   ]);
-  const adapter = openTestFs(path.join(root, ".tent"));
-  const source = {
-    fs: adapter,
-    workspace: { id: "confirm-completion", name: "Confirm" },
-    revision: "test",
-  };
-  const before = await buildSnapshot(source);
-  const at = before.nodes.find((node) => node.id === linked.nodeId)!.outputAt!;
+  const at = (await get(linked.nodeId)).generated.at;
   assert.ok(at);
   for (let index = 0; index < 2; index++) {
     const observed = await get(linked.nodeId);
     await cli("confirm", [linked.nodeId, "--base-etag", observed.etag, "--by", "human:cuca"]);
-    const after = await buildSnapshot(source);
-    assert.equal(after.nodes.find((node) => node.id === linked.nodeId)!.outputAt, at);
+    assert.equal((await get(linked.nodeId)).generated.at, at);
   }
   const saved = parseFrontmatter(await fs.readFile(path.join(root, linked.path), "utf8")).data;
   assert.equal(

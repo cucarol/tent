@@ -1,7 +1,7 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isHistoryFile } from "../src/core/store/document-history.js";
+import { isHistoryDocument } from "../src/core/store/document-history.js";
 import { execFileSync } from "node:child_process";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import { fileURLToPath } from "node:url";
@@ -45,7 +45,7 @@ export async function captureFixtureDocuments(root: string): Promise<void> {
       const file = path.posix.join(directory, entry.name);
       if (file === ".git" || file === "temp") continue;
       if (entry.isDirectory()) await walk(file);
-      else if (entry.isFile() && isHistoryFile(file))
+      else if (entry.isFile() && isHistoryDocument(file))
         changes.push({ path: file, raw: await fs.readFile(path.join(root, file), "utf8") });
     }
   }

@@ -8,7 +8,6 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { createNode, deleteNode, renameNode } from "../src/core/graph/ops.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
-import { listHistoryChanges } from "../src/core/read/history-query.js";
 import { testScratchRoot } from "./scratch.js";
 
 test("public saves and observed edits retain distinct history operations across locations", async (t) => {
@@ -54,7 +53,7 @@ test("public saves and observed edits retain distinct history operations across 
   assert.equal(rows.at(-1)!.changes[0]!.before!.path, "Beta/Beta.md");
   assert.equal(rows.at(-1)!.changes[0]!.after, undefined);
 
-  const changes = await listHistoryChanges(adapter, { from: first.commit });
+  const changes = await adapter.history.changesInRange({ from: first.commit });
   assert.deepEqual(
     changes.map((change) => change.operation),
     ["document.external-capture", "node.write", "node.rename", "node.delete"],

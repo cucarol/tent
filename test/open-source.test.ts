@@ -68,7 +68,7 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   assert.equal(pkg.license, "MIT");
   assert.equal(pkg.author, "cucarol");
   assert.equal(pkg.author, manifest.author);
-  assert.equal(pkg.version, "0.2.0");
+  assert.equal(pkg.version, "0.2.1");
   assert.equal(manifest.name, "Tent");
   assert.equal(
     manifest.minAppVersion,
@@ -185,7 +185,7 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   }
   assert.equal(pkg.scripts?.["test:grok-e2e"], undefined);
   assert.equal(pkg.scripts?.["test:foreground-e2e"], undefined);
-  // Both languages carry the three-type Node model and no release number.
+  // Both languages carry the three-type Node model; 0.2.0 names the migrated format.
   assert.match(readme, /`type` is exactly `goal`, `prompt` or `output`/);
   assert.match(readmeZh, /`type` 只能是 `goal`、`prompt` 或 `output`/);
   for (const text of [readme, readmeZh]) {
@@ -195,7 +195,11 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
     assert.match(text, /`decision`/);
     assert.doesNotMatch(text, /primary\[-secondary\]/, "type suffixes are retired");
     assert.doesNotMatch(text, /`(?:goal|prompt|output)-[a-z]+`/, "type suffixes are retired");
-    assert.doesNotMatch(text, /\b\d+\.\d+\.\d+\b/, "the release version is set at tag time");
+    assert.doesNotMatch(
+      text.replace(/\b0\.2\.0\b/g, ""),
+      /\b\d+\.\d+\.\d+\b/,
+      "only the migrated workspace format names a version in README",
+    );
     assert.match(text, /https:\/\/github\.com\/cucarol\/tent\/releases\/latest/);
   }
   const installation = await fs.readFile(path.join(repoRoot, "docs/PLUGIN.md"), "utf8");

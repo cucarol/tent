@@ -56,8 +56,10 @@ test("existing Git ignore entries and structural markers remain valid", async (t
   assert.equal(isValidTentIndexMarker("---\ntype: role\n---\n"), false);
 });
 
-test("retired agent commands remain unavailable", async () => {
+test("retired commands remain unavailable", async () => {
   await assert.rejects(run("agent", "session-start"), /Unknown command: tent agent/);
+  await assert.rejects(run("ui"), /Unknown command: tent ui/);
+  assert.doesNotMatch((await run("--help")).stdout, /tent ui/);
 });
 
 test("new's local ignore file is neither a Node nor a workspace check issue", async (t) => {

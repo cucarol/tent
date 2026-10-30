@@ -15,5 +15,4 @@ docs/plans/
 .tent/
 /.worktrees/
 /.scratch/
-/ui-dist/
 /migrate-history.mjs

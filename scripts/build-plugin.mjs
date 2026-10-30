@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildPluginRuntime } from "../esbuild.config.mjs";
 import { syncVersion } from "./sync-version.mjs";
-import { buildUi } from "./ui-build.mjs";
 import { writeDependencyNotices } from "./dependency-notices.mjs";
 import {
   hostDocuments,
@@ -43,8 +42,7 @@ export async function buildPlugin(outputRoot = path.join(root, "release")) {
   });
   const inputs = await buildPluginRuntime(root, first);
   await writeDependencyNotices(root, first, inputs);
-  await buildUi(root, { outputDir: path.join(first, "ui-dist") });
-  // Copy before applying shells: runtime, UI and common documents have identical bytes.
+  // Copy before applying shells: runtime and common documents have identical bytes.
   for (const host of hosts.slice(1))
     await fs.cp(first, path.join(output, host, "plugins/tent"), { recursive: true });
   for (const host of hosts) {

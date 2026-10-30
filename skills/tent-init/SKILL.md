@@ -12,6 +12,6 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows.
 | Pick the Workspace | The folder the user names, else the project root; reuse an existing `.tent/` | — |
 | Create the Tent | `tent new <root>` | `Created Tent` line |
 | Enable Hooks | Follow [Hooks](references/host-hooks.md) | `/hooks` |
-| The project already has files | [Map it](references/map.md) | the map at the `tent ui` address |
+| The project already has files | [Map it](references/map.md) | the part tree from `check-modules --json` |
 
 A project with no files yet starts with no Nodes; add them with tent-node as work produces facts.

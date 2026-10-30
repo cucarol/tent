@@ -407,7 +407,7 @@ test("unknown top-level commands show one command list and runnable help", async
   assert.equal(error.stdout, "");
   assert.equal(
     error.stderr.trimEnd(),
-    "Unknown command: tent frob\nCommands: new node card role workspace ui hook\nNext: tent --help",
+    "Unknown command: tent frob\nCommands: new node card role workspace hook\nNext: tent --help",
   );
   const help = await promisify(execFile)(
     process.execPath,

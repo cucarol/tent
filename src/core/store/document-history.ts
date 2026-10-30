@@ -1,12 +1,7 @@
 import { hasDocumentHistory } from "./history-port.js";
 import type { FsAdapter } from "./adapter.js";
 import type { CaptureMetadata, DocumentVersion } from "./history-port.js";
-import { isNodeNotePath, MUTATION_LOCK_PATH, CANVAS_PATH } from "../base/paths.js";
-
-/** Retained files also include the canvas, which has no Node/Role/Card identity. */
-export function isHistoryFile(file: string): boolean {
-  return file === CANVAS_PATH || isHistoryDocument(file);
-}
+import { isNodeNotePath, MUTATION_LOCK_PATH } from "../base/paths.js";
 
 /** Identity documents participate; operational caches do not. */
 export function isHistoryDocument(file: string): boolean {

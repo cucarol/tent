@@ -14,7 +14,6 @@ import {
 } from "../src/core/check/workspace-draft.js";
 import { checkModuleMap } from "../src/core/check/module-map.js";
 import { checkWorkspaceModules } from "../src/core/check/workspace-module-map.js";
-import { readModuleDependencies } from "../src/core/graph/module-dependencies.js";
 import type { WorkspaceScanResult } from "../src/core/check/workspace-scan.js";
 import { nodeWriteBatchInputSchema } from "../src/core/write/node-write-batch.js";
 import { loadTent } from "../src/core/store/tree.js";
@@ -746,14 +745,6 @@ test("hierarchical draft writes once after renaming a parent and preserves child
   );
   assert.ok(actual.modules.every((module) => module.productionFiles <= 10));
   assert.ok(actual.modules.some((module) => module.path.startsWith("Library product/library/")));
-  const deps = await readModuleDependencies(adapter, root, {
-    basis: { head: repository.head },
-    sources: repository.sources.files,
-  });
-  assert.equal(deps.unresolved, 0);
-  const rootPackage = actual.modules.find((module) => module.name === "Root Go package")!;
-  const command = actual.modules.find((module) => module.files.includes("cmd/tool/main.go"))!;
-  assert.ok(deps.edges.some((edge) => edge.from === command.id && edge.to === rootPackage.id));
 });
 
 test("a size-split cycle stays small when the Agent records its linked exception in a child prompt", async (t) => {

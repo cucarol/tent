@@ -14,12 +14,10 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "allowJs": false,
-    "noEmit": true,
-    "jsx": "react-jsx"
+    "noEmit": true
   },
   "include": [
     "src/**/*.ts",
-    "src/**/*.tsx",
     "test/**/*.ts"
   ]
 }

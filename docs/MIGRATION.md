@@ -28,3 +28,12 @@ Fixed-source resource validation covers document-relative and bundle-root addres
 After auditing, an operator may place the converted graph in the copied workspace and validate it through normal reads. Retain the original copy and external audit until that validation and independent review are complete. Switching a live workspace is a separate explicit action.
 
 SQLite uses DELETE rollback journals with synchronous EXTRA. Markdown and the database remain separate resources joined by Core's durable file journal and mutation lock. Process-termination checks validate recovery boundaries; they do not establish physical power-loss behavior. The minimum runtime is Node 22.19.0, and CI covers that minimum and the current Node LTS on Windows, macOS and Linux.
+
+## Map layout from 0.2.0
+
+Tent 0.2.0 kept the web map's layout in `.tent/canvas.json`, with its history. Later versions have no map and do not accept that file in history. Run this once in each workspace from 0.2.0; a workspace still on private-Git history takes the migration above first.
+
+1. Stop every agent session, Hook and `tent ui` that writes to the workspace.
+2. Download [remove-canvas-history.mjs](../scripts/one-off/remove-canvas-history.mjs) and run `node remove-canvas-history.mjs <project folder>`. It needs only Node.js 22.19+.
+
+It deletes `.tent/canvas.json` and the layout entries in `.tent/.git/history.sqlite`, then prints a JSON summary of what it removed. Nodes, Roles, Cards and every event's identity, time and parent stay unchanged; an event that only changed the layout stays as an empty event. It refuses to run while a write is unsettled, and a second run changes nothing.

@@ -221,10 +221,6 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
     if (!excluded.has(entry))
       await fs.cp(path.join(repoRoot, entry), path.join(packSource, entry), { recursive: true });
   }
-  const probes = ["ui-dist/snapshot.json", `ui-dist/pack-probe-${path.basename(packSource)}.map`];
-  for (const probe of probes) {
-    await fs.writeFile(path.join(packSource, probe), "Private development data must not ship");
-  }
   const packed = await runOk(
     process.execPath,
     [
@@ -241,22 +237,8 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
   const packageInfo = JSON.parse(packed.stdout)[0];
   const packedPaths = packageInfo.files.map((entry: { path: string }) => entry.path);
   assert.ok(packedPaths.includes("cli.mjs"));
-  for (const file of [
-    "index.html",
-    "theme.js",
-    "app.js",
-    "app.css",
-    "favicon.svg",
-    "THIRD_PARTY_NOTICES.txt",
-  ])
-    assert.ok(packedPaths.includes(`ui-dist/${file}`), `UI asset is packed: ${file}`);
   assert.equal(
-    packedPaths.some((file: string) => file.startsWith("ui-dist/fonts/")),
-    false,
-  );
-  for (const probe of probes) assert.equal(packedPaths.includes(probe), false);
-  assert.equal(
-    packedPaths.some((file: string) => file.startsWith("ui-dist/") && file.endsWith(".map")),
+    packedPaths.some((file: string) => file.startsWith("ui-dist/")),
     false,
   );
   assert.equal(packedPaths.includes("service.mjs"), false);
@@ -324,10 +306,11 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
     assert.equal(await exists(path.join(workspace, ".tent", "index.md")), true);
     const help = await runOk(process.execPath, [cli, "--help"], workspace);
     assert.match(help.stdout, /tent node/);
-    assert.match(
-      (await runOk(process.execPath, [cli, "ui", "--help"], workspace)).stdout,
-      /foreground/,
-    );
+    const retiredUi = await run(process.execPath, [cli, "ui", "--help"], workspace);
+    assert.equal(retiredUi.code, 1);
+    assert.equal(retiredUi.stdout, "");
+    assert.match(retiredUi.stderr, /^Unknown command: tent ui\n/);
+    assert.doesNotMatch(help.stdout, /\btent ui\b/);
     assert.doesNotMatch(help.stdout, /new-box|tent migrate\b|--vault/);
     assert.equal(await exists(path.join(installed, "service.mjs")), false);
     assert.deepEqual(installedPackage.bin, { tent: "./cli.mjs" });

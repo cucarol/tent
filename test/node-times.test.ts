@@ -1,7 +1,6 @@
-import { openTestService } from "./node-fs.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
-import { isHistoryFile } from "../src/core/store/document-history.js";
+import { isHistoryDocument } from "../src/core/store/document-history.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,7 +11,6 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { readNodeTimes } from "../src/core/read/node-times.js";
-import { startUiServer } from "../src/ui-server/server.js";
 import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
 
 const stamp = (n: number) => `2026-01-${String(n).padStart(2, "0")}T00:00:00.000Z`;
@@ -33,7 +31,7 @@ async function fixture(t: TestContext) {
         const file = directory ? `${directory}/${entry.name}` : entry.name;
         if (entry.isDir) {
           if (![".git", "temp"].includes(entry.name)) await visit(file);
-        } else if (isHistoryFile(file)) files.push(file);
+        } else if (isHistoryDocument(file)) files.push(file);
       }
     }
     await visit("");
@@ -207,39 +205,4 @@ test("missing or partial history cannot invent times or discard another Node's r
   assert.deepEqual(await readNodeTimes(adapter, []), []);
   await assert.rejects(readNodeTimes(adapter, ["../A"]), /canonical Node/);
   await assert.rejects(readNodeTimes(adapter, ["node-missing"]), /Node not found/);
-});
-
-test("time HTTP query is authenticated, selected, fresh for native edits and read-only", async (t) => {
-  const { root, adapter, save, commit } = await fixture(t);
-  await save("Rule", { id: "node-rule", type: "prompt" });
-  await commit(1);
-  const server = await openTestService({ workspaceRoot: root, staticDir: root, port: 0 });
-  t.after(() => server.close());
-  const url = new URL(server.url);
-  const endpoint = new URL("/api/nodes/times?nodeId=node-rule", url);
-  const headers = { Authorization: `Bearer ${url.hash.slice("#token=".length)}` };
-  assert.equal((await fetch(endpoint)).status, 401);
-  const read = async () => {
-    const res = await fetch(endpoint, { headers });
-    assert.equal(res.status, 200);
-    return res.json();
-  };
-  assert.deepEqual(await read(), [
-    { nodeId: "node-rule", contentChangedAt: stamp(1), recordedAt: null },
-  ]);
-  const head = await adapter.history.currentCommit();
-  await save("Rule", { id: "node-rule", type: "prompt" }, "Edited natively");
-  assert.deepEqual(await read(), [
-    { nodeId: "node-rule", contentChangedAt: null, recordedAt: null },
-  ]);
-  assert.equal(await adapter.history.currentCommit(), head);
-  assert.equal((await fetch(new URL("/api/nodes/times?nodeId=bad", url), { headers })).status, 422);
-  assert.equal(
-    (await fetch(new URL("/api/nodes/times?nodeId=node-missing", url), { headers })).status,
-    404,
-  );
-  assert.equal(
-    await adapter.readFile("Rule/Rule.md"),
-    serializeFrontmatter({ id: "node-rule", type: "prompt" }, "Edited natively"),
-  );
 });

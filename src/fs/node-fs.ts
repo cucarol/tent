@@ -19,7 +19,7 @@ import {
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CaptureMetadata } from "../core/store/history-port.js";
 import { SqliteDocumentHistory, sqliteContentFingerprint } from "../core/store/sqlite-history.js";
-import { isHistoryDocument, isHistoryFile } from "../core/store/document-history.js";
+import { isHistoryDocument } from "../core/store/document-history.js";
 import { durableMkdir, durableReplace, syncDirectory } from "./durable-file.js";
 import { observeMaterialResource, readStructureSource } from "./source-observation.js";
 import { withStructureSnapshot, withoutStructureSnapshot } from "./structure-observation.js";
@@ -38,7 +38,6 @@ import { loadNodeCatalog } from "../core/graph/node-catalog.js";
 import { materialLocator, localMaterialPath, type MaterialLocator } from "../core/base/material.js";
 import { assertSystemMaterial } from "../core/graph/material-target.js";
 import { materialIsTracked } from "./material-tracking.js";
-import { createHash } from "node:crypto";
 import { documentHeader } from "../core/graph/node-catalog.js";
 import { ReaderError } from "../core/graph/context-reader.js";
 import {
@@ -544,7 +543,7 @@ export class NodeFs implements FsAdapter {
     await durableReplace(abs, content, "utf8");
     if (isHookGraphFile(path) && this.graphWrites.getStore())
       this.graphWrites.getStore()!.changed = true;
-    if (tracked && isHistoryFile(path)) tracked.set(path, content);
+    if (tracked && isHistoryDocument(path)) tracked.set(path, content);
   }
 
   async readBinary(path: string): Promise<Uint8Array> {
@@ -634,29 +633,6 @@ export class NodeFs implements FsAdapter {
     }
   }
 
-  async readContentDigest(path: string): Promise<{ size: number; digest: string }> {
-    await this.ready();
-    return withFileReadScope(() =>
-      scopedRead(`digest:${this.abs(path)}`, async () => {
-        await checkedSourceFile(this.root, this.abs(path));
-        const state = fileState(await fs.stat(this.abs(path), { bigint: true }));
-        const cache = await this.readCacheFile();
-        const key = `digest:${this.abs(path)}`;
-        const cached = await cachedFileValue(
-          cache,
-          key,
-          state,
-          (value): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
-        );
-        if (cached !== undefined) return { size: Number(state.size), digest: cached };
-        const { bytes, state: observed } = await this.readBytes(path, true);
-        const digest = createHash("sha256").update(bytes).digest("hex");
-        await rememberFileValue(cache, key, observed, digest);
-        return { size: bytes.length, digest };
-      }),
-    );
-  }
-
   async writeBinary(path: string, data: Uint8Array): Promise<void> {
     forgetScopedReads();
     const abs = this.abs(path);
@@ -671,7 +647,7 @@ export class NodeFs implements FsAdapter {
     await durableReplace(abs, payload);
     if (isHookGraphFile(path) && this.graphWrites.getStore())
       this.graphWrites.getStore()!.changed = true;
-    if (tracked && isHistoryFile(path))
+    if (tracked && isHistoryDocument(path))
       tracked.set(path, new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(payload));
   }
 
@@ -712,8 +688,9 @@ export class NodeFs implements FsAdapter {
       await syncDirectory(parent);
     if (tracked)
       for (let i = 0; i < files.length; i++) {
-        if (isHistoryFile(files[i]!)) tracked.set(files[i]!, null);
-        if (isHistoryFile(targets[i]!)) tracked.set(targets[i]!, await this.readFile(targets[i]!));
+        if (isHistoryDocument(files[i]!)) tracked.set(files[i]!, null);
+        if (isHistoryDocument(targets[i]!))
+          tracked.set(targets[i]!, await this.readFile(targets[i]!));
       }
   }
 
@@ -730,7 +707,7 @@ export class NodeFs implements FsAdapter {
     if ((isHookGraphFile(path) || files.some(isNodeNotePath)) && this.graphWrites.getStore())
       this.graphWrites.getStore()!.changed = true;
     if (present) await syncDirectory(nodePath.dirname(this.abs(path)));
-    if (tracked) for (const file of files) if (isHistoryFile(file)) tracked.set(file, null);
+    if (tracked) for (const file of files) if (isHistoryDocument(file)) tracked.set(file, null);
   }
 
   async removeEmptyDir(path: string): Promise<void> {
@@ -842,7 +819,7 @@ export class NodeFs implements FsAdapter {
     if (!tracked) return;
     const before = [];
     const expected = new Map<string, string | null>();
-    for (const path of new Set(paths.filter(isHistoryFile))) {
+    for (const path of new Set(paths.filter(isHistoryDocument))) {
       const raw = await this.readFile(path).catch((error) => {
         if (error.code === "ENOENT") return null;
         throw error;

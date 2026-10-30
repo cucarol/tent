@@ -1,4 +1,3 @@
-import { openTestService } from "./node-fs.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -21,14 +20,11 @@ import { createRoleContext } from "../src/core/read/role-context.js";
 import { inspectCurrentContext, makeContextBrief } from "../src/core/read/context-brief.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
-import { startUiServer } from "../src/ui-server/server.js";
 import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "card-order-"));
-  const ownedServers: Array<{ close(): Promise<void> }> = [];
   t.after(async () => {
-    for (const server of ownedServers) await server.close();
     await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
   await initializeFixtureWorkspace(root);
@@ -45,7 +41,7 @@ async function fixture(t: TestContext) {
     });
   const pending = async (roleId: string, includeOpen = false) =>
     (await watchCardDocuments(adapter, roleId, 0, { includeOpen })).map((item) => item.cardId);
-  return { root, adapter, create, pending, ownedServers };
+  return { root, adapter, create, pending };
 }
 
 test("fractional Card keys retain exact default ties and allow repeated insertion at every boundary", () => {
@@ -302,8 +298,8 @@ test("watch emits the role queue, then opted-in public queue, then returns in re
   }
 });
 
-test("CLI and HTTP pass queue placement and expose the same snapshot key", async (t) => {
-  const { root, adapter, create, ownedServers } = await fixture(t);
+test("CLI passes queue placement", async (t) => {
+  const { root, create } = await fixture(t);
   const a = await create("card-a", "role-a"),
     b = await create("card-b", "role-a"),
     open = await create("card-open");
@@ -333,28 +329,4 @@ test("CLI and HTTP pass queue placement and expose the same snapshot key", async
     ).exitCode,
     1,
   );
-  const server = await openTestService({ workspaceRoot: root, staticDir: root, port: 0 });
-  ownedServers.push(server);
-  const url = new URL(server.url),
-    headers = {
-      Authorization: `Bearer ${url.hash.slice(7)}`,
-      Origin: url.origin,
-      "Content-Type": "application/json",
-    };
-  const endpoint = new URL(`/api/cards/${open.cardId}/move`, url);
-  const body = JSON.stringify({ target: "role-a", after: b.cardId, baseEtag: open.etag });
-  assert.equal((await fetch(endpoint, { method: "POST", body })).status, 401);
-  const response = await fetch(endpoint, { method: "POST", body, headers });
-  assert.equal(response.status, 200, await response.clone().text());
-  assert.equal((await fetch(endpoint, { method: "POST", body, headers })).status, 409);
-  const snapshotResponse = await fetch(new URL("/api/snapshot", url), { headers });
-  assert.equal(snapshotResponse.status, 200);
-  const snapshot = await snapshotResponse.json();
-  const cards = (await listCardDocuments(adapter, { roleId: "role-a", state: "pending" })).items;
-  assert.deepEqual(
-    cards.map((x) => x.cardId),
-    [b.cardId, open.cardId, a.cardId],
-  );
-  for (const item of cards)
-    assert.equal(snapshot.cards.find((x: any) => x.id === item.cardId).orderKey, item.orderKey);
 });

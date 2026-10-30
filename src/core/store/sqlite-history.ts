@@ -17,7 +17,7 @@ import { unifiedLineDiff } from "./line-diff.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { nodeBasisRecordSchema, type NodeBasisRecord } from "../base/node-basis-record.js";
 import { isNodeId, isRoleId, isCardId } from "../base/id.js";
-import { isHistoryFile, isHistoryDocument } from "./document-history.js";
+import { isHistoryDocument } from "./document-history.js";
 import type { DocumentHistory } from "./history-port.js";
 import type {
   CaptureMetadata,
@@ -40,7 +40,7 @@ export function sqliteContentFingerprint(raw: string): string {
 }
 function checkedPath(file: string) {
   if (
-    !isHistoryFile(file) ||
+    !isHistoryDocument(file) ||
     /[\\:\x00-\x1f\x7f]/.test(file) ||
     file.split("/").some((p) => !p || p === "." || p === "..")
   )

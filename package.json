@@ -1,6 +1,6 @@
 {
   "name": "vibe-tent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A local Workspace context graph for durable Nodes, immutable Cards, optional Roles, and Agent plugin workflows.",
   "type": "module",
   "bin": {
@@ -9,9 +9,6 @@
   "files": [
     "cli.mjs",
     "migrate-history.mjs",
-    "ui-dist/",
-    "!ui-dist/snapshot.json",
-    "!ui-dist/**/*.map",
     "manifest.json",
     "skills/",
     "skill-resources/",
@@ -36,16 +33,14 @@
     "test:fast": "node --import tsx scripts/run-tests.ts fast",
     "test:integration": "node --import tsx scripts/run-tests.ts integration",
     "typecheck": "tsc -noEmit",
-    "format": "prettier --write \"{src,test,scripts}/**/*.{ts,tsx,mjs}\" esbuild.config.mjs",
-    "format:check": "prettier --check \"{src,test,scripts}/**/*.{ts,tsx,mjs}\" esbuild.config.mjs",
+    "format": "prettier --write \"{src,test,scripts}/**/*.{ts,mjs}\" esbuild.config.mjs",
+    "format:check": "prettier --check \"{src,test,scripts}/**/*.{ts,mjs}\" esbuild.config.mjs",
     "security:audit": "npm audit --omit=dev --audit-level=high",
     "okf:check": "node scripts/okf-check.mjs",
     "okf:check:links": "node scripts/okf-check.mjs --check-links",
     "okf:upstream": "node scripts/okf-upstream.mjs",
     "check": "npm run format:check && npm run typecheck && npm run build && npm test && npm run okf:check",
-    "prepack": "npm run check",
-    "ui:build": "node scripts/ui-build.mjs",
-    "ui:dev": "node --import tsx scripts/ui-dev.ts"
+    "prepack": "npm run check"
   },
   "keywords": [
     "agent",
@@ -73,28 +68,9 @@
     "access": "public"
   },
   "devDependencies": {
-    "@antv/hierarchy": "^0.7.1",
-    "@codemirror/autocomplete": "^6.20.3",
-    "@codemirror/commands": "^6.11.1",
-    "@codemirror/lang-markdown": "^6.5.2",
-    "@codemirror/language": "^6.12.4",
-    "@codemirror/search": "^6.7.2",
-    "@codemirror/state": "^6.7.6",
-    "@codemirror/view": "^6.43.13",
-    "@lezer/highlight": "^1.2.5",
-    "@types/d3-hierarchy": "^3.1.7",
     "@types/node": "^22.0.0",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@xyflow/react": "^12.12.0",
-    "d3-hierarchy": "^3.1.2",
-    "dompurify": "^3.4.17",
     "esbuild": "^0.28.1",
-    "marked": "^15.0.12",
     "prettier": "3.9.9",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "supports-color": "^8.1.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   },

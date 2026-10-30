@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Body links ending in `/` accept existing local directories. The Web UI browses Workspace directories one level at a time in the file panel, with file previews and parent navigation.
+- The bundled Web UI and `tent ui` command are removed. The init Skill shows the part tree from `tent workspace check-modules --json`. Workspaces from 0.2.0 run a one-shot script that removes the map layout from history; see [Migration](MIGRATION.md#map-layout-from-020).
+- Body links ending in `/` accept existing local directories.
 - Interrupted saves recover as a complete old or new transaction on the next Tent open; `tent workspace repair` restores damaged Tent history while preserving other edits.
 
 ## 0.2.0

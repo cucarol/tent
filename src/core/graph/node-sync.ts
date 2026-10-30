@@ -634,13 +634,6 @@ export async function inspectNodesSync(
 export type OutputChange =
   { kind: "material"; resource: string } | { kind: "goal"; nodeId: string; name: string };
 
-export type OutputComparison = {
-  nodeId: string;
-  /** Nearest goal first. Unknown never implies a change or a match. */
-  goals: Array<{ goalId: string; state: "current" | "changed" | "unknown" }>;
-  changedSince: OutputChange[];
-};
-
 function outputChanges(inspection: NodeSyncInspection, catalog: NodeCatalog): OutputChange[] {
   const changed = inspection.materials.filter((material) => material.state === "changed");
   const own: OutputChange[] = changed
@@ -658,43 +651,6 @@ function outputChanges(inspection: NodeSyncInspection, catalog: NodeCatalog): Ou
     name: catalog.byId.get(id)!.name,
   }));
   return [...own, ...goals];
-}
-
-/** One selected batch shares the existing sync observation; it never acknowledges a baseline. */
-export async function readOutputComparisons(
-  fs: FsAdapter,
-  nodeIds: readonly string[],
-): Promise<OutputComparison[]> {
-  if (!Array.isArray(nodeIds) || nodeIds.some((id) => !isNodeId(id)))
-    throw new ReaderError("INVALID_INPUT", "Expected canonical output Node ids");
-  if (!nodeIds.length) return [];
-  fs = readOnlyFs(fs);
-  const catalog = await loadNodeCatalog(fs);
-  const selected = [...new Set(nodeIds)].map((id) => {
-    const node = catalog.byId.get(id);
-    if (!node) throw new ReaderError("NOT_FOUND", `Node not found: ${id}`);
-    if (!isOutputNode(node))
-      throw new ReaderError("INVALID_INPUT", `Expected an output Node: ${id}`);
-    return node;
-  });
-  const inspections = await inspectCatalogNodes(fs, catalog, selected, new Date().toISOString());
-  return inspections.nodes.map((inspection, index) => ({
-    nodeId: inspection.nodeId,
-    goals: (
-      inspection.goalIds ?? goalAncestors(selected[index]!, catalog.byId).map((g) => g.nodeId)
-    ).map((goalId) => {
-      const materials = inspection.materials.filter((material) => material.goalId === goalId);
-      const state: OutputComparison["goals"][number]["state"] = inspection.uncertain
-        ? "unknown"
-        : materials.some((material) => material.state === "changed")
-          ? "changed"
-          : materials.length && materials.every((material) => material.state === "current")
-            ? "current"
-            : "unknown";
-      return { goalId, state };
-    }),
-    changedSince: outputChanges(inspection, catalog),
-  }));
 }
 
 /** Informational comparisons never contribute output behind findings. */

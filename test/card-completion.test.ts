@@ -14,7 +14,6 @@ import {
   takeCardDocument,
 } from "../src/core/graph/card-document.js";
 import { inspectCurrentContext, makeContextBrief } from "../src/core/read/context-brief.js";
-import { readWorkspaceRevision } from "../src/core/workspace/workspace-revision.js";
 import { checkGraph } from "../src/core/check/graph-check.js";
 import { git } from "./helpers.js";
 
@@ -73,7 +72,7 @@ async function fixture(t: TestContext) {
   return { workspace, root, adapter, cache };
 }
 
-test("brief validates only unfinished headers and UI revisions skip retained completed bytes", async (t) => {
+test("brief validates only unfinished headers and skips retained completed bytes", async (t) => {
   const { adapter } = await fixture(t);
   assert.deepEqual([...(await completedCardPaths(adapter))].sort(), [
     "cards/card-closed.md",
@@ -104,13 +103,10 @@ test("brief validates only unfinished headers and UI revisions skip retained com
     "cards/card-working.md",
   ]);
   assert.equal(cardDirectories, 1);
-  const revision = await readWorkspaceRevision(adapter);
   await adapter.writeFile("cards/card-plain.md", "---\nid: [broken\n");
-  assert.equal(await readWorkspaceRevision(adapter), revision);
   assert.deepEqual(makeContextBrief(await inspectCurrentContext(adapter)), brief);
   const pending = await adapter.readFile("cards/card-pending.md");
   await adapter.writeFile("cards/card-pending.md", pending.replace("Original", "Changed"));
-  assert.notEqual(await readWorkspaceRevision(adapter), revision);
   await adapter.writeFile("cards/card-new.md", "---\nid: [broken\n");
   const inspected = await inspectCurrentContext(adapter);
   assert.ok(inspected.cards.items.some((item) => item.cardId === "card-new" && item.diagnostic));

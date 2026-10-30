@@ -63,8 +63,6 @@ export interface FsAdapter {
    * Path traversal defenses must match readFile.
    */
   readBinary(path: string): Promise<Uint8Array>;
-  /** Content digest validated against current file state; implementations may reuse an unracy observation. */
-  readContentDigest?(path: string): Promise<{ size: number; digest: string }>;
   /**
    * Write raw bytes. Prefer atomic temp+rename where the backend allows.
    * Path traversal defenses must match writeFile.

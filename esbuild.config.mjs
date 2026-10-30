@@ -5,7 +5,6 @@ import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isBuiltin } from "node:module";
 import { syncVersion } from "./scripts/sync-version.mjs";
-import { buildUi } from "./scripts/ui-build.mjs";
 import { buildIdentity } from "./scripts/build-identity.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
@@ -178,7 +177,6 @@ export async function build(buildRoot = root, production = false) {
       buildRoot,
       bundles.map((bundle) => bundle.artifact),
     );
-    await buildUi(buildRoot);
     return;
   }
 

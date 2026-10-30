@@ -3,7 +3,6 @@ import { testScratchRoot } from "./scratch.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
 import { readNode, readNodeForEdit, listNodes, searchNodes } from "../src/core/read/node-query.js";
-import { readDocumentDiff } from "../src/core/read/document-diff.js";
 import {
   createRoleContext,
   editRoleContext,
@@ -309,12 +308,8 @@ test("explicit read capture and Core saves retain only selected documents; histo
   const renamed = await readNodeForEdit(adapter, original.nodeId, { capture: true });
   assert.ok(renamed.version);
   assert.equal((await adapter.retainedDocumentPaths())!.join("\n"), "Renamed/Renamed.md");
-  const diff = await readDocumentDiff(adapter, {
-    from: original.version,
-    to: renamed.version,
-  });
-  assert.equal(diff.pathChanged, true);
-  assert.match(diff.text, /Core save/);
+  assert.notEqual(original.version.path, renamed.version.path);
+  assert.match(await adapter.history.diff(original.version, renamed.version), /Core save/);
   await deleteNode(h.mount.env, original.nodeId);
   const history = await runNodeCommand(
     "get",

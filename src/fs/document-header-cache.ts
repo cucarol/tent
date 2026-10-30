@@ -52,7 +52,7 @@ async function withParsedHeaders<T>(systemRoot: string, action: () => Promise<T>
   }
   const { result, used } = await withFrontmatterCache(previous, action);
   if ([...used].some(([key, value]) => previous.get(key) !== value)) {
-    // Metadata-only and narrow UI requests must not erase every other Node's parse.
+    // Metadata-only and narrow requests must not erase every other Node's parse.
     const entries = new Map(previous);
     for (const [key, value] of used) {
       entries.delete(key);

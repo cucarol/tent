@@ -11,7 +11,7 @@ import {
   sqliteContentFingerprint,
   hasLocalMachinePath,
 } from "../core/store/sqlite-history.js";
-import { isHistoryFile, isHistoryDocument } from "../core/store/document-history.js";
+import { isHistoryDocument } from "../core/store/document-history.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { nodeBasisRecordSchema } from "../core/base/node-basis-record.js";
 import { isNodeId, isRoleId, isCardId } from "../core/base/id.js";
@@ -274,7 +274,7 @@ async function legacyEvents(root: string): Promise<LegacyEvent[]> {
     const row = /^:[0-7]{6} [0-7]{6} ([a-f0-9]+) ([a-f0-9]+) ([AMDT])$/.exec(token);
     if (!row || !current) throw Error(`Invalid legacy history framing: ${token}`);
     const file = fields[i++]!;
-    if (!isHistoryFile(file)) continue;
+    if (!isHistoryDocument(file)) continue;
     if (row[3] === "T")
       throw Error(`Unsupported historical file type change: ${current.id}:${file}`);
     current.changes.push({

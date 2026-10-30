@@ -9,7 +9,6 @@ import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { loadTent, nodeNotePath } from "../src/core/store/tree.js";
 import { NodeFs, SystemClock } from "../src/fs/node-fs.js";
 import { makeTent } from "./helpers.js";
-import { workspaceDocumentPaths } from "../src/core/workspace/workspace-revision.js";
 
 test("Node creation rejects unindexable names before writing and allows nested system basenames", async (t) => {
   const root = await makeTent(t);
@@ -44,7 +43,7 @@ test("Node creation rejects unindexable names before writing and allows nested s
   assert.equal((await loadTent(fs)).byId.get(id)?.path, "prompt/index.md");
 });
 
-test("Node and revision scans never enter transient mutation lock guard directories", async (t) => {
+test("Node scans never enter transient mutation lock guard directories", async (t) => {
   const root = await makeTent(t);
   const fs = openTestFs(root);
   const listDir = fs.listDir.bind(fs);
@@ -66,7 +65,6 @@ test("Node and revision scans never enter transient mutation lock guard director
       : entries;
   };
   assert.equal((await loadTent(fs)).byId.has("node-p1"), true);
-  assert.ok((await workspaceDocumentPaths(fs)).includes("prompt/表达式任务书/表达式任务书.md"));
 });
 
 test("Core loads and extends the typed Node document forest", async (t) => {

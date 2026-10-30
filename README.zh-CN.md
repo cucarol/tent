@@ -6,7 +6,7 @@ Tent 是项目的上下文图谱：记下你定了什么、做出了什么、哪
 
 代码图谱画出代码怎样连在一起。Tent 记的是代码装不下的东西：你的 goal、你给的 prompt，以及由此做出来的 output。Agent 开工前读它，干活时更新它。一条记录依据的代码或文档变了，Tent 会把它标成过时，让它被改正，而不是误导下一个会话。
 
-你拍板，Agent 干活，Tent 记账。它支持 Claude Code 和 Codex，数据只在你的电脑上，你在本地网页里把它当一张图来看。
+你拍板，Agent 干活，Tent 记账。它支持 Claude Code 和 Codex，数据是你电脑上的 Markdown 文件。
 
 ## 快速开始
 
@@ -19,7 +19,7 @@ Tent 是项目的上下文图谱：记下你定了什么、做出了什么、哪
 
    Agent 会把现有代码画成一组 Node，项目的每一块各一个。每个 Node 挂着那块代码，写明改动时必须守住的规则、要跟着一起改的地方，以及怎么验证。做到一半的项目也是这样接进来。
 
-3. **打开图谱。** Agent 最后会启动网页并给你地址。之后想再看，让它打开 Tent 的图谱就行。
+3. **读图谱。** 每个 Node 是 `.tent/` 下的一个 Markdown 文件，套在它的上级下面。用任何编辑器都能打开，也可以直接问 Agent 哪些过时了。
 
 ## Tent 记什么
 
@@ -40,18 +40,9 @@ Tent 是项目的上下文图谱：记下你定了什么、做出了什么、哪
 
 各块之间的依赖从 TypeScript、JavaScript、Python、Go、Rust、Java、C#、C、C++ 和 PHP 的 import 里分析出来。其他语言的代码照样按目录、按 Git 历史里哪些文件总一起改来画图。
 
-## 图谱
-
-网页把 Node 画成一张画布上的卡片，连着它的上级和它依赖的部分。落后和领先标在卡片上。
-
-- 把一张卡拖到另一张上，两张卡就围成一个区域。Tent 用它已经记下的事实说出能核对的部分，比如一份产出还对不对得上它的目标，一条规则的材料在写下之后有没有改过。做得对不对，交给 Agent 判断。
-- 各 Role 在顶栏叠成一排头像，点开是一张列表，写着每个 Role 在做什么、有什么待接。把卡片拖到头像上，放到某个 Role 那一行，就给它写一张 Card。
-- 可以直接编辑 Node，也能在打开过的工作区之间切换。
-- 点正文里以 `/` 结尾的链接，可以在文件面板逐层浏览工作区目录、打开其中的文件。
-
 ## 安装
 
-需要 Node.js 22.19+。Git 用于观察项目仓库、沿用的目录忽略规则解释及初始化时的本地 exclude 步骤；SQLite 历史本身不依赖 Git。旧私有 Git 工作区须先在离线副本上做[一次性迁移](docs/MIGRATION.md)。
+需要 Node.js 22.19+。Git 用于观察项目仓库、沿用的目录忽略规则解释及初始化时的本地 exclude 步骤；SQLite 历史本身不依赖 Git。旧私有 Git 工作区须先在离线副本上做[一次性迁移](docs/MIGRATION.md)。0.2.0 的工作区升级后跑一次[清理脚本](docs/MIGRATION.md#map-layout-from-020)；没用过图谱的跑了也不会改什么。
 
 **Claude Code：**
 
@@ -67,7 +58,7 @@ claude plugin install tent --marketplace "https://github.com/cucarol/tent.git#pl
 codex plugin marketplace add cucarol/tent --ref plugin-dist && codex plugin add tent@tent
 ```
 
-每个插件都自带四个 Skill、SessionStart、UserPromptSubmit、PostToolUse 和 Stop 四个 Hook、CLI 和网页，不需要 npm install。Claude Code 装上插件 Hook 就启用；Codex 会请你审查它们。不启用 Hook，所有命令照样能用。详见 [docs/PLUGIN.md](docs/PLUGIN.md)。
+每个插件都自带四个 Skill、SessionStart、UserPromptSubmit、PostToolUse 和 Stop 四个 Hook 和 CLI，不需要 npm install。Claude Code 装上插件 Hook 就启用；Codex 会请你审查它们。不启用 Hook，所有命令照样能用。详见 [docs/PLUGIN.md](docs/PLUGIN.md)。
 
 也可以把下面这段发给你的 Agent：
 
@@ -120,7 +111,7 @@ tent node get <prompt-id> --full --json
 tent node confirm <prompt-id> --base-etag <etag>
 ```
 
-替换内容的写入必须带上读到的 ETag，两个会话不会悄悄覆盖对方。网页用 `tent ui --workspace <项目文件夹>` 启动，Ctrl+C 停止。精确规则见 [docs/SPEC.md](docs/SPEC.md)。
+替换内容的写入必须带上读到的 ETag，两个会话不会悄悄覆盖对方。精确规则见 [docs/SPEC.md](docs/SPEC.md)。
 
 ## 现状
 
@@ -132,7 +123,6 @@ Tent 0.x 由一个人维护。文件格式和命令还可能变；[docs/SPEC.md]
 npm ci
 npm run build
 npm run test:fast
-npm run ui:dev -- --workspace <项目文件夹>
 ```
 
 见 [CONTRIBUTING.md](CONTRIBUTING.md)。

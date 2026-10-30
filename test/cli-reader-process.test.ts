@@ -10,7 +10,6 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { test } from "node:test";
-import { readDocumentDiff } from "../src/core/read/document-diff.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { cli, git } from "./helpers.js";
@@ -92,9 +91,8 @@ test("separate CLI processes continue discovery, live and Git reads with checked
   const current = await read("get", "node-alpha");
   await read("check", "node-alpha");
   const currentVersion = { commit: (await adapter.history.currentCommit())!, path: "A/A.md" };
-  const diff = await readDocumentDiff(openTestFs(tent), { from: firstVersion, to: currentVersion });
-  assert.equal(diff.text, await openTestFs(tent).history.diff(firstVersion, currentVersion));
-  assert.ok(diff.text.includes("-DATA") && diff.text.includes("+NEW"));
+  const diff = await adapter.history.diff(firstVersion, currentVersion);
+  assert.ok(diff.includes("-DATA") && diff.includes("+NEW"));
   await reject(
     ["get", "node-beta", "--cursor", current.page.nextCursor],
     /another source or query/,
