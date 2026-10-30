@@ -118,33 +118,35 @@ test("mutation lock rejects a concurrent holder and releases for the next", asyn
     removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
   const lockPath = path.join(dir, "mutation.lock");
-  let release!: () => void;
+  let acquired!: () => void, release!: () => void;
+  const ready = new Promise<void>((resolve) => (acquired = resolve));
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const first = withFileMutationLock(lockPath, () => held, {
-    busyMessage: "busy",
-    acquireFailedMessage: "failed",
-  });
-  while (
-    !(await fs.stat(lockPath).then(
-      () => true,
-      () => false,
-    ))
-  ) {
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-  assert.ok((await readMutationLockRecord(lockPath))?.ownerToken);
-  await assert.rejects(
-    () =>
-      withFileMutationLock(lockPath, async () => undefined, {
-        busyMessage: "busy",
-        acquireFailedMessage: "failed",
-      }),
-    /busy/,
+  const first = withFileMutationLock(
+    lockPath,
+    () => {
+      acquired();
+      return held;
+    },
+    { busyMessage: "busy", acquireFailedMessage: "failed" },
   );
-  release();
-  await first;
+  try {
+    // File creation precedes record publication; the action proves acquisition is complete.
+    await Promise.race([ready, first]);
+    assert.ok((await readMutationLockRecord(lockPath))?.ownerToken);
+    await assert.rejects(
+      () =>
+        withFileMutationLock(lockPath, async () => undefined, {
+          busyMessage: "busy",
+          acquireFailedMessage: "failed",
+        }),
+      /busy/,
+    );
+  } finally {
+    release();
+    await first;
+  }
   await withFileMutationLock(lockPath, async () => undefined, {
     busyMessage: "busy",
     acquireFailedMessage: "failed",
