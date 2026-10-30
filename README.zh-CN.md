@@ -18,6 +18,7 @@ Tent 是项目的上下文图谱：记下你定了什么、做出了什么、哪
    ```
 
    Agent 会把现有代码画成一组 Node，项目的每一块各一个。每个 Node 挂着那块代码，写明改动时必须守住的规则、要跟着一起改的地方，以及怎么验证。做到一半的项目也是这样接进来。
+
 3. **打开图谱。** Agent 最后会启动网页并给你地址。之后想再看，让它打开 Tent 的图谱就行。
 
 ## Tent 记什么
@@ -66,7 +67,7 @@ claude plugin install tent --marketplace "https://github.com/cucarol/tent.git#pl
 codex plugin marketplace add cucarol/tent --ref plugin-dist && codex plugin add tent@tent
 ```
 
-每个插件都自带四个 Skill、SessionStart 和 Stop 两个 Hook、CLI 和网页，不需要 npm install。Claude Code 装上插件 Hook 就启用；Codex 会请你审查它们。不启用 Hook，所有命令照样能用。详见 [docs/PLUGIN.md](docs/PLUGIN.md)。
+每个插件都自带四个 Skill、SessionStart、UserPromptSubmit、PostToolUse 和 Stop 四个 Hook、CLI 和网页，不需要 npm install。Claude Code 装上插件 Hook 就启用；Codex 会请你审查它们。不启用 Hook，所有命令照样能用。详见 [docs/PLUGIN.md](docs/PLUGIN.md)。
 
 也可以把下面这段发给你的 Agent：
 

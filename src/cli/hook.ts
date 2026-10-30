@@ -7,9 +7,10 @@ import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import { loadStopMaterialIndex } from "../fs/stop-material-index.js";
 import { recordSectionFingerprints } from "../fs/section-fingerprint-baseline.js";
 import { readBuildIdentity, formatBuildIdentity, sourceBuildMismatch } from "./build-identity.js";
+import { seedSessionTurnDirty } from "../fs/turn-dirty-baseline.js";
 
 export const hookHelp =
-  "tent hook start|stop --host codex|claude-code\nNative hook input is one JSON object on stdin. No Session registration or prompt baseline.\n";
+  "tent hook start|stop --host codex|claude-code\nNative hook input is one JSON object on stdin. start prepares the session's coverage; stop does nothing. Turn-end reminders come from the plugin's own UserPromptSubmit and Stop hooks.\n";
 
 export async function runHookCommand(
   sub: string,
@@ -22,7 +23,7 @@ export async function runHookCommand(
     (sub === "stop" && args.some((arg) => arg === "--help" || arg === "-h"))
   )
     return { ...silent, stdout: hookHelp };
-  // Stop must not observe, notify, or ask the host for another model request.
+  // Plugin Stop events use the separate turn runtime; this public no-op reads no input.
   if (sub === "stop") return silent;
   try {
     if (!["start"].includes(sub)) throw new Error(hookHelp);
@@ -62,6 +63,14 @@ export async function runHookCommand(
         discovery.rejectedRootMarkers,
       );
       await recordSectionFingerprints(systemRoot, workspaceRoot, index);
+      if (typeof event.session_id === "string" && event.session_id)
+        await seedSessionTurnDirty(
+          systemRoot,
+          workspaceRoot,
+          event.cwd,
+          values.host,
+          event.session_id,
+        ).catch(() => undefined);
       const command = `node ${JSON.stringify(path.join(options.packageRoot, "cli.mjs"))}`;
       const identity = await readBuildIdentity(options.packageRoot);
       const mismatch = await sourceBuildMismatch(workspaceRoot, identity);

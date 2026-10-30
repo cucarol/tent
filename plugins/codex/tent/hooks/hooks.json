@@ -23,6 +23,28 @@
         ],
         "matcher": "apply_patch|request_user_input|request_user_input_async"
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.PLUGIN_ROOT,'hooks','session.mjs')).href)\" -- prompt",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.PLUGIN_ROOT,'hooks','session.mjs')).href)\" -- stop",
+            "timeout": 60
+          }
+        ]
+      }
     ]
   }
 }

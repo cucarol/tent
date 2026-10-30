@@ -1,5 +1,5 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
-import { testScratchRoot } from "./scratch.js";
+import { initializeFixtureRepository, testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
@@ -23,6 +23,7 @@ async function fixture(t: TestContext) {
   const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "tool-hooks-"));
+  initializeFixtureRepository(root);
   t.after(() =>
     removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
@@ -134,7 +135,7 @@ for (const host of ["codex", "claude-code"] as const)
   for (const prefix of ["", "src/"])
     test(`${host} operational directory aliases preserve platform case and real-write claims (${prefix || "root"})`, async (t) => {
       const { root, systemRoot, event } = await fixture(t);
-      await fs.mkdir(path.join(root, ".git"));
+      await fs.mkdir(path.join(root, ".git"), { recursive: true });
       await fs.writeFile(
         path.join(systemRoot, "Module/Module.md"),
         "---\nid: node-module\ntype: prompt\nsources:\n  - resource: ../../\n    track: structure\n---\nRule\n",

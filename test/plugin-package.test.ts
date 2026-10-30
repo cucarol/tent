@@ -98,6 +98,7 @@ test("both host packages carry the same common payload and separate native shell
   const commonFiles = [
     "cli.mjs",
     "tool-hook.mjs",
+    "turn-hook.mjs",
     "package.json",
     "THIRD_PARTY_NOTICES.txt",
     "LICENSE",
@@ -246,7 +247,8 @@ test("Claude Code Hook commands use their own bundle even when PLUGIN_ROOT point
     });
   const start = JSON.parse(await invoke("SessionStart")).hookSpecificOutput.additionalContext;
   assert.ok(start.includes(JSON.stringify(path.join(bundle, "cli.mjs"))));
-  assert.equal(hooks.Stop, undefined);
+  assert.ok(hooks.Stop);
+  assert.ok(hooks.UserPromptSubmit);
   const { validateHostPackage } = await import(
     new URL("../scripts/validate-plugin.mjs", import.meta.url).href
   );
@@ -357,8 +359,14 @@ test(
     const hooks = JSON.parse(
       await fs.readFile(path.join(bundle, "hooks/hooks.json"), "utf8"),
     ).hooks;
-    assert.deepEqual(Object.keys(hooks).sort(), ["PostToolUse", "SessionStart"]);
-    assert.equal(hooks.Stop, undefined);
+    assert.deepEqual(Object.keys(hooks).sort(), [
+      "PostToolUse",
+      "SessionStart",
+      "Stop",
+      "UserPromptSubmit",
+    ]);
+    assert.ok(hooks.Stop);
+    assert.ok(hooks.UserPromptSubmit);
     const hook = (event: string, extra: Record<string, unknown> = {}) =>
       new Promise<string>((resolve, reject) => {
         const child = exec(
@@ -381,7 +389,8 @@ test(
     assert.ok(start.includes(JSON.stringify(path.join(bundle, "cli.mjs"))));
     assert.match(start, /workspace brief/);
     assert.doesNotMatch(start, /SKILL\.md|\$tent-|reconcile|baseline|sessionToken/);
-    assert.equal(hooks.Stop, undefined);
+    assert.ok(hooks.Stop);
+    assert.ok(hooks.UserPromptSubmit);
     await assert.rejects(fs.access(dataDir), { code: "ENOENT" });
     await assert.rejects(fs.access(trap), { code: "ENOENT" });
     // A broken CLI is not repaired with a cwd/global runtime.

@@ -117,13 +117,16 @@ const shown = (value: string) =>
 export function formatToolTurnReview(
   textByteLimit: number,
   modules: TurnReviewModule[],
+  scope: "tool" | "turn" = "tool",
 ): { message: string; nodeIds: string[] } | undefined {
   const selected = modules
     .slice(0, 5)
     .map((module) => ({ ...module, files: module.files.slice(0, 8) }));
   const render = () =>
     [
-      "Tent: these Nodes cover the file you just changed:",
+      scope === "turn"
+        ? "Tent: these Nodes cover files changed during this turn:"
+        : "Tent: these Nodes cover the file you just changed:",
       ...selected.map(
         (module) =>
           `- ${module.names.map(shown).join(" / ")} (${shown(module.nodeId)}, ${shown(module.path)}): ${module.files.map(shown).join(", ")}`,

@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-type GitCheckout = { root: string; commonDir: string; linked: boolean };
+type GitCheckout = { root: string; gitDir: string; commonDir: string; linked: boolean };
 // node:path follows the host's path comparison semantics (including Windows case).
 const samePath = (left: string, right: string) => path.relative(left, right) === "";
 
@@ -9,7 +9,7 @@ const samePath = (left: string, right: string) => path.relative(left, right) ===
 export async function readGitCheckout(root: string): Promise<GitCheckout | undefined> {
   const marker = path.join(root, ".git");
   const stat = await fs.stat(marker).catch(() => undefined);
-  if (stat?.isDirectory()) return { root, commonDir: marker, linked: false };
+  if (stat?.isDirectory()) return { root, gitDir: marker, commonDir: marker, linked: false };
   if (!stat?.isFile()) return undefined;
   const pointer = await fs.readFile(marker, "utf8").catch(() => "");
   const match = /^gitdir: (.+)\r?$/m.exec(pointer);
@@ -18,6 +18,7 @@ export async function readGitCheckout(root: string): Promise<GitCheckout | undef
   const common = await fs.readFile(path.join(gitDir, "commondir"), "utf8").catch(() => "");
   return {
     root,
+    gitDir,
     commonDir: common.trim() ? path.resolve(gitDir, common.trim()) : gitDir,
     linked: !!common.trim(),
   };

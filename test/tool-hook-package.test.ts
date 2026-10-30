@@ -63,7 +63,12 @@ test(
       const index = await loadStopMaterialIndex(system, workspace);
       await recordSectionFingerprints(system, workspace, index);
       const hooks = JSON.parse(await fs.readFile(path.join(pkg, "hooks/hooks.json"), "utf8")).hooks;
-      assert.deepEqual(Object.keys(hooks).sort(), ["PostToolUse", "SessionStart"]);
+      assert.deepEqual(Object.keys(hooks).sort(), [
+        "PostToolUse",
+        "SessionStart",
+        "Stop",
+        "UserPromptSubmit",
+      ]);
       await fs.rename(path.join(pkg, "cli.mjs"), path.join(pkg, "cli.saved.mjs"));
       const invoke = (event: string, extra: Record<string, unknown> = {}) =>
         new Promise<string>((resolve, reject) => {
@@ -132,7 +137,24 @@ test(
       assert.equal(await write(path.join(workspace, "lib/already-claimed.ts")), "{}\n");
       assert.match(await write(path.join(workspace, "lib/next.ts"), "next"), /node-packaged/);
       assert.match(await write(path.join(workspace, "guide.md")), /node-section/);
-      assert.equal(hooks.Stop, undefined);
+      assert.ok(hooks.Stop);
+      assert.ok(hooks.UserPromptSubmit);
+      await fs.rename(path.join(pkg, "cli.mjs"), path.join(pkg, "cli.saved.mjs"));
+      const turn = { turn_id: "shell-turn", prompt_id: "shell-turn" };
+      assert.equal(await invoke("UserPromptSubmit", { ...turn, prompt: "shell write" }), "{}\n");
+      const turnFile = path.join(workspace, "lib/shell-write.ts");
+      await fs.mkdir(path.dirname(turnFile), { recursive: true });
+      await fs.writeFile(turnFile, "shell write\n");
+      const stop = JSON.parse(await invoke("Stop", turn));
+      assert.equal(stop.decision, "block");
+      assert.match(stop.reason, /^Tent: these Nodes cover files changed during this turn:/);
+      const continuation = { turn_id: "continuation", prompt_id: "continuation" };
+      assert.equal(
+        await invoke("UserPromptSubmit", { ...continuation, prompt: stop.reason }),
+        "{}\n",
+      );
+      assert.equal(await invoke("Stop", { ...continuation, stop_hook_active: true }), "{}\n");
+      assert.equal(await invoke("Stop", continuation), "{}\n");
     }
   },
 );

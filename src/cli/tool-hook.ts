@@ -11,6 +11,7 @@ import {
   unownedFilesForTurn,
 } from "../core/return/tool-turn-review.js";
 import { toolReviewOutput } from "./hook-adapter.js";
+import { turnReviewIdentity } from "../fs/turn-review-state.js";
 import { answeredQuestion, successfulWritePaths } from "./tool-write-event.js";
 import { refreshNativeGraphWrite } from "./native-graph-write.js";
 
@@ -28,7 +29,7 @@ export async function runToolHook(
       !event.session_id
     )
       return silent;
-    const turnId = host === "codex" ? event.turn_id : event.prompt_id;
+    let turnId = host === "codex" ? event.turn_id : event.prompt_id;
     if (typeof turnId !== "string" || !turnId) return silent;
     const files = successfulWritePaths(host, event);
     const answered = answeredQuestion(event);
@@ -37,6 +38,7 @@ export async function runToolHook(
     const prepared = await findPreparedHookWorkspace(event.cwd);
     if (!prepared) return silent;
     const { systemRoot, workspaceRoot, index } = prepared;
+    turnId = await turnReviewIdentity(systemRoot, host, event.session_id, turnId);
     if (answered) {
       if (typeof event.tool_use_id !== "string" || !event.tool_use_id) return silent;
       if (

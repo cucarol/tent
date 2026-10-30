@@ -18,6 +18,7 @@ You decide, agents do the work, and Tent keeps the record. It works with Claude 
    ```
 
    The agent maps the existing code into Nodes, one per part of the project. Each Node owns that part's code and records the rules a change must keep, what else changes with it, and how to verify it. A project you are halfway through can join this way.
+
 3. **Open the map.** The agent finishes by starting the web page and giving you its address. Later, ask it to open the Tent map again.
 
 ## What Tent keeps
@@ -66,7 +67,7 @@ If your Claude Code has no `--marketplace` option, run `claude plugin marketplac
 codex plugin marketplace add cucarol/tent --ref plugin-dist && codex plugin add tent@tent
 ```
 
-Each plugin bundles four Skills, a SessionStart and a Stop Hook, the CLI and the web page; it needs no npm install. Claude Code turns the Hooks on with the plugin. Codex asks you to review them. Every command works without them. Details: [docs/PLUGIN.md](docs/PLUGIN.md).
+Each plugin bundles four Skills, SessionStart, UserPromptSubmit, PostToolUse and Stop Hooks, the CLI and the web page; it needs no npm install. Claude Code turns the Hooks on with the plugin. Codex asks you to review them. Every command works without them. Details: [docs/PLUGIN.md](docs/PLUGIN.md).
 
 Or give your agent this:
 

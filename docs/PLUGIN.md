@@ -1,6 +1,6 @@
 # Tent Agent 插件
 
-插件提供四个 Skill、SessionStart 与 PostToolUse Hook，以及同包 CLI 和独立工具 Hook 运行时。Stop 静默结束。Node、Role、Card 的读写规则在 Core；Skill 按工作需要提供操作指引。
+插件提供四个 Skill、SessionStart、UserPromptSubmit、PostToolUse 和 Stop Hook，以及同包 CLI、独立工具与轮末 Hook 运行时。Node、Role、Card 的读写规则在 Core；Skill 按工作需要提供操作指引。
 
 ## 构建与安装
 
@@ -30,6 +30,7 @@ release/
       skill-resources/
       cli.mjs
       tool-hook.mjs
+      turn-hook.mjs
       wake.mjs
       ui-dist/
       docs/
@@ -44,6 +45,7 @@ release/
       skill-resources/
       cli.mjs
       tool-hook.mjs
+      turn-hook.mjs
       ui-dist/
       docs/
 ```
@@ -154,15 +156,19 @@ Node 正文或语义元数据变化时记录 OKF 原生 `generated: {by, at}`；
 
 ## Hook 边界
 
-SessionStart 先收录待处理的原生 Node 编辑，仅在有待收录改动时拿写锁。随后提示工作区、同包 CLI、`workspace brief` 与构建身份，并准备已有材料索引。不注册 UserPromptSubmit，也不建立 Session 或输入文件基线。插件不注册 Stop，结束时不启动 Tent 命令。既有 CLI `hook stop` 返回空 JSON，不 block、不加 context、不产生额外维护回答。
+SessionStart 先收录待处理的原生 Node 编辑，仅在有待收录改动时拿写锁。随后提示工作区、同包 CLI、`workspace brief` 与构建身份，并准备已有材料索引和首次轮末比较所需的脏路径清单。UserPromptSubmit 只记录轮首时刻和直接读取的 HEAD，不启动 Git、不清点项目文件，不建立 Session 注册或文件内容快照。既有公共 CLI `hook stop` 仍返回空 JSON，不做观察；插件的 UserPromptSubmit 与 Stop 使用独立 `turn-hook.mjs`。
+
+Stop 跑一次正常 Git status 并保存本轮脏路径清单，包括不出声的分支。status 直接列出的路径仅并发 stat 自身；新目录枚举和 HEAD 变化补出的路径保留祖先及忽略检查，同一路径以 status 为准。存在的文件按轮首时刻筛选 mtime，删除对照上次 Stop 的清单，首轮使用 SessionStart 准备的清单；缺少基线则不报删除，缺少有效轮首记录则整轮不提醒。Git status 按仓库配置运行 clean/process 过滤器，Tent 不发现、禁用或修改这些配置。完整候选边界、保留时间戳写入的遗漏与嵌套仓库例外见 SPEC§8。
+
+轮末只为尚未被原生写工具提醒、且有模块或材料 Node 的变化给一次有限的 block 提醒；不为孤立代码单独续作。链到节的变化沿用原生写工具的节指纹规则，只有这些变过的文件允许读内容。active continuation、重复轮末和 Tent 自己的续作保持安静，共享本轮 Node claim，完整 JSON 仍不超过 2 KiB。7,570 文件场景的 UserPromptSubmit 护栏为 100ms，Stop 少量变化为 600ms、全脏为 2s，节内容读取计入 Stop。
 
 成功写文件的 PostToolUse 才提示：Claude Code 的 Write、Edit、MultiEdit、NotebookEdit 需要成功结构化结果与输入路径一致；Codex apply_patch 使用成功结果中实际发布的文件路径，不从输入或 shell 文本猜测。失败、取消、只读、无覆盖以及 Node/Card 维护不提醒。同仓 linked worktree 按各自检出根归一，再匹配主检出的模块；其他仓库不匹配。每轮同一 Node 仅提醒一次，原生宿主/会话/回合身份隔离，独占空 claim 不保存聊天或文件内容。问答工具实际返回非空回答后给专门的记录提醒，取代原先 Stop 的正则意图问题。
 
 模块仍由 Core 按 `sources` 中 `track: structure` 的目录或前缀确定，每个文件只点名最具体的模块，保留并列与祖先名字。英文提醒逐字以 SPEC§8 为准。完整宿主 JSON 不超过 2 KiB，最多五个模块、每模块八个路径；固定行动句完整保留。提醒进入已有工具链的下一请求，无需记录时 Agent 不再额外说明，最后仍给工作总结。
 
-工具 Hook 使用独立 `tool-hook.mjs`，不载入完整 CLI、不起 Git、不读转录、不算 behind、不读取代码内容（Node 链到某一节时只读刚写的这个文件，跟会话开始记下的节指纹比），不等 `mutation.lock`，只读已有材料覆盖、节指纹与临时空 claim。已有索引缺失或损坏则静默，下次 SessionStart 重建；会话中修改 Node 的模块声明到下次启动才刷新。材料索引复用 `.tent/.git/tent-material-cache/stop-material-index.json`，仍由既有 Core 目录/frontmatter 规则生成，不引入常驻服务或新缓存。同一缓存只附加 Core 完整解析过的根 marker 字节身份及实际拒绝候选的字节身份；工具共享原找根与 linked worktree 路由，只有根身份及沿途拒绝证明均匹配时才使用覆盖。普通项目或子目录 index.md 必须有 Core 拒绝证明才能越过，不靠正则另判 YAML；marker 或证明变动后保守静默，等下次 SessionStart 重新准备。每个宿主的普通、未覆盖、已提醒、链到的节改了、没有模块管的代码五种路径分别相邻交替测 11 对工具命令与裸 `node -e 0`，各组每对墙钟差的中位数目标为 ≤100ms；两边都含 Node 启动，Tent 不额外套命令 shell，宿主自带的 shell 不计为 Tent 开销。全部原始配对及离群值保留，不用两组中位数之差或筛选快样本代替。原生宿主与本地模拟模型后端的协议验证不等于真实模型推理或桌面 UI 延迟达标。
+工具 Hook 使用独立 `tool-hook.mjs`，不载入完整 CLI、不起 Git、不读转录、不算 behind、不读取代码内容（Node 链到某一节时只读刚写的这个文件，跟会话开始记下的节指纹比），不等 `mutation.lock`，只读已有材料覆盖、节指纹与临时空 claim。已有索引缺失或损坏则静默；init、Tent 图写入后和原生工具写 `.tent/` 图文件时刷新索引，shell 或外部直改图等下次 SessionStart 刷新，工具路径不加冷准备或新鲜度检查。材料索引复用 `.tent/.git/tent-material-cache/stop-material-index.json`，仍由既有 Core 目录/frontmatter 规则生成，不引入常驻服务或新缓存。同一缓存只附加 Core 完整解析过的根 marker 字节身份及实际拒绝候选的字节身份；工具共享原找根与 linked worktree 路由，只有根身份及沿途拒绝证明均匹配时才使用覆盖。普通项目或子目录 index.md 必须有 Core 拒绝证明才能越过，不靠正则另判 YAML；marker 或证明变动后保守静默，等下次 SessionStart 重新准备。每个宿主的普通、未覆盖、已提醒、链到的节改了、没有模块管的代码五种路径分别相邻交替测 11 对工具命令与裸 `node -e 0`，各组每对墙钟差的中位数目标为 ≤100ms；两边都含 Node 启动，Tent 不额外套命令 shell，宿主自带的 shell 不计为 Tent 开销。全部原始配对及离群值保留，不用两组中位数之差或筛选快样本代替。原生宿主与本地模拟模型后端的协议验证不等于真实模型推理或桌面 UI 延迟达标。
 
-shell 或外部编辑器的路径不能从工具事件可靠识别。不建立输入基线或次轮补报，由 brief、check 的既有领先/落后事实兜底。两个实际宿主须分别验证原生信任、成功写入、context 进入已有下一请求和最后可见工作总结。手工 JSON 只证明处理器，不证明宿主生效。宿主事件契约见 [Codex Hooks](https://learn.chatgpt.com/docs/hooks) 和 [Claude Code Hooks](https://code.claude.com/docs/en/hooks)。
+shell 或外部编辑器的路径不能从工具事件可靠识别，由本轮 Stop 按 Git 净变化规则补报，不推断写入者或读转录。brief、check 仍提供既有领先/落后事实。两个实际宿主须分别验证原生信任、成功写入、context 进入已有下一请求和最后可见工作总结。手工 JSON 只证明处理器，不证明宿主生效。宿主事件契约见 [Codex Hooks](https://learn.chatgpt.com/docs/hooks) 和 [Claude Code Hooks](https://code.claude.com/docs/en/hooks)。
 
 `workspace brief` 在 16 KiB 页面内展示落后与领先两种同步状态计数、最近改过的 Node、未交回的 Card 和工作区问题。后三组各最多 10 条，每行最多 120 个字符；标题可截短，id 不截，省略数量和继续检查的命令写明。保留现有队列和问题优先顺序；来源变化只提醒仍领先的来源 goal。最近变化用留存的绝对时间，不猜上一个会话，也不读会话日志或列未关联产出。根 Node 仍可用 `node list` 查看；Card 行只列身份、状态和标题，接收者及返回地址从列出的 Card 命令读取。`workspace drift` 分页检查完整的领先／落后关系。即使没有 Hook，这两个命令也会重新观察 Node 已声明的本地材料版本。保存 Node 时自动记录新材料版本，已变化或读不到的旧材料保留原基线，普通保存不能清除落后。用 `node check` 查看，复核判断后用 `node confirm`；修正正文可用 `node write --confirm` 同时确认，write-many 更新条目也支持 `confirm: true`。用 `node link-output` 在目标下新建 output Node；全部 goal 祖先都保留比较基线，最近的 goal 作为显示归属。目标变化由 goal 领先表达，旧产物保持冻结；完整读取时用 changedSince 说明此后的变化。基线按 Node ID 与文档保存在同一 SQLite 事件，Markdown 不增加同步或哈希字段。已接收 Card 的 Node 来源变化会在 brief 中提示重读；取消任务用 `card deprecate`，默认列表和简报会隐藏它，显式查看或接收仍会给出警告与现行引用。细节见上文 Node 与 Card 的维护者说明；同步状态不改变 OKF `status`。
 

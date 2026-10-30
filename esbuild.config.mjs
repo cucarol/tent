@@ -118,6 +118,7 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
   for (const [artifact, entry] of [
     ["cli", "src/cli/tent.ts"],
     ["tool-hook", "src/cli/tool-hook-entry.ts"],
+    ["turn-hook", "src/cli/turn-hook-entry.ts"],
     ["migrate-history", "src/cli/migrate-history.ts"],
   ]) {
     const result = await esbuild.build({
@@ -142,7 +143,7 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
       },
     });
     assertCanonicalMetafile(`plugin-${artifact}`, result.metafile);
-    if (artifact === "tool-hook") {
+    if (artifact === "tool-hook" || artifact === "turn-hook") {
       for (const output of Object.values(result.metafile.outputs))
         for (const [input, contribution] of Object.entries(output.inputs))
           if (
@@ -161,7 +162,7 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
         throw new Error(`Plugin has external runtime imports: ${JSON.stringify(unbundled)}`);
     }
   }
-  await assertCanonicalRootArtifacts(outputRoot, ["cli.mjs", "tool-hook.mjs"]);
+  await assertCanonicalRootArtifacts(outputRoot, ["cli.mjs", "tool-hook.mjs", "turn-hook.mjs"]);
   return [...inputs].sort();
 }
 
