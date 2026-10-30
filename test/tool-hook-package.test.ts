@@ -1,4 +1,4 @@
-import { testScratchRoot } from "./scratch.js";
+import { initializeFixtureRepository, testScratchRoot } from "./scratch.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -9,10 +9,11 @@ import { pathToFileURL } from "node:url";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
+import { recordSectionFingerprints } from "../src/fs/section-fingerprint-baseline.js";
 
 test(
-  "both packaged tool launchers deliver context with the full CLI absent",
-  { timeout: 30000 },
+  "both packaged tool launchers load the CLI only for explicit graph refresh and preserve claims/sections",
+  { timeout: 90000 },
   async (t) => {
     const root = process.cwd();
     const scratch = testScratchRoot();
@@ -27,8 +28,10 @@ test(
     const { hostDocuments, validateHostPackage } = await import(
       pathToFileURL(path.join(root, "scripts/validate-plugin.mjs")).href
     );
-    const runtime = path.join(fixture, "runtime");
-    await buildPluginRuntime(root, runtime);
+    const runtime = process.env.TENT_TEST_TOOL_HOOK_RUNTIME
+      ? path.resolve(process.env.TENT_TEST_TOOL_HOOK_RUNTIME)
+      : path.join(fixture, "runtime");
+    if (!process.env.TENT_TEST_TOOL_HOOK_RUNTIME) await buildPluginRuntime(root, runtime);
     for (const host of ["codex", "claude-code"]) {
       const pkg = path.join(fixture, host, "package with spaces");
       await fs.cp(runtime, pkg, { recursive: true });
@@ -42,6 +45,7 @@ test(
       await validateHostPackage(pkg, host);
       const workspace = path.join(fixture, host, "workspace");
       await fs.mkdir(workspace);
+      initializeFixtureRepository(workspace);
       await scaffoldInWorkspace(openTestFs(workspace), { name: "package" });
       const system = path.join(workspace, ".tent");
       await fs.mkdir(path.join(system, ".git"));
@@ -50,7 +54,14 @@ test(
         path.join(system, "Module/Module.md"),
         "---\nid: node-packaged\ntype: prompt\nsources:\n  - resource: ../../src/\n    track: structure\n---\nRule\n",
       );
-      await loadStopMaterialIndex(system, workspace);
+      await fs.mkdir(path.join(system, "Linked"));
+      await fs.writeFile(
+        path.join(system, "Linked/Linked.md"),
+        "---\nid: node-section\ntype: prompt\nsources: [{resource: '../../guide.md#Tracked'}]\n---\nRule\n",
+      );
+      await fs.writeFile(path.join(workspace, "guide.md"), "# Tracked\nbefore\n");
+      const index = await loadStopMaterialIndex(system, workspace);
+      await recordSectionFingerprints(system, workspace, index);
       const hooks = JSON.parse(await fs.readFile(path.join(pkg, "hooks/hooks.json"), "utf8")).hooks;
       assert.deepEqual(Object.keys(hooks).sort(), ["PostToolUse", "SessionStart"]);
       await fs.rename(path.join(pkg, "cli.mjs"), path.join(pkg, "cli.saved.mjs"));
@@ -92,6 +103,35 @@ test(
             : { type: "update", filePath: file },
       });
       assert.match(JSON.parse(output).hookSpecificOutput.additionalContext, /node-packaged/);
+      await fs.writeFile(
+        path.join(system, "Module/Module.md"),
+        "---\nid: node-packaged\ntype: prompt\nsources:\n  - resource: ../../lib/\n    track: structure\n---\nRule\n",
+      );
+      await fs.writeFile(path.join(workspace, "guide.md"), "# Tracked\nafter\n");
+      const graphFile = path.join(system, "Module/Module.md");
+      const write = (filename: string, turn = "turn") =>
+        invoke("PostToolUse", {
+          turn_id: turn,
+          prompt_id: turn,
+          tool_name: host === "codex" ? "apply_patch" : "Write",
+          tool_input:
+            host === "codex"
+              ? { command: "*** Begin Patch\n*** End Patch" }
+              : { file_path: filename },
+          tool_response:
+            host === "codex"
+              ? `Success. Updated the following files:\nM ${filename}\n`
+              : { type: "update", filePath: filename },
+        });
+      // Only explicit graph writes need the CLI export. Without it, ordinary
+      // writes keep reading the old prepared coverage rather than rebuilding.
+      assert.equal(await write(graphFile), "{}\n");
+      assert.doesNotMatch(await write(path.join(workspace, "lib/still-stale.ts")), /node-packaged/);
+      await fs.rename(path.join(pkg, "cli.saved.mjs"), path.join(pkg, "cli.mjs"));
+      assert.equal(await write(graphFile), "{}\n");
+      assert.equal(await write(path.join(workspace, "lib/already-claimed.ts")), "{}\n");
+      assert.match(await write(path.join(workspace, "lib/next.ts"), "next"), /node-packaged/);
+      assert.match(await write(path.join(workspace, "guide.md")), /node-section/);
       assert.equal(hooks.Stop, undefined);
     }
   },

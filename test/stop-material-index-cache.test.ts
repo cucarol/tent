@@ -162,7 +162,7 @@ test("Stop binds cached headers to their own observation across requests and pro
   assert.deepEqual(header.state, other, "B content must carry B's observed identity");
 });
 
-test("Stop index persists directory and header hits without enumeration or header reads", async (t) => {
+test("Stop index reuses subtree and header observations while the shared lock changes root metadata", async (t) => {
   const { root, systemRoot, cacheFile } = await fixture(t);
   stableClock(t);
   const expected = await loadStopMaterialIndex(systemRoot, root);
@@ -171,9 +171,19 @@ test("Stop index persists directory and header hits without enumeration or heade
   const headers = t.mock.method(NodeFs.prototype, "readFrontmatterObservation");
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(directories.mock.callCount(), 0);
+  assert.deepEqual(
+    directories.mock.calls.map((call) => call.arguments[0]),
+    ["", ""],
+  );
   assert.equal(headers.mock.callCount(), 0);
-  assert.equal(await fs.readFile(cacheFile, "utf8"), cached);
+  const before = JSON.parse(cached),
+    after = JSON.parse(await fs.readFile(cacheFile, "utf8"));
+  assert.deepEqual(after.index, before.index);
+  assert.deepEqual(after.headers, before.headers);
+  assert.deepEqual(
+    after.directories.filter(([name]: [string]) => name),
+    before.directories.filter(([name]: [string]) => name),
+  );
 });
 
 test("Stop index reparses only changed header state, including restored mtime and same size", async (t) => {
@@ -190,7 +200,10 @@ test("Stop index reparses only changed header state, including restored mtime an
   assert.ok(changed.nodes.some((node) => node.nodeId === "node-b"));
   assert.ok(!changed.nodes.some((node) => node.nodeId === "node-a"));
   assert.notDeepEqual(changed, original);
-  assert.equal(directories.mock.callCount(), 0);
+  assert.deepEqual(
+    directories.mock.calls.map((call) => call.arguments[0]),
+    [""],
+  );
   assert.deepEqual(
     headers.mock.calls.map((call) => call.arguments[0]),
     ["A/A.md"],
@@ -219,6 +232,7 @@ test("Stop index notices added, renamed and removed directories while reusing un
   const added = await loadStopMaterialIndex(systemRoot, root);
   assert.ok(added.nodes.some((node) => node.nodeId === "node-added"));
   assert.deepEqual(directories.mock.calls.map((call) => call.arguments[0]).sort(), [
+    "",
     "A",
     "A/Added",
   ]);
@@ -257,7 +271,11 @@ test("Stop index rejects corrupt, obsolete and incomplete cache records and surv
   assert.equal(baseline.indexDigest, indexDigest(baseline));
   const directories = t.mock.method(NodeFs.prototype, "listDir");
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(directories.mock.callCount(), 0, "control cache must be a real hit");
+  assert.deepEqual(
+    directories.mock.calls.map((call) => call.arguments[0]),
+    [""],
+    "the lock changes only root metadata on a real cache hit",
+  );
   const cases: [string, string, boolean?, boolean?][] = [
     ["malformed JSON", "broken JSON"],
     ["obsolete schema 3", JSON.stringify({ ...baseline, schema: 3 }), true, true],

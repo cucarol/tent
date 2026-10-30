@@ -23,7 +23,11 @@ import { isHistoryDocument, isHistoryFile } from "../core/store/document-history
 import { durableMkdir, durableReplace, syncDirectory } from "./durable-file.js";
 import { observeMaterialResource, readStructureSource } from "./source-observation.js";
 import { withStructureSnapshot, withoutStructureSnapshot } from "./structure-observation.js";
-import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
+import {
+  isHookGraphFile,
+  isNodeNotePath,
+  workspaceRootFromSystemRoot,
+} from "../core/base/paths.js";
 import {
   prepareNodeSyncSave,
   relocateNodeRecord,
@@ -76,6 +80,7 @@ export class NodeFs implements FsAdapter {
   private readonly transactionScope = new AsyncLocalStorage<FileTransaction>();
   private readonly transactionBypass = new AsyncLocalStorage<boolean>();
   private readonly boundaryReady = new AsyncLocalStorage<boolean>();
+  private readonly graphWrites = new AsyncLocalStorage<{ changed: boolean }>();
   private opening?: Promise<void>;
   private readonly readyScope = `node-fs-ready:${nextReadyScope++}`;
   private readonly materialNodesScope = `${this.readyScope}:material-nodes`;
@@ -537,6 +542,8 @@ export class NodeFs implements FsAdapter {
       ]);
     await durableMkdir(nodePath.dirname(abs));
     await durableReplace(abs, content, "utf8");
+    if (isHookGraphFile(path) && this.graphWrites.getStore())
+      this.graphWrites.getStore()!.changed = true;
     if (tracked && isHistoryFile(path)) tracked.set(path, content);
   }
 
@@ -662,6 +669,8 @@ export class NodeFs implements FsAdapter {
         { path, after: { bytes: payload.toString("base64") } },
       ]);
     await durableReplace(abs, payload);
+    if (isHookGraphFile(path) && this.graphWrites.getStore())
+      this.graphWrites.getStore()!.changed = true;
     if (tracked && isHistoryFile(path))
       tracked.set(path, new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(payload));
   }
@@ -697,6 +706,8 @@ export class NodeFs implements FsAdapter {
     }
     await durableMkdir(nodePath.dirname(this.abs(to)));
     await fs.rename(this.abs(from), this.abs(to));
+    if ([...files, ...targets].some(isNodeNotePath) && this.graphWrites.getStore())
+      this.graphWrites.getStore()!.changed = true;
     for (const parent of new Set([from, to].map((file) => nodePath.dirname(this.abs(file)))))
       await syncDirectory(parent);
     if (tracked)
@@ -716,6 +727,8 @@ export class NodeFs implements FsAdapter {
       );
     const present = await this.exists(path);
     await fs.rm(this.abs(path), { recursive: true, force: true });
+    if ((isHookGraphFile(path) || files.some(isNodeNotePath)) && this.graphWrites.getStore())
+      this.graphWrites.getStore()!.changed = true;
     if (present) await syncDirectory(nodePath.dirname(this.abs(path)));
     if (tracked) for (const file of files) if (isHistoryFile(file)) tracked.set(file, null);
   }
@@ -874,6 +887,10 @@ export class NodeFs implements FsAdapter {
   }
 
   async withLock<T>(path: string, action: () => Promise<T>): Promise<T> {
+    return this.graphWrites.run({ changed: false }, () => this.withGraphWriteLock(path, action));
+  }
+
+  private async withGraphWriteLock<T>(path: string, action: () => Promise<T>): Promise<T> {
     try {
       const locked = () =>
         withFileMutationLock(
@@ -924,7 +941,17 @@ export class NodeFs implements FsAdapter {
         );
       // Reuse exact-header parses during mutation and capture. The lock callback
       // still discards file/structure observations before inspecting live state.
-      return await withDocumentHeaderCache(this.root, locked);
+      const result = await withDocumentHeaderCache(this.root, locked);
+      if (this.graphWrites.getStore()!.changed && this.workspaceRoot) {
+        // Core adapters also support document stores without a scaffolded Tent.
+        const { observeTentSystemRoot } = await import("../core/workspace/status.js");
+        const discovery = await observeTentSystemRoot(this.root, this.root);
+        if (discovery.systemRoot === this.root) {
+          const { loadStopMaterialIndex } = await import("./stop-material-index.js");
+          await loadStopMaterialIndex(this.root, this.workspaceRoot, discovery.rejectedRootMarkers);
+        }
+      }
+      return result;
     } finally {
       forgetScopedReads();
     }

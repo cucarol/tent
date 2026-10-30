@@ -12,6 +12,7 @@ import {
 } from "../core/return/tool-turn-review.js";
 import { toolReviewOutput } from "./hook-adapter.js";
 import { answeredQuestion, successfulWritePaths } from "./tool-write-event.js";
+import { refreshNativeGraphWrite } from "./native-graph-write.js";
 
 /** Deliberately separate from the CLI, transcript readers, Git and live catalog loader. */
 export async function runToolHook(
@@ -32,6 +33,7 @@ export async function runToolHook(
     const files = successfulWritePaths(host, event);
     const answered = answeredQuestion(event);
     if (!files.length && !answered) return silent;
+    if (files.length && !(await refreshNativeGraphWrite(host, event.cwd, files))) return silent;
     const prepared = await findPreparedHookWorkspace(event.cwd);
     if (!prepared) return silent;
     const { systemRoot, workspaceRoot, index } = prepared;

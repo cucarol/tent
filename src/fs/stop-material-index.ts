@@ -19,7 +19,10 @@ import {
   isSystemNoteName,
   nodeNotePath,
   OPERATIONAL_TOP_LEVEL,
+  MUTATION_LOCK_PATH,
 } from "../core/base/paths.js";
+import { TRANSACTION_PATH } from "../core/store/file-transaction.js";
+import { withFileMutationLock } from "./mutation-lock.js";
 
 const coverageSchema = z.strictObject({
   kind: z.enum(["directory", "prefix"]),
@@ -152,12 +155,46 @@ export async function loadStopMaterialIndex(
   systemRoot: string,
   workspaceRoot: string,
   rejectedMarkers: readonly RejectedRootMarker[] = [],
+  adapter = new NodeFs(systemRoot),
+): Promise<StopMaterialIndex> {
+  // ready/recovery belongs before acquisition. The existing observation scope
+  // bypasses it while all graph reads and cache publication share the writer lock.
+  return adapter.observationScope(
+    () =>
+      withFileMutationLock(
+        path.join(systemRoot, MUTATION_LOCK_PATH),
+        async () => {
+          await fs.access(path.join(systemRoot, TRANSACTION_PATH)).then(
+            () => {
+              throw new Error("Tent transaction is pending");
+            },
+            (error: NodeJS.ErrnoException) => {
+              if (error.code !== "ENOENT") throw error;
+            },
+          );
+          return loadStopMaterialIndexUnlocked(systemRoot, workspaceRoot, rejectedMarkers, adapter);
+        },
+        {
+          waitMs: 8_000,
+          busyMessage:
+            "Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying.",
+          acquireFailedMessage: "Cannot acquire the Tent mutation lock.",
+        },
+      ),
+    { forceContent: true },
+  );
+}
+
+async function loadStopMaterialIndexUnlocked(
+  systemRoot: string,
+  workspaceRoot: string,
+  rejectedMarkers: readonly RejectedRootMarker[],
+  adapter: NodeFs,
 ): Promise<StopMaterialIndex> {
   const marker = await fs.readFile(path.join(systemRoot, "index.md"));
   if (!isValidTentIndexMarker(marker.toString("utf8")))
     throw new Error("Invalid Tent index marker");
   const markerDigest = rootMarkerDigest(marker);
-  const adapter = new NodeFs(systemRoot);
   const cacheDir = path.join(systemRoot, ".git", "tent-material-cache");
   const cacheFile = path.join(cacheDir, "stop-material-index.json");
   const hasGit = await fs

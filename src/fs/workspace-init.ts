@@ -6,6 +6,8 @@ import { NodeFs } from "./node-fs.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 import { SqliteDocumentHistory } from "../core/store/sqlite-history.js";
 import { initializeGitIgnoreContext } from "./git-ignore-context.js";
+import { observeTentSystemRoot } from "../core/workspace/status.js";
+import { loadStopMaterialIndex } from "./stop-material-index.js";
 
 /** Initialize an empty Tent and its independent SQLite history. */
 export async function initializeTentWorkspace(workspaceRoot: string): Promise<void> {
@@ -31,6 +33,9 @@ export async function initializeTentWorkspace(workspaceRoot: string): Promise<vo
     await fs.writeFile(path.join(staging, ".gitignore"), "*\n");
     // Publish a complete, verified Tent. Failed preparation never creates a ready marker.
     await renameWithRetry(staging, systemRoot);
+    const discovery = await observeTentSystemRoot(root);
+    if (discovery.systemRoot === systemRoot)
+      await loadStopMaterialIndex(systemRoot, root, discovery.rejectedRootMarkers);
   } catch (error) {
     if (path.dirname(staging) !== root || !path.basename(staging).startsWith(".tent-init-"))
       throw error;

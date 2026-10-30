@@ -1,7 +1,7 @@
 import { hasDocumentHistory } from "./history-port.js";
 import type { FsAdapter } from "./adapter.js";
 import type { CaptureMetadata, DocumentVersion } from "./history-port.js";
-import { isOperationalPath, nodeNotePath, MUTATION_LOCK_PATH, CANVAS_PATH } from "../base/paths.js";
+import { isNodeNotePath, MUTATION_LOCK_PATH, CANVAS_PATH } from "../base/paths.js";
 
 /** Retained files also include the canvas, which has no Node/Role/Card identity. */
 export function isHistoryFile(file: string): boolean {
@@ -12,9 +12,7 @@ export function isHistoryFile(file: string): boolean {
 export function isHistoryDocument(file: string): boolean {
   if (/^roles\/role-[^/]+\.md$/.test(file)) return true;
   if (/^cards\/card-[^/]+\.md$/.test(file)) return true;
-  if (isOperationalPath(file)) return false;
-  const end = file.lastIndexOf("/");
-  return end > 0 && file === nodeNotePath(file.slice(0, end));
+  return isNodeNotePath(file);
 }
 
 /** Caller holds the mutation lock. Captures the exact bytes delivered, not a later reread. */

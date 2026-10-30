@@ -18,6 +18,8 @@ import { startUiServer } from "../ui-server/server.js";
 import { readBuildIdentity, formatBuildIdentity } from "./build-identity.js";
 import { cliErrorText, unknownCommandError } from "./error-text.js";
 
+export { refreshNativeHookIndex } from "../fs/native-hook-index-refresh.js";
+
 export function isInWorkspaceSystemRoot(systemRoot: string): boolean {
   return workspaceRootFromSystemRoot(systemRoot) !== undefined;
 }
