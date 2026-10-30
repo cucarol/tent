@@ -5,6 +5,12 @@ import { parse } from "yaml";
 
 export const hosts = ["codex", "claude-code"];
 
+/** Each host shell's own Agent documents, by the package path they take. */
+export const hostDocuments = {
+  "host-hooks.md": "skills/tent-init/references/host-hooks.md",
+  "host-role.md": "skills/tent-role/references/host-role.md",
+};
+
 function check(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -110,10 +116,11 @@ export async function validateCommonDocuments(root) {
 
 export async function validateSourceDocuments(root, host) {
   const documents = await validateCommonDocuments(root);
-  documents.set(
-    "skills/tent-init/references/host-hooks.md",
-    await fs.readFile(path.join(root, "plugins", host, "tent/host-hooks.md"), "utf8"),
-  );
+  for (const [name, target] of Object.entries(hostDocuments))
+    documents.set(
+      target,
+      await fs.readFile(path.join(root, "plugins", host, "tent", name), "utf8"),
+    );
   validateDocuments(documents);
 }
 

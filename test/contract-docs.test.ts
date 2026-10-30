@@ -8,11 +8,13 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const read = (file: string) => fs.readFile(path.join(repoRoot, file), "utf8");
 const flat = (text: string) => text.replace(/\s+/g, " ");
 
-// Agent-facing text: every SKILL.md, the shared references and the tent-init Hook reference.
+// Agent-facing text: every SKILL.md, the shared references and each host's own references.
 async function agentFacingFiles(): Promise<string[]> {
   const files = [
     "plugins/codex/tent/host-hooks.md",
     "plugins/claude-code/tent/host-hooks.md",
+    "plugins/codex/tent/host-role.md",
+    "plugins/claude-code/tent/host-role.md",
     "skills/tent-init/references/map.md",
   ];
   for (const entry of await fs.readdir(path.join(repoRoot, "skills"), { withFileTypes: true }))

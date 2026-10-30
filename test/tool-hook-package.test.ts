@@ -24,7 +24,7 @@ test(
     const { buildPluginRuntime } = await import(
       pathToFileURL(path.join(root, "esbuild.config.mjs")).href
     );
-    const { validateHostPackage } = await import(
+    const { hostDocuments, validateHostPackage } = await import(
       pathToFileURL(path.join(root, "scripts/validate-plugin.mjs")).href
     );
     const runtime = path.join(fixture, "runtime");
@@ -35,11 +35,10 @@ test(
       for (const directory of ["skills", "skill-resources"])
         await fs.cp(path.join(root, directory), path.join(pkg, directory), { recursive: true });
       await fs.cp(path.join(root, "plugins", host, "tent"), pkg, { recursive: true });
-      await fs.mkdir(path.join(pkg, "skills/tent-init/references"), { recursive: true });
-      await fs.copyFile(
-        path.join(root, "plugins", host, "tent/host-hooks.md"),
-        path.join(pkg, "skills/tent-init/references/host-hooks.md"),
-      );
+      for (const [name, target] of Object.entries(hostDocuments as Record<string, string>)) {
+        await fs.mkdir(path.dirname(path.join(pkg, target)), { recursive: true });
+        await fs.copyFile(path.join(root, "plugins", host, "tent", name), path.join(pkg, target));
+      }
       await validateHostPackage(pkg, host);
       const workspace = path.join(fixture, host, "workspace");
       await fs.mkdir(workspace);

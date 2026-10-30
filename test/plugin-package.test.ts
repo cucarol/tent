@@ -70,7 +70,7 @@ test(
 );
 
 test("both host packages carry the same common payload and separate native shells", async () => {
-  const { validateHostPackage } = await import(
+  const { hostDocuments, validateHostPackage } = await import(
     new URL("../scripts/validate-plugin.mjs", import.meta.url).href
   );
   const codex = bundleFor("codex"),
@@ -85,12 +85,16 @@ test("both host packages carry the same common payload and separate native shell
     const manifest = JSON.parse(await fs.readFile(path.join(bundle, manifestPath!), "utf8"));
     assert.equal(manifest.version, pkg.version);
     assert.equal(manifest.name, "tent");
-    assert.deepEqual(
-      await fs.readFile(path.join(bundle, "skills/tent-init/references/host-hooks.md")),
-      await fs.readFile(path.join(root, "plugins", host!, "tent/host-hooks.md")),
-    );
-    await assert.rejects(fs.access(path.join(bundle, "host-hooks.md")), { code: "ENOENT" });
+    for (const [name, target] of Object.entries(hostDocuments as Record<string, string>)) {
+      assert.deepEqual(
+        await fs.readFile(path.join(bundle, target)),
+        await fs.readFile(path.join(root, "plugins", host!, "tent", name)),
+      );
+      await assert.rejects(fs.access(path.join(bundle, name)), { code: "ENOENT" });
+    }
   }
+  await fs.access(path.join(codex, "wake.mjs"));
+  await assert.rejects(fs.access(path.join(claude, "wake.mjs")), { code: "ENOENT" });
   const commonFiles = [
     "cli.mjs",
     "tool-hook.mjs",
@@ -103,7 +107,7 @@ test("both host packages carry the same common payload and separate native shell
       (f) => `${dir}/${f.replaceAll("\\", "/")}`,
     );
     for (const file of codexFiles) {
-      if (file.includes("/agents") || file.endsWith("/host-hooks.md")) continue;
+      if (file.includes("/agents") || Object.values(hostDocuments).includes(file)) continue;
       if ((await fs.stat(path.join(codex, file))).isFile()) commonFiles.push(file);
     }
   }

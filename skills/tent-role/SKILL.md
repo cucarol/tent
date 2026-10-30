@@ -10,7 +10,7 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows.
 | When | Command | Read |
 | --- | --- | --- |
 | Given a Role name | `tent role list --json` | `items[].roleId` by `title`; skip `status: deprecated` |
-| Starting as a Role | `tent role show <role-id>` | `text`, then the Nodes it links |
+| Starting as a Role | `tent role show <role-id>`, then [this host's steps](references/host-role.md) | `text`, then the Nodes it links |
 | Looking for work | `tent card list --role <role-id> --include-open --state pending` | `items[].cardId` |
 | A new direction | `tent role create --title <title> --body -` | `roleId` |
 | Update or retire | [Role commands](../../skill-resources/references/roles.md) | `etag` |

@@ -8,7 +8,7 @@ Tent 把项目上下文维护成本地 Markdown 图谱：Node 记可复用的事
 
 - 本仓库自己用 Tent，图在 `.tent/`，是本地协作状态，不提交。
 - 拿着 Role 的会话，接手或压缩后读一次 `tent role show <role>` 和 `tent workspace brief --role <role>`：前者是定位，后者是手上的活。进度不写进 Role 文件。
-- 要结果的 Card 做完就交回。跨 Role 的事发 Card，不改别的 Role 的 worktree。
+- 要结果的 Card 做完就交回。要带材料、要交回的活，或宿主自带消息够不到的会话，发 Card；够得到的会话之间顺手问一句，用宿主自带的消息。不改别的 Role 的 worktree。
 
 ## 谁定什么
 

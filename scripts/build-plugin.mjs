@@ -5,7 +5,12 @@ import { buildPluginRuntime } from "../esbuild.config.mjs";
 import { syncVersion } from "./sync-version.mjs";
 import { buildUi } from "./ui-build.mjs";
 import { writeDependencyNotices } from "./dependency-notices.mjs";
-import { hosts, validateSourceDocuments, validateHostPackage } from "./validate-plugin.mjs";
+import {
+  hostDocuments,
+  hosts,
+  validateSourceDocuments,
+  validateHostPackage,
+} from "./validate-plugin.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -47,13 +52,12 @@ export async function buildPlugin(outputRoot = path.join(root, "release")) {
     const shell = path.join(root, "plugins", host, "tent");
     await fs.cp(shell, bundle, {
       recursive: true,
-      filter: (source) => path.relative(shell, source) !== "host-hooks.md",
+      filter: (source) => !Object.hasOwn(hostDocuments, path.relative(shell, source)),
     });
-    await fs.mkdir(path.join(bundle, "skills/tent-init/references"), { recursive: true });
-    await fs.copyFile(
-      path.join(shell, "host-hooks.md"),
-      path.join(bundle, "skills/tent-init/references/host-hooks.md"),
-    );
+    for (const [name, target] of Object.entries(hostDocuments)) {
+      await fs.mkdir(path.dirname(path.join(bundle, target)), { recursive: true });
+      await fs.copyFile(path.join(shell, name), path.join(bundle, target));
+    }
     await validateHostPackage(bundle, host);
     const catalogue =
       host === "codex" ? ".agents/plugins/marketplace.json" : ".claude-plugin/marketplace.json";

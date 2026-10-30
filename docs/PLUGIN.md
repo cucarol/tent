@@ -26,9 +26,11 @@ release/
       hooks/{hooks.json,session.mjs}
       skills/<skill>/{SKILL.md,agents/openai.yaml}
       skills/tent-init/references/host-hooks.md
+      skills/tent-role/references/host-role.md
       skill-resources/
       cli.mjs
       tool-hook.mjs
+      wake.mjs
       ui-dist/
       docs/
   claude-code/
@@ -38,6 +40,7 @@ release/
       hooks/{hooks.json,session.mjs}
       skills/<skill>/SKILL.md
       skills/tent-init/references/host-hooks.md
+      skills/tent-role/references/host-role.md
       skill-resources/
       cli.mjs
       tool-hook.mjs
@@ -45,7 +48,7 @@ release/
       docs/
 ```
 
-共用源码在 `skills/`、`skill-resources/` 与 `src/`；宿主壳在 `plugins/codex/tent/` 和 `plugins/claude-code/tent/`。构建只编译一次运行时与 UI，再复制到两个包；共用内容逐字节相同。每个壳的 `host-hooks.md` 原样放入该包的 `skills/tent-init/references/host-hooks.md`，Codex 的 `agents/openai.yaml` 由壳提供。版本统一取自 `package.json`。构建不覆盖已有交付，也不注册全局配置。运行依赖随包携带，安装后不依赖源码仓库的 node_modules 或全局 Tent。
+共用源码在 `skills/`、`skill-resources/` 与 `src/`；宿主壳在 `plugins/codex/tent/` 和 `plugins/claude-code/tent/`。构建只编译一次运行时与 UI，再复制到两个包；共用内容逐字节相同。每个壳的 `host-hooks.md` 和 `host-role.md` 原样放入该包的 `skills/tent-init/references/host-hooks.md` 和 `skills/tent-role/references/host-role.md`，Codex 的 `agents/openai.yaml` 由壳提供。`host-role.md` 写各宿主的会话怎么当 Role。Claude Code 在后台命令结束时会唤醒会话，所以空闲时用 `tent card watch` 等 Card；外部进程没有办法把消息送进 Claude Code 会话。Codex 的壳另带 `wake.mjs`：聊天接下 Role 时运行一次，就把这个聊天绑到这个 Role 上。之后它在后台常驻，用 `tent card watch` 等该 Role 的 Card，每批新 Card 用 `codex queue` 往这个聊天投一条消息，同一张 Card 只叫一次。别的会话用 `--tell <role-id>` 可以给绑到该 Role 的每个聊天捎一句话。聊天编号取自 `CODEX_THREAD_ID`，也可以用 `--thread` 指定。绑定记在 `.tent/temp/role-chats/`，后台进程退出就失效。不放系统临时目录，因为 Codex 沙箱有自己的临时目录，别的会话看不到。Windows 上优先用桌面应用自带的 `codex.exe`。版本统一取自 `package.json`。构建不覆盖已有交付，也不注册全局配置。运行依赖随包携带，安装后不依赖源码仓库的 node_modules 或全局 Tent。
 
 Codex 安装交付中的 `codex/` marketplace：
 
