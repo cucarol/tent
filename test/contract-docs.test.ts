@@ -13,7 +13,7 @@ async function agentFacingFiles(): Promise<string[]> {
   const files = [
     "plugins/codex/tent/host-hooks.md",
     "plugins/claude-code/tent/host-hooks.md",
-    "skills/tent-init/references/modules.md",
+    "skills/tent-init/references/map.md",
   ];
   for (const entry of await fs.readdir(path.join(repoRoot, "skills"), { withFileTypes: true }))
     if (entry.isDirectory()) files.push(`skills/${entry.name}/SKILL.md`);

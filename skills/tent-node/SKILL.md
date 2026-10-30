@@ -15,7 +15,7 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows.
 | A `path` | Read the file with your own reader | text |
 | Only a Node id | `tent node get <id>` | `text`, `etag` |
 | A topic | Search `.tent/` with your own search tool | `path` |
-| Before changing code | `tent node search --resource <file>` | each `path`; read that Node and its parents |
+| Before changing a file | `tent node search --resource <file>` | each `path`; read that Node and its parents |
 
 Treat each Node by its [type](../../skill-resources/references/node-types.md). More reads: [input](../../skill-resources/references/input.md).
 
