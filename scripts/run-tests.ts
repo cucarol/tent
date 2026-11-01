@@ -56,6 +56,7 @@ export const INTEGRATION_TEST_FILES = Object.freeze([
   "test/role-delete.test.ts",
   "test/root-build-canonical.test.ts",
   "test/sqlite-safety.test.ts",
+  "test/start-hook-launcher.test.ts",
   "test/workspace-init.test.ts",
   "test/workspace-draft.test.ts",
 ] as const);

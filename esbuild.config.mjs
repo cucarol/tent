@@ -116,6 +116,7 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
   const identity = buildIdentity(buildRoot);
   for (const [artifact, entry] of [
     ["cli", "src/cli/tent.ts"],
+    ["start-hook", "src/cli/start-hook-entry.ts"],
     ["tool-hook", "src/cli/tool-hook-entry.ts"],
     ["turn-hook", "src/cli/turn-hook-entry.ts"],
     ["migrate-history", "src/cli/migrate-history.ts"],
@@ -142,6 +143,11 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
       },
     });
     assertCanonicalMetafile(`plugin-${artifact}`, result.metafile);
+    if (artifact === "start-hook") {
+      for (const output of Object.values(result.metafile.outputs))
+        if ((output.inputs["src/cli/tent.ts"]?.bytesInOutput ?? 0) > 0)
+          throw new Error("Start hook must not load the CLI entrypoint");
+    }
     if (artifact === "tool-hook" || artifact === "turn-hook") {
       for (const output of Object.values(result.metafile.outputs))
         for (const [input, contribution] of Object.entries(output.inputs))
@@ -161,7 +167,12 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
         throw new Error(`Plugin has external runtime imports: ${JSON.stringify(unbundled)}`);
     }
   }
-  await assertCanonicalRootArtifacts(outputRoot, ["cli.mjs", "tool-hook.mjs", "turn-hook.mjs"]);
+  await assertCanonicalRootArtifacts(outputRoot, [
+    "cli.mjs",
+    "start-hook.mjs",
+    "tool-hook.mjs",
+    "turn-hook.mjs",
+  ]);
   return [...inputs].sort();
 }
 

@@ -103,6 +103,7 @@ test("both host packages carry the same common payload and separate native shell
   await assert.rejects(fs.access(path.join(claude, "wake.mjs")), { code: "ENOENT" });
   const commonFiles = [
     "cli.mjs",
+    "start-hook.mjs",
     "tool-hook.mjs",
     "turn-hook.mjs",
     "package.json",

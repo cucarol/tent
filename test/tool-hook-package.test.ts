@@ -97,6 +97,9 @@ test(
             }),
           );
         });
+      const start = JSON.parse(await invoke("SessionStart")).hookSpecificOutput.additionalContext;
+      assert.ok(start.includes(`Tent CLI: node ${JSON.stringify(path.join(pkg, "cli.mjs"))}`));
+      assert.ok(start.includes(`Tent Workspace: ${workspace}`));
       const file = path.join(workspace, "src/code.ts");
       const output = await invoke("PostToolUse", {
         tool_name: host === "codex" ? "apply_patch" : "Write",

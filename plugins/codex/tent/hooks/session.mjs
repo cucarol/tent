@@ -30,7 +30,9 @@ if (action === "prompt" || action === "stop") {
   process.argv = [process.execPath, fileURLToPath(runtime), "--host", "codex"];
   await import(runtime.href);
 } else {
-  const cli = new URL("../cli.mjs", import.meta.url);
-  process.argv = [process.execPath, fileURLToPath(cli), "hook", action, "--host", "codex"];
-  await import(cli.href);
+  const { runHookCommand } = await import(new URL("../start-hook.mjs", import.meta.url).href);
+  const result = await runHookCommand("start", ["--host", "codex"], {
+    packageRoot: fileURLToPath(new URL("../", import.meta.url)),
+  });
+  process.stdout.write(result.stdout);
 }

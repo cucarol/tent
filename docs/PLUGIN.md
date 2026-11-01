@@ -1,6 +1,6 @@
 # Tent Agent 插件
 
-插件提供四个 Skill、SessionStart、UserPromptSubmit、PostToolUse 和 Stop Hook，以及同包 CLI、独立工具与轮末 Hook 运行时。Node、Role、Card 的读写规则在 Core；Skill 按工作需要提供操作指引。
+插件提供四个 Skill、SessionStart、UserPromptSubmit、PostToolUse 和 Stop Hook，以及同包 CLI、独立会话启动、工具与轮末 Hook 运行时。Node、Role、Card 的读写规则在 Core；Skill 按工作需要提供操作指引。
 
 ## 构建与安装
 
@@ -154,7 +154,7 @@ Card 只记录四种投递状态：`pending`、`consumed`、`returned`、`closed
 
 四种 Hook 的行为、预算和提示原文以 [SPEC §5](SPEC.md#5.%20What%20the%20Agent%20is%20told) 为准；普通改代码不需要 Agent 先跑 Tent。显式读取与 Card 接收的上下文协议见 [SPEC §6](SPEC.md#6.%20What%20a%20reader%20gets)。
 
-两个宿主的入口分别在 `plugins/codex/tent/hooks/session.mjs` 和 `plugins/claude-code/tent/hooks/session.mjs`。SessionStart 转交同包 CLI 的 `hook start`；PostToolUse 运行独立 `tool-hook.mjs`，UserPromptSubmit 和 Stop 使用独立 `turn-hook.mjs`。宿主字段和 Stop 的 JSON 外壳由各包转译，Core 负责选择、原文和检查规则。公共 CLI 的 `hook stop` 仍是空操作。
+两个宿主的入口分别在 `plugins/codex/tent/hooks/session.mjs` 和 `plugins/claude-code/tent/hooks/session.mjs`。SessionStart 加载同包 `start-hook.mjs`，复用公共 CLI 的 `hook start` 实现；PostToolUse 运行独立 `tool-hook.mjs`，UserPromptSubmit 和 Stop 使用独立 `turn-hook.mjs`。宿主字段和 Stop 的 JSON 外壳由各包转译，Core 负责选择、原文和检查规则。公共 CLI 的 `hook stop` 仍是空操作。
 
 预备材料索引在 `.tent/.git/tent-material-cache/stop-material-index.json`，由既有 Core 目录与 frontmatter 规则准备，记录覆盖、规则关系、header 字节身份及找根证明；Node 正文在通知时读取，不另存一套图谱或内容索引。普通工具路径只消费已有准备结果；显式 Node 写的问题检查与索引刷新才动态加载同包 CLI。初始化、图写入和 SessionStart 的准备边界见 SPEC。
 
