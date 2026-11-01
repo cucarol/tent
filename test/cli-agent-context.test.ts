@@ -847,3 +847,48 @@ test("CLI context read basis: a stale primary body cannot be labelled with newly
     /changed/i,
   );
 });
+
+test("CLI context retains tests and its revision when unused project history is unavailable", async () => {
+  const root = await workspace();
+  const read = async () =>
+    result(await runNodeCommand("get", ["node-z0"], { workspace: root, json: true }));
+  const before = await read();
+  const headPath = path.join(root, ".git/HEAD");
+  const originalHead = await fs.readFile(headPath, "utf8");
+  const brokenRef = path.join(root, ".git/refs/heads/context-unavailable");
+  await fs.mkdir(path.dirname(brokenRef), { recursive: true });
+  await fs.writeFile(brokenRef, "a".repeat(40) + "\n");
+  try {
+    await fs.writeFile(headPath, "ref: refs/heads/context-unavailable\n");
+    const after = await read();
+    assert.deepEqual(after.agentContext, before.agentContext);
+    assert.deepEqual(
+      after.agentContext.sections
+        .find((section: { kind: string }) => section.kind === "tests")
+        .items.map((item: { path: string }) => item.path),
+      ["test/a.test.ts"],
+    );
+  } finally {
+    await fs.writeFile(headPath, originalHead);
+    await fs.unlink(brokenRef);
+  }
+});
+
+test("CLI context keeps unavailable required source bytes unknown", async () => {
+  const root = await workspace();
+  const filename = path.join(root, "src/a.ts");
+  const original = await fs.readFile(filename);
+  await fs.unlink(filename);
+  try {
+    const response = result(
+      await runNodeCommand("get", ["node-z0"], { workspace: root, json: true }),
+    );
+    const unknown = response.agentContext.sections.find(
+      (section: { kind: string }) => section.kind === "unknown",
+    );
+    assert.match(JSON.stringify(unknown), /Referenced repository source unavailable: src\/a.ts/);
+    assert.match(JSON.stringify(unknown), /Static test discovery is incomplete/);
+  } finally {
+    await fs.writeFile(filename, original);
+  }
+});

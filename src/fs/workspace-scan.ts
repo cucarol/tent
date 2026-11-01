@@ -3,6 +3,7 @@ import { lstat, open, readFile, realpath, unlink } from "node:fs/promises";
 import path from "node:path";
 import { isTentWorkspacePath } from "../core/base/material-coverage.js";
 import type { WorkspaceScanRepository } from "../core/check/workspace-scan.js";
+import type { AgentContextRepository } from "../core/read/agent-context.js";
 import { MODULE_MAP_THRESHOLDS, type ModuleMapCommit } from "../core/check/module-map.js";
 import type { WorkspaceModuleMapRepository } from "../core/check/workspace-module-map.js";
 import { selectSection } from "../core/base/markdown-section.js";
@@ -115,7 +116,7 @@ export function parseModuleMapGitLog(raw: string): ModuleMapCommit[] {
 }
 
 /** Git queries never refresh the index or create lock, cache, hook or model state. */
-async function readRepositoryFiles(workspaceRoot: string) {
+async function readRepositoryFiles(workspaceRoot: string, includeHead: boolean) {
   const root = (await git(workspaceRoot, ["rev-parse", "--show-toplevel"])).trim();
   const prefix = path.relative(root, workspaceRoot).split(path.sep).join("/");
   const workspacePrefix = process.platform === "win32" ? prefix.toLowerCase() : prefix;
@@ -135,12 +136,14 @@ async function readRepositoryFiles(workspaceRoot: string) {
         const relative = workspaceFile(file);
         return relative === undefined ? [] : [relative];
       });
-  const heads = await git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(
-    (error: Error & { code?: number | string }) => {
-      if (error.code !== 1) throw error;
-      return "";
-    },
-  );
+  const heads = includeHead
+    ? await git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(
+        (error: Error & { code?: number | string }) => {
+          if (error.code !== 1) throw error;
+          return "";
+        },
+      )
+    : "";
   const head = heads.trim() || null;
   const trackedFiles = list(await git(root, ["ls-files", "--cached", "-z"]));
   return { root, head, trackedFiles, workspaceFile };
@@ -149,7 +152,7 @@ async function readRepositoryFiles(workspaceRoot: string) {
 export async function readWorkspaceScanRepository(
   workspaceRoot: string,
 ): Promise<WorkspaceScanRepository> {
-  const { head, trackedFiles } = await readRepositoryFiles(workspaceRoot);
+  const { head, trackedFiles } = await readRepositoryFiles(workspaceRoot, true);
   return {
     head,
     trackedFiles,
@@ -159,12 +162,26 @@ export async function readWorkspaceScanRepository(
   };
 }
 
+/** Current file/import evidence does not depend on unused project history. */
+export async function readAgentContextRepository(
+  workspaceRoot: string,
+): Promise<AgentContextRepository> {
+  const { trackedFiles } = await readRepositoryFiles(workspaceRoot, false);
+  return {
+    trackedFiles,
+    sources: await readRepositorySources(workspaceRoot, trackedFiles, { includeTests: true }),
+  };
+}
+
 /** Module history follows the mainline rather than counting merged branches twice. */
 export async function readModuleMapRepository(
   workspaceRoot: string,
   options: { includeProductManifests?: boolean } = {},
 ): Promise<WorkspaceModuleMapRepository> {
-  const { root, head, trackedFiles, workspaceFile } = await readRepositoryFiles(workspaceRoot);
+  const { root, head, trackedFiles, workspaceFile } = await readRepositoryFiles(
+    workspaceRoot,
+    true,
+  );
   const [sources, log] = await Promise.all([
     readRepositorySources(workspaceRoot, trackedFiles, { includeTests: true, ...options }),
     head

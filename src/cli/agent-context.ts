@@ -1,7 +1,7 @@
 import type { FsAdapter } from "../core/store/adapter.js";
 import { assembleAgentContext, type AgentContextStart } from "../core/read/agent-context.js";
 import { projectAgentContext, formatAgentContextPage } from "../core/read/agent-context-page.js";
-import { readModuleMapRepository } from "../fs/workspace-scan.js";
+import { readAgentContextRepository } from "../fs/workspace-scan.js";
 import { readNode } from "../core/read/node-query.js";
 import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
 
@@ -37,7 +37,7 @@ export async function agentContextOutput<T extends object>(
       });
     }
     return assembleAgentContext(fs, workspaceRoot, start, {
-      repository: () => readModuleMapRepository(workspaceRoot),
+      repository: () => readAgentContextRepository(workspaceRoot),
     });
   };
   const context = await (fs.observationScope ? fs.observationScope(read) : read());
