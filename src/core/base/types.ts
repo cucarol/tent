@@ -27,8 +27,6 @@ export interface Node {
   tags: string[];
   status: DocumentStatus | null;
   statusDiagnostic?: string;
-  /** Convenience projection of this document's status === deprecated. Never inherited. */
-  archived: boolean;
   /** 自身或祖先引用了不存在的 type。失效子树退出正常流程。 */
   invalid: boolean;
   /** Path of the directly invalid root Node; descendants inherit it. */

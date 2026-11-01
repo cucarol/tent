@@ -204,6 +204,10 @@ test("one staged save uses one mutation lock and capture for forward parents and
   );
   assert.equal(locks, 1);
   assert.equal(captures, 1);
+  for (const item of result.results) {
+    const saved = await readNodeForEdit(f.adapter, item.nodeId);
+    assert.equal("generated" in saved.frontmatter, false);
+  }
   assert.match(
     parseFrontmatter(await f.adapter.readFile("Parent/Parent.md")).body,
     /\[child\]\(\.\/Child\/Child.md\)/,

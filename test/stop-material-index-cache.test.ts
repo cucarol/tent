@@ -57,9 +57,9 @@ const sourceDigest = (cached: Record<string, unknown>) =>
     cached.repository ?? null,
   ]);
 
-test("Stop header equivalence ignores provenance but preserves identity, validity and coverage changes", () => {
+test("Stop header equivalence treats unknown metadata like identity, validity and coverage fields", () => {
   const original = "---\nid: node-a\ntype: goal\ngenerated: {at: old}\n---\n";
-  assert.equal(sameStopMaterialHeader(original, original.replace("old", "new")), true);
+  assert.equal(sameStopMaterialHeader(original, original.replace("old", "new")), false);
   for (const replacement of [
     original.replace("node-a", "node-b"),
     original.replace("goal", "output"),
@@ -270,7 +270,7 @@ test("Stop index rejects corrupt, obsolete and incomplete cache records and surv
   const expected = await loadStopMaterialIndex(systemRoot, root);
   const valid = await fs.readFile(cacheFile, "utf8");
   const baseline = JSON.parse(valid);
-  assert.equal(baseline.schema, 12);
+  assert.equal(baseline.schema, 13);
   assert.equal(baseline.sourceDigest, sourceDigest(baseline));
   assert.equal(baseline.indexDigest, indexDigest(baseline));
   const directories = t.mock.method(NodeFs.prototype, "listDir");

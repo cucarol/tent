@@ -11,6 +11,7 @@ import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontma
 import { createNode, renameNode, moveNode } from "../src/core/graph/ops.js";
 import { nodeNotePath } from "../src/core/store/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
+import { nodeWriteInputSchema } from "../src/core/write/node-write.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import {
   writeNodeDocument,
@@ -280,4 +281,66 @@ test("former reserved names are ordinary metadata while Node identity stays fixe
     /Node id/,
   );
   assert.equal((await readNodeForEdit(adapter, id)).raw, live.raw);
+});
+
+test("Core create and ordinary writes leave unknown metadata untouched without adding generated", async (t) => {
+  const { adapter, create } = await fixture(t);
+  const id = await create("Metadata", "original");
+  let current = await readNodeForEdit(adapter, id);
+  assert.equal("generated" in current.frontmatter, false);
+  const bodySave = await writeNodeDocument(adapter, id, {
+    baseEtag: current.etag,
+    body: "changed",
+  });
+  assert.equal("generated" in parseFrontmatter(bodySave.raw).data, false);
+  const metadata = { generated: ["custom", 17], stale_after: { custom: false }, extra: "keep" };
+  await writeNodeDocument(adapter, id, { baseEtag: bodySave.etag, frontmatter: metadata });
+  current = await readNodeForEdit(adapter, id);
+  const saved = await writeNodeDocument(adapter, id, {
+    baseEtag: current.etag,
+    body: "changed again",
+  });
+  assert.deepEqual(parseFrontmatter(saved.raw).data, { ...current.frontmatter });
+  const raw = await writeNodeDocument(adapter, id, {
+    baseEtag: saved.etag,
+    raw: serializeFrontmatter(
+      { ...parseFrontmatter(saved.raw).data, generated: false },
+      "raw edit",
+    ),
+  });
+  assert.equal(parseFrontmatter(raw.raw).data.generated, false);
+  assert.deepEqual(parseFrontmatter(raw.raw).data.stale_after, metadata.stale_after);
+});
+
+test("write by requires confirmation and failed confirmed writes retain error identity and bytes", async (t) => {
+  const { adapter, create } = await fixture(t);
+  const id = await create("Verified", "original");
+  const initial = await readNodeForEdit(adapter, id);
+  const plain = { baseEtag: initial.etag, body: "next", by: "human:cuca" };
+  assert.equal(nodeWriteInputSchema.safeParse(plain).success, false);
+  await assert.rejects(writeNodeDocument(adapter, id, plain), (error) => {
+    assert.ok(error instanceof NodeWriteError);
+    assert.equal(error.code, "INVALID_INPUT");
+    return true;
+  });
+  const failure = Object.assign(new Error("confirmed write storage failure"), { code: "EIO" });
+  const write = adapter.writeFile.bind(adapter);
+  adapter.writeFile = async (file, raw) => {
+    if (file === "Verified/Verified.md") throw failure;
+    await write(file, raw);
+  };
+  await assert.rejects(
+    writeNodeDocument(adapter, id, { ...plain, confirm: true }),
+    (error) => error === failure,
+  );
+  assert.equal(await adapter.readFile("Verified/Verified.md"), initial.raw);
+  adapter.writeFile = write;
+  const saved = await writeNodeDocument(adapter, id, { ...plain, confirm: true });
+  const data = parseFrontmatter(saved.raw).data;
+  assert.equal("generated" in data, false);
+  assert.deepEqual(
+    (data.verified as { by: string }[]).map((entry) => entry.by),
+    ["human:cuca"],
+  );
+  assert.equal(parseFrontmatter(saved.raw).body, "next");
 });

@@ -19,7 +19,7 @@ import {
   verifyCardSourceVersion,
 } from "../src/core/graph/card-document.js";
 import { moveNode, renameNode, deleteNode } from "../src/core/graph/ops.js";
-import { archiveNode, restoreNode } from "../src/core/graph/node-lifecycle.js";
+import { archiveNode } from "../src/core/graph/node-lifecycle.js";
 import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { TRANSACTION_PATH } from "../src/core/store/file-transaction.js";
 
@@ -120,7 +120,7 @@ test("SQLite safety 2: real Core write-many retains all 112 saved documents in o
   }
 });
 
-test("SQLite safety 3: Card pins read historical bytes, ABA stays changed and archive undo rejects later edits", async (t) => {
+test("SQLite safety 3: Card pins read historical bytes, ABA stays changed and status edits enforce ETags", async (t) => {
   const { adapter, root, env } = await fixture(t),
     card = await createCardDocument(adapter, {
       cardId: "card-safety",
@@ -154,10 +154,27 @@ test("SQLite safety 3: Card pins read historical bytes, ABA stays changed and ar
   });
   await fs.writeFile(path.join(root, "N002/N002.md"), archivedRaw.raw);
   await captureNativeNodeEdits(adapter);
-  await assert.rejects(
-    restoreNode(env, "node-n002", archived.commit!),
-    /conflicts with later edits/,
+  assert.equal(
+    await adapter.history.changedSince({ commit: archived.commit!, path: "N002/N002.md" }),
+    true,
   );
+  assert.equal(
+    await adapter.history.read({ commit: archived.commit!, path: "N002/N002.md" }),
+    archivedRaw.raw,
+  );
+  const current = await readNodeForEdit(adapter, "node-n002");
+  const reactivated = await writeNodeDocument(adapter, "node-n002", {
+    baseEtag: current.etag,
+    frontmatter: { status: "stable" },
+  });
+  await assert.rejects(
+    writeNodeDocument(adapter, "node-n002", {
+      baseEtag: current.etag,
+      frontmatter: { status: "draft" },
+    }),
+    /changed|ETag|reread/i,
+  );
+  assert.match(reactivated.raw, /status: stable/);
 });
 
 test("SQLite safety 4: two independent CLI writers share the same ETag conflict boundary", async (t) => {

@@ -30,7 +30,7 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
   if (!selected) return [];
   const active = (node: CatalogNode) => {
     const status = documentLifecycle(parseFrontmatter(node.header).data).status;
-    return !node.archived && (status === "draft" || status === "stable");
+    return status === "draft" || status === "stable";
   };
   const item = (node: CatalogNode, kind: GoalContextItem["kind"]): GoalContextItem => {
     const data = parseFrontmatter(node.header).data;
@@ -130,7 +130,7 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
     const ref = incoming ? relation.from : relation.target;
     if (ref.kind !== "node" && ref.kind !== "role" && ref.kind !== "card") continue;
     const node = ref.kind === "node" ? catalog.byId.get(ref.id) : undefined;
-    if (incoming && node?.archived) continue;
+    if (incoming && node?.status === "deprecated") continue;
     const pinned =
       incoming && ref.kind === "card" && relation.via === "sources" && relation.version;
     const kind = pinned ? "card" : incoming ? "incoming" : "outgoing";

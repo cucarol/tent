@@ -292,8 +292,10 @@ test("Node help separates the overview from command notes and applicable footers
   assert.doesNotMatch(overview, /partial page|JSON by|MSYS_NO_PATHCONV/);
   assert.doesNotMatch(nodeHelpText("history"), /--body - reads stdin|--by records/);
   assert.match(nodeHelpText("append"), /unique matching section/);
-  assert.match(nodeHelpText("write-many"), /JSON by records/);
+  assert.doesNotMatch(nodeHelpText("write-many"), /JSON by records/);
   assert.doesNotMatch(nodeHelpText("write-many"), /--by records/);
+  for (const sub of ["confirm", "write"])
+    assert.match(nodeHelpText(sub), /--by records who confirmed it:/);
   assert.match(nodeHelpText("create"), /preset \(direction,/);
   assert.doesNotMatch(nodeHelpText("create"), /\$\{presets\}/);
 });

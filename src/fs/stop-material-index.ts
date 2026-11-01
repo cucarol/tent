@@ -302,7 +302,7 @@ async function loadStopMaterialIndexUnlocked(
       await fs.writeFile(
         temp,
         JSON.stringify({
-          schema: 12,
+          schema: 13,
           rootMarkerDigest: markerDigest,
           rejectedRootMarkers,
           workspaceRoot,

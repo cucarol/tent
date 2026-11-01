@@ -95,7 +95,7 @@ test("preparer and both readers reject the two superseded schema 11 shapes", asy
   const f = await fixture(t);
   const expected = await f.prepare();
   const current = await fs.readFile(f.cacheFile, "utf8");
-  assert.equal(JSON.parse(current).schema, 12);
+  assert.equal(JSON.parse(current).schema, 13);
   assert.ok(await readCache(f.cacheFile, f.root));
   assert.ok(await findPreparedHookWorkspace(f.root));
   for (const shape of ["read", "hook"] as const) {
@@ -129,8 +129,32 @@ test("preparer and both readers reject the two superseded schema 11 shapes", asy
     assert.equal(await readCache(f.cacheFile, f.root), undefined, shape);
     assert.equal(await findPreparedHookWorkspace(f.root), undefined, shape);
     assert.deepEqual(await f.prepare(), expected, shape);
-    assert.equal(JSON.parse(await fs.readFile(f.cacheFile, "utf8")).schema, 12, shape);
+    assert.equal(JSON.parse(await fs.readFile(f.cacheFile, "utf8")).schema, 13, shape);
   }
+});
+
+test("state semantics invalidate schema 12 even with unchanged headers and valid digests", async (t) => {
+  const f = await fixture(t);
+  await fs.writeFile(f.filename, f.raw.replace("type: goal", "type: goal\nstatus: draft"));
+  const expected = await f.prepare();
+  assert.ok(expected.nodes.some((node) => node.nodeId === "node-a"));
+  const old = JSON.parse(await fs.readFile(f.cacheFile, "utf8"));
+  old.schema = 12;
+  // Previous semantics excluded draft Nodes without changing their observed headers.
+  old.index.nodes = old.index.nodes.filter((node: { nodeId: string }) => node.nodeId !== "node-a");
+  old.indexDigest = createHash("sha256")
+    .update(JSON.stringify([old.rootMarkerDigest, old.rejectedRootMarkers, old.index]))
+    .digest("hex");
+  const oldBytes = JSON.stringify(old);
+  await fs.writeFile(f.cacheFile, oldBytes);
+  assert.deepEqual(await f.prepare(), expected);
+  await fs.writeFile(f.cacheFile, oldBytes);
+  assert.equal(await readCache(f.cacheFile, f.root), undefined);
+  assert.equal(await findPreparedHookWorkspace(f.root), undefined);
+  assert.deepEqual(await f.prepare(), expected);
+  assert.equal(JSON.parse(await fs.readFile(f.cacheFile, "utf8")).schema, 13);
+  assert.ok(await readCache(f.cacheFile, f.root));
+  assert.ok(await findPreparedHookWorkspace(f.root));
 });
 
 test("prepared graph reuses full Node bytes without changing catalog documents or fingerprints", async (t) => {

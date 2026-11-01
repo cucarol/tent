@@ -157,7 +157,7 @@ test("independent Core writers share CAS, selected reads and exact history", asy
   assert.equal(unrelatedReads, 0);
 });
 
-test("public lifecycle commands require an explicit archive commit for undo", async (t) => {
+test("public archive retains its event and deprecated document bytes", async (t) => {
   const h = await fixture(t),
     { adapter, workspace } = h;
   const archived = await runNodeCommand("archive", ["node-alpha"], { workspace, json: true });
@@ -166,20 +166,8 @@ test("public lifecycle commands require an explicit archive commit for undo", as
   assert.match(result.commit, /^[a-f0-9]{40,64}$/);
   const edit = await readNodeForEdit(adapter, "node-alpha");
   assert.equal(edit.status, "deprecated");
-  const missing = await runNodeCommand("restore", ["node-alpha"], { workspace, json: true });
-  assert.equal(missing.exitCode, 1);
-  assert.match(missing.stderr, /archive-commit/);
-  assert.equal(await adapter.readFile("A/A.md"), edit.raw);
-  const restored = await runNodeCommand(
-    "restore",
-    ["node-alpha", "--archive-commit", result.commit],
-    { workspace, json: true },
-  );
-  assert.equal(restored.exitCode, 0, restored.stderr);
-  const current = await readNodeForEdit(adapter, "node-alpha");
-  assert.equal(current.status, "stable");
-  assert.equal(current.frontmatter.status, undefined);
-  assert.equal(current.body, "Original A\n");
+  assert.equal(edit.body, "Original A\n");
+  assert.equal(await adapter.history!.read({ commit: result.commit, path: "A/A.md" }), edit.raw);
 });
 
 test("public standard material edits retain exact history and reject invalid source shapes before saving", async (t) => {
@@ -393,6 +381,7 @@ test("material versions are automatic, body-preserving, local and captured with 
   await fs.writeFile(target, "material one");
   let node = await readNodeForEdit(adapter, "node-alpha");
   const originalBody = parseFrontmatter(node.raw).body;
+  const generated = { imported: ["opaque", false], by: "not an actor", at: "not a timestamp" };
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "unanchored");
   const readFile = adapter.readFile.bind(adapter);
   const bodyReads: string[] = [];
@@ -402,7 +391,7 @@ test("material versions are automatic, body-preserving, local and captured with 
   };
   await writeNodeDocument(adapter, node.nodeId, {
     baseEtag: node.etag,
-    frontmatter: { resource: "../../checked.txt" },
+    frontmatter: { resource: "../../checked.txt", generated },
   });
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
   assert.equal(
@@ -411,6 +400,7 @@ test("material versions are automatic, body-preserving, local and captured with 
     "checking one Node must not read unrelated bodies",
   );
   node = await readNodeForEdit(adapter, node.nodeId);
+  assert.deepEqual(node.frontmatter.generated, generated);
   const firstRecord = (await adapter.history.nodeRecords())[node.nodeId]!;
   const firstHash = firstRecord.materials[0]!.version!;
   assert.match(firstHash, /^[a-f0-9]{64}$/);
@@ -425,6 +415,7 @@ test("material versions are automatic, body-preserving, local and captured with 
   const confirmed = await confirmNodeSync(adapter, node.nodeId, { baseEtag: firstConfirmed.etag });
   assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
   assert.equal(parseFrontmatter(confirmed.raw).body, originalBody);
+  assert.deepEqual(parseFrontmatter(confirmed.raw).data.generated, generated);
   await assert.rejects(
     confirmNodeSync(adapter, node.nodeId, { baseEtag: node.etag }),
     /etag conflict/i,

@@ -114,7 +114,7 @@ test("decisions scope: only sources expand work; body citations, code examples a
     .items.filter((item) => item.nodeId)
     .map((item) => item.nodeId)
     .sort();
-  assert.deepEqual(goals, ["node-child", "node-task"]);
+  assert.deepEqual(goals, ["node-child", "node-draft", "node-task"]);
   assert.deepEqual(
     section(value, "open")
       .items.filter((item) => item.cardId)
@@ -130,8 +130,8 @@ test("prose missing IDs leave unknown room for established selector errors in Ca
   const noise = Array.from({ length: 20 }, (_, index) => `node-missing${index}`);
   const body = [
     noise.join(", "),
-    "[unknown id](node-nope00) `node-inline` `node-rule「Missing」`",
-    "node-rule「Keep」 node-rule「Missing」 node-rule「Repeat」",
+    "[unknown id](node-nope00) `node-inline` `[Missing](node-rule#Missing)`",
+    "[Keep](node-rule#Keep) [Missing](node-rule#Missing) [Repeat](node-rule#Repeat)",
     "```\nnode-inline\n```",
   ].join("\n");
   await node("Module", "node-module", "goal", "Module rules.", {
@@ -216,7 +216,7 @@ test("explicit historical pins keep their identity and ambiguity after deletion 
     operation: "test.delete-before-publication",
   });
   const prompt =
-    "Read node-target「Exact」 and [the same rule](node-target#Exact). node-nope00 `node-target「Missing」`.";
+    "Read [Exact](node-target#Exact) and [the same rule](node-target#Exact). node-nope00 `[Missing](node-target#Missing)`.";
   const source = (commit: string) => ({
     resource: "../Target/Target.md",
     version: { commit, path: "Target/Target.md" },
@@ -309,7 +309,7 @@ test("canonical source binding precedes a same-name alias while true paths and u
   await node("node-target", "node-imposter", "prompt", "## Exact\nAlias occupant rule.");
   await save();
   const prompt =
-    "Bare node-target「Exact」 and [canonical](node-target#Exact); [actual path](../node-target/node-target.md#Exact).";
+    "Bare node-target and [canonical](node-target#Exact); [actual path](../node-target/node-target.md#Exact).";
   const source = (commit: string) => ({
     resource: "../Original/Original.md",
     version: { commit, path: "Original/Original.md" },
@@ -463,7 +463,7 @@ test("decisions sections: adjacent quoted titles bind exact pins; outgoing follo
   await node("Task", "node-task", "goal", "## Chosen\nNew changed text.\n## Only Today\nnew");
   await card(
     "card-selection",
-    "node-task「Chosen」 and node-task「Only Today」.\n```text\nnode-task「Other」\n```",
+    "[Chosen](node-task#Chosen) and [Only Today](node-task#Only%20Today).\n```text\n[Other](node-task#Other)\n```",
     [{ resource: "../Task/Task.md#Chosen", version: { commit: basis, path: "Task/Task.md" } }],
   );
   await save();
@@ -513,7 +513,7 @@ test("decisions protected boundary: five individually bounded source texts excee
   const basis = await save();
   await card(
     "card-many",
-    "Read sources. Missing node-absent「Missing」.",
+    "Read sources. Missing [Missing](node-absent#Missing).",
     Array.from({ length: 5 }, (_, index) => ({
       resource: `../Source${index}/Source${index}.md`,
       version: { commit: basis, path: `Source${index}/Source${index}.md` },
@@ -561,10 +561,10 @@ test("decisions controls: missing, repeated and ambiguous literal titles stay un
     resource: "../Target/Target.md",
     version: { commit, path: "Target/Target.md" },
   });
-  await card("card-literals", "node-target「Repeat」 node-target「Missing」 node-target「」", [
+  await card("card-literals", "[Repeat](node-target#Repeat) [Missing](node-target#Missing)", [
     pin(first),
   ]);
-  await card("card-ambiguity", "node-target「Unique」", [pin(first), pin(second)]);
+  await card("card-ambiguity", "[Unique](node-target#Unique)", [pin(first), pin(second)]);
   await card("card-prose", "来源 Node「Unique」中的政策表格。", [pin(first)]);
   await save();
   const missing = await assembleAgentContext(fs, root, { kind: "card", cardId: "card-literals" });
@@ -592,7 +592,7 @@ test("decisions Node body: inline exact citations and file references remain rea
     "Task",
     "node-task",
     "goal",
-    "See node-rule「Late」 and src/b.ts.\n```\nnode-ignored\n```",
+    "See [Late](node-rule#Late) and src/b.ts.\n```\nnode-ignored\n```",
     { resource: "../../src/a.ts" },
   );
   await node(
@@ -628,7 +628,7 @@ test("decisions missing pin: unavailable history cannot fall back to the publica
   const { fs, node, save, card } = await fixture();
   await node("Target", "node-target", "goal", "## Exact\nPublication text.");
   await save();
-  await card("card-missing", "node-target「Exact」", [
+  await card("card-missing", "[Exact](node-target#Exact)", [
     {
       resource: "../Target/Target.md",
       version: { commit: "f".repeat(64), path: "Target/Target.md" },
@@ -639,7 +639,7 @@ test("decisions missing pin: unavailable history cannot fall back to the publica
   assert.ok(!section(value, "decisions").items.some((item) => item.nodeId === "node-target"));
   assert.ok(section(value, "unknown").items.some((item) => item.why.includes("Missing history")));
   const basis = await save();
-  await card("card-directory", "node-target「Exact」", [
+  await card("card-directory", "[Exact](node-target#Exact)", [
     { resource: "../Target/Target.md", version: { commit: basis, path: "Target/Target.md" } },
   ]);
   await save();
@@ -697,8 +697,8 @@ test("decisions Card selector: exact body selectors narrow an existing source at
   const basis = await save();
   await node("Task", "node-task", "goal", "## No Such\nToday-only policy.");
   const source = { resource: "../Task/Task.md", version: { commit: basis, path: "Task/Task.md" } };
-  await card("card-late", "Read node-task「Late」.", [source]);
-  await card("card-missing", "Read node-task「No Such」.", [source]);
+  await card("card-late", "Read [Late](node-task#Late).", [source]);
+  await card("card-missing", "Read [No Such](node-task#No%20Such).", [source]);
   await save();
   const repository = { trackedFiles: [], sources: { files: [], errors: [] } };
   const selected = await assembleAgentContext(
@@ -790,7 +790,7 @@ test("competing literal source selectors keep the source whole and retain their 
   const body = "Opening.\n## First\none\n## Second\ntwo";
   await node("Task", "node-task", "goal", body);
   const pin = await save();
-  await card("card-competing", "node-task「First」 and node-task「Second」", [
+  await card("card-competing", "[First](node-task#First) and [Second](node-task#Second)", [
     {
       resource: "../Task/Task.md",
       version: { commit: pin, path: "Task/Task.md" },
@@ -896,4 +896,24 @@ test("source deduplication keeps different pinned versions and literal sections 
   assert.match(sources[1]!.text!, /New first/);
   assert.match(sources[2]!.text!, /New second/);
   assert.match(sources[3]!.text!, /^New opening/);
+});
+
+test("Chinese quote suffixes are prose while Markdown fragments select sections", async () => {
+  const { fs, node, save, card } = await fixture();
+  await node("Target", "node-target", "prompt", "Opening.\n## Exact\nChosen.\n## Other\nOther.");
+  await save();
+  await card(
+    "card-quotes",
+    "node-target「Exact」 node-target「Missing」 node-target「」 node-target「unclosed",
+  );
+  await card("card-fragment", "[rule](node-target#Exact)");
+  await save();
+  const prose = await readCardBodyReferences(fs, "card-quotes");
+  assert.equal(prose.references.length, 4);
+  assert.ok(
+    prose.references.every((ref) => ref.nodeId === "node-target" && !ref.heading && !ref.reason),
+  );
+  const selected = await readCardBodyReferences(fs, "card-fragment");
+  assert.equal(selected.references.length, 1);
+  assert.equal(selected.references[0]!.heading, "Exact");
 });

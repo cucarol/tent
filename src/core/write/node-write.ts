@@ -1,5 +1,6 @@
 import * as z from "zod/v4";
 import { nodeActorSchema } from "../base/node-provenance.js";
+import { NODE_WRITE_BY_REQUIRES_CONFIRM } from "../graph/node-document-write.js";
 
 /** One observed Node revision, one descriptor edit. */
 export const nodeWriteInputSchema = z
@@ -11,6 +12,7 @@ export const nodeWriteInputSchema = z
     by: nodeActorSchema.optional(),
     readBack: z.boolean().optional(),
   })
+  .refine((p) => p.by === undefined || p.confirm === true, NODE_WRITE_BY_REQUIRES_CONFIRM)
   .refine(
     (p) =>
       p.body !== undefined ||

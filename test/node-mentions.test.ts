@@ -39,7 +39,7 @@ test("materialized Node readers expose mentions in both directions with exact re
       path: id,
       raw,
       etag: contentEtag(raw),
-      archived: false,
+      status: "stable",
       invalid: false,
       parentNodeId: null,
       childNodeIds: [],

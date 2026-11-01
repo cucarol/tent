@@ -88,7 +88,10 @@ test("PLUGIN.md points to SPEC for frozen outputs and brief rules", async () => 
     spec,
     /An output keeps comparison bases for its own materials and for every goal above it/,
   );
-  assert.match(spec, /never make it behind; only `stale_after` does/);
+  assert.match(
+    spec,
+    /An output records one moment, so changes to its materials or its goals never make it behind/,
+  );
   assert.match(spec, /A complete read of an output lists `changedSince`/);
   assert.doesNotMatch(
     spec,

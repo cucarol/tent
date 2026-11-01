@@ -209,11 +209,11 @@ test("main schema 7 coverage cannot stand in for schema 8 marker preparation", a
   assert.equal(await f.tool(), "{}\n");
   assert.equal(await fs.readFile(f.cache, "utf8"), raw);
   await f.prepare();
-  assert.equal(JSON.parse(await fs.readFile(f.cache, "utf8")).schema, 12);
+  assert.equal(JSON.parse(await fs.readFile(f.cache, "utf8")).schema, 13);
   assert.match(await f.tool(f.root, "prepared-v8"), /node-proof/);
 });
 
-test("fresh prepared tool coverage excludes draft owners and retains their stable children", async (t) => {
+test("fresh prepared tool coverage includes draft owners and their stable children", async (t) => {
   const f = await fixture(t);
   const parent = path.join(f.system, "Module/Module.md");
   await fs.writeFile(
@@ -229,6 +229,6 @@ test("fresh prepared tool coverage excludes draft owners and retains their stabl
   await f.prepare();
   const output = await f.tool();
   assert.match(output, /node-child/);
-  assert.doesNotMatch(output, /node-proof/);
+  assert.match(output, /node-proof/);
   assert.match(output, /Module \/ Child/);
 });

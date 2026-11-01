@@ -25,12 +25,12 @@ export type NodeTagCount = { tag: string; count: number; preset: boolean };
 
 /** Tags in use, most used first; deprecated Nodes count only when included. */
 export function countNodeTags(
-  nodes: Iterable<Pick<Node, "tags" | "archived">>,
+  nodes: Iterable<Pick<Node, "tags" | "status">>,
   options: { includeArchived?: boolean } = {},
 ): NodeTagCount[] {
   const counts = new Map<string, number>();
   for (const node of nodes) {
-    if (node.archived && !options.includeArchived) continue;
+    if (node.status === "deprecated" && !options.includeArchived) continue;
     for (const tag of new Set(node.tags)) counts.set(tag, (counts.get(tag) ?? 0) + 1);
   }
   return [...counts]

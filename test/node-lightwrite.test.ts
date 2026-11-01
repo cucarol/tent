@@ -57,6 +57,7 @@ test("append requires no caller read, normalizes boundary newlines, captures exa
     parseFrontmatter(saved.raw).body,
     "Keep indentation\n    code  \n\n## Notes \\*literally\\*\n\n[next](../Peer/Peer.md)\n",
   );
+  assert.equal("generated" in parseFrontmatter(saved.raw).data, false);
   assert.equal(saved.etag, contentEtag(saved.raw));
   assert.ok(saved.version);
   assert.equal(await adapter.history.read(saved.version), saved.raw);
@@ -461,4 +462,18 @@ test("plain appended heading text round-trips named and numeric entity spellings
   const read = await readSection(adapter, "node-note", heading);
   assert.match(read.text, /A \\&amp; B \\&\\#35; C \\&\\#x26; D \\& E/);
   await assert.rejects(readSection(adapter, "node-note", "A & B # C & D & E"), /not found/);
+});
+
+test("append preserves generated and stale_after as arbitrary metadata", async (t) => {
+  const { adapter } = await fixture(t, "original");
+  const parsed = parseFrontmatter(await adapter.readFile("Note/Note.md"));
+  const metadata = { generated: 17, stale_after: ["custom", false], owner: { team: "docs" } };
+  await adapter.writeFile(
+    "Note/Note.md",
+    serializeFrontmatter({ ...parsed.data, ...metadata }, parsed.body, parsed.keyOrder),
+  );
+  const saved = await appendNodeBody(adapter, "node-note", { body: "added" });
+  const data = parseFrontmatter(saved.raw).data;
+  for (const [key, value] of Object.entries(metadata)) assert.deepEqual(data[key], value);
+  assert.equal(parseFrontmatter(saved.raw).body, "original\n\nadded\n");
 });

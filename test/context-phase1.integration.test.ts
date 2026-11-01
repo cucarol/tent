@@ -80,8 +80,6 @@ test("brief limits each waiting list independently and retains totals, read comm
           nodeId: "node-legacy",
           path: "Legacy",
           state: "behind",
-          trustTier: "unverified",
-          stale: false,
           behind: { reasons: ["Node record missing; no retained baseline"] },
           materials: [
             {
@@ -652,8 +650,6 @@ test("brief reports only drift counts and a qualified entry while bounding other
     path: i === 1 ? "Short" : `一个很长的名字${"非常长".repeat(200)}`,
     type: "goal",
     state: (i % 2 ? "ahead" : "behind") as "ahead" | "behind",
-    trustTier: "unverified" as const,
-    stale: false,
     ...(i % 2
       ? { ahead: { reasons: ["No output"] } }
       : { behind: { reasons: ["材料变化".repeat(100)] } }),
@@ -752,7 +748,6 @@ test("brief keeps interleaved Card states in their original sorted order and pre
     cards: { revision: "fixture", items },
     changedCardSources: { items: [], diagnostics: [{ message: "Source could not be compared" }] },
     recoveryConflicts: Array.from({ length: 12 }, (_, i) => `a/full recovery path ${i}.md`),
-    draftCount: 3,
   };
   const brief = makeContextBrief(context, { roleId: "role-requester" });
   assert.deepEqual(
@@ -770,9 +765,9 @@ test("brief keeps interleaved Card states in their original sorted order and pre
   });
   assert.equal(brief.cardSourcesUncertain, true);
   assert.deepEqual(brief.recoveryConflicts, context.recoveryConflicts);
-  assert.deepEqual(brief.drafts, { count: 3, command: "tent node list --status draft" });
+  assert.equal("drafts" in brief, false);
   const text = formatContextBrief(brief);
-  assert.match(text, /3 条还没定 · tent node list --status draft/);
+  assert.doesNotMatch(text, /还没定|--status draft/);
   for (const p of context.recoveryConflicts!) assert.ok(text.includes(`.tent/${p}`));
   for (const read of [brief.returnedCardsRead!, brief.consumedCardsRead!, brief.unknownCardsRead!])
     assert.ok(text.split("\n").includes(`+2 more: ${read.command}`));
@@ -854,8 +849,6 @@ test("brief counts a dual-status goal while drift lists both findings and leaves
           path: "Goal",
           type: "goal",
           state: "behind",
-          trustTier: "unverified",
-          stale: false,
           materials: [],
           reasons: ["Material changed", "No output"],
           behind: { reasons: ["Material changed"] },
@@ -867,8 +860,6 @@ test("brief counts a dual-status goal while drift lists both findings and leaves
           type: "output",
           resource: "../../evidence.svg",
           state: "synced",
-          trustTier: "unverified",
-          stale: false,
           materials: [],
           reasons: [],
         },

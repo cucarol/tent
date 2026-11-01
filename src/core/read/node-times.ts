@@ -4,7 +4,6 @@ import type { DocumentVersion, HistoryCommit } from "../store/history-port.js";
 import { isNodeId } from "../base/id.js";
 import { nodeNotePath } from "../base/paths.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
-import { nodeVerifications, okfTimestampSchema } from "../base/node-provenance.js";
 import { ReaderError } from "../graph/context-reader.js";
 import { loadNodeCatalog, readCatalogDocument } from "../graph/node-catalog.js";
 import { nodeSemanticFingerprint } from "../graph/node-sync-record.js";
@@ -13,24 +12,7 @@ export type NodeTimes = {
   nodeId: string;
   /** Time of the latest retained body/material-address change; null when it cannot be established. */
   contentChangedAt: string | null;
-  /** Latest declared generation or confirmation of a current output; not its completion time. */
-  recordedAt: string | null;
 };
-
-function recordedAt(data: Record<string, unknown>): string | null {
-  if (data.type !== "output") return null;
-  const times: number[] = [];
-  const generated = okfTimestampSchema.safeParse((data.generated as { at?: unknown })?.at);
-  if (generated.success) times.push(Date.parse(generated.data));
-  for (const entry of Array.isArray(data.verified) ? data.verified : [data.verified]) {
-    try {
-      times.push(...nodeVerifications({ verified: [entry] }).map(({ at }) => Date.parse(at)));
-    } catch {
-      // One invalid declaration cannot erase another valid confirmation time.
-    }
-  }
-  return times.length ? new Date(Math.max(...times)).toISOString() : null;
-}
 
 /** On-demand times for selected Nodes; no capture, acknowledgement or material observation. */
 export async function readNodeTimes(
@@ -48,10 +30,9 @@ export async function readNodeTimes(
     return node;
   });
   const documents = await Promise.all(selected.map((node) => readCatalogDocument(fs, node)));
-  const result = documents.map(({ nodeId, raw }) => ({
+  const result = documents.map(({ nodeId }) => ({
     nodeId,
     contentChangedAt: null as string | null,
-    recordedAt: recordedAt(parseFrontmatter(raw).data),
   }));
   if (!fs.history || !(await hasDocumentHistory(fs))) return result;
   let events: HistoryCommit[];

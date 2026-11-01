@@ -14,7 +14,7 @@ import { runCardCommand } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import { NodeFs } from "../src/fs/node-fs.js";
+import { readNodeTimes } from "../src/core/read/node-times.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
@@ -142,11 +142,12 @@ test("cold-start material declarations share the Workspace root and detect subse
       "node-goal",
       "--sources-json",
       JSON.stringify([{ resource: "docs/req.md", title: "Requirements" }]),
-      "--by",
-      "process:review",
     ])
   ).node;
-  assert.equal((await get(goal.nodeId)).sources[0].resource, "../../../docs/req.md");
+  const cold = await get(goal.nodeId);
+  assert.equal(cold.sources[0].resource, "../../../docs/req.md");
+  assert.equal("generated" in cold, false);
+  assert.equal("verified" in cold, false);
   const card = parse(
     await runCardCommand(
       "create",
@@ -365,11 +366,17 @@ test("Card CLI file sources use the Workspace root while Node sources retain the
 
 test("actor validation explains all formats without exposing a validation JSON dump", async (t) => {
   const { root, cli, get } = await fixture(t);
-  for (const actor of ["human:reviewer", "process:import", "producer/1.0"])
-    await cli("create", [actor.replace(/[/:]/g, "-"), "--type", "prompt", "--by", actor]);
+  const actors = ["human:reviewer", "process:import", "producer/1.0"];
+  for (const actor of actors) {
+    const goal = await get("node-goal");
+    await cli("confirm", ["node-goal", "--base-etag", goal.etag, "--by", actor]);
+  }
+  const goal = await get("node-goal");
+  assert.deepEqual(goal.verified.map((entry: { by: string }) => entry.by).sort(), actors);
+  const before = await fs.readFile(path.join(root, ".tent/Goal/Goal.md"), "utf8");
   const result = await runNodeCommand(
-    "create",
-    ["Invalid", "--type", "prompt", "--by", "agent:judge"],
+    "confirm",
+    ["node-goal", "--base-etag", goal.etag, "--by", "agent:judge"],
     { workspace: root },
   );
   assert.equal(result.exitCode, 1);
@@ -377,15 +384,21 @@ test("actor validation explains all formats without exposing a validation JSON d
     result.stderr.split("\n")[0],
     "--by must use human:<id>, process:<id>, or <producer>/<version>.",
   );
-  assert.match(result.stderr, /\nNext: tent node create --help[^\n]*\n$/);
-  const goal = await get("node-goal");
+  assert.match(result.stderr, /\nNext: tent node confirm --help[^\n]*\n$/);
   for (const [sub, input] of [
-    ["write", { baseEtag: goal.etag, body: "Invalid", by: "agent:judge" }],
+    ["write", { baseEtag: goal.etag, body: "Invalid", confirm: true, by: "agent:judge" }],
     [
       "write-many",
       {
         items: [
-          { op: "create", ref: "invalid", name: "Invalid", type: "prompt", by: "agent:judge" },
+          {
+            op: "update",
+            nodeId: "node-goal",
+            baseEtag: goal.etag,
+            body: "Invalid",
+            confirm: true,
+            by: "agent:judge",
+          },
         ],
       },
     ],
@@ -395,14 +408,18 @@ test("actor validation explains all formats without exposing a validation JSON d
       [...(sub === "write" ? ["node-goal"] : []), "--input-json", JSON.stringify(input)],
       { workspace: root },
     );
+    assert.equal(rejected.exitCode, 1);
     assert.equal(
       rejected.stderr.split("\n")[0],
       "by must use human:<id>, process:<id>, or <producer>/<version>.",
     );
     assert.match(rejected.stderr, new RegExp(`\\nNext: tent node ${sub} --help[^\\n]*\\n$`));
   }
-  for (const sub of ["create", "write", "link-output", "confirm", "write-many"])
+  assert.equal(await fs.readFile(path.join(root, ".tent/Goal/Goal.md"), "utf8"), before);
+  for (const sub of ["write", "confirm"])
     assert.match(nodeHelpText(sub), /human:<id>, process:<id> or <producer>\/<version>/);
+  for (const sub of ["create", "append", "link-output", "write-many"])
+    assert.doesNotMatch(nodeHelpText(sub), /--by\b|human:<id>/);
 });
 
 test("successful mutation output identifies the resolved Workspace in human and JSON output", async (t) => {
@@ -462,7 +479,7 @@ test("Card response source roots match stored documents while ordinary CLI paths
   assert.equal((await get(ordinary.nodeId)).resource, `../../cards/${card.cardId}.md`);
 });
 
-test("ordinary link-output confirmation preserves completion time", async (t) => {
+test("ordinary link-output confirmation preserves content time and records verification", async (t) => {
   const { root, cli, get } = await fixture(t);
   const linked = await cli("link-output", [
     "node-goal",
@@ -471,17 +488,29 @@ test("ordinary link-output confirmation preserves completion time", async (t) =>
     "--name",
     "Linked proof",
   ]);
-  const at = (await get(linked.nodeId)).generated.at;
+  const adapter = openTestFs(path.join(root, ".tent"));
+  const contentTime = async () =>
+    (await readNodeTimes(adapter, [linked.nodeId]))[0]!.contentChangedAt;
+  const at = await contentTime();
   assert.ok(at);
+  const initial = parseFrontmatter(await fs.readFile(path.join(root, linked.path), "utf8"));
+  assert.equal("generated" in initial.data, false);
+  assert.equal("verified" in initial.data, false);
+  let previousVerifiedAt = Number.NEGATIVE_INFINITY;
   for (let index = 0; index < 2; index++) {
     const observed = await get(linked.nodeId);
     await cli("confirm", [linked.nodeId, "--base-etag", observed.etag, "--by", "human:cuca"]);
-    assert.equal((await get(linked.nodeId)).generated.at, at);
+    assert.equal(await contentTime(), at);
+    const confirmed = parseFrontmatter(await fs.readFile(path.join(root, linked.path), "utf8"));
+    const { verified, ...retained } = confirmed.data;
+    assert.deepEqual(retained, initial.data);
+    assert.equal(confirmed.body, initial.body);
+    const entries = verified as { by: string; at: string }[];
+    assert.equal(entries.length, 1, "verification retains only the latest entry per actor");
+    assert.equal(entries[0]!.by, "human:cuca");
+    const verifiedAt = Date.parse(entries[0]!.at);
+    assert.ok(Number.isFinite(verifiedAt));
+    assert.ok(verifiedAt >= previousVerifiedAt);
+    previousVerifiedAt = verifiedAt;
   }
-  const saved = parseFrontmatter(await fs.readFile(path.join(root, linked.path), "utf8")).data;
-  assert.equal(
-    (saved.verified as unknown[]).length,
-    1,
-    "verification still retains only the latest entry per actor",
-  );
 });

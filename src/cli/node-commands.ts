@@ -88,7 +88,6 @@ async function runNodeCommandOpened(
         "rename",
         "move",
         "archive",
-        "restore",
         "delete",
       ].includes(sub)
     )
@@ -106,13 +105,12 @@ async function runNodeCommandOpened(
       return usage("--heading is only valid for node append");
     if (
       flags.by !== undefined &&
-      !["create", "write", "append", "confirm", "link-output"].includes(sub)
+      sub !== "confirm" &&
+      !(sub === "write" && flags.confirm === "true")
     )
-      return usage("--by is only valid for content writes and node confirm");
+      return usage("--by is only valid with node confirm or node write --confirm.");
     if (flags.start !== undefined && sub !== "read-many")
       return usage("--start is only valid for node read-many");
-    if (flags["archive-commit"] !== undefined && sub !== "restore")
-      return usage("--archive-commit is only valid for node restore");
     if (flags["sources-json"] !== undefined && sub !== "create")
       return usage(
         "--sources-json is only valid for node create; write standard fields through --input-json frontmatter",
@@ -222,7 +220,7 @@ async function runNodeCommandOpened(
         const { linkOutputResource, workspaceMaterialFields } = await import("./material-input.js");
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
-        const allowed = ["json", "workspace", "resource", "name", "by", "card", "role", "tags"];
+        const allowed = ["json", "workspace", "resource", "name", "card", "role", "tags"];
         if (Object.keys(flags).some((key) => !allowed.includes(key)) || !flags.resource)
           return usage(nodeHelpText(sub));
         const material = await workspaceMaterialFields(
@@ -234,7 +232,6 @@ async function runNodeCommandOpened(
           resource: linkOutputResource(material.resource as string),
           label: flags.resource,
           name: flags.name,
-          by: flags.by,
           cardId: flags.card,
           roleId: flags.role,
           tags: parseCsv(flags.tags).map(normalizeTagName),
@@ -679,7 +676,6 @@ async function runNodeCommandOpened(
             ? { body: body && !body.endsWith("\n") ? body + "\n" : body }
             : {}),
           ...normalizedMaterials,
-          ...(flags.by !== undefined ? { by: flags.by } : {}),
           ...(tags.length > 0 ? { tags } : {}),
         });
         const result = workspaceReadPaths(
@@ -715,7 +711,7 @@ async function runNodeCommandOpened(
         const { appendNodeBody } = await import("../core/write/node-lightwrite.js");
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
-        const allowed = ["json", "workspace", "heading", "body", "by"];
+        const allowed = ["json", "workspace", "heading", "body"];
         if (Object.keys(flags).some((key) => !allowed.includes(key)) || flags.body === undefined)
           return usage(nodeHelpText(sub));
         const nodeId = nodeRef(target);
@@ -723,7 +719,6 @@ async function runNodeCommandOpened(
         const saved = await appendNodeBody(fs, nodeId, {
           body,
           heading: flags.heading,
-          by: flags.by,
         });
         const result = {
           workspaceId,
@@ -803,7 +798,7 @@ async function runNodeCommandOpened(
               path: saved.path,
               raw: saved.raw,
               etag: saved.etag,
-              archived: documentLifecycle(parseFrontmatter(saved.raw).data).status === "deprecated",
+              status: documentLifecycle(parseFrontmatter(saved.raw).data).status,
               invalid: false,
               parentNodeId: null,
               childNodeIds: [],
@@ -885,23 +880,12 @@ async function runNodeCommandOpened(
           if (from !== to) writtenNodePaths.add(nodeNotePath(to));
         return await mutationPrint(result, json, () => `Moved ${target}`);
       }
-      case "archive":
-      case "restore": {
-        const { archiveNode, restoreNode } = await import("../core/graph/node-lifecycle.js");
+      case "archive": {
+        const { archiveNode } = await import("../core/graph/node-lifecycle.js");
         const target = oneTarget(positionals, `tent node ${sub} <nodeId> [--json]`);
         if (typeof target !== "string") return target;
-        const archiveCommit = flagValue(flags, "archive-commit");
-        if (sub === "restore" && !archiveCommit)
-          return usage("tent node restore <nodeId> --archive-commit <commit> [--json]");
-        const result =
-          sub === "archive"
-            ? await archiveNode(env, nodeRef(target))
-            : await restoreNode(env, nodeRef(target), archiveCommit!);
-        return await mutationPrint(
-          result,
-          json,
-          () => `${sub === "archive" ? "Archived" : "Restored"} ${target}`,
-        );
+        const result = await archiveNode(env, nodeRef(target));
+        return await mutationPrint(result, json, () => `Archived ${target}`);
       }
       case "delete": {
         const { deleteNode } = await import("../core/graph/ops.js");
@@ -964,20 +948,21 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
   check: ["tent node check <nodeId> [--json]"],
   confirm: ["tent node confirm <nodeId> --base-etag <complete-live-etag> [--by <actor>] [--json]"],
   "link-output": [
-    "tent node link-output <goalId> --resource <address> [--name <name>] [--tags a,b] [--by <actor>] [--role <roleId>] [--card <id>] [--json]",
+    "tent node link-output <goalId> --resource <address> [--name <name>] [--tags a,b] [--role <roleId>] [--card <id>] [--json]",
   ],
   search: ["tent node search --resource <address> [--limit <n>] [--cursor <cursor>] [--json]"],
   relations: [
     "tent node relations <nodeId|root> --direction parent|children|outgoing|incoming [--limit <n>] [--cursor <cursor>] [--include-archived] [--json]",
   ],
   create: [
-    "tent node create <name> --type goal|prompt|output [--id node-ID] [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--by <actor>] [--json]",
+    "tent node create <name> --type goal|prompt|output [--id node-ID] [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--json]",
   ],
   write: [
-    "tent node write <nodeId> [--body <text>|-] [--confirm] --base-etag <etag> [--by <actor>] [--read-back] [--json]",
+    "tent node write <nodeId> [--body <text>|-] [--confirm] --base-etag <etag> [--read-back] [--json]",
+    "tent node write <nodeId> --confirm --base-etag <etag> [--by <actor>] [--body <text>|-] [--read-back] [--json]",
     "tent node write <nodeId> --input-json <JSON>|- [--json]",
   ],
-  append: ["tent node append <nodeId> --body <text|-> [--heading <title>] [--by <actor>] [--json]"],
+  append: ["tent node append <nodeId> --body <text|-> [--heading <title>] [--json]"],
   "write-many": [
     "tent node write-many --input-json <JSON|-> [--json]",
     "tent node write-many --draft <file> [--json]",
@@ -985,7 +970,6 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
   rename: ["tent node rename <nodeId> <new-name> [--json]"],
   move: ["tent node move <nodeId> --parent <nodeId|root> [--json]"],
   archive: ["tent node archive <nodeId> [--json]"],
-  restore: ["tent node restore <nodeId> --archive-commit <commit> [--json]"],
   delete: ["tent node delete <nodeId> [--json]"],
   tags: ["tent node tags [--include-archived] [--json]"],
 };
@@ -1013,7 +997,7 @@ Record
   tent node link-output <goal-id> --resource <path>
 
 Organize
-  tent node rename|move|archive|restore|delete
+  tent node rename|move|archive|delete
 
 tent node <command> --help shows all of its options.`;
   const notes: Record<string, string> = {
@@ -1041,8 +1025,7 @@ tent node <command> --help shows all of its options.`;
     "write-many":
       'Saves a batch in one commit; if any item fails, nothing is saved. {"items":[{"op":"create","ref":"rules","name":"Rules","type":"prompt","body":"..."},{"op":"update","nodeId":"node-abc123","baseEtag":"<etag>","body":"...","confirm":true}]}. A create\'s parent is an existing id or @ref; @ref also works in links and material paths, even for items later in the batch. New resource and sources paths start at the Workspace root; raw updates use stored document-relative paths. Updates need ETags from complete reads. Results list nodeId, path and etag in input order.',
     tags: "Lists the tags in use with their counts and marks the presets. Tags only help find Nodes; they change no behavior.",
-    archive:
-      "Marks the Node and everything under it archived, in one commit. tent node restore <id> --archive-commit <commit> undoes exactly that commit.",
+    archive: "Marks the Node and everything under it archived, in one commit.",
   };
   return [
     ...NODE_COMMAND_HELP[sub],
@@ -1050,14 +1033,9 @@ tent node <command> --help shows all of its options.`;
     "",
     "--workspace <path> picks the Workspace; --json prints JSON. Options also take --key=value, and -- ends them.",
     ...(["create", "write", "append"].includes(sub) ? ["--body - reads stdin."] : []),
-    ...(["create", "write", "append", "confirm", "link-output"].includes(sub)
+    ...(["write", "confirm"].includes(sub)
       ? [
-          "--by records who wrote it: human:<id>, process:<id> or <producer>/<version>; without it, Tent records tent/<version>.",
-        ]
-      : []),
-    ...(sub === "write-many"
-      ? [
-          "JSON by records who wrote it: human:<id>, process:<id> or <producer>/<version>; without it, Tent records tent/<version>.",
+          "--by records who confirmed it: human:<id>, process:<id> or <producer>/<version>; without it, Tent records tent/<version>.",
         ]
       : []),
     ...(["create", "link-output", "search", "write", "write-many"].includes(sub)
@@ -1146,7 +1124,6 @@ function parseFlags(args: string[]): {
           "sources-json",
           "tags",
           "base-etag",
-          "archive-commit",
           "input-json",
           "draft",
         ].map((name) => [name, { type: "string" as const }]),

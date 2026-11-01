@@ -143,7 +143,7 @@ test("modules require explicit structure sources and retain all equally specific
   );
 });
 
-test("material index excludes draft module coverage while retaining stable modules beneath it", async (t) => {
+test("material index retains draft coverage and excludes deprecated owners without retiring stable children", async (t) => {
   const { root, adapter } = await fixture(t);
   const systemRoot = path.join(root, ".tent");
   await fs.mkdir(path.join(systemRoot, ".git"));
@@ -154,12 +154,12 @@ test("material index excludes draft module coverage while retaining stable modul
   const draftRaw = original.replace("type: output", "type: output\nstatus: draft");
   await adapter.writeFile("Core/Core.md", draftRaw);
   const expected = buildStopMaterialIndex(await loadNodeCatalog(adapter), root);
-  assert.ok(!expected.nodes.some((node) => node.nodeId === "node-core"));
+  assert.ok(expected.nodes.some((node) => node.nodeId === "node-core"));
   assert.deepEqual(
     modulesForIndexedTurn(expected, turn)
       .map((node) => node.nodeId)
       .sort(),
-    ["node-card", "node-equal"],
+    ["node-card", "node-core", "node-equal"],
   );
   assert.deepEqual(
     modulesForIndexedTurn(expected, turn).find((node) => node.nodeId === "node-card")!.names,
@@ -175,8 +175,18 @@ test("material index excludes draft module coverage while retaining stable modul
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 12);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 13);
   assert.equal(await adapter.readFile("Core/Core.md"), draftRaw);
+  await adapter.writeFile("Core/Core.md", draftRaw.replace("status: draft", "status: deprecated"));
+  const retired = buildStopMaterialIndex(await loadNodeCatalog(adapter), root);
+  assert.ok(!retired.nodes.some((node) => node.nodeId === "node-core"));
+  assert.deepEqual(
+    modulesForIndexedTurn(retired, turn)
+      .map((node) => node.nodeId)
+      .sort(),
+    ["node-card", "node-equal"],
+  );
+  assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), retired);
   await adapter.writeFile("Core/Core.md", original);
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), stable);
 });
@@ -208,9 +218,9 @@ test("material index excludes unknown lifecycle from modules and ordinary materi
     assert.match(current.statusDiagnostic!, /preserved without assuming currentness/);
   }
   const expected = buildStopMaterialIndex(catalog, root);
-  for (const id of ["node-stable", "node-core"])
+  for (const id of ["node-stable", "node-draft", "node-core"])
     assert.ok(expected.nodes.some((node) => node.nodeId === id));
-  for (const id of ["node-draft", "node-unknownmodule", "node-unknownevidence", "node-deprecated"])
+  for (const id of ["node-unknownmodule", "node-unknownevidence", "node-deprecated"])
     assert.ok(!expected.nodes.some((node) => node.nodeId === id));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
   await fs.mkdir(path.join(systemRoot, ".git"));
@@ -230,7 +240,7 @@ test("material index excludes unknown lifecycle from modules and ordinary materi
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 12);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 13);
   assert.deepEqual(modulesForIndexedTurn(expected, event(["unknown/a.ts"])), []);
   await fs.writeFile(
     path.join(systemRoot, unknownModulePath),

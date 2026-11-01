@@ -213,7 +213,7 @@ test("unavailable goal material cannot establish a match or claim a known change
   assert.equal(await fs.history.currentCommit(), head);
 });
 
-test("only explicit expiry makes a frozen output behind, and confirmation does not clear expiry", async () => {
+test("stale_after is ordinary metadata and never makes a frozen output behind", async () => {
   const { fs, output, confirm } = await fixture("asset");
   const edit = await readNodeForEdit(fs, output);
   await writeNodeDocument(fs, output, {
@@ -221,11 +221,10 @@ test("only explicit expiry makes a frozen output behind, and confirmation does n
     frontmatter: { stale_after: "2026-10-07T00:00:00Z" },
   });
   await fs.writeFile("../result.txt", "changed");
-  assert.equal((await inspectNodeSync(fs, output, "2026-10-06T23:59:59Z")).behind, undefined);
-  const expired = await inspectNodeSync(fs, output, "2026-10-07T00:00:00Z");
-  assert.deepEqual(expired.behind?.reasons, ["Content is stale on or after 2026-10-07T00:00:00Z"]);
+  assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
   await confirm(output);
-  assert.ok((await inspectNodeSync(fs, output, "2026-10-07T00:00:00Z")).behind);
+  assert.equal((await inspectNodeSync(fs, output)).behind, undefined);
+  assert.equal((await readNodeForEdit(fs, output)).frontmatter.stale_after, "2026-10-07T00:00:00Z");
 });
 
 test("output change metadata survives a complete CLI page and is omitted from partial pages", () => {

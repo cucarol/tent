@@ -10,7 +10,7 @@ import {
   savePreparedNodeDocumentUnlocked,
 } from "../graph/node-document-write.js";
 
-export type NodeAppendInput = { body: string; heading?: string; by?: string };
+export type NodeAppendInput = { body: string; heading?: string };
 /** Append without a caller read; the current body is observed only inside the write lock. */
 export function appendNodeBody(fs: FsAdapter, nodeId: string, input: NodeAppendInput) {
   assertBody(input.body);
@@ -41,7 +41,7 @@ export function appendNodeBody(fs: FsAdapter, nodeId: string, input: NodeAppendI
           end: prefix.length + addition.length,
         },
       );
-      return saveBody(fs, current, body, "node.append", input.by);
+      return saveBody(fs, current, body, "node.append");
     },
     { operation: "node.append" },
   );
@@ -63,10 +63,9 @@ async function saveBody(
   current: Awaited<ReturnType<typeof readNodeForEdit>>,
   body: string,
   operation: string,
-  by?: string,
 ) {
   const node = { id: current.nodeId, path: current.path, name: current.name };
-  const input = { baseEtag: current.etag, body, by };
+  const input = { baseEtag: current.etag, body };
   const prepared = prepareNodeDocumentWrite(node, current.raw, input);
   const parsed = parseFrontmatter(prepared);
   // Canonicalize material addresses without rewriting Markdown outside the changed range.

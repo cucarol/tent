@@ -20,7 +20,11 @@ import {
   validateMaterialAddresses,
 } from "../base/material.js";
 import { loadNodeCatalog, readCatalogDocument } from "../graph/node-catalog.js";
-import { NodeWriteError, prepareNodeDocumentWrite } from "../graph/node-document-write.js";
+import {
+  NODE_WRITE_BY_REQUIRES_CONFIRM,
+  NodeWriteError,
+  prepareNodeDocumentWrite,
+} from "../graph/node-document-write.js";
 import { isIncompleteNodeReadEtag } from "../base/node-read-basis.js";
 import { normalizeOptionalNodeType } from "../base/node-type.js";
 import type { OpsEnv } from "../graph/ops-context.js";
@@ -40,11 +44,7 @@ import {
   type NodeBasisRecord,
 } from "../graph/node-sync-record.js";
 
-import {
-  prepareNodeProvenanceSave,
-  nodeActorSchema,
-  recordNodeVerification,
-} from "../base/node-provenance.js";
+import { nodeActorSchema, recordNodeVerification } from "../base/node-provenance.js";
 
 const requiredString = (field: string) =>
   z.string({ error: (issue) => (issue.input === undefined ? `${field} is required` : undefined) });
@@ -64,7 +64,6 @@ const createItem = z.strictObject({
   tags: z.array(z.string()).optional(),
   resource: resourceSchema.optional(),
   sources: sourcesSchema.optional(),
-  by: nodeActorSchema.optional(),
 });
 const updateItem = z
   .strictObject({
@@ -77,6 +76,7 @@ const updateItem = z
     confirm: z.boolean().optional(),
     by: nodeActorSchema.optional(),
   })
+  .refine((p) => p.by === undefined || p.confirm === true, NODE_WRITE_BY_REQUIRES_CONFIRM)
   .refine(
     (p) =>
       p.raw !== undefined
@@ -272,7 +272,6 @@ export async function writeNodesBatchUnlocked(
         before: null,
         raw: serializeFrontmatter(data, body, NODE_FRONTMATTER_KEY_ORDER),
         parentId: entry.parentId,
-        by: item.by,
       });
     } else {
       const node = catalog.byId.get(item.nodeId);
@@ -326,7 +325,6 @@ export async function writeNodesBatchUnlocked(
   const nodes = new Map(catalog.byId);
   const nodeRecords: Record<string, NodeBasisRecord> = {};
   for (const node of planned) {
-    node.raw = prepareNodeProvenanceSave(node.raw, node.before, node.by, now);
     if (node.confirm) {
       const parsed = parseFrontmatter(node.raw);
       recordNodeVerification(parsed.data, node.by, now);
@@ -342,7 +340,7 @@ export async function writeNodesBatchUnlocked(
       header: node.raw.slice(0, node.raw.length - parsed.body.length),
       parentNodeId: node.parentId ?? nodes.get(node.nodeId)?.parentNodeId ?? null,
       childNodeIds: [],
-      archived: documentLifecycle(parsed.data).status === "deprecated",
+      status: documentLifecycle(parsed.data).status,
       invalid: false,
     });
   }

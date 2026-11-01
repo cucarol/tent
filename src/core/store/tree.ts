@@ -18,7 +18,6 @@ import {
 import { isNodeId } from "../base/id.js";
 import { contentEtag } from "../base/etag.js";
 import { assertCurrentLayout } from "./retired-layout.js";
-import { okfTimestampSchema } from "../base/node-provenance.js";
 
 export { nodeNotePath } from "../base/paths.js";
 
@@ -165,7 +164,6 @@ async function loadNode(fs: FsAdapter, path: string, parent: Node | null): Promi
     type: fm.type,
     tags,
     ...documentLifecycle(fm),
-    archived: false,
     invalid: !!parseError || !!schemaError,
     path,
     name,
@@ -197,8 +195,6 @@ export function canonicalIdentityError(data: Record<string, unknown>): string | 
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
-  if (data.stale_after !== undefined && !okfTimestampSchema.safeParse(data.stale_after).success)
-    return "Invalid stale_after: expected an ISO 8601 timestamp with an explicit timezone.";
   return undefined;
 }
 
@@ -242,7 +238,6 @@ function resolveSubtree(node: Node, inheritedInvalid?: { rootPath: string; reaso
   const lifecycle = documentLifecycle(node.fm);
   node.status = lifecycle.status;
   node.statusDiagnostic = lifecycle.statusDiagnostic;
-  node.archived = node.status === "deprecated";
   for (const c of node.children) resolveSubtree(c, invalid);
 }
 
@@ -258,7 +253,7 @@ function invalidIdentityReference(node: Node): { rootPath: string; reason: strin
 
 /** Default current-context discovery; lifecycle never grants or denies write permission. */
 export function isUsableNode(node: Node): boolean {
-  return !node.invalid && node.status !== null && !node.archived;
+  return !node.invalid && node.status !== null && node.status !== "deprecated";
 }
 
 /**

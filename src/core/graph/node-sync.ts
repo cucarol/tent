@@ -31,12 +31,7 @@ import {
   retainedNodeRecords,
   coverageGoalAncestors,
 } from "./node-sync-record.js";
-import {
-  nodeIsStale,
-  nodeTrustTier,
-  nodeVerifications,
-  type NodeTrustTier,
-} from "../base/node-provenance.js";
+import { nodeVerifications } from "../base/node-provenance.js";
 import { createNodeUnlocked } from "./ops.js";
 import { normalizeTagList } from "../base/tags.js";
 import { ReaderError } from "./context-reader.js";
@@ -66,8 +61,6 @@ export type NodeSyncInspection = {
   state: NodeSyncState;
   ahead?: { reasons: string[] };
   behind?: { reasons: string[] };
-  trustTier: NodeTrustTier;
-  stale: boolean;
   uncertain?: boolean;
   materials: {
     resource: string;
@@ -85,17 +78,15 @@ export type NodeSyncInspection = {
 
 export async function inspectWorkspaceSync(
   fs: FsAdapter,
-  now = new Date().toISOString(),
   invalidNativeNodes: readonly InvalidNativeNode[] = [],
   currentCatalog?: NodeCatalog,
 ) {
-  const run = () => inspectWorkspaceSyncInScope(fs, now, invalidNativeNodes, currentCatalog);
+  const run = () => inspectWorkspaceSyncInScope(fs, invalidNativeNodes, currentCatalog);
   return fs.observationScope ? fs.observationScope(run) : run();
 }
 
 async function inspectWorkspaceSyncInScope(
   fs: FsAdapter,
-  now: string,
   invalidNativeNodes: readonly InvalidNativeNode[],
   currentCatalog?: NodeCatalog,
 ) {
@@ -110,7 +101,6 @@ async function inspectWorkspaceSyncInScope(
             (invalid) => invalid.path === `.tent/${nodeNotePath(node.path)}`,
           ),
       ),
-      now,
     )),
     invalidNodes: [
       ...invalidNativeNodes,
@@ -133,11 +123,7 @@ async function inspectWorkspaceSyncInScope(
 
 function currentNodes(catalog: Awaited<ReturnType<typeof loadNodeCatalog>>) {
   return [...catalog.byId.values()].filter(
-    (n) =>
-      !n.archived &&
-      !n.invalid &&
-      catalog.tree.byPath.get(n.path)!.fm.status !== "deprecated" &&
-      catalog.tree.byPath.get(n.path)!.fm.status !== "draft",
+    (n) => !n.invalid && n.status !== null && n.status !== "deprecated",
   );
 }
 
@@ -146,11 +132,10 @@ function inspectCatalogNodes(
   fs: FsAdapter,
   catalog: NodeCatalog,
   selected: CatalogNode[],
-  now: string,
   explicitNodeId?: string,
 ) {
   // One inspection shares one material observation scope, never a later one.
-  const run = () => inspectCatalogNodesInScope(fs, catalog, selected, now, explicitNodeId);
+  const run = () => inspectCatalogNodesInScope(fs, catalog, selected, explicitNodeId);
   return fs.observationScope ? fs.observationScope(run) : run();
 }
 
@@ -158,7 +143,6 @@ async function inspectCatalogNodesInScope(
   fs: FsAdapter,
   catalog: NodeCatalog,
   selected: CatalogNode[],
-  now: string,
   explicitNodeId?: string,
 ) {
   const records = await retainedNodeRecords(fs);
@@ -271,7 +255,6 @@ async function inspectCatalogNodesInScope(
         };
       });
   const goalIntentMatches = new Map<string, boolean>();
-  const draftNodes = new Set<string>();
   const coverageAncestors = new WeakMap<Map<string, CatalogNode>, Set<string>>();
   const coversThroughGoals = (nodes: Map<string, CatalogNode>, nodeId: string) => {
     let ancestors = coverageAncestors.get(nodes);
@@ -288,8 +271,6 @@ async function inspectCatalogNodesInScope(
       try {
         const { raw } = await readDocument(current, attempt > 0);
         const data = nodeCatalog.tree.byPath.get(current.path)!.fm;
-        if (data.status === "draft") draftNodes.add(current.nodeId);
-        else draftNodes.delete(current.nodeId);
         const path = nodeNotePath(current.path);
         const record = records[current.nodeId];
         const observations = await observeMaterials(data, path, nodeCatalog, attempt > 0);
@@ -381,7 +362,6 @@ async function inspectCatalogNodesInScope(
         materials.push(...goalChecks.flat());
         if ((await fs.readFile(path)) !== raw)
           throw new NodeWriteError("ETAG_CONFLICT", "Node changed during sync inspection");
-        const stale = nodeIsStale(data, now);
         const reasons = (isOutputNode(data) ? [] : materials)
           .filter(
             (m) =>
@@ -392,7 +372,6 @@ async function inspectCatalogNodesInScope(
             (m) =>
               `${m.goalId ? `Goal ${m.goalId}: ` : ""}${m.reason ?? `Material changed`}: ${m.resource}`,
           );
-        if (stale) reasons.push(`Content is stale on or after ${data.stale_after}`);
         const anchored =
           materials.some((m) => m.recordedVersion) || nodeVerifications(data).length > 0;
         result = {
@@ -405,8 +384,6 @@ async function inspectCatalogNodesInScope(
             : {}),
           state: reasons.length ? "behind" : anchored ? "synced" : "unanchored",
           ...(reasons.length ? { behind: { reasons: [...reasons] } } : {}),
-          trustTier: nodeTrustTier(data),
-          stale,
           materials,
           reasons,
         };
@@ -453,9 +430,7 @@ async function inspectCatalogNodesInScope(
               refreshed &&
               !refreshed.invalid &&
               (refreshed.nodeId === explicitNodeId ||
-                (!refreshed.archived &&
-                  parseFrontmatter(refreshed.header).data.status !== "deprecated" &&
-                  parseFrontmatter(refreshed.header).data.status !== "draft"))
+                (refreshed.status !== null && refreshed.status !== "deprecated"))
             ) {
               current = refreshed;
               continue;
@@ -470,8 +445,6 @@ async function inspectCatalogNodesInScope(
           path: current.path,
           type: current.type,
           state: "unanchored",
-          trustTier: "unverified",
-          stale: false,
           uncertain: true,
           materials: [],
           reasons: [
@@ -524,9 +497,7 @@ async function inspectCatalogNodesInScope(
       }
     }),
   );
-  // Drafts remain readable, but do not establish requirements or evidence.
-  const settledNodes = nodes.filter((node) => !draftNodes.has(node.nodeId));
-  const outputNodes = settledNodes
+  const outputNodes = nodes
     .filter((n) => isOutputNode(n))
     .map((n) => ({
       nodeId: n.nodeId,
@@ -535,9 +506,9 @@ async function inspectCatalogNodesInScope(
       ...(n.goalId ? { goalId: n.goalId } : {}),
     }));
   const requirementsWithoutOutputs: string[] = [];
-  for (const goal of settledNodes.filter((n) => isRequirementNode({ type: n.type }))) {
+  for (const goal of nodes.filter((n) => isRequirementNode({ type: n.type }))) {
     if (goal.uncertain) continue;
-    const subtreeOutputs = settledNodes.filter(
+    const subtreeOutputs = nodes.filter(
       (n) => isOutputNode(n) && n.path.startsWith(goal.path + "/"),
     );
     const hasMatchingOutput = subtreeOutputs.some((node) => {
@@ -548,9 +519,7 @@ async function inspectCatalogNodesInScope(
         dependencies.every((material) => material.state === "current")
       );
     });
-    const uncertainSubtree = settledNodes.some(
-      (n) => n.uncertain && n.path.startsWith(goal.path + "/"),
-    );
+    const uncertainSubtree = nodes.some((n) => n.uncertain && n.path.startsWith(goal.path + "/"));
     const coverageGoal = goalIntentMatches.has(goal.nodeId);
     const hasMatchingBasis = goalIntentMatches.get(goal.nodeId) === true || hasMatchingOutput;
     if (!coverageGoal && !subtreeOutputs.length && !uncertainSubtree)
@@ -577,16 +546,12 @@ async function inspectCatalogNodesInScope(
   return { nodes, counts, requirementsWithoutOutputs, outputNodes };
 }
 
-export async function inspectNodeSync(
-  fs: FsAdapter,
-  nodeId: string,
-  now = new Date().toISOString(),
-) {
-  const run = () => inspectSingleNodeSync(fs, nodeId, now);
+export async function inspectNodeSync(fs: FsAdapter, nodeId: string) {
+  const run = () => inspectSingleNodeSync(fs, nodeId);
   return fs.observationScope ? fs.observationScope(run, { forceContent: true }) : run();
 }
 
-async function inspectSingleNodeSync(fs: FsAdapter, nodeId: string, now: string) {
+async function inspectSingleNodeSync(fs: FsAdapter, nodeId: string) {
   const catalog = await loadNodeCatalog(fs),
     active = currentNodes(catalog);
   const target = catalog.byId.get(nodeId);
@@ -599,7 +564,7 @@ async function inspectSingleNodeSync(fs: FsAdapter, nodeId: string, now: string)
         ),
       ]
     : [target];
-  const node = (await inspectCatalogNodes(fs, catalog, selected, now, nodeId)).nodes.find(
+  const node = (await inspectCatalogNodes(fs, catalog, selected, nodeId)).nodes.find(
     (n) => n.nodeId === nodeId,
   );
   if (!node) throw new NodeWriteError("NOT_FOUND", `Node not found: ${nodeId}`);
@@ -607,11 +572,7 @@ async function inspectSingleNodeSync(fs: FsAdapter, nodeId: string, now: string)
 }
 
 /** Include a selected goal's outputs so its progress has the same basis as a single check. */
-export async function inspectNodesSync(
-  fs: FsAdapter,
-  nodeIds: readonly string[],
-  now = new Date().toISOString(),
-) {
+export async function inspectNodesSync(fs: FsAdapter, nodeIds: readonly string[]) {
   const catalog = await loadNodeCatalog(fs);
   const ids = new Set(nodeIds);
   const goals = [...catalog.byId.values()].filter(
@@ -626,7 +587,6 @@ export async function inspectNodesSync(
           ids.has(node.nodeId) ||
           (isOutputNode(node) && goals.some((goal) => node.path.startsWith(goal.path + "/"))),
       ),
-      now,
     )
   ).nodes.filter((node) => ids.has(node.nodeId));
 }
@@ -659,9 +619,7 @@ export async function readOutputChanges(fs: FsAdapter, nodeId: string) {
   const target = catalog.byId.get(nodeId);
   if (!target) throw new NodeWriteError("NOT_FOUND", `Node not found: ${nodeId}`);
   if (!isOutputNode(target)) return undefined;
-  const inspection = (
-    await inspectCatalogNodes(fs, catalog, [target], new Date().toISOString(), nodeId)
-  ).nodes[0]!;
+  const inspection = (await inspectCatalogNodes(fs, catalog, [target], nodeId)).nodes[0]!;
   const changes = outputChanges(inspection, catalog);
   return changes.length ? changes : undefined;
 }
@@ -708,7 +666,6 @@ export function linkNodeOutput(
     /** The caller's spelling of resource, used only in messages. */
     label?: string;
     name?: string;
-    by?: string;
     cardId?: string;
     roleId?: string;
     tags?: string[];
@@ -724,8 +681,8 @@ export function linkNodeOutput(
       if (
         !goal ||
         !isRequirementNode({ type: goal.type }) ||
-        goal.archived ||
-        parseFrontmatter(goal.header).data.status === "deprecated"
+        goal.status === null ||
+        goal.status === "deprecated"
       )
         throw new NodeWriteError("INVALID_INPUT", "Output creation requires a current goal Node");
       const descriptor = { resource: input.resource };
@@ -859,7 +816,6 @@ export function linkNodeOutput(
           ...(tags.length ? { tags } : {}),
           resource: descriptor.resource,
           ...(cardId ? { sources: [{ resource: `/${cardRecordPath(cardId)}` }] } : {}),
-          by: input.by,
         },
       );
       const path = `${goal.path}/${name}`,

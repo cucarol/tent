@@ -12,7 +12,7 @@ import {
   type ReaderSource,
   type ReaderRelations,
 } from "./context-reader.js";
-import { documentLifecycle } from "../base/document-status.js";
+import { documentLifecycle, type DocumentStatus } from "../base/document-status.js";
 import { contentEtag } from "../base/etag.js";
 import { canonicalSha256 } from "../base/canonical-digest.js";
 import { normalizeNodeTags } from "../base/tags.js";
@@ -24,7 +24,7 @@ export type CatalogNode = {
   path: string;
   type?: string;
   header: string;
-  archived: boolean;
+  status: DocumentStatus | null;
   invalid: boolean;
   parentNodeId: string | null;
   childNodeIds: string[];
@@ -96,7 +96,7 @@ async function loadCatalogInScope(fs: FsAdapter) {
     path: node.path,
     type: node.type,
     header: headers.get(nodeNotePath(node.path))!,
-    archived: node.archived,
+    status: node.status,
     invalid: node.invalid,
     parentNodeId: node.parent?.id ?? null,
     childNodeIds: node.children.map((child) => child.id),
@@ -134,7 +134,7 @@ function summarize(node: CatalogNode) {
 
 export function catalogSummary(catalog: NodeCatalog, source: ReaderSource, nodeId: string) {
   const node = requireCatalogNode(catalog, nodeId);
-  return { source, ...summarize(node), view: "summary" as const, archived: node.archived };
+  return { source, ...summarize(node), view: "summary" as const };
 }
 
 /** Hierarchy navigation depends on headers and order, never on full-document ETags. */
@@ -192,7 +192,7 @@ export function catalogMatches(
       if (!node) continue;
       const summary = summarize(node);
       if (
-        (p.includeArchived || !node.archived) &&
+        (p.includeArchived || node.status !== "deprecated") &&
         (p.type === undefined || summary.type === p.type) &&
         tags.every((tag) => summary.tags.includes(tag))
       )

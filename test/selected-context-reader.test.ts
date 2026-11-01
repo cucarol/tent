@@ -63,7 +63,8 @@ test("fresh headers preserve group hierarchy, local lifecycle and duplicate quar
   assert.equal(catalog.byId.get("node-child")!.parentNodeId, "node-parent");
   const reader = await selectedContextReader(adapter, source, ["node-child"]);
   const summary = reader.read({ nodeId: "node-child", view: "summary" });
-  assert.ok("archived" in summary && !summary.archived);
+  assert.equal(summary.status, "stable");
+  assert.equal("archived" in summary, false);
   await adapter.writeFile("Other/Other.md", raw("node-parent"));
   await assert.rejects(selectedContextReader(adapter, source, ["node-parent"]), error("NOT_FOUND"));
   await assert.rejects(selectedContextReader(adapter, source, ["node-child"]), error("NOT_FOUND"));

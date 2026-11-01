@@ -212,7 +212,7 @@ async function historyOf(fs: FsAdapter) {
 async function roleAvailable(
   fs: FsAdapter,
   roleId: string,
-  options: { headerOnly?: boolean; allowDraft?: boolean } = {},
+  options: { headerOnly?: boolean } = {},
 ) {
   try {
     if (!isRoleId(roleId)) throw new Error("Invalid Role id");
@@ -224,8 +224,7 @@ async function roleAvailable(
         : await fs.readFile(path),
     );
     const status = documentLifecycle(parseFrontmatter(role.raw).data).status;
-    if (status !== "stable" && !(options.allowDraft && status === "draft"))
-      throw new Error("Role is not current");
+    if (status !== "stable" && status !== "draft") throw new Error("Role is not current");
   } catch (error) {
     throw new CardDocumentError(
       "ROLE_UNAVAILABLE",
@@ -1075,7 +1074,7 @@ export async function listCardDocumentHeaders(
     unfinishedOnly?: boolean;
   } = {},
 ) {
-  if (options.roleId) await roleAvailable(fs, options.roleId, { allowDraft: true });
+  if (options.roleId) await roleAvailable(fs, options.roleId);
   const cardIds = options.cardIds ? new Set(options.cardIds) : undefined;
   const items: Array<Record<string, unknown>> = [];
   const selected: Array<Record<string, unknown> & { path: string }> = [];

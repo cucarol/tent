@@ -112,13 +112,15 @@ for (const host of ["codex", "claude-code"] as const)
     assert.match(await f.write("src/code.ts", "turn", host), /node-refresh/);
   });
 
-test("native draft, malformed and deleted modules cannot leave stale coverage", async (t) => {
+test("native draft modules retain coverage while deprecated, malformed and deleted modules leave none", async (t) => {
   const f = await fixture(t);
   await initializeTentWorkspace(f.root);
   await f.module();
   await f.start();
   await f.module("src/", "status: draft\n");
-  assert.doesNotMatch(await f.write("src/draft.ts", "draft"), /node-refresh/);
+  assert.match(await f.write("src/draft.ts", "draft"), /node-refresh/);
+  await f.module("src/", "status: deprecated\n");
+  assert.doesNotMatch(await f.write("src/deprecated.ts", "deprecated"), /node-refresh/);
   await fs.writeFile(f.moduleFile, "---\nid: node-refresh\nsources: [\n---\n");
   await f.notify(".tent/Module/Module.md");
   assert.doesNotMatch(await f.write("src/invalid.ts", "invalid"), /node-refresh/);

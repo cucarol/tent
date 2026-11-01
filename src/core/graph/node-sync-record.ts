@@ -57,9 +57,8 @@ export function coverageGoalAncestors(
   for (const node of nodes.values()) {
     if (
       node.invalid ||
-      node.archived ||
-      node.type !== "goal" ||
-      parseFrontmatter(node.header).data.status === "draft"
+      (node.status !== "draft" && node.status !== "stable") ||
+      node.type !== "goal"
     )
       continue;
     if (
@@ -73,7 +72,7 @@ export function coverageGoalAncestors(
     let parent = node.parentNodeId ? nodes.get(node.parentNodeId) : undefined;
     while (parent && !parent.invalid) {
       // Lifecycle is local: an inactive intermediary does not retire its descendants.
-      if (!parent.archived) ancestors.add(parent.nodeId);
+      if (parent.status === "draft" || parent.status === "stable") ancestors.add(parent.nodeId);
       parent = parent.parentNodeId ? nodes.get(parent.parentNodeId) : undefined;
     }
   }
@@ -87,12 +86,7 @@ export function goalAncestors(node: CatalogNode, byId: Map<string, CatalogNode>)
   const goals: CatalogNode[] = [];
   let parent = node.parentNodeId ? byId.get(node.parentNodeId) : undefined;
   while (parent) {
-    if (
-      !parent.invalid &&
-      isRequirementNode({ type: parent.type }) &&
-      parseFrontmatter(parent.header).data.status !== "draft"
-    )
-      goals.push(parent);
+    if (!parent.invalid && isRequirementNode({ type: parent.type })) goals.push(parent);
     parent = parent.parentNodeId ? byId.get(parent.parentNodeId) : undefined;
   }
   return goals;
@@ -565,8 +559,7 @@ export async function prepareNodeSyncSave(
       (ancestor) =>
         options.previousLocation!.documentPath.startsWith(ancestor.path + "/") &&
         !ancestor.invalid &&
-        isRequirementNode({ type: ancestor.type }) &&
-        parseFrontmatter(ancestor.header).data.status !== "draft",
+        isRequirementNode({ type: ancestor.type }),
     );
   if (goals.length && (options.created || options.confirm || firstGoalPlacement)) {
     record.goals = [];

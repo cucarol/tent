@@ -1,10 +1,8 @@
-import { isDeepStrictEqual } from "node:util";
 import { withTentMutation, type FsAdapter } from "../store/adapter.js";
 import { documentLifecycle } from "../base/document-status.js";
 import { parseFrontmatter, serializeFrontmatter } from "../base/frontmatter.js";
 import { nodeNotePath } from "../store/tree.js";
 import { loadNodeCatalog, readCatalogDocument } from "./node-catalog.js";
-import { isHistoryDocument } from "../store/document-history.js";
 import type { OpsEnv } from "./ops-context.js";
 import type { DocumentVersion } from "../store/history-port.js";
 
@@ -14,7 +12,7 @@ type SaveContext = { savedPaths: string[]; beforeCommit?: string };
 export class NodeLifecycleError extends Error {
   constructor(
     message: string,
-    readonly details: { savedPaths: string[]; beforeCommit?: string; conflicts?: string[] },
+    readonly details: { savedPaths: string[]; beforeCommit?: string },
   ) {
     super(message);
     this.name = "NodeLifecycleError";
@@ -123,68 +121,5 @@ export function archiveNode(env: OpsEnv, nodeId: string) {
     }
     const result = await saveStatusWrites(env.fs, writes, context, "node.archive");
     return { nodeId, path: root.path, ...result };
-  });
-}
-
-/** Undo only the status changes in a supplied, verifiable archive commit. */
-export function restoreNode(env: OpsEnv, nodeId: string, archiveCommit: string) {
-  return lifecycleMutation(env.fs, async (context) => {
-    const history = env.fs.history;
-    if (!history) throw new Error("Archive undo requires Tent history");
-    const { changes } = await history.commitChanges(archiveCommit);
-    const catalog = await loadNodeCatalog(env.fs),
-      root = catalog.byId.get(nodeId);
-    if (!root) throw new Error(`Node not found: ${nodeId}`);
-    if (!changes.length) throw new Error("Commit contains no archive changes");
-    const writes: StatusWrite[] = [],
-      conflicts: string[] = [];
-    for (const change of changes) {
-      if (
-        !isHistoryDocument(change.path) ||
-        !change.path.startsWith(root.path + "/") ||
-        change.before === null ||
-        change.after === null
-      ) {
-        throw new Error("Commit is not a pure status archive of the selected subtree");
-      }
-      const before = parseFrontmatter(change.before),
-        after = parseFrontmatter(change.after);
-      const { status: previous, ...oldFields } = before.data,
-        { status, ...newFields } = after.data;
-      const member = catalog.byId.get(String(after.data.id));
-      if (
-        documentLifecycle(before.data).status === null ||
-        previous === "deprecated" ||
-        status !== "deprecated" ||
-        !isDeepStrictEqual(oldFields, newFields) ||
-        before.body !== after.body ||
-        !member ||
-        nodeNotePath(member.path) !== change.path
-      ) {
-        throw new Error(`Commit is not a pure status archive: ${change.path}`);
-      }
-      if (
-        (await readCatalogDocument(env.fs, member)).raw !== change.after ||
-        (await history.changedSince({ commit: archiveCommit, path: change.path }))
-      ) {
-        conflicts.push(change.path);
-      }
-      writes.push({
-        path: change.path,
-        before: change.after,
-        after: statusRaw(change.after, previous),
-      });
-    }
-    if (conflicts.length)
-      throw new NodeLifecycleError(
-        "Archive undo conflicts with later edits; use explicit status edits against current bytes",
-        { savedPaths: [], conflicts },
-      );
-    return {
-      nodeId,
-      path: root.path,
-      archiveCommit,
-      ...(await saveStatusWrites(env.fs, writes, context, "node.restore")),
-    };
   });
 }

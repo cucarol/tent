@@ -7,7 +7,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { loadTent, isContentMutable, isUsableNode } from "../src/core/store/tree.js";
-import { archiveNode, restoreNode, NodeLifecycleError } from "../src/core/graph/node-lifecycle.js";
+import { archiveNode, NodeLifecycleError } from "../src/core/graph/node-lifecycle.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import {
   loadNodeCatalog,
@@ -20,48 +20,42 @@ import { contentEtag } from "../src/core/base/etag.js";
 import { git } from "./helpers.js";
 
 const source = { kind: "live" as const, workspaceId: "ws-status" };
-for (const action of ["archive", "restore"] as const) {
-  test(`${action} reports saved paths and reachable preimages when outer history finalization fails`, async (t) => {
-    const { root, adapter, env } = await fixture(t);
-    const archived = action === "restore" ? await archiveNode(env, "node-root") : undefined;
-    const capture = adapter.history.captureUnlocked.bind(adapter.history);
-    let afterCapture = false;
-    adapter.history.captureUnlocked = async (changes, metadata) => {
-      const result = await capture(changes, metadata);
-      const rootChange = changes.find((c) => c.path === "A/A.md");
-      if (
-        !afterCapture &&
-        changes.length === 3 &&
-        rootChange?.raw &&
-        (parseFrontmatter(rootChange.raw).data.status === "deprecated") === (action === "archive")
-      ) {
-        afterCapture = true;
-        await fs.writeFile(
-          path.join(root, "A/A.md"),
-          rootChange.raw + "\nexternal change after capture",
-        );
-      }
-      return result;
-    };
-    await assert.rejects(
-      () =>
-        action === "archive"
-          ? archiveNode(env, "node-root")
-          : restoreNode(env, "node-root", archived!.commit!),
-      (asyncError) => {
-        assert.ok(asyncError instanceof NodeLifecycleError);
-        assert.deepEqual(asyncError.details.savedPaths.sort(), ["A/A.md", "A/B/B.md", "A/D/D.md"]);
-        assert.ok(asyncError.details.beforeCommit);
-        assert.match(asyncError.message, /Document changed during save/);
-        return true;
-      },
-    );
-    assert.ok(afterCapture);
-    assert.match(await adapter.readFile("A/A.md"), /external change after capture/);
-    // The explicit preimage is reachable despite the outer failure; current files are not rolled back.
-    assert.ok((await adapter.history.changesInRange()).length > 0);
-  });
-}
+test("archive reports saved paths and reachable preimages when outer history finalization fails", async (t) => {
+  const { root, adapter, env } = await fixture(t);
+  const capture = adapter.history.captureUnlocked.bind(adapter.history);
+  let afterCapture = false;
+  adapter.history.captureUnlocked = async (changes, metadata) => {
+    const result = await capture(changes, metadata);
+    const rootChange = changes.find((c) => c.path === "A/A.md");
+    if (
+      !afterCapture &&
+      changes.length === 3 &&
+      rootChange?.raw &&
+      parseFrontmatter(rootChange.raw).data.status === "deprecated"
+    ) {
+      afterCapture = true;
+      await fs.writeFile(
+        path.join(root, "A/A.md"),
+        rootChange.raw + "\nexternal change after capture",
+      );
+    }
+    return result;
+  };
+  await assert.rejects(
+    () => archiveNode(env, "node-root"),
+    (asyncError) => {
+      assert.ok(asyncError instanceof NodeLifecycleError);
+      assert.deepEqual(asyncError.details.savedPaths.sort(), ["A/A.md", "A/B/B.md", "A/D/D.md"]);
+      assert.ok(asyncError.details.beforeCommit);
+      assert.match(asyncError.message, /Document changed during save/);
+      return true;
+    },
+  );
+  assert.ok(afterCapture);
+  assert.match(await adapter.readFile("A/A.md"), /external change after capture/);
+  // The explicit preimage is reachable despite the outer failure; current files are not rolled back.
+  assert.ok((await adapter.history.changesInRange()).length > 0);
+});
 const raw = (id: string, extra = "", body = "fact") =>
   `\uFEFF---\r\nid: ${id}\r\ntype: prompt\r\nextra: {nested: [1, two]} # preserve\r\n${extra}---\r\n${body}`;
 async function fixture(t: TestContext) {
@@ -92,6 +86,8 @@ test("local status never inherits or freezes edits; unknown status stays visible
   const tree = await loadTent(adapter),
     root = tree.byId.get("node-root")!;
   assert.equal(root.status, "deprecated");
+  assert.equal("archived" in root, false);
+  assert.equal(isUsableNode(tree.byId.get("node-draft")!), true);
   assert.equal(tree.byId.get("node-draft")!.status, "draft");
   assert.equal(isContentMutable(root), true);
   assert.equal(isUsableNode(root), false);
@@ -127,7 +123,7 @@ test("local status never inherits or freezes edits; unknown status stays visible
   assert.equal((await loadTent(adapter)).byId.get("node-draft")!.status, "draft");
 });
 
-test("archive captures only selected preimages and undo restores exact declared statuses", async (t) => {
+test("archive captures selected documents in ordinary history and status edits reactivate them", async (t) => {
   const { root, adapter, env } = await fixture(t);
   const unchanged = await adapter.readFile("A/C/C.md");
   const read = adapter.readFile.bind(adapter),
@@ -151,57 +147,16 @@ test("archive captures only selected preimages and undo restores exact declared 
   const noOp = await archiveNode(env, "node-root");
   assert.equal(noOp.changed, false);
   assert.equal(await adapter.history.currentCommit(), archived.commit);
-  await adapter.writeFile("A/New/New.md", raw("node-new"));
-  const restored = await restoreNode(env, "node-root", archived.commit);
-  assert.equal(restored.changed, true);
-  for (const [file, expected] of [
-    ["A/A.md", undefined],
-    ["A/B/B.md", "draft"],
-    ["A/C/C.md", "deprecated"],
-    ["A/D/D.md", "stable"],
-    ["A/New/New.md", undefined],
-  ] as const) {
-    const document = parseFrontmatter(await read(file));
-    assert.equal(document.data.status, expected);
-    assert.deepEqual(document.data.extra, { nested: [1, "two"] });
-    assert.equal(document.body, "fact");
-  }
-  assert.equal(await read("A/C/C.md"), unchanged);
-  await assert.rejects(restoreNode(env, "node-root", archived.commit), /conflicts/);
-});
-
-test("archive undo preflights external edits and retained ABA without changing other documents", async (t) => {
-  const { adapter, env } = await fixture(t);
-  const archived = await archiveNode(env, "node-root");
-  assert.ok(archived.commit);
-  const rootRaw = await adapter.readFile("A/A.md"),
-    childRaw = await adapter.readFile("A/B/B.md");
-  await adapter.writeFile("A/B/B.md", childRaw + "external edit");
-  await assert.rejects(restoreNode(env, "node-root", archived.commit), (error: unknown) => {
-    assert.ok(error instanceof NodeLifecycleError);
-    assert.deepEqual(error.details.savedPaths, []);
-    assert.deepEqual(error.details.conflicts, ["A/B/B.md"]);
-    return true;
-  });
-  assert.equal(await adapter.readFile("A/A.md"), rootRaw);
-  await adapter.writeFile("A/B/B.md", childRaw);
-  const changed = await writeNodeDocument(adapter, "node-root", {
-    baseEtag: contentEtag(rootRaw),
+  const before = await adapter.readFile("A/A.md");
+  const reactivated = await writeNodeDocument(adapter, "node-root", {
+    baseEtag: contentEtag(before),
     frontmatter: { status: "stable" },
   });
-  await writeNodeDocument(adapter, "node-root", { baseEtag: changed.etag, raw: rootRaw });
-  assert.equal(await adapter.readFile("A/A.md"), rootRaw);
-  await assert.rejects(restoreNode(env, "node-root", archived.commit), /conflicts/);
-  const ordinary = await writeNodeDocument(adapter, "node-root", {
-    baseEtag: contentEtag(rootRaw),
-    body: "new body",
-  });
-  assert.ok(ordinary.version);
-  await assert.rejects(
-    restoreNode(env, "node-root", ordinary.version.commit),
-    /pure status archive/,
-  );
-  await assert.rejects(restoreNode(env, "node-root", "f".repeat(64)), /history|event|version/i);
+  assert.equal(parseFrontmatter(reactivated.raw).data.status, "stable");
+  assert.equal(isUsableNode((await loadTent(adapter)).byId.get("node-root")!), true);
+  assert.equal(parseFrontmatter(await read("A/B/B.md")).data.status, "deprecated");
+  assert.equal(await read("A/C/C.md"), unchanged);
+  assert.equal(await adapter.history.read({ commit: archived.commit, path: "A/A.md" }), before);
 });
 
 test("archive errors report attempted writes and restore the whole unpublished group", async (t) => {

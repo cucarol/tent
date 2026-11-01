@@ -588,7 +588,7 @@ test("prose code spans exclude Node examples while ordinary handles and links re
     },
   ];
   const body = [
-    "node-known「Keep」, node-known.",
+    "[selected](node-known#Keep), node-known.",
     "`node-known` ``node-known `node-known` `` `node-nope00`",
     "`node-known\r\nnode-known`",
     "```text\nnode-known [example](node-known#Missing)\n```",
@@ -602,9 +602,9 @@ test("prose code spans exclude Node examples while ordinary handles and links re
   const refs = resolveBodyNodeReferences(body, "cards/card-example.md", nodes);
   assert.deepEqual(
     refs.filter((ref) => ref.kind === "mention").map((ref) => ref.raw),
-    ["node-known", "node-known", "node-known"],
+    ["node-known", "node-known"],
   );
-  assert.equal(refs.filter((ref) => ref.kind === "link").length, 1);
+  assert.equal(refs.filter((ref) => ref.kind === "link").length, 2);
   assert.ok(refs.every((ref) => ref.nodeId === "node-known" && !ref.reason));
   assert.equal(refs.filter((ref) => ref.heading === "Keep").length, 2);
 });
@@ -754,4 +754,30 @@ test("measurement repair: explicit pinned and Markdown fragments select exact la
   assert.equal(fallback.text, intro.slice(0, 1600));
   assert.equal(fallback.truncated, true);
   assert.ok(section(missing, "unknown").items.some((item) => item.why.includes("section")));
+});
+
+test("ancestor rules use local lifecycle: draft is active, deprecated and unknown are excluded", async () => {
+  const { fs, node } = await fixture();
+  await node("Outer", "node-outer", "goal", "Retired goal body.", { status: "deprecated" });
+  await node("Outer/Keep", "node-keep", "prompt", "Current sibling rule.");
+  await node("Outer/Draft", "node-draft", "prompt", "Draft sibling rule.", { status: "draft" });
+  await node("Outer/Retired", "node-retired", "prompt", "Retired sibling rule.", {
+    status: "deprecated",
+  });
+  await node("Outer/Unknown", "node-unknown", "prompt", "Unknown sibling rule.", {
+    status: "future",
+  });
+  await node("Outer/Middle", "node-middle", "goal", "Draft goal body.", { status: "draft" });
+  await node("Outer/Middle/Task", "node-task", "goal", "Selected task.");
+  const result = await assembleAgentContext(fs, root, { kind: "node", nodeId: "node-task" });
+  assert.deepEqual(
+    section(result, "rules")
+      .items.map((item) => item.nodeId)
+      .sort(),
+    ["node-draft", "node-keep", "node-middle"],
+  );
+  assert.doesNotMatch(
+    JSON.stringify(section(result, "rules")),
+    /Retired goal body|Retired sibling rule|Unknown sibling rule/,
+  );
 });

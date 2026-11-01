@@ -1,13 +1,10 @@
 import { hasDocumentHistory } from "../store/history-port.js";
-import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
+import type { FsAdapter } from "../store/adapter.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { documentVersionSchema, type DocumentVersion } from "../store/history-port.js";
 import { materialLocator, isDirectoryMaterial, type MaterialSource } from "../base/material.js";
 import { systemMaterialPath } from "./material-target.js";
-import { loadNodeCatalog } from "./node-catalog.js";
-import { isRequirementNode, isOutputNode } from "./node-sync-record.js";
-import { documentLifecycle } from "../base/document-status.js";
-import { nodeIsStale, nodeVerifications, okfTimestampSchema } from "../base/node-provenance.js";
+import { isRequirementNode } from "./node-sync-record.js";
 import { cardRecordPath } from "../base/paths.js";
 import { parseRoleDocument } from "../store/role-document.js";
 import { canonicalIdentityError } from "../store/tree.js";
@@ -77,36 +74,6 @@ export async function readCardGoalIds(fs: FsAdapter, cards: readonly CardSourceI
     } catch (error) {
       target.diagnostics.push(`Cannot read Card source ${entry.source.resource}: ${String(error)}`);
     }
-  }
-  return result;
-}
-
-function active(node: { archived: boolean; header: string }) {
-  const status = documentLifecycle(parseFrontmatter(node.header).data).status;
-  return !node.archived && (status === "draft" || status === "stable");
-}
-
-/** Activity is declared by the current output's own generated/verified timestamps. */
-export async function readOutputActivity(fs: FsAdapter): Promise<Map<string, string>> {
-  const result = new Map<string, string>();
-  const now = new Date().toISOString();
-  const catalog = await loadNodeCatalog(readOnlyFs(fs));
-  const outputs = [...catalog.byId.values()].filter((node) => isOutputNode(node) && active(node));
-  if (!outputs.length) return result;
-  for (const node of outputs) {
-    const data = parseFrontmatter(node.header).data;
-    if (nodeIsStale(data, now)) continue;
-    const times: string[] = [];
-    const generated = data.generated as { at?: unknown } | undefined;
-    const at = okfTimestampSchema.safeParse(generated?.at);
-    if (at.success) times.push(at.data);
-    try {
-      times.push(...nodeVerifications(data).map((entry) => entry.at));
-    } catch {
-      /* Invalid provenance supplies no verification evidence. */
-    }
-    times.sort((a, b) => Date.parse(a) - Date.parse(b));
-    if (times[0]) result.set(node.nodeId, new Date(times[0]).toISOString());
   }
   return result;
 }

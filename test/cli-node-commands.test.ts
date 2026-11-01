@@ -287,10 +287,20 @@ test("separate direct CLI processes retain Git versions and reject a stale edit 
     await cli("get", ["node-parent", "--version-json", JSON.stringify(beforeVersion)]),
   );
   assert.equal(prior.text, "parent");
-  const archive = parse(await cli("archive", ["node-parent"]));
+  parse(await cli("archive", ["node-parent"]));
   assert.equal(parseFrontmatter(await tent.readFile("Parent/Parent.md")).data.status, "deprecated");
-  parse(await cli("restore", ["node-parent", "--archive-commit", archive.commit]));
-  assert.equal(parseFrontmatter(await tent.readFile("Parent/Parent.md")).data.status, undefined);
+  const archived = parse(await cli("get", ["node-parent", "--full"]));
+  parse(
+    await cli("write", [
+      "node-parent",
+      "--input-json",
+      JSON.stringify({
+        baseEtag: archived.etag,
+        frontmatter: { status: "stable" },
+      }),
+    ]),
+  );
+  assert.equal(parseFrontmatter(await tent.readFile("Parent/Parent.md")).data.status, "stable");
   assert.equal(parseFrontmatter(await tent.readFile("Parent/Parent.md")).body, "next");
   await assert.rejects(fs.stat(path.join(root, "absent-service")), { code: "ENOENT" });
 });

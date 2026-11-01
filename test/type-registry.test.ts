@@ -75,18 +75,19 @@ test("tag presets are suggestions counted only where documents use them", () => 
   assert.equal(isNodeTagPreset("ui"), false);
   assert.deepEqual(
     countNodeTags([
-      { tags: ["ui", "evidence"], archived: false },
-      { tags: ["evidence"], archived: false },
-      { tags: ["old"], archived: true },
+      { tags: ["ui", "evidence"], status: "stable" },
+      { tags: ["evidence"], status: "stable" },
+      { tags: ["old"], status: "deprecated" },
     ]),
     [
       { tag: "evidence", count: 2, preset: true },
       { tag: "ui", count: 1, preset: false },
     ],
   );
-  assert.deepEqual(countNodeTags([{ tags: ["old"], archived: true }], { includeArchived: true }), [
-    { tag: "old", count: 1, preset: false },
-  ]);
+  assert.deepEqual(
+    countNodeTags([{ tags: ["old"], status: "deprecated" }], { includeArchived: true }),
+    [{ tag: "old", count: 1, preset: false }],
+  );
 });
 
 test("Node loading rejects missing type and accepts exact type without registry authority", async (t) => {

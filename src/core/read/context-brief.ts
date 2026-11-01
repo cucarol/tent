@@ -32,7 +32,7 @@ async function inspectCurrentContextInScope(
   const nativeNodes = Promise.resolve(options.nodes);
   const catalog = nativeNodes.then((nodes) => nodes?.catalog ?? loadNodeCatalog(fs));
   const syncPromise = Promise.all([nativeNodes, catalog]).then(([nodes, currentCatalog]) =>
-    inspectWorkspaceSync(fs, undefined, nodes?.invalidNodes, currentCatalog),
+    inspectWorkspaceSync(fs, nodes?.invalidNodes, currentCatalog),
   );
   // Card queries can finish without consuming these shared results. The main
   // syncPromise below remains responsible for reporting capture/sync failures.
@@ -70,9 +70,6 @@ async function inspectCurrentContextInScope(
     ...sourceChanges,
     items: sourceChanges.items.filter((item) => aheadIds.has(item.nodeId)),
   };
-  const draftCount = [...currentCatalog.tree.byId.values()].filter(
-    (node) => !node.invalid && !node.archived && node.status === "draft",
-  ).length;
   return {
     sync,
     cards,
@@ -80,7 +77,6 @@ async function inspectCurrentContextInScope(
     roots,
     ...(fs.workspaceRoot ? { workspaceRoot: fs.workspaceRoot } : {}),
     ...(fs.recoveryConflicts?.length ? { recoveryConflicts: [...fs.recoveryConflicts] } : {}),
-    ...(draftCount ? { draftCount } : {}),
   };
 }
 
@@ -145,7 +141,6 @@ export type ContextBrief = {
   cardSourcesUncertain?: true;
   recoveryConflicts?: string[];
   roleId?: string;
-  drafts?: { count: number; command: string };
 };
 const shorten = (value: string, length: number) =>
   Array.from(value.replace(/[\r\n\t]/g, " "))
@@ -186,7 +181,6 @@ export function baselineOnlyBehind(node: WorkspaceSync["nodes"][number]) {
   );
   return (
     !!node.behind &&
-    !node.stale &&
     missing.length > 0 &&
     missing.every(
       (material) =>
@@ -344,8 +338,6 @@ export function makeContextBrief(
   ];
   for (const [key, items, readCommand] of reads)
     if (items.length > 10) brief[key] = { total: items.length, command: readCommand };
-  if (context.draftCount)
-    brief.drafts = { count: context.draftCount, command: "tent node list --status draft" };
   return brief;
 }
 
@@ -357,7 +349,6 @@ export function formatContextBrief(brief: ContextBrief): string {
       "Transaction recovery kept external edits:",
       ...brief.recoveryConflicts.map((p) => `- .tent/${p}`),
     );
-  if (brief.drafts) lines.push(`${brief.drafts.count} 条还没定 · ${brief.drafts.command}`);
   if (brief.invalidNodes.length) {
     lines.push(
       `Invalid Nodes${brief.invalidNodesRead ? ` (${brief.invalidNodesRead.total} total)` : ""}:`,

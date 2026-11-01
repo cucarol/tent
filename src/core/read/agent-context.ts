@@ -191,7 +191,10 @@ export async function assembleAgentContext(
         }),
     );
     const liveById = new Map(live.map((node) => [node.nodeId, node]));
-    const active = (node: ContextNode) => documentLifecycle(node.data).status === "stable";
+    const active = (node: ContextNode) => {
+      const status = documentLifecycle(node.data).status;
+      return status === "stable" || status === "draft";
+    };
     const baseCommand = command(start, workspaceRoot);
     const roots: {
       node: ContextNode;
@@ -638,17 +641,31 @@ export async function assembleAgentContext(
             why: `Literal file reference in selected prose of ${root.node.nodeId}`,
           });
       }
+      const governing = [root.node];
       const parents = root.node.path.split("/");
       parents.pop();
       while (parents.length) {
         const parent = root.universe.find((node) => node.path === parents.join("/"));
         if (parent?.data.type === "goal") {
-          items.rules.push(
-            summarize(parent, `Ancestor goal of ${root.node.nodeId} in the same source`),
-          );
+          governing.push(parent);
+          if (active(parent))
+            items.rules.push(
+              summarize(parent, `Ancestor goal of ${root.node.nodeId} in the same source`),
+            );
         }
         parents.pop();
       }
+      for (const owner of governing)
+        for (const rule of root.universe.filter(
+          (node) =>
+            active(node) &&
+            node.data.type === "prompt" &&
+            node.nodeId !== root.node.nodeId &&
+            path.posix.dirname(node.path) === owner.path,
+        ))
+          items.rules.push(
+            summarize(rule, `Rule directly under ${owner.nodeId} in the same source`),
+          );
       for (const candidate of root.universe) {
         const outgoing = candidate.nodeId === root.node.nodeId;
         const refs = resolveBodyNodeReferences(

@@ -58,7 +58,7 @@ async function fixture(t: TestContext) {
   await node(`${module}/Rule`, "node-localrule", "prompt");
   await node(`${module}/Nested`, "node-nested", "output");
   await node(`${module}/Nested/Rule`, "node-nestedrule", "prompt");
-  await node("Goal/Inactive", "node-inactiverule", "prompt", "status: draft\n");
+  await node("Goal/Inactive", "node-inactiverule", "prompt", "status: deprecated\n");
   await node("Evidence", "node-evidence", "output", source("Evidence", "src/core/a.ts"));
   await node("Self", "node-self", "goal", source("Self", "src/core/a.ts"));
   await node("Self/Rule", "node-selfrule", "prompt");
@@ -138,7 +138,7 @@ test("material-only output and prompt Nodes include their own direct active prom
   const prompt = index.nodes.find((candidate) => candidate.nodeId === "node-materialprompt")!;
   assert.deepEqual(output.moduleCoverage, []);
   assert.deepEqual(prompt.moduleCoverage, []);
-  assert.deepEqual(output.ruleNodeIds, ["node-evidencerule"]);
+  assert.deepEqual(output.ruleNodeIds, ["node-evidencedraft", "node-evidencerule"]);
   assert.deepEqual(prompt.ruleNodeIds, ["node-materialrule", "node-nearrule", "node-far"]);
   const selected = modulesForIndexedTurn(index, {
     files: [{ kind: "written", address: "src/core/a.ts" }],
@@ -149,7 +149,7 @@ test("material-only output and prompt Nodes include their own direct active prom
     loaded
       .find((candidate) => candidate.nodeId === output.nodeId)!
       .rules!.map((rule) => rule.nodeId),
-    ["node-evidencerule"],
+    ["node-evidencedraft", "node-evidencerule"],
   );
   assert.deepEqual(
     loaded
@@ -409,4 +409,43 @@ test("Hook body splitting shares BOM, CRLF, closing-fence whitespace and missing
   }
   assert.throws(() => turnReviewDocument("---\nid: node-a\n"));
   assert.throws(() => turnReviewDocument("Body\n"));
+});
+
+test("prepared rules keep active child prompts through stable, draft and deprecated ancestor goals", async (t) => {
+  const { root, node, currentFs } = await fixture(t);
+  await node("Goal/Gap/Current", "node-gapcurrent", "prompt");
+  await node("Goal/Gap/Draft", "node-gapdraft", "prompt", "status: draft\n");
+  await node("Goal/Gap/Retired", "node-gapretired", "prompt", "status: deprecated\n");
+  const expected = [
+    "node-localrule",
+    "node-nearrule",
+    "node-gapcurrent",
+    "node-gapdraft",
+    "node-far",
+  ];
+  for (const status of ["stable", "draft", "deprecated"]) {
+    await node(
+      "Goal/Gap",
+      "node-gap",
+      "goal",
+      `status: ${status}\n`,
+      "Ancestor body stays separate.\n",
+    );
+    const index = buildStopMaterialIndex(await loadNodeCatalog(currentFs), root);
+    assert.equal(
+      index.nodes.some((node) => node.nodeId === "node-gap"),
+      status !== "deprecated",
+    );
+    const module = index.nodes.find((node) => node.nodeId === "node-module")!;
+    assert.deepEqual(module.ruleNodeIds, expected);
+    const selected = modulesForIndexedTurn(index, {
+      files: [{ kind: "written", address: "src/core/a.ts" }],
+    }).filter((node) => node.nodeId === module.nodeId);
+    const loaded = await loadTurnReviewContent(currentFs, index, selected);
+    assert.deepEqual(
+      loaded[0].rules!.map((rule) => rule.nodeId),
+      expected,
+    );
+    assert.doesNotMatch(JSON.stringify(loaded), /Ancestor body stays separate/);
+  }
 });

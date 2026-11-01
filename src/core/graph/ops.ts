@@ -21,13 +21,12 @@ import { executeDeleteUnlocked, type DeleteWrite } from "../store/delete-recover
 import { canonicalDocumentReferences } from "./document-links.js";
 import type { CaptureMetadata } from "../store/history-port.js";
 import { prepareNodeSyncSave } from "./node-sync-record.js";
-import { prepareNodeProvenanceSave } from "../base/node-provenance.js";
 import { captureDocumentUnlocked } from "../store/document-history.js";
 import { validateSystemMaterials } from "./material-target.js";
 
 export type { OpsEnv } from "./ops-context.js";
 export { renameNode, type RenameNodeResult } from "./rename-ops.js";
-export { archiveNode, restoreNode } from "./node-lifecycle.js";
+export { archiveNode } from "./node-lifecycle.js";
 export { moveNode, type MoveNodeResult, type MovePosition } from "./move-ops.js";
 
 // ---- 结构编辑(建框/移动/改属性)----
@@ -40,7 +39,6 @@ export type NewNodeInput = MaterialFields & {
   type: string;
   body?: string;
   tags?: string[];
-  by?: string;
 } & ({ parentPath: string; parentId?: never } | { parentId: string | null; parentPath?: never });
 
 export async function createNode(env: OpsEnv, input: NewNodeInput): Promise<string> {
@@ -91,12 +89,7 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
       notePath,
     ]),
   );
-  const content = prepareNodeProvenanceSave(
-    serializeFrontmatter(fm, body, NODE_FRONTMATTER_KEY_ORDER),
-    null,
-    input.by,
-    env.clock.now(),
-  );
+  const content = serializeFrontmatter(fm, body, NODE_FRONTMATTER_KEY_ORDER);
   if (await env.fs.exists(path)) {
     const current = tent.byPath.get(path);
     throw new Error(

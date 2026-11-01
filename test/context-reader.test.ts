@@ -5,6 +5,7 @@ import {
   ReaderError,
   type ReaderDocument,
 } from "../src/core/graph/context-reader.js";
+import { documentLifecycle } from "../src/core/base/document-status.js";
 import { contentEtag } from "../src/core/base/etag.js";
 import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 
@@ -18,7 +19,7 @@ function doc(id: string, body: string, fields: Record<string, unknown> = {}): Re
     type: "prompt",
     etag: contentEtag(raw),
     raw,
-    archived: false,
+    status: documentLifecycle(fields).status,
     invalid: false,
     parentNodeId: null,
     childNodeIds: [],
@@ -85,4 +86,23 @@ test("list and relations return complete result sets", () => {
     ),
   );
   assert.equal(many.list().items.length, 81);
+});
+
+test("Reader status replaces archived while local deprecated navigation remains traversable", () => {
+  const parent = doc("node-parent", "Retired", { status: "deprecated" });
+  const child = doc("node-child", "Draft current", { status: "draft" });
+  parent.childNodeIds = [child.nodeId];
+  child.parentNodeId = parent.nodeId;
+  const r = new ContextReader(source, [parent, child], [parent.nodeId]);
+  assert.deepEqual(
+    r.list().items.map((item) => [item.nodeId, item.status]),
+    [[parent.nodeId, "deprecated"]],
+  );
+  const children = r.list({ parentNodeId: parent.nodeId }).items;
+  assert.deepEqual(
+    children.map((item) => [item.nodeId, item.status]),
+    [[child.nodeId, "draft"]],
+  );
+  assert.equal("archived" in r.read({ nodeId: parent.nodeId, view: "summary" }), false);
+  assert.equal("archived" in children[0]!, false);
 });

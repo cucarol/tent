@@ -33,7 +33,6 @@ import { runCardCommand } from "../src/cli/card-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { linkNodeOutput, confirmNodeSync } from "../src/core/graph/node-sync.js";
-import { readOutputActivity } from "../src/core/graph/card-context.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(testScratchRoot());
@@ -74,22 +73,20 @@ test("a draft Card is diagnosed, raw-readable and cannot be taken", async (t) =>
   await assert.rejects(takeCardDocument(adapter, card.cardId), code("INVALID_DOCUMENT"));
 });
 
-test("draft Roles cannot receive Cards but their documents remain readable", async (t) => {
+test("draft Roles receive new and existing Cards normally", async (t) => {
   const { adapter } = await fixture(t);
   const card = await createCardDocument(adapter, { prompt: "Decided task", target: "role-a" });
   await adapter.writeFile(
     "roles/role-a.md",
     (await adapter.readFile("roles/role-a.md")).replace("type: role", "type: role\nstatus: draft"),
   );
-  await assert.rejects(takeCardDocument(adapter, card.cardId, "role-a"), code("ROLE_UNAVAILABLE"));
-  await assert.rejects(
-    createCardDocument(adapter, { prompt: "Task", target: "role-a" }),
-    code("ROLE_UNAVAILABLE"),
-  );
+  assert.equal((await takeCardDocument(adapter, card.cardId, "role-a")).state, "consumed");
+  const next = await createCardDocument(adapter, { prompt: "Task", target: "role-a" });
+  assert.equal(next.target, "role-a");
   assert.match(await adapter.readFile("roles/role-a.md"), /status: draft/);
 });
 
-test("draft Role Card filters remain readable while Card actions and watch stay unavailable", async (t) => {
+test("draft Role Card filters, actions and watch stay available", async (t) => {
   const { adapter } = await fixture(t);
   const pending = await createCardDocument(adapter, { prompt: "Pending", target: "role-a" });
   const consumed = await createCardDocument(adapter, {
@@ -117,21 +114,7 @@ test("draft Role Card filters remain readable while Card actions and watch stay 
     "type: role\nstatus: draft",
   );
   await adapter.writeFile("roles/role-a.md", roleRaw);
-  const head = await adapter.history.currentCommit();
-  for (const action of [
-    () => createCardDocument(adapter, { prompt: "New", target: "role-a" }),
-    () => createCardDocument(adapter, { prompt: "New", returnTo: "role-a" }),
-    () =>
-      moveCardDocument(adapter, unrelated.cardId, {
-        target: "role-a",
-        expectedEtag: unrelated.etag,
-      }),
-    () => takeCardDocument(adapter, pending.cardId, "role-a"),
-    () => takeCardDocument(adapter, returned.cardId, "role-a"),
-    () => returnCardDocument(adapter, consumed.cardId, { roleId: "role-a", result: "Done" }),
-    () => watchCardDocuments(adapter, "role-a", 0),
-  ])
-    await assert.rejects(action, code("ROLE_UNAVAILABLE"));
+  const withLock = adapter.withLock;
   adapter.withLock = async () => {
     throw new Error("Read-only Role filtering must not acquire the write lock");
   };
@@ -150,8 +133,22 @@ test("draft Role Card filters remain readable while Card actions and watch stay 
     (await readCardDocument(adapter, pending.cardId, { view: "raw" })).text,
     await adapter.readFile(pending.path),
   );
-  assert.equal(await adapter.history.currentCommit(), head);
   assert.equal(await adapter.readFile("roles/role-a.md"), roleRaw);
+  adapter.withLock = withLock;
+  await createCardDocument(adapter, { prompt: "New", target: "role-a" });
+  await createCardDocument(adapter, { prompt: "New", returnTo: "role-a" });
+  await moveCardDocument(adapter, unrelated.cardId, {
+    target: "role-a",
+    expectedEtag: unrelated.etag,
+  });
+  await takeCardDocument(adapter, pending.cardId, "role-a");
+  await takeCardDocument(adapter, returned.cardId, "role-a");
+  await returnCardDocument(adapter, consumed.cardId, { roleId: "role-a", result: "Done" });
+  assert.ok(
+    (await watchCardDocuments(adapter, "role-a", 0)).some(
+      (card) => card.cardId === unrelated.cardId,
+    ),
+  );
 });
 
 test("Card Role filters retain unavailable handling for deprecated and unknown Role status", async (t) => {
@@ -386,7 +383,7 @@ test("automatic output attribution requires the receiving Role and returns the s
   });
   await takeCardDocument(adapter, card.cardId, "role-a");
   const input = { resource: "https://example.org/result" };
-  for (const options of [{}, { roleId: "role-b" }, { by: "role-a" }])
+  for (const options of [{}, { roleId: "role-b" }])
     await assert.rejects(linkNodeOutput(adapter, "node-main", { ...input, ...options }), /--card/);
   assert.equal((await adapter.listDir("Main")).filter((entry) => entry.isDir).length, 0);
   const linked = await linkNodeOutput(adapter, "node-main", { ...input, roleId: "role-a" });
@@ -424,7 +421,7 @@ test("automatic output attribution requires the receiving Role and returns the s
   assert.equal((await git(root, "diff", "--cached", "--name-only")).trim(), "");
 });
 
-test("goal and output material changes preserve explicit Card delivery and output activity", async (t) => {
+test("goal and output material changes preserve explicit Card delivery", async (t) => {
   const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "card-review-"));
@@ -464,10 +461,8 @@ test("goal and output material changes preserve explicit Card delivery and outpu
   });
   const cardRaw = await adapter.readFile(card.path);
   assert.equal(((await readCardDocument(adapter, card.cardId)) as any).state, "consumed");
-  assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
   await fs.writeFile(path.join(workspace, "result.txt"), "changed");
   assert.equal(((await readCardDocument(adapter, card.cardId)) as any).state, "consumed");
-  assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
   await writeNodeDocument(adapter, "node-goal", {
     baseEtag: contentEtag(await adapter.readFile("Goal/Goal.md")),
     body: "Changed requirement",
@@ -476,7 +471,6 @@ test("goal and output material changes preserve explicit Card delivery and outpu
   const behind = (await readCardDocument(adapter, card.cardId)) as any;
   assert.equal(behind.state, "consumed");
   assert.equal(Object.prototype.hasOwnProperty.call(behind, "progress"), false);
-  assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
   assert.equal(await adapter.history.currentCommit(), head);
   assert.equal(await adapter.readFile(card.path), cardRaw);
   await assert.rejects(
@@ -488,7 +482,6 @@ test("goal and output material changes preserve explicit Card delivery and outpu
     by: "human:cuca",
   });
   assert.equal(((await readCardDocument(adapter, card.cardId)) as any).state, "consumed");
-  assert.ok((await readOutputActivity(adapter)).has(output.nodeId));
 });
 
 test("Card source inspection needs no Git when no published Card was received", async (t) => {

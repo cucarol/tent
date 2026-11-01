@@ -161,16 +161,7 @@ export function resolveBodyNodeReferences(
       continue;
     const bound = bindings.get(mention[0]);
     const node = bound instanceof Error ? undefined : (bound ?? byId.get(mention[0]));
-    const quoted = /^「([^」\r\n]+)」/.exec(suffix);
-    const heading = quoted?.[1];
-    let reason = bound instanceof Error ? bound.message : undefined;
-    if (suffix.startsWith("「") && !quoted) reason = `Invalid literal heading after ${mention[0]}`;
-    if (node && heading)
-      try {
-        selectSection(node.body, heading);
-      } catch (error) {
-        reason = String(error);
-      }
+    const reason = bound instanceof Error ? bound.message : undefined;
     references.push(
       node && !reason
         ? {
@@ -178,7 +169,6 @@ export function resolveBodyNodeReferences(
             kind: "mention",
             nodeId: node.nodeId,
             version: node.version,
-            ...(heading ? { heading } : {}),
           }
         : {
             raw: mention[0],
@@ -189,7 +179,6 @@ export function resolveBodyNodeReferences(
               : bound instanceof Error
                 ? { targetNodeId: mention[0] }
                 : {}),
-            ...(suffix.startsWith("「") ? { heading: heading ?? "" } : {}),
             reason: reason ?? "Node id unavailable in the selected source",
           },
     );

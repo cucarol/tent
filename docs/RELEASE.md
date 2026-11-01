@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Node state is simpler: `draft` counts as stable, an output never goes behind, and confirmations keep `verified`. Tent no longer writes `generated`, and expiry, trust tiers and `node restore` are gone.
+
 - The bundled Web UI and `tent ui` command are removed. The init Skill shows the part tree from `tent workspace check-modules --json`. Workspaces from 0.2.0 run a one-shot script that removes the map layout from history; see [Migration](MIGRATION.md#map-layout-from-020).
 - Body links ending in `/` accept existing local directories.
 - Interrupted saves recover as a complete old or new transaction on the next Tent open; `tent workspace repair` restores damaged Tent history while preserving other edits.

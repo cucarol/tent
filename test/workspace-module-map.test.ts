@@ -251,7 +251,7 @@ test("module goals retain exceptions in child prompts, scoped to the nearest mod
   assert.ok((await codes()).includes("deps.cycle"));
 });
 
-test("draft rules, pair exceptions and directory declarations have no module effect", async (t) => {
+test("draft rules, pair exceptions and directory declarations have the same module effect as stable", async (t) => {
   const { root, adapter, node } = await fixture(t);
   await node("aaaaaa", { type: "goal", ...structure("../../a/") });
   await node("bbbbbb", { type: "goal", ...structure("../../b/") });
@@ -282,14 +282,24 @@ test("draft rules, pair exceptions and directory declarations have no module eff
       "allow:module.oversized\nallow:deps.cycle [B](../../bbbbbb/bbbbbb.md)",
     ),
   );
-  assert.deepEqual(await inspect(), baseline);
+  const draftRules = await inspect();
+  const ruleRaw = await adapter.readFile("aaaaaa/Rules/Rules.md");
+  await adapter.writeFile(
+    "aaaaaa/Rules/Rules.md",
+    ruleRaw.replace("status: draft", "status: stable"),
+  );
+  assert.deepEqual(await inspect(), draftRules);
+  assert.notDeepEqual(draftRules, baseline);
   await node(
     "drafts",
     { type: "goal", status: "draft", ...structure("../../c/") },
     "allow:map.empty",
   );
-  assert.deepEqual(await inspect(), baseline);
-  // A decided child module still works beneath the draft declaration.
+  const draftModule = await inspect();
+  assert.ok(draftModule.modules.some((module) => module.id === "node-drafts"));
+  const moduleRaw = await adapter.readFile("drafts/drafts.md");
+  await adapter.writeFile("drafts/drafts.md", moduleRaw.replace("status: draft", "status: stable"));
+  assert.deepEqual(await inspect(), draftModule);
   await adapter.writeFile(
     "drafts/Decided/Decided.md",
     serializeFrontmatter(

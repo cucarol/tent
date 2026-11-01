@@ -12,7 +12,7 @@ import { buildOkfNodeIndex } from "../base/okf-index.js";
 import { nodeNotePath } from "../base/paths.js";
 import { documentVersionSchema, type DocumentVersion } from "../store/history-port.js";
 import { extractOutLinksDetailed, extractNodeMentions, resolveOutLink } from "../base/links.js";
-import { documentLifecycle } from "../base/document-status.js";
+import { documentLifecycle, type DocumentStatus } from "../base/document-status.js";
 import type { WorkspaceRelation, DocumentRef } from "./workspace-relations.js";
 
 export type ReaderSource =
@@ -25,7 +25,7 @@ export type ReaderDocument = {
   type?: string;
   etag: string;
   raw: string;
-  archived: boolean;
+  status: DocumentStatus | null;
   invalid: boolean;
   parentNodeId: string | null;
   childNodeIds: string[];
@@ -33,12 +33,12 @@ export type ReaderDocument = {
 
 /** Deprecated ancestors remain navigable when they contain current descendants. */
 export function navigationIds(
-  documents: Iterable<Pick<ReaderDocument, "nodeId" | "parentNodeId" | "archived">>,
+  documents: Iterable<Pick<ReaderDocument, "nodeId" | "parentNodeId" | "status">>,
 ) {
   const byId = new Map([...documents].map((n) => [n.nodeId, n])),
     visible = new Set<string>();
   for (const node of byId.values()) {
-    if (node.archived) continue;
+    if (node.status === "deprecated") continue;
     let current: typeof node | undefined = node;
     while (current && !visible.has(current.nodeId)) {
       visible.add(current.nodeId);
@@ -179,13 +179,13 @@ export class ContextReader {
       source,
       rootNodeIds,
       documents: this.documents.map(
-        ({ nodeId, etag, path, parentNodeId, childNodeIds, archived, invalid }) => ({
+        ({ nodeId, etag, path, parentNodeId, childNodeIds, status, invalid }) => ({
           nodeId,
           etag,
           path,
           parentNodeId,
           childNodeIds,
-          archived,
+          status,
           invalid,
         }),
       ),
@@ -226,7 +226,7 @@ export class ContextReader {
       throw new ReaderError("SOURCE_CHANGED", "Node ETag changed; reread before using offsets");
     if (view === "summary") {
       if (p.range) throw new ReaderError("INVALID_RANGE", "summary has no text range");
-      return { source: this.source, ...this.summary(d), view, archived: d.archived };
+      return { source: this.source, ...this.summary(d), view };
     }
     const text = view === "raw" ? d.raw : d.body;
     const requested = p.range ?? range(0, text.length);
@@ -286,7 +286,7 @@ export class ContextReader {
       const refSummary = (ref: DocumentRef) => {
         const node = ref.kind === "node" ? this.byId.get(ref.id) : undefined;
         return node
-          ? { ...this.summary(node), kind: ref.kind, id: ref.id, archived: node.archived }
+          ? { ...this.summary(node), kind: ref.kind, id: ref.id }
           : {
               kind: ref.kind,
               id: ref.id,
@@ -305,7 +305,8 @@ export class ContextReader {
         )
           continue;
         const from = relation.from.kind === "node" ? this.byId.get(relation.from.id) : undefined;
-        if (p.direction === "incoming" && from?.archived && !p.includeArchived) continue;
+        if (p.direction === "incoming" && from?.status === "deprecated" && !p.includeArchived)
+          continue;
         const { via, target, fromEtag, range: occurrenceRange, ...occurrence } = relation;
         if (from && from.etag !== fromEtag)
           throw new ReaderError(
@@ -369,7 +370,7 @@ export class ContextReader {
         if (
           from.invalid ||
           (p.direction === "incoming"
-            ? from.archived && !p.includeArchived
+            ? from.status === "deprecated" && !p.includeArchived
             : from.nodeId !== p.nodeId)
         )
           continue;
@@ -385,7 +386,7 @@ export class ContextReader {
             field: occurrence.field,
             index: occurrence.index,
             resource: occurrence.resource,
-            ...(target ? { target: { ...this.summary(target), archived: target.archived } } : {}),
+            ...(target ? { target: this.summary(target) } : {}),
             ...(occurrence.error ? { error: occurrence.error } : {}),
             ...(occurrence.locator?.kind === "unresolved" ? { unresolved: true } : {}),
             read: { nodeId: from.nodeId, view: "raw", expectedEtag: from.etag },
@@ -411,7 +412,7 @@ export class ContextReader {
             textRange: range(start, end),
             read: { nodeId: from.nodeId, view: "body", expectedEtag: from.etag, range: link.range },
             ...(target
-              ? { target: { ...this.summary(target), archived: target.archived } }
+              ? { target: this.summary(target) }
               : { unresolved: resolved.kind !== "artifact", kind: resolved.kind }),
           });
         }
@@ -423,7 +424,7 @@ export class ContextReader {
             kind: "mention",
             raw: mention.targetNodeId,
             range: mention.range,
-            target: { ...this.summary(target), archived: target.archived },
+            target: this.summary(target),
             read: {
               nodeId: from.nodeId,
               view: "body",

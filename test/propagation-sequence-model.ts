@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { PropagationMemoryFs } from "./propagation-memory.js";
 import { scaffoldTent } from "../src/core/store/scaffold.js";
-import { createNode, archiveNode, restoreNode } from "../src/core/graph/ops.js";
+import { createNode, archiveNode } from "../src/core/graph/ops.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { appendNodeBody } from "../src/core/write/node-lightwrite.js";
@@ -126,10 +126,10 @@ export function generate(seed: number): Sequence {
       { kind: "output-material", goal: 2, output: 2 },
       { kind: "output-confirm", goal: 2, output: 2 },
       { kind: "archive-output", goal: 2, output: 2 },
-      { kind: "restore-output", goal: 2, output: 2 },
+      { kind: "activate-output", goal: 2, output: 2 },
       { kind: "card-deprecate", goal: 2, card: 0 },
       { kind: "archive-goal", goal: 0 },
-      { kind: "restore-goal", goal: 0 },
+      { kind: "activate-goal", goal: 0 },
     );
   }
   const kinds = [
@@ -146,9 +146,9 @@ export function generate(seed: number): Sequence {
     "output-material",
     "link",
     "archive-goal",
-    "restore-goal",
+    "activate-goal",
     "archive-output",
-    "restore-output",
+    "activate-output",
     "card-deprecate",
   ];
   const operations = [...prefix];
@@ -200,7 +200,6 @@ export class SequenceRunner {
   readonly goals: Goal[] = [];
   readonly outputs: Output[] = [];
   readonly cards: Card[] = [];
-  readonly archives = new Map<string, { commit: string; statuses: Map<string, boolean> }>();
   private tick = 0;
   readonly executed = new Set<string>();
 
@@ -460,30 +459,12 @@ export class SequenceRunner {
     if (!goal) return;
     const output = this.outputs.filter((o) => o.goal === op.goal)[op.output ?? 0];
     const material = goal.materials[op.slot ?? 0];
-    if (op.kind === "restore-goal" || op.kind === "restore-output") {
-      const selected = op.kind === "restore-goal" ? goal : output;
-      if (!selected) return;
-      const archive = this.archives.get(selected.id);
-      if (!archive) return;
-      // Only restore an unchanged archived subtree; interleaved writes make the real Core operation intentionally invalid.
-      const changes = await this.fs.history.commitChanges(archive.commit);
-      if (
-        (
-          await Promise.all(
-            changes.changes.map((c) =>
-              this.fs.history.changedSince({ commit: archive.commit, path: c.path }),
-            ),
-          )
-        ).some(Boolean)
-      )
-        return;
-      await restoreNode(this.env, selected.id, archive.commit);
+    if (op.kind === "activate-goal" || op.kind === "activate-output") {
+      const selected = op.kind === "activate-goal" ? goal : output;
+      if (!selected || selected.active) return;
+      await this.edit(selected.id, { frontmatter: { status: "stable" } });
+      selected.active = true;
       this.executed.add(op.kind);
-      for (const g of this.goals)
-        if (archive.statuses.has(g.id)) g.active = archive.statuses.get(g.id)!;
-      for (const o of this.outputs)
-        if (archive.statuses.has(o.id)) o.active = archive.statuses.get(o.id)!;
-      this.archives.delete(selected.id);
       return;
     }
     if (!goal.active && op.kind !== "card-deprecate") return;
@@ -534,7 +515,6 @@ export class SequenceRunner {
           statuses.set(o.id, o.active);
       const result = await archiveNode(this.env, selected.id);
       if (result.changed && result.commit) {
-        this.archives.set(selected.id, { commit: result.commit, statuses });
         for (const g of this.goals) if (statuses.has(g.id)) g.active = false;
         for (const o of this.outputs) if (statuses.has(o.id)) o.active = false;
       }

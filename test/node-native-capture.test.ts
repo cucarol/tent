@@ -194,12 +194,7 @@ test("sync rechecks native boundary snapshots before returning a judgment", asyn
   const observed = await captureNativeNodeEdits(adapter);
   const goalFile = "需求/需求.md";
   await adapter.writeFile(goalFile, (await adapter.readFile(goalFile)) + "\nChanged after capture");
-  const sync = await inspectWorkspaceSync(
-    adapter,
-    undefined,
-    observed.invalidNodes,
-    observed.catalog,
-  );
+  const sync = await inspectWorkspaceSync(adapter, observed.invalidNodes, observed.catalog);
   assert.equal(sync.nodes.find((node) => node.nodeId === output)?.behind, undefined);
   assert.ok(sync.nodes.find((node) => node.nodeId === goal)?.ahead);
   assert.ok(

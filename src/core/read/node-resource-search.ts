@@ -49,7 +49,7 @@ export async function searchNodeResources(
     for (const node of catalog.byId.values()) {
       const data = parseFrontmatter(node.header).data;
       const status = documentLifecycle(data).status;
-      if (node.archived || (status !== "draft" && status !== "stable")) continue;
+      if (status !== "draft" && status !== "stable") continue;
       let occurrences;
       try {
         occurrences = resolvedMaterialOccurrences(data, nodeNotePath(node.path));

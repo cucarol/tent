@@ -83,7 +83,7 @@ test("output metadata, equivalent newlines and partial edits retain a changed de
   );
   await edit({ body: "## Result\nRewritten after full review.\n" });
   assert.deepEqual(await readOutputChanges(fs, output), changes);
-  assert.equal((await inspectNodeSync(fs, output)).trustTier, "unverified");
+  assert.equal("trustTier" in (await inspectNodeSync(fs, output)), false);
   const reviewed = await readNodeForEdit(fs, output);
   await confirmNodeSync(fs, output, { baseEtag: reviewed.etag });
   assert.equal((await inspectNodeSync(fs, output)).behind, undefined);

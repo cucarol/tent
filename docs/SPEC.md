@@ -22,7 +22,7 @@ A Node is a directory holding `<name>/<name>.md`. A directory without that file 
 
 Record what will help later work: confirmed goals and constraints, decisions with their reasons, reference pointers, observed findings and facts about real results. A goal can exist before the work; a result that did not happen cannot be recorded. Goals and prompts hold settled intent, not commit ids, test counts or delivery status; dated evidence goes in an output. Agents do not write drafts: an undecided matter is asked in conversation or sent as a Card to the Role that decides it, and the settled result is recorded.
 
-`status` is `draft`, `stable` or `deprecated` (OKF v0.2 §5.4); omitted means stable, and Tent never changes it on its own. An unknown value is kept and reported. Status belongs to one Node: the children of a draft or deprecated Node keep their own. A draft written by another OKF tool stays readable and editable but has no effect: a draft goal is never ahead, a draft prompt supplies no rules, a draft output is no evidence, and draft directory materials own no files. A deprecated Node stays readable and editable but drops out of resource lookup. `node archive <id>` marks a subtree deprecated in one event; `node restore <id> --archive-commit <event>` undoes exactly that event's status changes while nothing has changed since. `node delete` removes a subtree; it leaves materials and inbound links alone.
+`status` is `stable` or `deprecated` (OKF v0.2 §5.4); omitted means stable, and Tent never changes it on its own. OKF's `draft` counts as stable. An unknown value is kept and reported, and that Node supplies no rules or coverage until it is fixed. Status belongs to one Node: the children of a deprecated Node keep their own. A deprecated Node stays readable and editable but drops out of resource lookup, rules and coverage. `node archive <id>` marks a subtree deprecated in one event; to bring a Node back, set its `status` again. `node delete` removes a subtree; it leaves materials and inbound links alone.
 
 ### Reading and writing
 
@@ -74,7 +74,7 @@ Code edits under a module can make its prose wrong without changing its structur
 
 ### Behind
 
-A goal or prompt is behind when a material's current version differs from its basis, or a material it had is missing or unavailable. Any Node is behind once its `stale_after` time has passed. An output records one moment: changes to its materials or its goals never make it behind; only `stale_after` does.
+A goal or prompt is behind when a material's current version differs from its basis, or a material it had is missing or unavailable. An output records one moment, so changes to its materials or its goals never make it behind.
 
 A Node material compares by meaning: its body with normalized line endings, its ordered material addresses and their `track` modes. Type, tags, status, authorship and confirmation do not count, so confirming an upstream Node without changing what it says makes no one behind. A matching version proves only that the recorded bytes still match, not that the text is right.
 
@@ -97,9 +97,9 @@ An output keeps comparison bases for its own materials and for every goal above 
 
 `node check <id>` reports ahead and behind with their reasons: each material's recorded and current version and, for a structure source, up to 20 added or deleted dependencies. It reads content directly and changes nothing.
 
-### Authorship and verification
+### Verification
 
-`generated`, `verified` and `stale_after` follow OKF v0.2 §5.2 and §5.5. `generated: {by, at}` records who last changed a Node's content; reads, no-op saves, confirmation and status changes leave it alone. `verified: [{by, at}]` keeps the latest confirmation of each actor and survives later content edits. Writes accept `--by` as `human:<id>`, `process:<id>` or `<producer>/<version>`; without it Tent records its own `tent/<version>`, never a guessed person or model. Times are ISO 8601 with an explicit zone. An invalid `stale_after` is a header problem of that Node alone.
+`verified: [{by, at}]` (OKF v0.2 §5.2) keeps the latest confirmation of each actor and survives later content edits. A confirmation accepts `--by` as `human:<id>`, `process:<id>` or `<producer>/<version>`; without it Tent records its own `tent/<version>`, never a guessed person or model. Times are ISO 8601 with an explicit zone. Tent neither writes nor checks `generated` or `stale_after`; like any other field, they survive edits untouched.
 
 ## 5. What the Agent is told
 
@@ -188,7 +188,7 @@ Ordinary code work needs no Tent read first: the Hooks copy the covering Nodes a
 
 For file-start reads, `paths` and `tests` come only from the most specific covering structure modules and exact-file material Nodes, deduplicated before pagination; higher goals contribute rules without expanding their files.
 
-Every assembled entry states the relationship that selected it. Text is copied, never summarized, and gathering it confirms, records and repairs nothing. The whole response fits 16 KiB, with the primary body taking at most half; when room runs out, later lists shrink to titles and then drop out, each marked, and ids and addresses are never shortened. The source commands it prints recover the bodies and a raw Card read every source address and version; no command lists every omitted entry. A Card source keeps its pinned version. `node-xxxxxx#Heading`, a link ending in `#Heading`, or `node-xxxxxx「Heading」` selects one section of a source; a missing or duplicate heading becomes an unknown, and the source's pinned opening stands in for the section, never today's text. Tent keeps no old project-file bytes, so code changes since a basis show only as changed versions, and since it records no session boundary, what the last session did is unknown. Raw views, `--full`, continuation pages and `read-many` carry no `agentContext`.
+Every assembled entry states the relationship that selected it. Text is copied, never summarized, and gathering it confirms, records and repairs nothing. The whole response fits 16 KiB, with the primary body taking at most half; when room runs out, later lists shrink to titles and then drop out, each marked, and ids and addresses are never shortened. The source commands it prints recover the bodies and a raw Card read every source address and version; no command lists every omitted entry. A Card source keeps its pinned version. `node-xxxxxx#Heading` or a link ending in `#Heading` selects one section of a source; a missing or duplicate heading becomes an unknown, and the source's pinned opening stands in for the section, never today's text. Tent keeps no old project-file bytes, so code changes since a basis show only as changed versions, and since it records no session boundary, what the last session did is unknown. Raw views, `--full`, continuation pages and `read-many` carry no `agentContext`.
 
 ## 7. Mapping a project
 

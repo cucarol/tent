@@ -7,9 +7,9 @@
 | A Node is behind or ahead | `tent node check <id>` | `state`, `reasons` |
 | A behind Node needs a fix | `tent node write <id> --confirm --base-etag <etag> --body -` | `etag` |
 | Rename or move | `tent node rename <id> <name>`, `tent node move <id> --parent <id>` | the id stays |
-| Retire a subtree | `tent node archive <id>`; undo with `tent node restore <id> --archive-commit <commit>` | `commit` |
+| Retire a subtree | `tent node archive <id>`; to bring a Node back, delete its `status: deprecated` line | `commit` |
 
-Behind: a goal's or prompt's material changed since it was created or confirmed, or a Node's `stale_after` passed. An output keeps what was seen when it was saved: later changes to its material or goals never make it behind, and a complete `node get` lists them. Ahead: nothing shows that a goal is carried out for its current body and material. A goal that owns a directory or prefix, itself or through a child goal, is carried out by that code while its body and materials stay as they were when it was created or confirmed; other goals need an undeprecated output saved or confirmed against them. Either clears ahead: confirm the goal once its code matches the change, confirm an output that still holds, or record a new one.
+Behind: a goal's or prompt's material changed since it was created or confirmed. An output keeps what was seen when it was saved: later changes to its material or goals never make it behind, and a complete `node get` lists them. Ahead: nothing shows that a goal is carried out for its current body and material. A goal that owns a directory or prefix, itself or through a child goal, is carried out by that code while its body and materials stay as they were when it was created or confirmed; other goals need an undeprecated output saved or confirmed against them. Either clears ahead: confirm the goal once its code matches the change, confirm an output that still holds, or record a new one.
 
 - On an ETag conflict, reread, merge and save with the new `etag`. A partial read's `read:` ETag cannot replace or confirm a body.
 - `append --heading <title>` adds to the end of that section, or starts it.

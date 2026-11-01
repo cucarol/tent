@@ -349,7 +349,7 @@ test("Core reads disclose complete standard metadata and exact raw bytes", () =>
           type: "prompt",
           raw,
           etag: contentEtag(raw),
-          archived: false,
+          status: "stable",
           invalid: false,
           parentNodeId: null,
           childNodeIds: [],

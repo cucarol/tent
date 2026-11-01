@@ -120,9 +120,9 @@ Node 名称在所有平台按 Windows 文件名校验：不得含 `< > : " / \ |
 
 `node append` 不需要先读或 ETag；`--heading` 与现有同名节匹配时追加到该节末尾。正文编辑交给 Agent 自带的文件工具或 `node write`。替换整个正文前须完整读取（`--full`）；分页或部分读取得到的 `read:` ETag 只允许元数据修改，不能替换或确认正文。保存后保留回执中的 ETag 与 version，无需回读。ETag 冲突时重新读取、合并后用新 ETag 保存。Card 钉住的来源版本不能作为编辑基础。`node write-many` 的每个 create 条目需要本批唯一的 `ref`，`@ref` 可用于 parent、链接与材料地址。批次先校验并准备全部最终文档，在一个 Workspace 锁下写入，并把改动的文档记入一个 Tent 提交；失败的批次回滚它自己的文档、目录和顺序改动，回滚失败时报告受影响的路径与冲突并保留外部编辑。锁只串行化 Tent 写入者，不让文件写入与 Git 对外部编辑器或进程终止具有原子性。
 
-落后（behind）：goal 或 prompt 已记录的材料变化或缺失，或任意 Node 的 `stale_after` 到期。output 记录某一时刻的结果，自己的材料或任意祖先 goal 后续变化都不会让它落后，`asset` 标签也没有例外。完整读取 output 时，`changedSince` 分别列出变化的自身材料和向上遇到的最近一个 goal；更上层 goal 不提醒，但比较数据和历史基线完整保留；这些信息不进 brief 的落后清单。领先（ahead）：goal 自己或现行后代 goal 持有本工作区目录或前缀材料时，创建和确认会记录该 goal 自身正文与声明的意图基线；普通保存和原生收录保留该基线。自身基线或一份完整匹配的现行 output 任一成立即可清除领先，缺失或改变的基线不算匹配。分组 goal 仍比较自己的意图，不把子 goal 正文合并进来。单个文件、Node/Role 引用和外部 URL 不获得这项豁免；其余 goal 子树下没有现行 output，或者没有一份 output 的 goal 基线与当前正文、材料全部匹配时领先。基线未知或材料不可核对不构成匹配；不同 output 的局部匹配不能拼成一份证据。复核实现后确认范围内的 goal，或确认一份仍成立的 output、另建一份匹配的 output，可清除该 goal 的领先，其他旧 output 的变化说明保留。材料 behind 仍独立判断。现行 output 的范围不变，不增加时间字段或重放历史。Card 投递状态独立于 goal 的领先与产出状态。一个 goal 可同时落后和领先。读完整 Node 和变化的材料后，仍成立用 `node confirm`，需要修正用 `node write --confirm`；output 的普通重写、append、节编辑和元数据修改都保留原基线。确认 output 刷新其比较基线并清除已核实的变化说明，确认 goal 不代替确认 output。Tent 把材料版本记入 Git，不需要手填哈希。
+落后（behind）：goal 或 prompt 已记录的材料变化或缺失。output 记录某一时刻的结果，自己的材料或任意祖先 goal 后续变化都不会让它落后，`asset` 标签也没有例外。完整读取 output 时，`changedSince` 分别列出变化的自身材料和向上遇到的最近一个 goal；更上层 goal 不提醒，但比较数据和历史基线完整保留；这些信息不进 brief 的落后清单。领先（ahead）：goal 自己或现行后代 goal 持有本工作区目录或前缀材料时，创建和确认会记录该 goal 自身正文与声明的意图基线；普通保存和原生收录保留该基线。自身基线或一份完整匹配的现行 output 任一成立即可清除领先，缺失或改变的基线不算匹配。分组 goal 仍比较自己的意图，不把子 goal 正文合并进来。单个文件、Node/Role 引用和外部 URL 不获得这项豁免；其余 goal 子树下没有现行 output，或者没有一份 output 的 goal 基线与当前正文、材料全部匹配时领先。基线未知或材料不可核对不构成匹配；不同 output 的局部匹配不能拼成一份证据。复核实现后确认范围内的 goal，或确认一份仍成立的 output、另建一份匹配的 output，可清除该 goal 的领先，其他旧 output 的变化说明保留。材料 behind 仍独立判断。现行 output 的范围不变，不增加时间字段或重放历史。Card 投递状态独立于 goal 的领先与产出状态。一个 goal 可同时落后和领先。读完整 Node 和变化的材料后，仍成立用 `node confirm`，需要修正用 `node write --confirm`；output 的普通重写、append、节编辑和元数据修改都保留原基线。确认 output 刷新其比较基线并清除已核实的变化说明，确认 goal 不代替确认 output。Tent 把材料版本记入 Git，不需要手填哈希。
 
-`node link-output` 在 goal 下新建 output，名称默认取文件名，只带 `--tags` 给出的标签；文件须已在 Workspace checkout 中，候选分支或 worktree 应先集成。从 linked worktree 调用仍写入主检出的 `.tent/`；材料、漂移和 brief 读取主检出文件，未合入的分支变化不使 Node 落后。本地材料按声明的地址读取，缺失时不从其他检出回退。`status` 为 `draft`、`stable`（默认）或 `deprecated`，只作用于本文档；`node archive` 弃用子树，`node restore --archive-commit` 撤销；`node delete` 永久删除子树，只在用户要求时使用。`node rename` 与 `node move` 保持 id 并更新指向它的链接。
+`node link-output` 在 goal 下新建 output，名称默认取文件名，只带 `--tags` 给出的标签；文件须已在 Workspace checkout 中，候选分支或 worktree 应先集成。从 linked worktree 调用仍写入主检出的 `.tent/`；材料、漂移和 brief 读取主检出文件，未合入的分支变化不使 Node 落后。本地材料按声明的地址读取，缺失时不从其他检出回退。`status` 为 `draft`、`stable`（默认）或 `deprecated`，只作用于本文档；`node archive` 弃用子树，要重新启用 Node，删去它的 `status: deprecated`；`node delete` 永久删除子树，只在用户要求时使用。`node rename` 与 `node move` 保持 id 并更新指向它的链接。
 
 显式 `--context` 的首页与 `--full` 实时读取附带独立于 `text` 的 `context`（不超过 1 KiB）：祖先、按类型分组的子 Node、入链与出链（正文中 Markdown 链接以外的已知 Node id 记为 `mention`）、钉住该 Node 的 Card 及其投递状态、接收者、返回地址和结果；output 另列 goal 链与同步状态，goal 保留范围内的 prompt 与子树 output。省略的计数可用 `node relations` 展开；历史读取保留钉住的内容，但没有 `context`。`node history` 跨移动列出已捕获的版本；用其中的 `version: {commit, path}` 和 `node get --version-json` 读取历史字节，再由 Agent 自己比较。Tent 只保存材料地址，材料由宿主已有工具读取。
 
@@ -146,9 +146,9 @@ Card 只记录四种投递状态：`pending`、`consumed`、`returned`、`closed
 
 ## 作者与确认
 
-Node 正文或语义元数据变化时记录 OKF 原生 `generated: {by, at}`；确认时记录 `verified: [{by, at}]`，按 actor 保留最新一项。确认不改正文或生成时间，内容修改也不抹掉既有复核记录。读取、无变化保存和生命周期修改不刷新生成时间。`stale_after` 到期使 Node 落后；`status: deprecated` 的 Node 不进入当前上下文。
+确认时记录 `verified: [{by, at}]`，按确认方保留最新一项，内容修改保留已有核对记录。Tent 不写不校验 `generated` 和 `stale_after`。
 
-写入与确认支持 `--by`，JSON 写入和批量条目支持 `by`。已知身份使用 `human:<id>`、`process:<id>` 或 `<producer>/<version>`；无法取得可靠宿主身份时写实际运行的 `tent/<version>`，不猜模型或冒充人工。只有 `human:` 验证者显示为人工复核，其余是机器确认，无验证者则未验证。信任档位由验证记录推导，不是权限控制。
+`--by` 只用于确认：`node confirm`、`node write --confirm` 和批量 `confirm: true`。确认方写 `human:<id>`、`process:<id>` 或 `<producer>/<version>`，不写时记 `tent/<version>`。
 
 ## Hook 边界
 

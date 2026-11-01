@@ -16,7 +16,7 @@ import { canonicalDocumentReferences } from "./document-links.js";
 import { validateSystemMaterials } from "./material-target.js";
 import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "../base/node-read-basis.js";
 import { assertNodeRecordFields, prepareNodeSyncSave } from "./node-sync-record.js";
-import { prepareNodeProvenanceSave, assertNodeProvenanceEdit } from "../base/node-provenance.js";
+import { assertNodeProvenanceEdit } from "../base/node-provenance.js";
 import { nodeMaterialWarnings } from "./node-material-warnings.js";
 
 export class NodeWriteError extends Error {
@@ -35,6 +35,8 @@ export class NodeWriteError extends Error {
     this.name = "NodeWriteError";
   }
 }
+
+export const NODE_WRITE_BY_REQUIRES_CONFIRM = "`by` is only valid with `confirm: true`.";
 
 export type NodeDocumentEdit = {
   baseEtag?: string;
@@ -118,17 +120,12 @@ export async function savePreparedNodeDocumentUnlocked(
       throw new NodeWriteError("INVALID_EDIT", error.message);
     throw error;
   }
-  const { raw, record } = await prepareNodeSyncSave(
-    fs,
-    nodeNotePath(node.path),
-    prepareNodeProvenanceSave(preparedRaw, diskRaw, input.by, now),
-    {
-      now,
-      previousRaw: diskRaw,
-      confirm: input.confirm,
-      by: input.by,
-    },
-  );
+  const { raw, record } = await prepareNodeSyncSave(fs, nodeNotePath(node.path), preparedRaw, {
+    now,
+    previousRaw: diskRaw,
+    confirm: input.confirm,
+    by: input.by,
+  });
   const changed = raw !== diskRaw;
   const path = nodeNotePath(node.path);
   const warnings = await nodeMaterialWarnings(
@@ -188,6 +185,8 @@ export function prepareNodeDocumentWrite(
   diskRaw: string,
   input: NodeDocumentEdit,
 ): string {
+  if (input.by !== undefined && input.confirm !== true)
+    throw new NodeWriteError("INVALID_INPUT", NODE_WRITE_BY_REQUIRES_CONFIRM);
   const { baseEtag, raw: rawInput, body, frontmatter } = input;
   const currentEtag = contentEtag(diskRaw);
   // Existing documents require the caller's observed revision.

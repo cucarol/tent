@@ -390,7 +390,7 @@ test("directory markers cannot select Node semantic content, pinned Card files o
         etag: contentEtag(raw),
         parentNodeId: null,
         childNodeIds: [],
-        archived: false,
+        status: "stable",
         invalid: false,
       },
     ],

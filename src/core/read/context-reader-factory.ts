@@ -37,7 +37,7 @@ function treeRevision(tent: LoadedTent) {
       etag: n.etag,
       parent: n.parent?.id,
       children: n.children.map((c) => c.id),
-      archived: n.archived,
+      status: n.status,
       invalid: n.invalid,
     })),
   });
@@ -63,7 +63,7 @@ export async function liveContextReader(
       type: node.type,
       etag: node.etag,
       raw,
-      archived: node.archived,
+      status: node.status,
       invalid: node.invalid,
       parentNodeId: node.parent?.id ?? null,
       childNodeIds: node.children.map((n) => n.id),

@@ -154,6 +154,7 @@ test("scan uses active material coverage, excludes body links and respects direc
   );
   await node("docs", { resource: "../../guide/", status: "deprecated" });
   await node("draft", { resource: "../../src/core-other/", status: "draft" });
+  await node("unknown", { resource: "../../docs/body.md", status: "future" });
   await node("missingdir", { resource: "../../gone/" });
   await adapter.writeFile(
     "roles/role-other.md",
@@ -173,9 +174,9 @@ test("scan uses active material coverage, excludes body links and respects direc
   const before = await snapshot(root);
   const result = await scanWorkspace(adapter, root, repository, scanFileKind);
   assert.deepEqual(result.inspectionErrors, []);
-  assert.equal(result.coverage.coveredFiles, 5);
+  assert.equal(result.coverage.coveredFiles, 6);
   assert.ok(result.coverage.uncoveredFiles.includes("guide/README.markdown"));
-  assert.ok(result.coverage.uncoveredFiles.includes("src/core-other/c.ts"));
+  assert.ok(!result.coverage.uncoveredFiles.includes("src/core-other/c.ts"));
   assert.ok(result.coverage.uncoveredFiles.includes("docs/body.md"));
   assert.ok(!result.coverage.uncoveredFiles.includes("gone/x.ts"));
   assert.ok(result.coverage.uncoveredFiles.includes("docs/ref.md"));

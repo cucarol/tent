@@ -49,7 +49,7 @@ export async function convertModuleGoals(
       seen.add(entry.nodeId);
       const rulesTags = normalizeTagList(entry.rulesTags);
       const node = catalog.byId.get(entry.nodeId);
-      if (!node || node.invalid || node.archived)
+      if (!node || node.invalid || node.status === "deprecated")
         throw new Error(`Unavailable Node: ${entry.nodeId}`);
       const document = await readCatalogDocument(adapter, node);
       const parsed = parseFrontmatter(document.raw);

@@ -117,7 +117,7 @@ export async function scanWorkspace(
       });
       continue;
     }
-    if (node.archived || node.status === "deprecated" || node.status === "draft") continue;
+    if (node.status !== "draft" && node.status !== "stable") continue;
     const owner = nodeNotePath(node.path);
     for (const occurrence of resolvedMaterialOccurrences(node.fm, owner)) {
       if (occurrence.error) {

@@ -64,8 +64,8 @@ test("content time ignores confirmation and metadata, tracks body/address edits 
   await commit(1);
   const read = () => readNodeTimes(adapter, ["node-rule", "node-out", "node-rule"]);
   assert.deepEqual(await read(), [
-    { nodeId: "node-rule", contentChangedAt: stamp(1), recordedAt: null },
-    { nodeId: "node-out", contentChangedAt: stamp(1), recordedAt: stamp(1) },
+    { nodeId: "node-rule", contentChangedAt: stamp(1) },
+    { nodeId: "node-out", contentChangedAt: stamp(1) },
   ]);
   await save("Rule", {
     ...base,
@@ -82,8 +82,8 @@ test("content time ignores confirmation and metadata, tracks body/address edits 
   );
   await commit(2);
   assert.deepEqual(await read(), [
-    { nodeId: "node-rule", contentChangedAt: stamp(1), recordedAt: null },
-    { nodeId: "node-out", contentChangedAt: stamp(1), recordedAt: stamp(2) },
+    { nodeId: "node-rule", contentChangedAt: stamp(1) },
+    { nodeId: "node-out", contentChangedAt: stamp(1) },
   ]);
   await save("Rule", base, "New rule");
   await commit(3);
@@ -106,31 +106,6 @@ test("content time ignores confirmation and metadata, tracks body/address edits 
   );
   await save("Rule", base);
   assert.equal((await read())[0]!.contentChangedAt, stamp(5));
-});
-
-test("recorded time preserves valid confirmations beside invalid native declarations", async (t) => {
-  const { adapter, save, commit } = await fixture(t);
-  const base = { id: "node-out", type: "output", generated: { by: "test/1", at: stamp(1) } };
-  await save("Out", base);
-  await commit(4);
-  const head = await adapter.history.currentCommit();
-  for (const verified of [
-    [
-      { by: "human:a", at: stamp(3) },
-      { by: "human:b", at: "not-a-timestamp" },
-    ],
-    [null, { by: "human:a", at: stamp(3) }, { by: "invalid", at: stamp(9) }],
-    [[{ by: "human:nested", at: stamp(9) }], { by: "human:a", at: stamp(3) }],
-    { by: "human:a", at: "2026-01-03T08:00:00+08:00" },
-  ]) {
-    await save("Out", { ...base, verified });
-    assert.deepEqual(await readNodeTimes(adapter, ["node-out"]), [
-      { nodeId: "node-out", contentChangedAt: stamp(4), recordedAt: stamp(3) },
-    ]);
-  }
-  await save("Out", { ...base, verified: [null, { by: "human:a", at: "bad" }] });
-  assert.equal((await readNodeTimes(adapter, ["node-out"]))[0]!.recordedAt, stamp(1));
-  assert.equal(await adapter.history.currentCommit(), head);
 });
 
 test("moves and canonical address rewrites retain content times across historical identities", async (t) => {
@@ -193,14 +168,14 @@ test("missing or partial history cannot invent times or discard another Node's r
     ),
   );
   assert.deepEqual(await readNodeTimes(adapter, ["node-a", "node-b"]), [
-    { nodeId: "node-a", contentChangedAt: null, recordedAt: null },
-    { nodeId: "node-b", contentChangedAt: stamp(1), recordedAt: stamp(1) },
+    { nodeId: "node-a", contentChangedAt: null },
+    { nodeId: "node-b", contentChangedAt: stamp(1) },
   ]);
   t.mock.method(adapter.history, "changesInRange", async () => {
     throw new Error("unavailable history");
   });
   assert.deepEqual(await readNodeTimes(adapter, ["node-b"]), [
-    { nodeId: "node-b", contentChangedAt: null, recordedAt: stamp(1) },
+    { nodeId: "node-b", contentChangedAt: null },
   ]);
   assert.deepEqual(await readNodeTimes(adapter, []), []);
   await assert.rejects(readNodeTimes(adapter, ["../A"]), /canonical Node/);

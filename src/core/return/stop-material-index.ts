@@ -64,12 +64,12 @@ function workspaceMaterialFile(
   }
 }
 
-/** Provenance stamps do not change Stop membership, names, types or material coverage. */
+/** Compare parsed metadata, preserving unknown fields as ordinary metadata. */
 export function sameStopMaterialHeader(before: string, after: string): boolean {
   if (before === after) return true;
   try {
-    const { generated: _before, ...left } = parseFrontmatter(before).data;
-    const { generated: _after, ...right } = parseFrontmatter(after).data;
+    const left = parseFrontmatter(before).data;
+    const right = parseFrontmatter(after).data;
     return canonicalSha256(left) === canonicalSha256(right);
   } catch {
     // A changed malformed header still goes through the tree's quarantine rules.
@@ -86,7 +86,6 @@ export function buildStopMaterialIndex(
   const nodes = [...catalog.byId.values()].filter(
     (node) =>
       isUsableNode(catalog.tree.byPath.get(node.path)!) &&
-      catalog.tree.byPath.get(node.path)!.status !== "draft" &&
       !invalidNodePaths.includes(`.tent/${nodeNotePath(node.path)}`),
   );
   const active = new Set(nodes.map((node) => node.nodeId));

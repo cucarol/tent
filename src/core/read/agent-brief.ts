@@ -24,8 +24,6 @@ export function projectAgentBrief(
     identity: { nodeId?: string; cardId?: string } = {},
   ) => problems.push({ kind, ...identity, ...briefLine(prefix, title) });
   for (const item of context.recoveryConflicts ?? []) add("recovery", "Recovery", item);
-  if (context.draftCount)
-    add("draft", "Draft", `${context.draftCount} unsettled Nodes; inspect the Node listing`);
   for (const item of context.sync.invalidNodes ?? [])
     add("invalid", item.nodeId ?? "Invalid", `${item.path}: ${item.reason}`, {
       nodeId: item.nodeId,
@@ -107,7 +105,7 @@ export function projectAgentBrief(
 }
 
 export function formatAgentBrief(value: AgentBrief) {
-  const early = new Set(["recovery", "draft", "invalid"]);
+  const early = new Set(["recovery", "invalid"]);
   const cards = value.agentContext.sections.find((section) => section.kind === "open")!;
   const nodes = value.agentContext.sections.find((section) => section.kind === "references")!;
   const unknown = value.agentContext.sections.find((section) => section.kind === "unknown")!;

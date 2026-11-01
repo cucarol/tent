@@ -15,6 +15,7 @@ import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { incompleteNodeReadEtag } from "../src/core/base/node-read-basis.js";
 import {
   NodeBatchWriteError,
+  nodeWriteBatchInputSchema,
   writeNodesBatch,
   type NodeWriteBatchInput,
 } from "../src/core/write/node-write-batch.js";
@@ -104,7 +105,9 @@ test("batch creates forward parents and mutual links, updates, and captures once
   assert.equal(result.results[1]!.nodeId, existing.nodeId);
   for (const node of result.results) {
     const name = node.path.split("/").at(-1)!;
-    assert.equal(node.etag, contentEtag(await fs.readFile(`${node.path}/${name}.md`)));
+    const raw = await fs.readFile(`${node.path}/${name}.md`);
+    assert.equal(node.etag, contentEtag(raw));
+    assert.equal("generated" in parseFrontmatter(raw).data, false);
   }
   const child = parseFrontmatter(await fs.readFile("Parent/Child/Child.md"));
   assert.match(child.body, /\[parent\]\(\.\.\/Parent.md#part\)/);
@@ -600,4 +603,79 @@ test("batch retains the original capture error when recovery also fails, then or
     items: [{ op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "retry" }],
   });
   assert.equal((await readNodeForEdit(fs, existing.nodeId)).body, "retry");
+});
+
+test("batch by belongs to confirmed updates and ordinary updates preserve unknown metadata", async (t) => {
+  const { env, fs, existing } = await fixture(t);
+  assert.equal(
+    nodeWriteBatchInputSchema.safeParse({
+      items: [{ op: "create", ref: "new", name: "New", type: "prompt", by: "human:cuca" }],
+    }).success,
+    false,
+  );
+  assert.equal(
+    nodeWriteBatchInputSchema.safeParse({
+      items: [
+        {
+          op: "update",
+          nodeId: existing.nodeId,
+          baseEtag: existing.etag,
+          body: "next",
+          by: "human:cuca",
+        },
+      ],
+    }).success,
+    false,
+  );
+  const metadata = { generated: { arbitrary: [17, false] }, stale_after: "custom timestamp" };
+  await writeNodesBatch(env, {
+    items: [
+      { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, frontmatter: metadata },
+    ],
+  });
+  let current = await readNodeForEdit(fs, existing.nodeId);
+  await writeNodesBatch(env, {
+    items: [{ op: "update", nodeId: existing.nodeId, baseEtag: current.etag, body: "changed" }],
+  });
+  current = await readNodeForEdit(fs, existing.nodeId);
+  for (const [key, value] of Object.entries(metadata))
+    assert.deepEqual(current.frontmatter[key], value);
+  await writeNodesBatch(env, {
+    items: [
+      {
+        op: "update",
+        nodeId: existing.nodeId,
+        baseEtag: current.etag,
+        body: "confirmed",
+        confirm: true,
+        by: "human:cuca",
+      },
+    ],
+  });
+  current = await readNodeForEdit(fs, existing.nodeId);
+  for (const [key, value] of Object.entries(metadata))
+    assert.deepEqual(current.frontmatter[key], value);
+  assert.deepEqual(current.frontmatter.verified, [{ by: "human:cuca", at: env.clock.now() }]);
+  const failure = new Error("confirmed batch write failure");
+  const write = fs.writeFile.bind(fs);
+  fs.writeFile = async (file, raw) => {
+    if (file === "Existing/Existing.md") throw failure;
+    await write(file, raw);
+  };
+  await assert.rejects(
+    writeNodesBatch(env, {
+      items: [
+        {
+          op: "update",
+          nodeId: existing.nodeId,
+          baseEtag: current.etag,
+          body: "failed",
+          confirm: true,
+          by: "process:review",
+        },
+      ],
+    }),
+    (error) => error === failure,
+  );
+  assert.equal(await fs.readFile("Existing/Existing.md"), current.raw);
 });
