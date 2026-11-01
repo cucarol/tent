@@ -4,6 +4,7 @@ import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { syncBuiltinESMExports } from "node:module";
 import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { NodeFs } from "../src/fs/node-fs.js";
@@ -14,6 +15,7 @@ import {
   takeCardDocument,
   returnCardDocument,
   watchCardDocuments,
+  CardDocumentError,
   listCardDocuments,
   moveCardDocument,
   deprecateCardDocument,
@@ -33,6 +35,8 @@ import { runCardCommand } from "../src/cli/card-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { linkNodeOutput, confirmNodeSync } from "../src/core/graph/node-sync.js";
+import { ReaderError } from "../src/core/graph/context-reader.js";
+import { cliErrorText } from "../src/cli/error-text.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(testScratchRoot());
@@ -53,6 +57,154 @@ async function fixture(t: TestContext) {
 }
 const code = (expected: string) => (error: unknown) =>
   (error as { code?: string }).code === expected;
+
+test("watch retries an atomic Role replacement detected by the real file reader", async (t) => {
+  const { root, adapter } = await fixture(t);
+  const card = await createCardDocument(adapter, { prompt: "Work", target: "role-a" });
+  const rolePath = path.join(root, "roles/role-a.md");
+  const replacement = rolePath + ".replacement";
+  const raw = await fs.readFile(rolePath);
+  await fs.writeFile(replacement, raw);
+  const stat = fs.stat;
+  let replaced = false;
+  t.mock.method(fs, "stat", async (...args: Parameters<typeof fs.stat>) => {
+    if (!replaced && String(args[0]) === rolePath) {
+      replaced = true;
+      // Emulate a replacement becoming visible after the old handle was read.
+      // Windows itself can deny rename while that handle is still open.
+      return stat(replacement, args[1]);
+    }
+    return stat(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  await assert.rejects(adapter.readFile("roles/role-a.md"), code("SOURCE_CHANGED"));
+  await fs.writeFile(replacement, raw);
+  replaced = false;
+  assert.deepEqual(await watchCardDocuments(adapter, "role-a", 10), [{ cardId: card.cardId }]);
+  assert.equal(replaced, true);
+});
+
+test("watch retries transient reads without losing the unchanged inbox head", async (t) => {
+  for (const errno of ["EPERM", "EACCES", "EBUSY", "ENOENT", "SOURCE_CHANGED"]) {
+    const { adapter } = await fixture(t);
+    const card = await createCardDocument(adapter, { prompt: "Work", target: "role-a" });
+    const read = adapter.history.readDirectory.bind(adapter.history);
+    let calls = 0;
+    adapter.history.readDirectory = async (...args) => {
+      if (++calls === 1) throw Object.assign(new Error(`inbox ${errno}`), { code: errno });
+      return read(...args);
+    };
+    assert.deepEqual(await watchCardDocuments(adapter, "role-a", 10), [{ cardId: card.cardId }]);
+    assert.equal(calls, 2);
+  }
+});
+
+test("watch distinguishes one missing read from a missing or deprecated Role", async (t) => {
+  const { adapter } = await fixture(t);
+  const card = await createCardDocument(adapter, { prompt: "Work", target: "role-a" });
+  const read = adapter.readFile.bind(adapter);
+  let calls = 0;
+  adapter.readFile = async (file) => {
+    if (file === "roles/role-a.md" && ++calls === 1)
+      throw Object.assign(new Error("replacement ENOENT"), { code: "ENOENT" });
+    return read(file);
+  };
+  assert.deepEqual(await watchCardDocuments(adapter, "role-a", 0), [{ cardId: card.cardId }]);
+  const start = performance.now();
+  await assert.rejects(watchCardDocuments(adapter, "role-missing", 30), code("ROLE_UNAVAILABLE"));
+  assert.ok(performance.now() - start < 1000, "missing Role must not wait for a poll");
+  await adapter.writeFile(
+    "roles/role-a.md",
+    (await read("roles/role-a.md")).replace("type: role", "type: role\nstatus: deprecated"),
+  );
+  await assert.rejects(watchCardDocuments(adapter, "role-a", 30), code("ROLE_UNAVAILABLE"));
+});
+
+test("watch reports persistent and nontransient read failures with their original cause", async (t) => {
+  const { adapter } = await fixture(t);
+  const failure = Object.assign(new Error("EPERM: read roles/role-a.md"), { code: "EPERM" });
+  let reads = 0;
+  adapter.readFile = async () => {
+    reads++;
+    throw failure;
+  };
+  await assert.rejects(watchCardDocuments(adapter, "role-a", 10), (error: unknown) => {
+    assert.equal((error as CardDocumentError).cause, failure);
+    assert.match(cliErrorText(error, "tent card watch"), /EPERM: read roles\/role-a.md/);
+    return true;
+  });
+  assert.equal(reads, 2);
+  await assert.rejects(watchCardDocuments(adapter, "role-a", 0), code("ROLE_UNAVAILABLE"));
+  assert.equal(reads, 3, "timeout zero must not sleep or hide a read failure");
+  const invalid = new Error("invalid Role bytes");
+  adapter.readFile = async () => {
+    throw invalid;
+  };
+  await assert.rejects(watchCardDocuments(adapter, "role-a", 30), (error: unknown) => {
+    assert.equal((error as CardDocumentError).cause, invalid);
+    return true;
+  });
+});
+
+test("waiting watch notices native Role retirement even without a new inbox head", async (t) => {
+  const { adapter } = await fixture(t);
+  const head = await adapter.history.currentCommit();
+  const directory = adapter.history.readDirectory.bind(adapter.history);
+  adapter.history.readDirectory = async (...args) => {
+    const result = await directory(...args);
+    await adapter.writeFile(
+      "roles/role-a.md",
+      (await adapter.readFile("roles/role-a.md")).replace(
+        "type: role",
+        "type: role\nstatus: deprecated",
+      ),
+    );
+    return result;
+  };
+  await assert.rejects(watchCardDocuments(adapter, "role-a", 10), code("ROLE_UNAVAILABLE"));
+  assert.equal(await adapter.history.currentCommit(), head);
+});
+
+test("Card commands retain Role read errors and the CLI keeps their cause", async (t) => {
+  const { adapter } = await fixture(t);
+  const card = await createCardDocument(adapter, {
+    prompt: "Work",
+    target: "role-a",
+    returnTo: "role-b",
+  });
+  const header = adapter.readFrontmatter.bind(adapter);
+  const failure = new ReaderError("SOURCE_CHANGED", "Source changed while reading header");
+  adapter.readFrontmatter = async (file) => {
+    if (file === "roles/role-a.md") throw failure;
+    return header(file);
+  };
+  for (const action of [
+    () => createCardDocument(adapter, { prompt: "Work", target: "role-a" }),
+    () => takeCardDocument(adapter, card.cardId, "role-a"),
+  ]) {
+    await assert.rejects(action(), (error: unknown) => {
+      assert.equal((error as CardDocumentError).cause, failure);
+      assert.match(cliErrorText(error, "tent card take"), /Source changed while reading header/);
+      return true;
+    });
+  }
+  adapter.readFrontmatter = header;
+  await takeCardDocument(adapter, card.cardId, "role-a");
+  adapter.readFrontmatter = async () => {
+    throw failure;
+  };
+  await assert.rejects(
+    returnCardDocument(adapter, card.cardId, { roleId: "role-a", result: "Done" }),
+    (error: unknown) => {
+      assert.equal((error as CardDocumentError).cause, failure);
+      return true;
+    },
+  );
+});
 
 test("a draft Card is diagnosed, raw-readable and cannot be taken", async (t) => {
   const { adapter } = await fixture(t);

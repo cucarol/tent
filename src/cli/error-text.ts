@@ -80,7 +80,7 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
         ? `Role not found: ${roleId}.`
         : reason === "Error: Role is not current"
           ? `Role ${roleId} is deprecated.`
-          : `Role unavailable: ${roleId}.`;
+          : message;
     }
     next = ["tent", "role", "list"];
   } else if (missingNode) {

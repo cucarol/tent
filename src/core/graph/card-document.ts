@@ -75,6 +75,7 @@ export class CardDocumentError extends Error {
     readonly details?: {
       current: { etag: string; state: CardDocumentState; target?: string; receivedBy?: string };
     },
+    readonly cause?: unknown,
   ) {
     super(message);
   }
@@ -212,23 +213,33 @@ async function historyOf(fs: FsAdapter) {
 async function roleAvailable(
   fs: FsAdapter,
   roleId: string,
-  options: { headerOnly?: boolean } = {},
+  options: { headerOnly?: boolean; confirmMissing?: boolean } = {},
 ) {
   try {
     if (!isRoleId(roleId)) throw new Error("Invalid Role id");
     const path = roleDocumentPath(roleId);
-    const role = parseRoleDocument(
-      roleId,
+    const read = () =>
       options.headerOnly !== false && fs.readFrontmatter
-        ? await fs.readFrontmatter(path)
-        : await fs.readFile(path),
-    );
+        ? fs.readFrontmatter(path)
+        : fs.readFile(path);
+    let raw: string;
+    try {
+      raw = await read();
+    } catch (error) {
+      // A missing Role remains fatal. Confirm one ENOENT so a replacement's
+      // momentary absence is not mistaken for a genuinely deleted Role.
+      if (!options.confirmMissing || (error as { code?: string })?.code !== "ENOENT") throw error;
+      raw = await read();
+    }
+    const role = parseRoleDocument(roleId, raw);
     const status = documentLifecycle(parseFrontmatter(role.raw).data).status;
     if (status !== "stable" && status !== "draft") throw new Error("Role is not current");
   } catch (error) {
     throw new CardDocumentError(
       "ROLE_UNAVAILABLE",
       `Role unavailable: ${roleId}: ${String(error)}`,
+      undefined,
+      error,
     );
   }
 }
@@ -959,6 +970,19 @@ type WatchedCard = {
   result?: string;
   fromPublic?: true;
 };
+
+function retryableWatchRead(error: unknown): boolean {
+  const roleError = error instanceof CardDocumentError && error.code === "ROLE_UNAVAILABLE";
+  const code = ((roleError ? error.cause : error) as { code?: string } | undefined)?.code;
+  // roleAvailable already confirmed a missing Role; only inbox ENOENT retries.
+  return (
+    code === "SOURCE_CHANGED" ||
+    code === "EPERM" ||
+    code === "EACCES" ||
+    code === "EBUSY" ||
+    (!roleError && code === "ENOENT")
+  );
+}
 /** Wait for published pending input or returned results; idle polls read only the current retained event. */
 export async function watchCardDocuments(
   fs: FsAdapter,
@@ -968,66 +992,76 @@ export async function watchCardDocuments(
 ): Promise<WatchedCard[]> {
   if (timeoutSeconds !== undefined && (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0))
     throw new Error("--timeout must be a nonnegative number of seconds");
-  // Watch must not populate the adapter's persistent frontmatter cache.
-  await roleAvailable(fs, roleId, { headerOnly: false });
-  const history = await historyOf(fs);
   const deadline =
     performance.now() + (timeoutSeconds === undefined ? Infinity : timeoutSeconds * 1000);
   let observed: string | null | undefined;
+  let retrying = false;
   for (;;) {
-    const head = await history.currentCommit();
-    if (head !== observed) {
-      observed = head;
-      await roleAvailable(fs, roleId, { headerOnly: false });
-      const selected: CardDocument[] = [];
-      for (const [path, raw] of head ? await history.readDirectory(head, CARDS_DIR) : []) {
-        const name = path.slice(CARDS_DIR.length + 1);
-        const id = name.slice(0, -3);
-        if (!name.endsWith(".md") || !isCardId(id)) continue;
-        const card = parseCardDocument(id, raw);
-        if (
-          ((card.data.state === "pending" &&
-            (card.data.target === roleId ||
-              (options.includeOpen && card.data.target === undefined))) ||
-            (card.data.state === "returned" && card.data.returnTo === roleId)) &&
-          documentLifecycle(card.data).status !== "deprecated"
-        )
-          selected.push(card);
-      }
-      const { published: times, returned: returnedTimes } = head
-        ? await history.cardQueueTimes(
-            head,
-            selected.map((card) => card.path),
+    try {
+      // Watch must not populate the adapter's persistent frontmatter cache.
+      // Check even an unchanged inbox, so native Role deletion/retirement is seen.
+      await roleAvailable(fs, roleId, { headerOnly: false, confirmMissing: true });
+      const history = await historyOf(fs);
+      const head = await history.currentCommit();
+      if (head !== observed) {
+        const selected: CardDocument[] = [];
+        for (const [path, raw] of head ? await history.readDirectory(head, CARDS_DIR) : []) {
+          const name = path.slice(CARDS_DIR.length + 1);
+          const id = name.slice(0, -3);
+          if (!name.endsWith(".md") || !isCardId(id)) continue;
+          const card = parseCardDocument(id, raw);
+          if (
+            ((card.data.state === "pending" &&
+              (card.data.target === roleId ||
+                (options.includeOpen && card.data.target === undefined))) ||
+              (card.data.state === "returned" && card.data.returnTo === roleId)) &&
+            documentLifecycle(card.data).status !== "deprecated"
           )
-        : { published: new Map<string, string>(), returned: new Map<string, string>() };
-      const group = (card: CardDocument) =>
-        card.data.state === "returned" ? 2 : card.data.target === roleId ? 0 : 1;
-      selected.sort((a, b) => {
-        const lane = group(a) - group(b);
-        if (lane) return lane;
-        const key = (card: CardDocument) =>
-          card.data.state === "returned"
-            ? (returnedTimes.get(card.path) ?? "~")
-            : cardOrderKey(card.data.id, times.get(card.path)!, card.data.order);
-        const ak = key(a),
-          bk = key(b);
-        return ak < bk ? -1 : ak > bk ? 1 : a.data.id < b.data.id ? -1 : 1;
-      });
-      const items: WatchedCard[] = selected.map((card) => ({
-        cardId: card.data.id,
-        ...(card.data.title ? { title: card.data.title } : {}),
-        ...(card.data.state === "returned"
-          ? {
-              state: "returned" as const,
-              receivedBy: card.data.receivedBy,
-              result: card.data.result,
-            }
-          : {}),
-        ...(card.data.state === "pending" && card.data.target === undefined
-          ? { fromPublic: true as const }
-          : {}),
-      }));
-      if (items.length) return items;
+            selected.push(card);
+        }
+        const { published: times, returned: returnedTimes } = head
+          ? await history.cardQueueTimes(
+              head,
+              selected.map((card) => card.path),
+            )
+          : { published: new Map<string, string>(), returned: new Map<string, string>() };
+        const group = (card: CardDocument) =>
+          card.data.state === "returned" ? 2 : card.data.target === roleId ? 0 : 1;
+        selected.sort((a, b) => {
+          const lane = group(a) - group(b);
+          if (lane) return lane;
+          const key = (card: CardDocument) =>
+            card.data.state === "returned"
+              ? (returnedTimes.get(card.path) ?? "~")
+              : cardOrderKey(card.data.id, times.get(card.path)!, card.data.order);
+          const ak = key(a),
+            bk = key(b);
+          return ak < bk ? -1 : ak > bk ? 1 : a.data.id < b.data.id ? -1 : 1;
+        });
+        const items: WatchedCard[] = selected.map((card) => ({
+          cardId: card.data.id,
+          ...(card.data.title ? { title: card.data.title } : {}),
+          ...(card.data.state === "returned"
+            ? {
+                state: "returned" as const,
+                receivedBy: card.data.receivedBy,
+                result: card.data.result,
+              }
+            : {}),
+          ...(card.data.state === "pending" && card.data.target === undefined
+            ? { fromPublic: true as const }
+            : {}),
+        }));
+        // Failed reads must leave this head unobserved for the next poll.
+        observed = head;
+        if (items.length) return items;
+      }
+      retrying = false;
+    } catch (error) {
+      // One failed poll may straddle a replacement. Repeated failures are real
+      // errors, not an indefinitely silent watcher with a broken inbox.
+      if (retrying || !retryableWatchRead(error) || performance.now() >= deadline) throw error;
+      retrying = true;
     }
     const remaining = deadline - performance.now();
     if (remaining <= 0) return [];
