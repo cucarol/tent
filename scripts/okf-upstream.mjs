@@ -4,8 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const REPO = "GoogleCloudPlatform/knowledge-catalog";
-const FILE = "okf/SPEC.md";
+const REPO = "GoogleCloudPlatform/open-knowledge-format";
+const FILE = "SPEC.md";
 const BRANCH = "main";
 export const SOURCE = `https://github.com/${REPO}/blob/${BRANCH}/${FILE}`;
 export const PINNED = path.resolve(import.meta.dirname, "../docs/upstream/okf-SPEC.md");

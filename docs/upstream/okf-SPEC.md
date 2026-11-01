@@ -2,10 +2,10 @@
 Pinned copy of the upstream Open Knowledge Format specification. Everything after this
 comment is the upstream file, unmodified. Do not edit; refresh with
 `npm run okf:upstream -- --update`.
-source: https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
-upstream-commit: 62432a095456147ee71e70ac6e4dc0d2dea3ac30
-upstream-date: 2026-08-21T01:44:53Z
-fetched-at: 2026-10-07T17:13:21Z
+source: https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
+upstream-commit: 0b87c52c6ef999286c745e19998fdfcd03d5dbee
+upstream-date: 2026-08-21T19:31:43Z
+fetched-at: 2026-11-01T16:37:36Z
 license: Apache-2.0 (docs/upstream/okf-LICENSE.md, THIRD_PARTY_NOTICES.md)
 okf-version: 0.2
 sha256: 26aa5da029278939f914e578107242d9607d4f2dc5fe153272b82f9ed1030101
