@@ -3,7 +3,8 @@ import { isModuleProductionSource } from "../base/source-kind.js";
 import { sectionKey } from "./section-fingerprint.js";
 import type { StopMaterialFile, StopMaterialIndex } from "./stop-material-index.js";
 
-export type TurnReviewModule = { nodeId: string; path: string; names: string[]; files: string[] };
+export type TurnReviewNode = { nodeId: string; path: string; names: string[]; body?: string };
+export type TurnReviewModule = TurnReviewNode & { files: string[]; rules?: TurnReviewNode[] };
 
 const samePath = (a: string, b: string) =>
   process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
@@ -107,43 +108,123 @@ export function modulesForIndexedTurn(
 }
 
 export const TOOL_REVIEW_ACTION =
-  "Check them before you end this turn. If one now says something the change made wrong, edit that sentence in its file. If the change settled a rule or a rejected option that also binds code it did not touch, or hit a dead end, add one short section: tent node append <nodeId> --heading <title> --body -. A lesson about these lines belongs in a code comment or a test. Otherwise say nothing about it.";
+  "If one now says something the change made wrong, edit that sentence in its file. If the change settled a rule or a rejected option that also binds code it did not touch, or hit a dead end, add one short section: tent node append <nodeId> --heading <title> --body -. A lesson about these lines belongs in a code comment or a test. Otherwise say nothing about Tent.";
 export const ANSWER_REVIEW =
   "Tent: the user just answered. If the answer settles a requirement or a decision, record it in the Node it belongs to before you end this turn; otherwise say nothing about it.";
 const shown = (value: string) =>
   /[\r\n\t\u2028\u2029]/.test(value) ? JSON.stringify(value) : value;
+const resourceArgument = (value: string) => {
+  if (/^[\w./-]+$/.test(value)) return value;
+  // PowerShell also recognizes curly single quotes as string delimiters.
+  return process.platform === "win32"
+    ? `'${value.replace(/['\u2018-\u201b]/g, "$&$&")}'`
+    : `'${value.replaceAll("'", `'"'"'`)}'`;
+};
 
-/** Core budgets plain text and returns the Nodes actually named. */
+/** Core budgets plain text and returns every owner and rule whose text was delivered. */
 export function formatToolTurnReview(
   textByteLimit: number,
   modules: TurnReviewModule[],
   scope: "tool" | "turn" = "tool",
-): { message: string; nodeIds: string[] } | undefined {
-  const selected = modules
-    .slice(0, 5)
-    .map((module) => ({ ...module, files: module.files.slice(0, 8) }));
-  const render = () =>
-    [
-      scope === "turn"
-        ? "Tent: these Nodes cover files changed during this turn:"
-        : "Tent: these Nodes cover the file you just changed:",
-      ...selected.map(
-        (module) =>
-          `- ${module.names.map(shown).join(" / ")} (${shown(module.nodeId)}, ${shown(module.path)}): ${module.files.map(shown).join(", ")}`,
-      ),
-      ...(modules.length > selected.length
-        ? [`+${modules.length - selected.length} more modules`]
-        : []),
-      TOOL_REVIEW_ACTION,
-    ].join("\n");
-  while (selected.length && Buffer.byteLength(render()) > textByteLimit) {
-    const withFiles = [...selected].reverse().find((module) => module.files.length > 0);
-    if (withFiles) withFiles.files.pop();
-    else selected.pop();
+):
+  | { message: string; nodeIds: string[]; ownerNodeIds: string[]; ruleNodeIds: string[] }
+  | undefined {
+  type Entry = {
+    node: TurnReviewNode;
+    owner?: TurnReviewModule;
+    resource: string;
+    points: string[];
+    limit: number;
+  };
+  const ownerIds = new Set(modules.map((module) => module.nodeId));
+  const seen = new Set<string>();
+  const entries: Entry[] = [];
+  const add = (node: TurnReviewNode, module: TurnReviewModule, owner?: TurnReviewModule) => {
+    if (seen.has(node.nodeId)) return;
+    seen.add(node.nodeId);
+    const points = [...(node.body ?? "")];
+    entries.push({
+      node,
+      owner,
+      resource: module.files[0] ?? "",
+      points,
+      limit: Math.min(1600, points.length),
+    });
+  };
+  for (const module of modules) {
+    add(module, module, module);
+    for (const rule of module.rules ?? []) if (!ownerIds.has(rule.nodeId)) add(rule, module);
   }
-  return selected.length
-    ? { message: render(), nodeIds: selected.map((module) => module.nodeId) }
-    : undefined;
+  if (!entries.length) return;
+  const selected: Entry[] = [];
+  const label = (node: TurnReviewNode) =>
+    `${node.names.map(shown).join(" / ")} (${shown(node.nodeId)}, ${shown(node.path)})`;
+  const omittedGroups = () => {
+    const omitted = new Map<string, number>();
+    for (const entry of entries.slice(selected.length))
+      omitted.set(entry.resource, (omitted.get(entry.resource) ?? 0) + 1);
+    return [...omitted].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  };
+  const render = (hints: string[] = [], remaining = omittedGroups()) => {
+    const blocks = [
+      scope === "turn"
+        ? "Tent: these Nodes cover files changed during this turn."
+        : "Tent: these Nodes cover the file you just changed.",
+    ];
+    let rules = false;
+    for (const entry of selected) {
+      const { node, owner, points, limit } = entry;
+      const ruleHeading = !owner && !rules ? "Rules over it:\n" : "";
+      rules = !owner;
+      const text = points.slice(0, limit).join("");
+      const cut = limit < points.length ? `\n… (cut; the rest is in ${shown(node.path)})` : "";
+      blocks.push(
+        `${ruleHeading}${label(node)}${owner ? ` covers ${owner.files.map(shown).join(", ")}` : ""}:\n${text}${cut}`,
+      );
+    }
+    blocks.push(...hints);
+    if (remaining.length)
+      blocks.push(
+        `${remaining.reduce((total, [, count]) => total + count, 0)} more Nodes cover ${remaining.length} other changed files: run tent node search --resource on each.`,
+      );
+    blocks.push(TOOL_REVIEW_ACTION);
+    return blocks.join("\n\n");
+  };
+  for (const entry of entries) {
+    selected.push(entry);
+    if (Buffer.byteLength(render()) <= textByteLimit) continue;
+    let low = entry.points.length ? 1 : 0;
+    let high = entry.limit - 1;
+    let fitting = -1;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      entry.limit = middle;
+      if (Buffer.byteLength(render()) <= textByteLimit) {
+        fitting = middle;
+        low = middle + 1;
+      } else high = middle - 1;
+    }
+    if (fitting < 0) selected.pop();
+    else entry.limit = fitting;
+    break;
+  }
+  if (Buffer.byteLength(render()) > textByteLimit) return;
+  // Body prefixes have priority. Only their remaining room is available to file
+  // recovery lines; reserve the aggregate line until every omitted group is named.
+  const groups = omittedGroups();
+  const hints: string[] = [];
+  for (let i = 0; i < groups.length; i++) {
+    const [resource, count] = groups[i];
+    const line = `${count} more Nodes: tent node search --resource ${resourceArgument(resource)}`;
+    if (Buffer.byteLength(render([...hints, line], groups.slice(i + 1))) > textByteLimit) break;
+    hints.push(line);
+  }
+  return {
+    message: render(hints, groups.slice(hints.length)),
+    nodeIds: selected.map((entry) => entry.node.nodeId),
+    ownerNodeIds: selected.flatMap((entry) => (entry.owner ? [entry.node.nodeId] : [])),
+    ruleNodeIds: selected.flatMap((entry) => (entry.owner ? [] : [entry.node.nodeId])),
+  };
 }
 
 const unownedReview = (paths: string) =>
@@ -173,7 +254,15 @@ export function formatWriteReview(
   textByteLimit: number,
   modules: TurnReviewModule[],
   files: string[],
-): { message: string; nodeIds: string[]; files: string[] } | undefined {
+):
+  | {
+      message: string;
+      nodeIds: string[];
+      ownerNodeIds: string[];
+      ruleNodeIds: string[];
+      files: string[];
+    }
+  | undefined {
   const gap = "\n\n";
   const review = modules.length ? formatToolTurnReview(textByteLimit, modules) : undefined;
   const note = files.length
@@ -186,6 +275,8 @@ export function formatWriteReview(
   return {
     message: [review?.message, note?.message].filter((part) => part !== undefined).join(gap),
     nodeIds: review?.nodeIds ?? [],
+    ownerNodeIds: review?.ownerNodeIds ?? [],
+    ruleNodeIds: review?.ruleNodeIds ?? [],
     files: note?.files ?? [],
   };
 }

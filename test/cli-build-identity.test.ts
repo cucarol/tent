@@ -150,7 +150,8 @@ test("source identity has no build time; mismatch is limited to Tent source chec
   });
   const context = JSON.parse(start.stdout).hookSpecificOutput.additionalContext;
   assert.match(context, /Build: Tent .*; source/);
-  assert.match(context, /runtime build differs from Workspace source/);
+  assert.match(context, /No Tent command is needed before working\.$/);
+  assert.doesNotMatch(context, /Current context:|workspace brief|runtime build differs/);
   assert.ok(Buffer.byteLength(context) < 2048);
   await fs.writeFile(
     path.join(root, "package.json"),

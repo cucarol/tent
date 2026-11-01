@@ -107,7 +107,11 @@ test(
             ? "Exit code: 0\nWall time: 1.4 seconds\nOutput:\nSuccess. Updated the following files:\nM src/code.ts\n"
             : { type: "update", filePath: file },
       });
-      assert.match(JSON.parse(output).hookSpecificOutput.additionalContext, /node-packaged/);
+      assert.ok(Buffer.byteLength(output) <= 8192);
+      assert.match(
+        JSON.parse(output).hookSpecificOutput.additionalContext,
+        /Module \(node-packaged, \.tent\/Module\/Module\.md\) covers src\/code\.ts:\nRule\n/,
+      );
       await fs.writeFile(
         path.join(system, "Module/Module.md"),
         "---\nid: node-packaged\ntype: prompt\nsources:\n  - resource: ../../lib/\n    track: structure\n---\nRule\n",
@@ -133,7 +137,10 @@ test(
       assert.equal(await write(graphFile), "{}\n");
       assert.doesNotMatch(await write(path.join(workspace, "lib/still-stale.ts")), /node-packaged/);
       await fs.rename(path.join(pkg, "cli.saved.mjs"), path.join(pkg, "cli.mjs"));
-      assert.equal(await write(graphFile), "{}\n");
+      const problems = JSON.parse(await write(graphFile)).hookSpecificOutput.additionalContext;
+      assert.match(problems, /^Tent: \.tent\/Module\/Module\.md has problems:/);
+      assert.match(problems, /missing-material-file|disk-only/);
+      assert.ok(problems.endsWith("Fix them before you end this turn."));
       assert.equal(await write(path.join(workspace, "lib/already-claimed.ts")), "{}\n");
       assert.match(await write(path.join(workspace, "lib/next.ts"), "next"), /node-packaged/);
       assert.match(await write(path.join(workspace, "guide.md")), /node-section/);
@@ -147,7 +154,12 @@ test(
       await fs.writeFile(turnFile, "shell write\n");
       const stop = JSON.parse(await invoke("Stop", turn));
       assert.equal(stop.decision, "block");
-      assert.match(stop.reason, /^Tent: these Nodes cover files changed during this turn:/);
+      assert.ok(Buffer.byteLength(JSON.stringify(stop) + "\n") <= 8192);
+      assert.match(stop.reason, /^Tent: these Nodes cover files changed during this turn\./);
+      assert.match(
+        stop.reason,
+        /Module \(node-packaged, \.tent\/Module\/Module\.md\) covers lib\/shell-write\.ts:\nRule\n/,
+      );
       const continuation = { turn_id: "continuation", prompt_id: "continuation" };
       assert.equal(
         await invoke("UserPromptSubmit", { ...continuation, prompt: stop.reason }),

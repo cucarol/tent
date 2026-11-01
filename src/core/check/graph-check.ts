@@ -27,6 +27,7 @@ import { NodeSectionError } from "../base/markdown-section.js";
 import { isHistoryDocument } from "../store/document-history.js";
 import { assertSystemMaterial } from "../graph/material-target.js";
 import { readCardBodyReferences } from "../read/card-references.js";
+import { loadNodeCatalog } from "../graph/node-catalog.js";
 
 export type GraphCheckIssue =
   | { kind: "unresolved-link"; path: string; target: string; reason: string }
@@ -70,11 +71,25 @@ export async function checkGraph(
   return fs.observationScope ? fs.observationScope(run) : run();
 }
 
+/** The same diagnostics as checkGraph, restricted to these canonical Node files. */
+export async function checkSelectedNodes(
+  fs: FsAdapter,
+  workspaceRoot: string,
+  fileExists: GraphFileExists,
+  paths: readonly string[],
+): Promise<GraphCheckResult> {
+  const selected = new Set(paths);
+  if (!selected.size) return { documents: 0, issues: [], notices: [], errors: [] };
+  const run = () => checkGraphInScope(fs, workspaceRoot, fileExists, undefined, selected);
+  return fs.observationScope ? fs.observationScope(run) : run();
+}
+
 async function checkGraphInScope(
   fs: FsAdapter,
   workspaceRoot: string,
   fileExists: GraphFileExists,
   observedTree?: LoadedTent,
+  selected?: ReadonlySet<string>,
 ): Promise<GraphCheckResult> {
   const readonlyFs = readOnlyFs(fs);
   const result: GraphCheckResult = { documents: 0, issues: [], notices: [], errors: [] };
@@ -86,6 +101,7 @@ async function checkGraphInScope(
     id?: string;
   }> = [];
   const error = (path: string, reason: string) => {
+    if (selected && !selected.has(path)) return;
     if (!result.errors.some((item) => item.path === path && item.reason === reason))
       result.errors.push({ path, reason });
   };
@@ -94,10 +110,12 @@ async function checkGraphInScope(
   // diagnostic, while sibling discovery continues without repair writes.
   const observationFs = new Proxy(readonlyFs, {
     get(target, key) {
-      if (key === "readFile")
+      if (key === "readFile" || (key === "readFrontmatter" && target.readFrontmatter))
         return async (path: string) => {
           try {
-            return await target.readFile(path);
+            return await (key === "readFrontmatter" && target.readFrontmatter
+              ? target.readFrontmatter(path)
+              : target.readFile(path));
           } catch (cause) {
             const reason = message(cause);
             failedReads.set(path, reason);
@@ -118,7 +136,8 @@ async function checkGraphInScope(
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  const tent = observedTree ?? (await loadTent(observationFs));
+  const catalog = selected ? await loadNodeCatalog(observationFs) : undefined;
+  const tent = observedTree ?? catalog?.tree ?? (await loadTent(observationFs));
   const nodePaths = new Set([...tent.byId.values()].map((node) => nodeNotePath(node.path)));
   const retainedPaths = await readonlyFs.retainedDocumentPaths?.();
   if (retainedPaths) {
@@ -130,7 +149,7 @@ async function checkGraphInScope(
     const retained = new Set(retainedPaths.filter(isNodeDocument));
     const disk = new Set([...tent.byPath.keys()].map(nodeNotePath).filter(isNodeDocument));
     for (const file of disk)
-      if (!retained.has(file))
+      if ((!selected || selected.has(file)) && !retained.has(file))
         result.issues.push({
           kind: "node-git-mismatch",
           path: file,
@@ -138,7 +157,7 @@ async function checkGraphInScope(
           reason: "Node document exists on disk but not in retained history",
         });
     for (const file of retained)
-      if (!disk.has(file))
+      if ((!selected || selected.has(file)) && !disk.has(file))
         result.issues.push({
           kind: "node-git-mismatch",
           path: file,
@@ -218,6 +237,7 @@ async function checkGraphInScope(
   const nodeDocuments: DocumentRead[] = [];
   for (const node of tent.byPath.values()) {
     const file = nodeNotePath(node.path);
+    if (selected && !selected.has(file)) continue;
     let invalidReason: string | undefined;
     if (node.invalid && !failedReads.has(file)) {
       const unavailableAncestor = node.invalidRootPath
@@ -228,8 +248,24 @@ async function checkGraphInScope(
     nodeDocuments.push({ path: file, validate: () => {}, valid: !node.invalid, invalidReason });
   }
   await readDocuments(nodeDocuments);
-  const completed = await completedCardPaths(readonlyFs);
+  const completed = selected ? new Set<string>() : await completedCardPaths(readonlyFs);
   const completedDocuments: Array<{ path: string; raw: string }> = [];
+  const referenceDocuments: typeof documents = [];
+  if (catalog)
+    for (const node of catalog.byPath.values()) {
+      try {
+        const { data } = parseFrontmatter(node.header);
+        referenceDocuments.push({
+          path: nodeNotePath(node.path),
+          data,
+          body: "",
+          valid: !node.invalid,
+          ...(typeof data.id === "string" ? { id: data.id } : {}),
+        });
+      } catch {
+        /* Invalid targets remain absent from the identity index. */
+      }
+    }
   const foundCards = new Set<string>();
   for (const [directory, kind] of [
     [ROLES_DIR, "role"],
@@ -242,6 +278,32 @@ async function checkGraphInScope(
       const id = entry.name.slice(0, -3);
       const file = `${directory}/${entry.name}`;
       if (kind === "card") foundCards.add(file);
+      if (selected) {
+        // Reference identity needs metadata only; unrelated bodies are never inspected.
+        try {
+          const raw = await (readonlyFs.readFrontmatter
+            ? readonlyFs.readFrontmatter(file)
+            : readonlyFs.readFile(file));
+          let valid = true;
+          try {
+            if (kind === "role") parseRoleDocument(id, raw);
+            else parseCardDocument(id, raw);
+          } catch {
+            valid = false;
+          }
+          const { data } = parseFrontmatter(raw);
+          referenceDocuments.push({
+            path: file,
+            data,
+            body: "",
+            valid,
+            ...(typeof data.id === "string" ? { id: data.id } : {}),
+          });
+        } catch {
+          /* An unreadable reference is missing or invalid, not another finding. */
+        }
+        continue;
+      }
       directoryDocuments.push({
         path: file,
         validate: (raw) => {
@@ -261,9 +323,10 @@ async function checkGraphInScope(
   if (completedDocuments.length && readonlyFs.history)
     for (const changed of await readonlyFs.history.changedRetainedDocuments(completedDocuments))
       error(changed.path, "Completed Card differs from its retained Tent history version");
-  const byPath = new Map(documents.map((document) => [document.path, document]));
+  const lookupDocuments = [...referenceDocuments, ...documents];
+  const byPath = new Map(lookupDocuments.map((document) => [document.path, document]));
   const byId = new Map(
-    documents.filter((document) => document.valid && document.id).map((d) => [d.id!, d]),
+    lookupDocuments.filter((document) => document.valid && document.id).map((d) => [d.id!, d]),
   );
   const pinned = documents.flatMap((document) =>
     document.path.startsWith(`${CARDS_DIR}/`) && Array.isArray(document.data.sources)

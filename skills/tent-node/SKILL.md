@@ -1,37 +1,36 @@
 ---
 name: tent-node
-description: "Reads and records context as Tent Nodes. Use when a task needs Tent context, or work produced a decision, rule, result or problem."
+description: "Records what a change settled in Tent Nodes, and runs Tent reads or writes the user asks for. Tent's hooks already show the Nodes that cover each changed file; ordinary code work needs no Tent command."
 ---
 
 # Tent Node
 
 Run `tent` as [access](../../skill-resources/references/access.md) shows.
 
-## Before working
+## After a change
 
-| When | Command | Read |
-| --- | --- | --- |
-| No pointer | `tent workspace brief` | `behind`, `ahead`, `cardInputs`, then `roots` |
-| A `path` | Read the file with your own reader | text |
-| Only a Node id | `tent node get <id>` | `text`, `etag` |
-| A topic | Search `.tent/` with your own search tool | `path` |
-| Before changing a file | `tent node search --resource <file>` | each `path`; read that Node and its parents |
+Tent shows the Nodes that cover each file you change, with their text, right after the change. Work from that text. When the work is done, change Nodes only if it made a sentence wrong or settled something lasting; otherwise change nothing and say nothing about Tent.
 
-Treat each Node by its [type](../../skill-resources/references/node-types.md). More reads: [input](../../skill-resources/references/input.md).
+| When | Do |
+| --- | --- |
+| A sentence is now wrong | Edit it in the Node file with your own editor |
+| A rule and why, a rejected option and why, or a dead end that binds code outside this change | `tent node append <id> --heading <title> --body -` on the Node that governs that code |
+| A lesson about particular lines | A code comment or a test, not a Node |
+| A file implements a goal | `tent node link-output <goal-id> --resource <path> --tags asset` |
+| A new fact no Node holds | `tent node create <name> --type <type> [--parent <id>] --tags <tag> --body -` |
 
-## After working
+Make the Node changes together, once, at the end. Tent reports a problem in a Node right after you write it; fix what it names. Process, hashes and acceptance logs go in your report or Card return; the Node links to the report when it rests on one. More: [saving](../../skill-resources/references/node-maintenance.md), [types](../../skill-resources/references/node-types.md).
 
-Update only the Nodes your work touched; if nothing changed, change nothing. Write what now holds into the Node that governs that code or task: a rule and why, a rejected option and why, a dead end. Process, hashes and acceptance logs go in your report or Card return; the Node keeps a link to the report when it rests on one.
+## When asked
 
-| When | Command | Read |
-| --- | --- | --- |
-| Change text | Edit the file with your own editor; Tent records it at its next write, brief or check | |
-| Add a section without reading | `tent node append <id> --heading <title> --body -` | `etag` |
-| A behind Node still holds | `tent node get <id> --full --json`, then `tent node confirm <id> --base-etag <etag>` | `etag` |
-| New fact | `tent node create <name> --type <type> [--parent <id>] --tags <tag> --body -` | `node.nodeId` |
-| A file implements a goal | `tent node link-output <goal-id> --resource <path> --tags asset` | `nodeId` |
+| Asked for | Command |
+| --- | --- |
+| What changed and what waits | `tent workspace brief` |
+| A Node by id | `tent node get <id>` |
+| The rules for a file | `tent node search --resource <file>` |
+| A behind Node still holds | `tent node get <id> --full --json`, then `tent node confirm <id> --base-etag <etag>` |
 
-No edit clears behind; only `confirm` does. More: [saving](../../skill-resources/references/node-maintenance.md). After saving, run `tent workspace check --json` once and fix what it lists.
+More: [input](../../skill-resources/references/input.md).
 
 ## How to write
 

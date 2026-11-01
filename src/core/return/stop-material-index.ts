@@ -17,6 +17,7 @@ import { markdownMaterialHeading } from "../base/material-section.js";
 import { isUsableNode } from "../store/tree.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { canonicalSha256 } from "../base/canonical-digest.js";
+import { turnReviewHeaderDigest } from "./turn-review-document.js";
 
 /** A whole file, or one Markdown section of it, that the Node's content rests on. */
 export type StopMaterialFile = { path: string; heading?: string };
@@ -25,6 +26,9 @@ export type StopIndexedNode = {
   path: string;
   names: string[];
   type?: string;
+  /** Direct prompts of this Node, then of each ancestor goal, nearest first. */
+  ruleNodeIds?: string[];
+  headerDigest?: string;
   moduleCoverage: MaterialCoverage[];
   materialFiles: StopMaterialFile[];
   /** A module owns every directory and prefix it names, tracked or not; empty for other Nodes. */
@@ -85,6 +89,7 @@ export function buildStopMaterialIndex(
       catalog.tree.byPath.get(node.path)!.status !== "draft" &&
       !invalidNodePaths.includes(`.tent/${nodeNotePath(node.path)}`),
   );
+  const active = new Set(nodes.map((node) => node.nodeId));
   return {
     nodes: nodes
       .sort((a, b) => a.path.localeCompare(b.path))
@@ -110,11 +115,22 @@ export function buildStopMaterialIndex(
           const coverage = structureMaterialCoverage(resource, owner, workspaceRoot);
           if (coverage && moduleCoverage.length) moduleMaterials.push(coverage);
         }
+        const ruleNodeIds = new Set<string>();
+        let governing: typeof node | undefined = node;
+        while (governing) {
+          if (governing.nodeId === node.nodeId || governing.type === "goal")
+            for (const id of governing.childNodeIds)
+              if (id !== node.nodeId && active.has(id) && catalog.byId.get(id)?.type === "prompt")
+                ruleNodeIds.add(id);
+          governing = governing.parentNodeId ? catalog.byId.get(governing.parentNodeId) : undefined;
+        }
         return {
           nodeId: node.nodeId,
           path: `.tent/${owner}`,
           names,
           ...(node.type ? { type: node.type } : {}),
+          ruleNodeIds: [...ruleNodeIds],
+          headerDigest: turnReviewHeaderDigest(node.header),
           moduleCoverage,
           materialFiles: [...materialFiles.values()],
           moduleMaterials,

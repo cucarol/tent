@@ -6,7 +6,7 @@ import { observeTentSystemRoot } from "../core/workspace/status.js";
 import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import { loadStopMaterialIndex } from "../fs/stop-material-index.js";
 import { recordSectionFingerprints } from "../fs/section-fingerprint-baseline.js";
-import { readBuildIdentity, formatBuildIdentity, sourceBuildMismatch } from "./build-identity.js";
+import { readBuildIdentity, formatBuildIdentity } from "./build-identity.js";
 import { seedSessionTurnDirty } from "../fs/turn-dirty-baseline.js";
 
 export const hookHelp =
@@ -73,14 +73,13 @@ export async function runHookCommand(
         ).catch(() => undefined);
       const command = `node ${JSON.stringify(path.join(options.packageRoot, "cli.mjs"))}`;
       const identity = await readBuildIdentity(options.packageRoot);
-      const mismatch = await sourceBuildMismatch(workspaceRoot, identity);
       return {
         ...silent,
         stdout:
           JSON.stringify({
             hookSpecificOutput: {
               hookEventName: "SessionStart",
-              additionalContext: `Tent Workspace: ${workspaceRoot}\nTent CLI: ${command}\nCurrent context: Tent CLI with workspace brief --json\nBuild: ${formatBuildIdentity(identity)}\n${mismatch ? `${mismatch}\n` : ""}`,
+              additionalContext: `Tent Workspace: ${workspaceRoot}\nTent CLI: ${command}\nBuild: ${formatBuildIdentity(identity)}\nTent shows you the Nodes that cover each file you change, right after the change. No Tent command is needed before working.`,
             },
           }) + "\n",
       };

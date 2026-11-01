@@ -17,6 +17,7 @@ import { readBuildIdentity, formatBuildIdentity } from "./build-identity.js";
 import { cliErrorText, unknownCommandError } from "./error-text.js";
 
 export { refreshNativeHookIndex } from "../fs/native-hook-index-refresh.js";
+export { checkNativeNodeWrites } from "../fs/node-write-problems.js";
 
 export function isInWorkspaceSystemRoot(systemRoot: string): boolean {
   return workspaceRootFromSystemRoot(systemRoot) !== undefined;

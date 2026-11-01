@@ -103,6 +103,13 @@ export function compactItem<T>(item: T): T {
   }
   output.metadataRead ??= exactRead(original);
   if (fits(output, 8 * 1024)) return output as T;
+  return compactReadItem(item);
+}
+
+/** Existing identity-only fallback when a receipt has no room for readable content. */
+export function compactReadItem<T>(item: T): T {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+  const original = item as Record<string, unknown>;
   const identity = Object.fromEntries(
     ["nodeId", "cardId", "roleId", "commit", "etag", "version", "read", "uncaptured"]
       .filter((key) => key in original)

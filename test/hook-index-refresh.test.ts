@@ -29,7 +29,26 @@ async function fixture(t: TestContext) {
       moduleFile,
       `---\nid: node-refresh\ntype: prompt\n${status}sources:\n  - resource: ../../${coverage}\n    track: structure\n---\nRule\n`,
     );
-    assert.equal(await notify(".tent/Module/Module.md", "graph", host), "{}\n");
+    const output = await notify(".tent/Module/Module.md", "graph", host);
+    const directoryExists = await fs.stat(path.join(root, coverage)).then(
+      (stat) => stat.isDirectory(),
+      () => false,
+    );
+    const expected = [
+      ...(!directoryExists
+        ? [
+            `- missing-material-file: ../../${coverage} — Local material does not exist as a directory`,
+          ]
+        : []),
+      "- node-git-mismatch: disk-only — Node document exists on disk but not in retained history",
+    ];
+    // New native identities stay disk-only even after SessionStart captures retained edits.
+    const notice = JSON.parse(output).hookSpecificOutput;
+    assert.equal(notice.hookEventName, "PostToolUse");
+    const lines = notice.additionalContext.split("\n");
+    assert.equal(lines[0], "Tent: .tent/Module/Module.md has problems:");
+    assert.equal(lines.at(-1), "Fix them before you end this turn.");
+    assert.deepEqual(lines.slice(1, -1).sort(), expected.sort());
   };
   const start = () =>
     runHookCommand("start", ["--host", "codex"], {
@@ -224,12 +243,20 @@ test("ordinary writes do not inspect arbitrary shell graph edits", async (t) => 
   const f = await fixture(t);
   await initializeTentWorkspace(f.root);
   await f.module();
+  const cache = path.join(f.systemRoot, ".git/tent-material-cache/stop-material-index.json");
+  const prepared = await fs.readFile(cache);
   await fs.writeFile(
     f.moduleFile,
     (await fs.readFile(f.moduleFile, "utf8")).replace("../../src/", "../../lib/"),
   );
+  const directories = t.mock.method(NodeFs.prototype, "listDir");
+  const headers = t.mock.method(NodeFs.prototype, "readFrontmatterObservation");
   assert.doesNotMatch(await f.write("lib/code.ts"), /node-refresh/);
-  assert.match(await f.write("src/code.ts", "old-prepared"), /node-refresh/);
+  // Old membership cannot authorize current text after an unobserved header edit.
+  assert.equal(await f.write("src/code.ts", "old-prepared"), "{}\n");
+  assert.equal(directories.mock.callCount(), 0);
+  assert.equal(headers.mock.callCount(), 0);
+  assert.deepEqual(await fs.readFile(cache), prepared);
   await f.start();
   assert.match(await f.write("lib/refreshed.ts", "next-session"), /node-refresh/);
 });

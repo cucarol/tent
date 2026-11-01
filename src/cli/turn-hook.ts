@@ -17,6 +17,9 @@ import {
 } from "../fs/turn-review-state.js";
 import { observeTurnDirty } from "../fs/turn-dirty-baseline.js";
 import { changedSections, settleSections } from "../fs/section-fingerprints.js";
+import { loadHookTurnReviewContent } from "../fs/turn-review-content.js";
+import { HOOK_REVIEW_BYTE_LIMIT } from "./hook-adapter.js";
+import { reprojectTurnReviewContent } from "../core/return/turn-review-content.js";
 
 export type TurnHookInput = {
   eventName: unknown;
@@ -96,18 +99,35 @@ export async function runTurnHook(
       ),
     );
     candidates = candidates.filter((_, i) => pending[i]);
+    const pendingModules = candidates;
+    const excludedNodeIds = new Set<string>();
+    const indexById = new Map(index.nodes.map((node) => [node.nodeId, node]));
+    const ruleIds = new Set(
+      candidates.flatMap((node) => indexById.get(node.nodeId)?.ruleNodeIds ?? []),
+    );
+    for (const id of ruleIds)
+      if (await hasStopReviewClaim(systemRoot, host, sessionId, key(id))) excludedNodeIds.add(id);
+    const loaded = await loadHookTurnReviewContent(
+      systemRoot,
+      index,
+      pendingModules,
+      excludedNodeIds,
+    );
+    candidates = loaded;
     const owned = new Set<string>();
     let reserved = false;
     for (;;) {
-      let budget = 2048 - Buffer.byteLength(serialize(""));
+      let budget = HOOK_REVIEW_BYTE_LIMIT - Buffer.byteLength(serialize(""));
       let output;
       while (budget > 0) {
         output = formatToolTurnReview(budget, candidates, "turn");
-        if (!output || Buffer.byteLength(serialize(output.message)) <= 2048) break;
+        if (!output || Buffer.byteLength(serialize(output.message)) <= HOOK_REVIEW_BYTE_LIMIT)
+          break;
         budget = Buffer.byteLength(output.message) - 1;
       }
-      if (!output || Buffer.byteLength(serialize(output.message)) > 2048) {
-        if (!candidates.length) await settleSections(systemRoot, checkout, changed);
+      if (!output || Buffer.byteLength(serialize(output.message)) > HOOK_REVIEW_BYTE_LIMIT) {
+        if (pendingModules.every((node) => excludedNodeIds.has(node.nodeId)))
+          await settleSections(systemRoot, checkout, changed);
         return silent;
       }
       // Reserve the one continuation before taking any render-only Node claims.
@@ -116,7 +136,17 @@ export async function runTurnHook(
         reserved = true;
       }
       const competing = new Set<string>();
-      for (const node of output.nodeIds) {
+      for (const node of output.ownerNodeIds) {
+        if (owned.has(node)) continue;
+        if (await claimStopReview(systemRoot, host, sessionId, key(node))) owned.add(node);
+        else competing.add(node);
+      }
+      if (competing.size) {
+        for (const id of competing) excludedNodeIds.add(id);
+        candidates = reprojectTurnReviewContent(index, loaded, excludedNodeIds);
+        continue;
+      }
+      for (const node of output.ruleNodeIds) {
         if (owned.has(node)) continue;
         if (await claimStopReview(systemRoot, host, sessionId, key(node))) owned.add(node);
         else competing.add(node);
@@ -126,8 +156,9 @@ export async function runTurnHook(
           allModules
             .filter(
               (node) =>
-                !output.nodeIds.includes(node.nodeId) &&
-                candidates.some((candidate) => candidate.nodeId === node.nodeId),
+                !output.ownerNodeIds.includes(node.nodeId) &&
+                pendingModules.some((candidate) => candidate.nodeId === node.nodeId) &&
+                !excludedNodeIds.has(node.nodeId),
             )
             .map((node) => node.nodeId),
         );
@@ -141,7 +172,8 @@ export async function runTurnHook(
         await rememberTurnContinuation(systemRoot, host, sessionId, record.turnId, output.message);
         return serialize(output.message);
       }
-      candidates = candidates.filter((node) => !competing.has(node.nodeId));
+      for (const id of competing) excludedNodeIds.add(id);
+      candidates = reprojectTurnReviewContent(index, loaded, excludedNodeIds);
     }
   } catch {
     return silent;

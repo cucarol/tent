@@ -13,7 +13,9 @@ import {
 import { toolReviewOutput } from "./hook-adapter.js";
 import { turnReviewIdentity } from "../fs/turn-review-state.js";
 import { answeredQuestion, successfulWritePaths } from "./tool-write-event.js";
-import { refreshNativeGraphWrite } from "./native-graph-write.js";
+import { nativeNodeWriteProblems, refreshNativeGraphWrite } from "./native-graph-write.js";
+import { loadHookTurnReviewContent } from "../fs/turn-review-content.js";
+import { reprojectTurnReviewContent } from "../core/return/turn-review-content.js";
 
 /** Ordinary file events avoid the CLI, transcripts, Git and live catalogue; graph refresh is explicit. */
 // Ordinary PTU guard: each host x ordinary/uncovered/claimed/changed-section/unowned-code,
@@ -37,9 +39,12 @@ export async function runToolHook(
     const files = successfulWritePaths(host, event);
     const answered = answeredQuestion(event);
     if (!files.length && !answered) return silent;
-    if (files.length && !(await refreshNativeGraphWrite(host, event.cwd, files))) return silent;
+    const problems = files.length ? await nativeNodeWriteProblems(host, event.cwd, files) : [];
+    const problemOnly = () => toolReviewOutput([], [], problems)?.stdout ?? silent;
+    if (files.length && !(await refreshNativeGraphWrite(host, event.cwd, files)))
+      return problemOnly();
     const prepared = await findPreparedHookWorkspace(event.cwd);
-    if (!prepared) return silent;
+    if (!prepared) return problemOnly();
     const { systemRoot, workspaceRoot, index } = prepared;
     turnId = await turnReviewIdentity(systemRoot, host, event.session_id, turnId);
     if (answered) {
@@ -96,7 +101,7 @@ export async function runToolHook(
       changedSections: new Set(changed.keys()),
     });
     const unowned = unownedFilesForTurn(index, written);
-    if (!modules.length && !unowned.length) return silent;
+    if (!modules.length && !unowned.length) return problemOnly();
     // A changed section stays unsettled while a Node linking it is left unnamed.
     const settle = async (unnamed: Set<string>) => {
       const named = new Map(
@@ -123,15 +128,36 @@ export async function runToolHook(
         unnamed.push(file);
     if (!pending.length && !unnamed.length) {
       await settle(new Set());
-      return silent;
+      return problemOnly();
     }
-    let candidates = pending;
+    const excludedNodeIds = new Set<string>();
+    const indexById = new Map(index.nodes.map((node) => [node.nodeId, node]));
+    const ruleIds = new Set(
+      pending.flatMap((node) => indexById.get(node.nodeId)?.ruleNodeIds ?? []),
+    );
+    for (const id of ruleIds)
+      if (await hasStopReviewClaim(systemRoot, host, event.session_id, key(id)))
+        excludedNodeIds.add(id);
+    const loaded = await loadHookTurnReviewContent(systemRoot, index, pending, excludedNodeIds);
+    let candidates = loaded;
     const owned = new Set<string>();
     for (;;) {
-      const output = toolReviewOutput(candidates, unnamed);
-      if (!output) return silent;
+      const output = toolReviewOutput(candidates, unnamed, problems);
+      if (!output) return problemOnly();
       const competing = new Set<string>();
-      for (const claim of [...output.nodeIds.map(key), ...output.files.map(fileKey)]) {
+      // Secure owner context first; a lost owner must not leave an undelivered rule claimed.
+      for (const id of output.ownerNodeIds) {
+        const claim = key(id);
+        if (owned.has(claim)) continue;
+        if (await claimStopReview(systemRoot, host, event.session_id, claim)) owned.add(claim);
+        else competing.add(claim);
+      }
+      if (competing.size) {
+        for (const id of output.ownerNodeIds) if (competing.has(key(id))) excludedNodeIds.add(id);
+        candidates = reprojectTurnReviewContent(index, loaded, excludedNodeIds);
+        continue;
+      }
+      for (const claim of [...output.ruleNodeIds.map(key), ...output.files.map(fileKey)]) {
         if (owned.has(claim)) continue;
         if (await claimStopReview(systemRoot, host, event.session_id, claim)) owned.add(claim);
         else competing.add(claim);
@@ -141,8 +167,12 @@ export async function runToolHook(
       if (!competing.size) {
         await settle(
           new Set(
-            candidates
-              .filter((module) => !output.nodeIds.includes(module.nodeId))
+            pending
+              .filter(
+                (module) =>
+                  !output.ownerNodeIds.includes(module.nodeId) &&
+                  !excludedNodeIds.has(module.nodeId),
+              )
               .map((module) => module.nodeId),
           ),
         );
@@ -150,7 +180,8 @@ export async function runToolHook(
       }
       // Another hook owns these Nodes or files. Rebudget without them and claim any newly
       // visible ones before delivering; keep this process's existing claims.
-      candidates = candidates.filter((module) => !competing.has(key(module.nodeId)));
+      for (const id of output.nodeIds) if (competing.has(key(id))) excludedNodeIds.add(id);
+      candidates = reprojectTurnReviewContent(index, loaded, excludedNodeIds);
       unnamed = unnamed.filter((file) => !competing.has(fileKey(file)));
     }
   } catch {

@@ -1,5 +1,21 @@
 import path from "node:path";
 import { isHookGraphFile } from "../core/base/paths.js";
+import type { NodeWriteProblem } from "../core/check/node-write-problems.js";
+
+/** The full Node validator is loaded only after an actual native graph write. */
+export async function nativeNodeWriteProblems(
+  host: "codex" | "claude-code",
+  cwd: string,
+  files: readonly string[],
+): Promise<NodeWriteProblem[]> {
+  if (!hasNativeGraphWrite(cwd, files)) return [];
+  const entry = new URL(
+    import.meta.url.endsWith(".ts") ? "./tent.ts" : "./cli.mjs",
+    import.meta.url,
+  );
+  const { checkNativeNodeWrites } = await import(entry.href);
+  return checkNativeNodeWrites(host, cwd, files);
+}
 
 /** Cheap admission only; the authoritative export rechecks actual checkout/root routing. */
 export function hasNativeGraphWrite(cwd: string, files: readonly string[]): boolean {

@@ -66,12 +66,19 @@ import {
   formatTextPage,
   uncapturedNotice,
   compactItem,
+  compactReadItem,
   incompleteNodeRead,
 } from "./reader-page.js";
 import { inspectNodeSync, confirmNodeSync, linkNodeOutput } from "../core/graph/node-sync.js";
 import { goalContextText } from "./goal-context.js";
 import { retainedDocumentFs } from "../core/graph/retained-read.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
+import { checkNodeWriteProblems } from "../fs/node-write-problems.js";
+import {
+  formatNodeWriteProblems,
+  type NodeWriteProblem,
+} from "../core/check/node-write-problems.js";
+import { isNodeNotePath } from "../core/base/paths.js";
 
 export type NodeCommandOptions = {
   workspace?: string;
@@ -213,12 +220,35 @@ async function runNodeCommandOpened(
       : [];
     if (sub === "check" && invalidNativeNodes.some((node) => node.nodeId === target))
       throw new Error(invalidNativeNodes.find((node) => node.nodeId === target)!.reason);
+    // Start after native capture: receipts describe this command's writes only.
+    const writtenNodePaths = new Set<string>();
+    const writeFile = fs.writeFile.bind(fs);
+    fs.writeFile = async (file, content) => {
+      await writeFile(file, content);
+      if (isNodeNotePath(file)) writtenNodePaths.add(file);
+    };
+    const writeBinary = fs.writeBinary.bind(fs);
+    fs.writeBinary = async (file, content) => {
+      await writeBinary(file, content);
+      if (isNodeNotePath(file)) writtenNodePaths.add(file);
+    };
+    let inspectedProblems: Promise<NodeWriteProblem[]> | undefined;
+    const mutationProblems = () =>
+      (inspectedProblems ??= checkNodeWriteProblems(fs, workspaceRoot, [...writtenNodePaths]));
     const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot: systemRoot };
-    const mutationPrint = <T>(result: T, json: boolean, format: (value: T) => string) => {
+    const mutationPrint = async <T>(result: T, json: boolean, format: (value: T) => string) => {
       const readable = workspaceReadPaths(result, workspaceRoot);
       const warnings = (readable as { warnings?: string[] }).warnings ?? [];
-      return print({ ...readable, workspaceRoot }, json, () =>
-        [format(readable), ...warnings, `Workspace: ${workspaceRoot}`].join("\n"),
+      const problems = await mutationProblems();
+      return print({ ...readable, workspaceRoot, problems }, json, () =>
+        [
+          format(readable),
+          ...warnings,
+          formatNodeWriteProblems(problems),
+          `Workspace: ${workspaceRoot}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
       );
     };
 
@@ -253,7 +283,7 @@ async function runNodeCommandOpened(
           roleId: flags.role,
           tags: parseCsv(flags.tags).map(normalizeTagName),
         });
-        return mutationPrint(
+        return await mutationPrint(
           result,
           json,
           (value) =>
@@ -280,7 +310,7 @@ async function runNodeCommandOpened(
           changed: saved.changed,
           ...(saved.version ? { version: saved.version } : {}),
         };
-        return mutationPrint(
+        return await mutationPrint(
           result,
           json,
           (value) => `${value.nodeId}  ${value.path}  ${value.etag}`,
@@ -366,7 +396,7 @@ async function runNodeCommandOpened(
               env,
               await prepareInput(nodeWriteBatchInputSchema.parse(supplied)),
             );
-        return mutationPrint(result, json, (value) =>
+        return await mutationPrint(result, json, (value) =>
           value.results.map((item) => `${item.nodeId}  ${item.path}  ${item.etag}`).join("\n"),
         );
       }
@@ -666,28 +696,30 @@ async function runNodeCommandOpened(
           await readNode(fs, workspaceId, { nodeId: created, capture: true }),
           workspaceRoot,
         );
-        const output = {
-          ...result,
-          node:
-            "text" in result.node
-              ? pageText(result.node, `node.get:${created}`, {
-                  maxBytes:
-                    16 * 1024 -
-                    Buffer.byteLength(JSON.stringify({ ...result, workspaceRoot, node: null })) +
-                    4,
-                })
-              : compactItem(result.node),
-        };
         const warnings = await nodeMaterialWarnings(
           fs,
           { id: created, type, ...normalizedMaterials },
           nodeNotePath(parentPath ? `${parentPath}/${name}` : name),
         );
-        return mutationPrint(
-          { ...output, ...(warnings.length ? { warnings } : {}) },
-          json,
-          (value) => `Created ${formatNode(value)}`,
-        );
+        const problems = await mutationProblems();
+        const receipt = { ...result, ...(warnings.length ? { warnings } : {}) };
+        const output = {
+          ...receipt,
+          node:
+            "text" in result.node
+              ? mutationTextPage(
+                  result.node,
+                  `node.get:${created}`,
+                  16 * 1024 -
+                    1 -
+                    Buffer.byteLength(
+                      JSON.stringify({ ...receipt, workspaceRoot, problems, node: null }),
+                    ) +
+                    4,
+                )
+              : compactItem(result.node),
+        };
+        return await mutationPrint(output, json, (value) => `Created ${formatNode(value)}`);
       }
       case "append": {
         const target = oneTarget(positionals, nodeHelpText(sub));
@@ -711,7 +743,7 @@ async function runNodeCommandOpened(
           ...(saved.version ? { version: saved.version } : {}),
           ...(saved.warnings ? { warnings: saved.warnings } : {}),
         };
-        return mutationPrint(result, json, () => `Updated ${nodeId}  ${saved.etag}`);
+        return await mutationPrint(result, json, () => `Updated ${nodeId}  ${saved.etag}`);
       }
       case "write": {
         const target = oneTarget(
@@ -795,25 +827,29 @@ async function runNodeCommandOpened(
           },
           workspaceRoot,
         );
+        const problems = await mutationProblems();
         const readBack =
           input.readBack && "text" in readBackCore
-            ? pageText(workspaceReadPaths(readBackCore, workspaceRoot), `node.get:${ref}`, {
-                maxBytes:
-                  16 * 1024 -
+            ? mutationTextPage(
+                workspaceReadPaths(readBackCore, workspaceRoot),
+                `node.get:${ref}`,
+                16 * 1024 -
+                  1 -
                   Buffer.byteLength(
                     JSON.stringify({
                       ...incompleteNodeRead(savedResult),
+                      problems,
                       readBack: null,
                     }),
                   ) +
                   4,
-              })
+              )
             : undefined;
         const result = { ...savedResult, ...(readBack ? { readBack } : {}) };
         const output = (readBack ? readBack.partial : input.body === undefined)
           ? incompleteNodeRead(result)
           : result;
-        return mutationPrint(output, json, (value) => {
+        return await mutationPrint(output, json, (value) => {
           const { warnings: _warnings, ...readback } = value;
           return input.readBack ? JSON.stringify(readback, null, 2) : `Updated ${ref}`;
         });
@@ -821,7 +857,9 @@ async function runNodeCommandOpened(
       case "rename": {
         if (positionals.length !== 2) return usage("tent node rename <nodeId> <new-name> [--json]");
         const result = await renameNode(env, nodeRef(positionals[0]), positionals[1]);
-        return mutationPrint(result, json, (value) => `Renamed ${formatNode(value)}`);
+        for (const [from, to] of Object.entries(result.pathMap))
+          if (from !== to) writtenNodePaths.add(nodeNotePath(to));
+        return await mutationPrint(result, json, (value) => `Renamed ${formatNode(value)}`);
       }
       case "move": {
         const target = oneTarget(
@@ -843,7 +881,9 @@ async function runNodeCommandOpened(
           return usage("tent node move --parent must be root or a stable node- id");
         }
         const result = await moveNode(env, target, newParentId, { mode: "inside" }, expectedPath);
-        return mutationPrint(result, json, () => `Moved ${target}`);
+        for (const [from, to] of Object.entries(result.pathMap ?? {}))
+          if (from !== to) writtenNodePaths.add(nodeNotePath(to));
+        return await mutationPrint(result, json, () => `Moved ${target}`);
       }
       case "archive":
       case "restore": {
@@ -856,7 +896,7 @@ async function runNodeCommandOpened(
           sub === "archive"
             ? await archiveNode(env, nodeRef(target))
             : await restoreNode(env, nodeRef(target), archiveCommit!);
-        return mutationPrint(
+        return await mutationPrint(
           result,
           json,
           () => `${sub === "archive" ? "Archived" : "Restored"} ${target}`,
@@ -866,7 +906,7 @@ async function runNodeCommandOpened(
         const target = oneTarget(positionals, "tent node delete <nodeId> [--json]");
         if (typeof target !== "string") return target;
         const result = await deleteNode(env, nodeRef(target));
-        return mutationPrint(result, json, () => `Deleted ${target}`);
+        return await mutationPrint(result, json, () => `Deleted ${target}`);
       }
       case "tags": {
         if (
@@ -1262,6 +1302,20 @@ function print(
     stdout: json ? JSON.stringify(value) + "\n" : format(value).trimEnd() + "\n",
     stderr: "",
   };
+}
+
+function mutationTextPage<T extends Parameters<typeof pageText>[0]>(
+  value: T,
+  operation: string,
+  maxBytes: number,
+) {
+  try {
+    return pageText(value, operation, { maxBytes });
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "PAGE_TOO_LARGE")
+      throw error;
+    return { ...incompleteNodeRead(compactReadItem(value)), partial: true };
+  }
 }
 
 function usage(text: string): NodeCommandResult {

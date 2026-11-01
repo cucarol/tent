@@ -23,6 +23,7 @@ import {
 } from "../core/base/paths.js";
 import { TRANSACTION_PATH } from "../core/store/file-transaction.js";
 import { withFileMutationLock } from "./mutation-lock.js";
+import { turnReviewHeaderDigest } from "../core/return/turn-review-document.js";
 
 const coverageSchema = z.strictObject({
   kind: z.enum(["directory", "prefix"]),
@@ -35,6 +36,8 @@ const indexSchema = z.strictObject({
       path: z.string(),
       names: z.array(z.string()),
       type: z.string().optional(),
+      ruleNodeIds: z.array(z.string()),
+      headerDigest: z.string().regex(/^[a-f0-9]{64}$/),
       moduleCoverage: z.array(coverageSchema),
       materialFiles: z.array(z.strictObject({ path: z.string(), heading: z.string().optional() })),
       moduleMaterials: z.array(coverageSchema),
@@ -61,7 +64,7 @@ const directorySchema = z.strictObject({
 });
 const headerSchema = z.strictObject({ state: stateSchema, content: z.string() });
 const cacheSchema = z.strictObject({
-  schema: z.literal(10),
+  schema: z.literal(11),
   rootMarkerDigest: z.string().regex(/^[a-f0-9]{64}$/),
   rejectedRootMarkers: z.array(
     z.strictObject({ root: z.string(), digest: z.string().regex(/^[a-f0-9]{64}$/) }),
@@ -284,7 +287,7 @@ async function loadStopMaterialIndexUnlocked(
     }
   }, true);
   if (directories.size !== oldDirectories.size || headers.size !== oldHeaders.size) changed = true;
-  let index = cached?.index;
+  let index: StopMaterialIndex | undefined = cached?.index;
   if (changed || !index) {
     const snapshot = new Proxy(adapter, {
       get(target, key) {
@@ -302,6 +305,17 @@ async function loadStopMaterialIndexUnlocked(
       },
     });
     index = buildStopMaterialIndex(await loadNodeCatalog(snapshot), workspaceRoot);
+  } else if (refreshed) {
+    // A provenance-only edit preserves membership and rules, but live content must
+    // still be bound to the exact current validated prefix without parsing YAML in Hooks.
+    index = {
+      nodes: index.nodes.map((node) => ({
+        ...node,
+        headerDigest: turnReviewHeaderDigest(
+          headers.get(node.path.slice(".tent/".length))!.content,
+        ),
+      })),
+    };
   }
   if (hasGit && refreshed) {
     const temp = `${cacheFile}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`;
@@ -312,7 +326,7 @@ async function loadStopMaterialIndexUnlocked(
       await fs.writeFile(
         temp,
         JSON.stringify({
-          schema: 10,
+          schema: 11,
           rootMarkerDigest: markerDigest,
           rejectedRootMarkers,
           workspaceRoot,

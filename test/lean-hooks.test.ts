@@ -17,7 +17,7 @@ import { sectionKey } from "../src/core/return/section-fingerprint.js";
 import { toolReviewOutput } from "../src/cli/hook-adapter.js";
 import { successfulWritePaths } from "../src/cli/tool-write-event.js";
 import { ANSWER_REVIEW, TOOL_REVIEW_ACTION } from "../src/core/return/tool-turn-review.js";
-import { hasStopReviewClaim } from "../src/fs/stop-review-claim.js";
+import { claimStopReview, hasStopReviewClaim } from "../src/fs/stop-review-claim.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(testScratchRoot());
@@ -66,7 +66,7 @@ test("successful writes name only covering Nodes, once per native host/session/t
   assert.equal(notice.hookSpecificOutput.hookEventName, "PostToolUse");
   assert.equal(
     notice.hookSpecificOutput.additionalContext,
-    `Tent: these Nodes cover the file you just changed:\n- Module (node-module, .tent/Module/Module.md): src/a.ts\n${TOOL_REVIEW_ACTION}`,
+    `Tent: these Nodes cover the file you just changed.\n\nModule (node-module, .tent/Module/Module.md) covers src/a.ts:\nRule\n\n\n${TOOL_REVIEW_ACTION}`,
   );
   assert.equal(await tool(["src/b.ts"]), "{}\n");
   assert.match(await tool(["src/b.ts", "lib/b.ts"]), /node-other/);
@@ -82,7 +82,7 @@ test("successful writes name only covering Nodes, once per native host/session/t
   assert.equal(await runToolHook("claude-code", claude), "{}\n");
 });
 
-test("failure, cancellation, reads, no identity, uncovered and Tent maintenance stay silent", async (t) => {
+test("failure, cancellation, reads, no identity and operational writes stay silent; Node problems are immediate", async (t) => {
   const { tool, event } = await fixture(t);
   for (const extra of [
     { tool_response: "Error: patch failed" },
@@ -102,14 +102,13 @@ test("failure, cancellation, reads, no identity, uncovered and Tent maintenance 
     { tool_response: "Success. Updated the following files:\n" },
   ])
     assert.equal(await tool(undefined, extra), "{}\n");
-  for (const file of [
-    "unknown.txt",
-    ".tent/Module/Module.md",
-    ".tent/cards/card-x.md",
-    ".scratch/a.ts",
-    "node_modules/a.ts",
-  ])
+  for (const file of ["unknown.txt", ".tent/cards/card-x.md", ".scratch/a.ts", "node_modules/a.ts"])
     assert.equal(await tool([file]), "{}\n");
+  const problems = JSON.parse(await tool([".tent/Module/Module.md"])).hookSpecificOutput
+    .additionalContext;
+  assert.match(problems, /^Tent: \.tent\/Module\/Module\.md has problems:/);
+  assert.match(problems, /missing-material-file: \.\.\/\.\.\/src\//);
+  assert.ok(problems.endsWith("Fix them before you end this turn."));
   assert.equal(
     await runToolHook("claude-code", {
       ...event(),
@@ -249,13 +248,29 @@ test("answered questions get the dedicated reminder; missing or cancelled answer
   }
 });
 
-test("tools only consume existing coverage and never acquire locks or inspect transcripts", async (t) => {
+test("tools consume prepared coverage with current selected bodies, without locks or transcripts", async (t) => {
   const { systemRoot, tool } = await fixture(t);
   const module = path.join(systemRoot, "Module/Module.md");
+  const original = await fs.readFile(module, "utf8");
   await fs.writeFile(module, "invalid new bytes");
   await fs.writeFile(path.join(systemRoot, "mutation.lock"), "held by another writer");
-  assert.match(await tool(undefined, { transcript_path: "missing" }), /node-module/);
+  assert.equal(await tool(undefined, { transcript_path: "missing" }), "{}\n");
+  assert.equal(
+    await hasStopReviewClaim(
+      systemRoot,
+      "codex",
+      "session",
+      JSON.stringify(["turn", "node", "node-module"]),
+    ),
+    false,
+  );
   assert.equal(await fs.readFile(module, "utf8"), "invalid new bytes");
+  assert.equal(
+    await fs.readFile(path.join(systemRoot, "mutation.lock"), "utf8"),
+    "held by another writer",
+  );
+  await fs.writeFile(module, original);
+  assert.match(await tool(undefined, { transcript_path: "missing" }), /node-module/);
   const cache = path.join(systemRoot, ".git/tent-material-cache/stop-material-index.json");
   await fs.writeFile(cache, "broken cache");
   assert.equal(await tool(undefined, { turn_id: "next" }), "{}\n");
@@ -263,9 +278,29 @@ test("tools only consume existing coverage and never acquire locks or inspect tr
 });
 
 test("concurrent events deliver a Node at most once, without a global lock", async (t) => {
-  const { tool } = await fixture(t);
+  const { tool, systemRoot, root } = await fixture(t);
+  await fs.mkdir(path.join(systemRoot, "Module/Rule"));
+  await fs.writeFile(
+    path.join(systemRoot, "Module/Rule/Rule.md"),
+    "---\nid: node-rule\ntype: prompt\n---\nGoverning text\n",
+  );
+  await loadStopMaterialIndex(systemRoot, root);
   const results = await Promise.all(Array.from({ length: 12 }, () => tool()));
   assert.equal(results.filter((result) => result !== "{}\n").length, 1);
+  assert.deepEqual(namedReviewNodes(results.find((result) => result !== "{}\n")!), [
+    "node-module",
+    "node-rule",
+  ]);
+  for (const id of ["node-module", "node-rule"])
+    assert.equal(
+      await hasStopReviewClaim(
+        systemRoot,
+        "codex",
+        "session",
+        JSON.stringify(["turn", "node", id]),
+      ),
+      true,
+    );
 });
 
 test("Stop is completely quiet, even malformed input, and does no filesystem work", async (t) => {
@@ -283,10 +318,17 @@ test("bounded review preserves the exact action and identifies only rendered cla
     path: `.tent/${"a".repeat(80)}/${i}.md`,
     names: ["x".repeat(50)],
     files: Array.from({ length: 8 }, (_, n) => `src/${"q".repeat(50)}${n}.ts`),
+    body: "汉".repeat(1601),
   }));
   const output = toolReviewOutput(modules)!;
-  assert.ok(Buffer.byteLength(output.stdout) <= 2048);
-  assert.match(output.stdout, /more modules/);
+  assert.ok(Buffer.byteLength(output.stdout) <= 8192);
+  assert.ok(
+    JSON.parse(output.stdout).hookSpecificOutput.additionalContext.includes(
+      `${modules.length - output.nodeIds.length} more Nodes cover 1 other changed files: run tent node search --resource on each.`,
+    ),
+  );
+  assert.ok(output.nodeIds.length > 0 && output.nodeIds.length < modules.length);
+  assert.deepEqual(namedReviewNodes(output.stdout), output.nodeIds);
   assert.ok(
     JSON.parse(output.stdout).hookSpecificOutput.additionalContext.endsWith(TOOL_REVIEW_ACTION),
   );
@@ -325,30 +367,35 @@ test("covering Nodes keep their room when an unowned note joins them", () => {
     path: `.tent/M${i}/M${i}.md`,
     names: ["n".repeat(219)],
     files: ["src/a.ts"],
+    body: "汉".repeat(1601),
   }));
   const alone = toolReviewOutput(modules)!;
   const joined = toolReviewOutput(modules, ["new.ts"])!;
   assert.deepEqual(joined.nodeIds, alone.nodeIds);
-  assert.equal(joined.nodeIds.length, 5);
+  assert.ok(joined.nodeIds.length > 0 && joined.nodeIds.length < 5);
   assert.deepEqual(joined.files, []);
-  assert.ok(Buffer.byteLength(joined.stdout) <= 2048);
+  assert.ok(Buffer.byteLength(joined.stdout) <= 8192);
   const roomy = toolReviewOutput(modules.slice(0, 1), ["new.ts"])!;
   assert.deepEqual([roomy.nodeIds, roomy.files], [["node-0"], ["new.ts"]]);
 });
 
-test("escaping overhead drops filenames before dropping the only covered Node", () => {
+test("escaping overhead produces a bounded omission without claiming an undelivered owner", () => {
   const result = toolReviewOutput([
     {
       nodeId: "node-covered",
       path: ".tent/Module/Module.md",
       names: ["Module"],
-      files: ['"'.repeat(1600)],
+      files: ["src/a.ts", '"'.repeat(6000)],
     },
   ])!;
   assert.ok(result);
-  assert.ok(Buffer.byteLength(result.stdout) <= 2048);
-  assert.deepEqual(result.nodeIds, ["node-covered"]);
-  assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /node-covered/);
+  assert.ok(Buffer.byteLength(result.stdout) <= 8192);
+  assert.deepEqual(result.nodeIds, []);
+  assert.deepEqual(result.ownerNodeIds, []);
+  assert.match(
+    JSON.parse(result.stdout).hookSpecificOutput.additionalContext,
+    /1 more Nodes: tent node search --resource src\/a\.ts/,
+  );
 });
 
 test("the removed input hook command has no prompt handling or context", async (t) => {
@@ -369,7 +416,7 @@ async function sixCoveredNodes(t: TestContext, longNames: boolean) {
     await fs.mkdir(path.join(f.systemRoot, name));
     await fs.writeFile(
       path.join(f.systemRoot, name, name + ".md"),
-      `---\nid: node-extra${i}\ntype: prompt\nsources:\n  - resource: ../../src/\n    track: structure\n---\nRule\n`,
+      `---\nid: node-extra${i}\ntype: prompt\nsources:\n  - resource: ../../src/\n    track: structure\n---\n${"汉".repeat(1601)}\n`,
     );
   }
   await loadStopMaterialIndex(f.systemRoot, f.root);
@@ -380,16 +427,16 @@ const namedReviewNodes = (stdout: string) => {
   return [...message.matchAll(/\((node-[a-z0-9]+), /g)].map((match) => match[1]);
 };
 
-test("running hook preserves omitted counts and only claims rendered Nodes for count and byte limits", async (t) => {
+test("running hook preserves byte omissions and only claims rendered Nodes for long bodies and metadata", async (t) => {
   for (const longNames of [false, true]) {
     const f = await sixCoveredNodes(t, longNames);
     const first = await f.tool();
     const named = namedReviewNodes(first);
-    assert.ok(named.length > 0 && named.length <= 5);
-    assert.equal(named.length < 5, longNames);
+    assert.ok(named.length > 0 && named.length < 6);
+    assert.ok(Buffer.byteLength(first) <= 8192);
     assert.match(
       JSON.parse(first).hookSpecificOutput.additionalContext,
-      new RegExp(`\\+${6 - named.length} more modules`),
+      new RegExp(`${6 - named.length} more Nodes: tent node search --resource src/code.ts`),
     );
     assert.equal(
       (await fs.readdir(path.join(f.systemRoot, "temp/stop-reviews"))).length,
@@ -444,12 +491,17 @@ test("claim competition rebudgets both capped projections before claiming newly 
     assert.equal(competed, true);
     const named = namedReviewNodes(output!);
     assert.ok(named.length > 0);
-    assert.equal(named.length < 5, longNames);
+    assert.ok(named.length < 5);
+    assert.ok(Buffer.byteLength(output!) <= 8192);
     assert.equal(named.includes("node-extra0"), false);
     const remaining = 6 - 1 - named.length;
     const message = JSON.parse(output!).hookSpecificOutput.additionalContext;
-    if (remaining) assert.match(message, new RegExp(`\\+${remaining} more modules`));
-    else assert.doesNotMatch(message, /more modules/);
+    if (remaining)
+      assert.match(
+        message,
+        new RegExp(`${remaining} more Nodes: tent node search --resource src/code.ts`),
+      );
+    else assert.doesNotMatch(message, /more Nodes/);
     assert.equal(
       (await fs.readdir(path.join(f.systemRoot, "temp/stop-reviews"))).length,
       named.length + 1,
@@ -467,6 +519,79 @@ test("claim competition rebudgets both capped projections before claiming newly 
     assert.equal(seen.size, 5);
     assert.equal(await f.tool(), "{}\n");
   }
+});
+
+test("owner claim race drops its unique rule and transfers a shared rule to the surviving owner without rereads", async (t) => {
+  const f = await fixture(t);
+  const documents = [
+    ["Goal", "node-goal", "goal", ""],
+    ["Goal/A", "node-a", "output", "sources: [{resource: '../../../doc.md'}]\n"],
+    ["Goal/B", "node-b", "output", "sources: [{resource: '../../../doc.md'}]\n"],
+    ["Goal/A/Unique", "node-unique", "prompt", ""],
+    ["Goal/Shared", "node-shared", "prompt", ""],
+  ];
+  const bodyFiles = new Set<string>();
+  for (const [directory, id, type, extra] of documents) {
+    const filename = path.join(f.systemRoot, directory, path.posix.basename(directory) + ".md");
+    await fs.mkdir(path.dirname(filename), { recursive: true });
+    await fs.writeFile(filename, `---\nid: ${id}\ntype: ${type}\n${extra}---\n${id} body\n`);
+    if (id !== "node-goal") bodyFiles.add(filename);
+  }
+  await fs.writeFile(path.join(f.root, "doc.md"), "material\n");
+  await loadStopMaterialIndex(f.systemRoot, f.root);
+  const ownerFile = path.join(f.systemRoot, "Goal/A/A.md");
+  const open = fs.open;
+  const bodyReads = new Map<string, number>();
+  let competed = false;
+  fs.open = (async (...args: Parameters<typeof open>) => {
+    const filename = String(args[0]);
+    if (bodyFiles.has(filename)) bodyReads.set(filename, (bodyReads.get(filename) ?? 0) + 1);
+    if (filename === ownerFile && !competed) {
+      // The Hook has admitted A to pending; another event claims it before this Hook claims owners.
+      competed = true;
+      assert.equal(
+        await claimStopReview(
+          f.systemRoot,
+          "codex",
+          "session",
+          JSON.stringify(["turn", "node", "node-a"]),
+        ),
+        true,
+      );
+    }
+    return open(...args);
+  }) as typeof open;
+  syncBuiltinESMExports();
+  let output: string;
+  try {
+    output = await f.tool(["doc.md"]);
+  } finally {
+    fs.open = open;
+    syncBuiltinESMExports();
+  }
+  assert.equal(competed, true);
+  const named = namedReviewNodes(output!);
+  assert.deepEqual(named, ["node-b", "node-shared"]);
+  const message = JSON.parse(output!).hookSpecificOutput.additionalContext;
+  assert.match(message, /Rules over it:\nGoal \/ Shared \(node-shared,/);
+  assert.doesNotMatch(message, /node-unique|node-a body/);
+  assert.equal(bodyReads.size, 4);
+  for (const reads of bodyReads.values()) assert.equal(reads, 1);
+  for (const id of ["node-a", "node-b", "node-unique", "node-shared", "node-goal"])
+    assert.equal(
+      await hasStopReviewClaim(
+        f.systemRoot,
+        "codex",
+        "session",
+        JSON.stringify(["turn", "node", id]),
+      ),
+      id === "node-a" || named.includes(id),
+      id,
+    );
+  assert.equal(
+    (await fs.readdir(path.join(f.systemRoot, "temp/stop-reviews"))).length,
+    named.length + 1,
+  );
 });
 
 test("material links name a file's Nodes, and a linked section only after that section changes", async (t) => {
@@ -504,6 +629,36 @@ test("material links name a file's Nodes, and a linked section only after that s
   assert.equal(await tool(["docs/SPEC.md"], { turn_id: "t6" }), "{}\n");
   await spec("again", "newer");
   assert.match(await tool(["docs/SPEC.md"], { turn_id: "t7" }), /node-rule/);
+});
+
+test("an unreadable selected owner stays unclaimed and cannot settle its changed section", async (t) => {
+  const { root, systemRoot, tool } = await fixture(t);
+  const filename = path.join(systemRoot, "Rule/Rule.md");
+  const raw =
+    "---\nid: node-rule\ntype: prompt\nsources:\n  - resource: ../../doc.md#Tracked\n---\nOriginal body\n";
+  await fs.mkdir(path.dirname(filename));
+  await fs.writeFile(filename, raw);
+  await fs.writeFile(path.join(root, "doc.md"), "# Tracked\nbefore\n");
+  await recordSectionFingerprints(systemRoot, root, await loadStopMaterialIndex(systemRoot, root));
+  const sections = new Map([
+    [sectionKey("doc.md", "Tracked"), { path: "doc.md", heading: "Tracked" }],
+  ]);
+  await fs.writeFile(path.join(root, "doc.md"), "# Tracked\nafter\n");
+  await fs.writeFile(filename, "invalid selected bytes");
+  assert.equal(await tool(["doc.md"]), "{}\n");
+  assert.equal(
+    await hasStopReviewClaim(
+      systemRoot,
+      "codex",
+      "session",
+      JSON.stringify(["turn", "node", "node-rule"]),
+    ),
+    false,
+  );
+  assert.equal((await changedSections(systemRoot, root, sections)).size, 1);
+  await fs.writeFile(filename, raw);
+  assert.match(await tool(["doc.md"]), /Original body/);
+  assert.equal((await changedSections(systemRoot, root, sections)).size, 0);
 });
 
 test("a linked heading is followed through inline Markdown and a respelling", async (t) => {
@@ -638,7 +793,7 @@ test("hand-written code no module owns is named once per session, beside coverin
   const both = context(await tool(["src/a.ts", "app/b.ts"], { turn_id: "both" }));
   assert.equal(
     both,
-    `Tent: these Nodes cover the file you just changed:\n- Module (node-module, .tent/Module/Module.md): src/a.ts\n${TOOL_REVIEW_ACTION}\n\n${note("app/b.ts")}`,
+    `Tent: these Nodes cover the file you just changed.\n\nModule (node-module, .tent/Module/Module.md) covers src/a.ts:\nRule\n\n\n${TOOL_REVIEW_ACTION}\n\n${note("app/b.ts")}`,
   );
   // A module owns every directory it names, tracked or not.
   await fs.writeFile(
@@ -649,6 +804,6 @@ test("hand-written code no module owns is named once per session, beside coverin
   assert.equal(await tool(["app/owned/x.ts"], { turn_id: "owned" }), "{}\n");
   const many = Array.from({ length: 20 }, (_, i) => `app/many/file-${i}.ts`);
   const listed = await tool(many, { turn_id: "many" });
-  assert.ok(Buffer.byteLength(listed) <= 2048);
+  assert.ok(Buffer.byteLength(listed) <= 8192);
   assert.equal(context(listed), note(`${[...many].sort().slice(0, 8).join(", ")}, +12 more`));
 });

@@ -681,7 +681,15 @@ test("SessionStart records pending native edits without writing a session baseli
       }),
     });
     assert.equal(result.exitCode, 0);
-    assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /workspace brief/);
+    const context = JSON.parse(result.stdout).hookSpecificOutput.additionalContext.split("\n");
+    assert.equal(context.length, 4);
+    assert.equal(context[0], `Tent Workspace: ${workspace}`);
+    assert.equal(context[1], `Tent CLI: node ${JSON.stringify(path.resolve("cli.mjs"))}`);
+    assert.match(context[2], /^Build: Tent /);
+    assert.equal(
+      context[3],
+      "Tent shows you the Nodes that cover each file you change, right after the change. No Tent command is needed before working.",
+    );
     const head = await adapter.history.currentCommit();
     assert.notEqual(head, beforeHead);
     assert.equal(await adapter.history.read({ commit: head!, path: file }), raw);
@@ -712,7 +720,15 @@ test("SessionStart takes no write lock and writes no files when no native edits 
       }),
     });
     assert.equal(result.exitCode, 0);
-    assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /workspace brief/);
+    const context = JSON.parse(result.stdout).hookSpecificOutput.additionalContext.split("\n");
+    assert.equal(context.length, 4);
+    assert.equal(context[0], `Tent Workspace: ${workspace}`);
+    assert.equal(context[1], `Tent CLI: node ${JSON.stringify(path.resolve("cli.mjs"))}`);
+    assert.match(context[2], /^Build: Tent /);
+    assert.equal(
+      context[3],
+      "Tent shows you the Nodes that cover each file you change, right after the change. No Tent command is needed before working.",
+    );
     assert.equal(await adapter.history.currentCommit(), beforeHead);
     assert.equal(await adapter.history.read({ commit: beforeHead!, path: file }), retained);
     assert.equal(await adapter.readFile(file), raw);

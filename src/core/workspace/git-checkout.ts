@@ -65,7 +65,8 @@ export async function createTurnPathResolver(
       if (!workspaceRoot) return undefined;
       const local = path.relative(workspaceRoot, filename).split(path.sep).join("/");
       // Tent owns this operational directory; these writes still identify Node/Card edits.
-      if (local.startsWith(".tent/")) return local;
+      if ((process.platform === "win32" ? local.toLowerCase() : local).startsWith(".tent/"))
+        return local;
       const owner = await find(path.dirname(filename));
       if (owner && workspace && !samePath(owner.commonDir, workspace.commonDir)) return undefined;
       if (owner && !workspace) {

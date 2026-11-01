@@ -11,6 +11,7 @@ import {
 } from "yaml";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { contentEtag } from "./etag.js";
+import { frontmatterBoundary } from "./frontmatter-boundary.js";
 
 export interface ParsedFrontmatter {
   data: Record<string, unknown>;
@@ -77,11 +78,9 @@ export function validFrontmatterCache(value: unknown): value is FrontmatterCache
 }
 
 export function parseFrontmatter(raw: string): ParsedFrontmatter {
-  const opening = /^(\uFEFF)?---[\t ]*(\r?\n)/.exec(raw);
-  if (!opening) return { data: {}, body: raw, keyOrder: [] };
-  const fence = /^---[\t ]*(?:\r?\n|$)/gm;
-  fence.lastIndex = opening[0].length;
-  const closing = fence.exec(raw);
+  const boundary = frontmatterBoundary(raw);
+  if (!boundary) return { data: {}, body: raw, keyOrder: [] };
+  const { opening, closing } = boundary;
   if (!closing) throw invalidYaml("unterminated frontmatter fence.");
 
   const end = closing.index + closing[0].length;

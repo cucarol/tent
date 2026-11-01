@@ -21,9 +21,11 @@ import {
 import { runTurnHook } from "../src/cli/turn-hook.js";
 import { runToolHook } from "../src/cli/tool-hook.js";
 import { TOOL_REVIEW_ACTION } from "../src/core/return/tool-turn-review.js";
-import { hasStopReviewClaim } from "../src/fs/stop-review-claim.js";
+import { claimStopReview, hasStopReviewClaim } from "../src/fs/stop-review-claim.js";
 import { seedSessionTurnDirty } from "../src/fs/turn-dirty-baseline.js";
 import { recordSectionFingerprints } from "../src/fs/section-fingerprint-baseline.js";
+import { changedSections } from "../src/fs/section-fingerprints.js";
+import { sectionKey } from "../src/core/return/section-fingerprint.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "turn-hook-"));
@@ -257,7 +259,7 @@ test("both host namespaces block once, retain exact wording, and preserve their 
     assert.equal(output.decision, "block");
     assert.equal(
       output.reason,
-      `Tent: these Nodes cover files changed during this turn:\n- Module (node-module, .tent/Module/Module.md): src/a.ts\n${TOOL_REVIEW_ACTION}`,
+      `Tent: these Nodes cover files changed during this turn.\n\nModule (node-module, .tent/Module/Module.md) covers src/a.ts:\nRule\n\n\n${TOOL_REVIEW_ACTION}`,
     );
     assert.equal(await f.hook("Stop", {}, host), "{}\n");
     await f.hook("UserPromptSubmit", { turnId: "continuation", prompt: output.reason }, host);
@@ -313,9 +315,14 @@ test("parallel Stop calls produce one bounded block and claim only rendered Node
     await fs.mkdir(path.join(f.system, "Extra" + i));
     await fs.writeFile(
       path.join(f.system, `Extra${i}/Extra${i}.md`),
-      `---\nid: node-extra${i}\ntype: prompt\nsources:\n  - resource: ../../src/a.ts\n---\nRule\n`,
+      `---\nid: node-extra${i}\ntype: goal\nsources:\n  - resource: ../../src/a.ts\n---\n${"汉".repeat(1601)}\n`,
     );
   }
+  await fs.mkdir(path.join(f.system, "Extra0/Rule"));
+  await fs.writeFile(
+    path.join(f.system, "Extra0/Rule/Rule.md"),
+    "---\nid: node-rule\ntype: prompt\n---\nGoverning text\n",
+  );
   await loadStopMaterialIndex(f.system, f.root);
   await f.hook("UserPromptSubmit");
   const original = await readTurnRecord(f.system, "codex", "session", "turn");
@@ -326,16 +333,97 @@ test("parallel Stop calls produce one bounded block and claim only rendered Node
   const outputs = await Promise.all([f.hook("Stop"), f.hook("Stop")]);
   assert.equal(outputs.filter((out) => out !== "{}\n").length, 1);
   const output = outputs.find((out) => out !== "{}\n")!;
-  assert.ok(Buffer.byteLength(output) <= 2048);
-  assert.match(output, /\+3 more modules/);
+  assert.ok(Buffer.byteLength(output) <= 8192);
+  const message = JSON.parse(output).reason;
+  const named = [...message.matchAll(/\((node-[a-z0-9]+), /g)].map((match) => match[1]);
+  assert.ok(named.length > 0 && named.length < 9);
+  assert.ok(named.includes("node-rule"));
+  assert.match(message, /Rules over it:\nExtra0 \/ Rule \(node-rule,/);
+  assert.match(
+    message,
+    new RegExp(`${9 - named.length} more Nodes: tent node search --resource src/a.ts`),
+  );
+  for (const id of [
+    "node-module",
+    "node-rule",
+    ...Array.from({ length: 7 }, (_, i) => `node-extra${i}`),
+  ])
+    assert.equal(
+      await hasStopReviewClaim(f.system, "codex", "session", JSON.stringify(["turn", "node", id])),
+      named.includes(id),
+      id,
+    );
+});
+
+test("Stop owner claim race leaves no unique-rule claim and delivers the surviving shared rule once without rereads", async (t) => {
+  const f = await fixture(t);
+  const documents = [
+    ["Goal", "node-goal", "goal", ""],
+    ["Goal/A", "node-a", "output", "sources: [{resource: '../../../doc.md'}]\n"],
+    ["Goal/B", "node-b", "output", "sources: [{resource: '../../../doc.md'}]\n"],
+    ["Goal/A/Unique", "node-unique", "prompt", ""],
+    ["Goal/Shared", "node-shared", "prompt", ""],
+  ];
+  const bodyFiles = new Set<string>();
+  for (const [directory, id, type, extra] of documents) {
+    const filename = path.join(f.system, directory, path.posix.basename(directory) + ".md");
+    await fs.mkdir(path.dirname(filename), { recursive: true });
+    await fs.writeFile(filename, `---\nid: ${id}\ntype: ${type}\n${extra}---\n${id} body\n`);
+    if (id !== "node-goal") bodyFiles.add(filename);
+  }
+  await f.write("doc.md", "before\n");
+  await loadStopMaterialIndex(f.system, f.root);
+  await f.hook("UserPromptSubmit");
+  const record = (await readTurnRecord(f.system, "codex", "session", "turn"))!;
+  await f.write("doc.md", "after\n");
+  const changedTime = new Date(record.baseline.startedAt + 2000);
+  await fs.utimes(path.join(f.root, "doc.md"), changedTime, changedTime);
+  const ownerFile = path.join(f.system, "Goal/A/A.md");
+  const open = fs.open;
+  const bodyReads = new Map<string, number>();
+  let competed = false;
+  fs.open = (async (...args: Parameters<typeof open>) => {
+    const filename = String(args[0]);
+    if (bodyFiles.has(filename)) bodyReads.set(filename, (bodyReads.get(filename) ?? 0) + 1);
+    if (filename === ownerFile && !competed) {
+      competed = true;
+      assert.equal(
+        await claimStopReview(
+          f.system,
+          "codex",
+          "session",
+          JSON.stringify(["turn", "node", "node-a"]),
+        ),
+        true,
+      );
+    }
+    return open(...args);
+  }) as typeof open;
+  syncBuiltinESMExports();
+  let output: string;
+  try {
+    output = await f.hook("Stop");
+  } finally {
+    fs.open = open;
+    syncBuiltinESMExports();
+  }
+  assert.equal(competed, true);
+  const message = JSON.parse(output!).reason;
+  const named = [...message.matchAll(/\((node-[a-z0-9]+), /g)].map((match) => match[1]);
+  assert.deepEqual(named, ["node-b", "node-shared"]);
+  assert.match(message, /Rules over it:\nGoal \/ Shared \(node-shared,/);
+  assert.doesNotMatch(message, /node-unique|node-a body/);
+  assert.equal(bodyReads.size, 4);
+  for (const reads of bodyReads.values()) assert.equal(reads, 1);
+  for (const id of ["node-a", "node-b", "node-unique", "node-shared", "node-goal"])
+    assert.equal(
+      await hasStopReviewClaim(f.system, "codex", "session", JSON.stringify(["turn", "node", id])),
+      id === "node-a" || named.includes(id),
+      id,
+    );
   assert.equal(
-    await hasStopReviewClaim(
-      f.system,
-      "codex",
-      "session",
-      JSON.stringify(["turn", "node", "node-extra6"]),
-    ),
-    false,
+    (await fs.readdir(path.join(f.system, "temp/stop-reviews"))).length,
+    named.length + 2,
   );
 });
 
@@ -416,6 +504,39 @@ test("Stop shares section filtering, unknown seeding and named-only settling wit
   const unknownTime = new Date(unknown.baseline.startedAt + 2000);
   await fs.utimes(path.join(f.root, "unknown.md"), unknownTime, unknownTime);
   assert.equal(await f.hook("Stop", { turnId: "unknown" }), "{}\n");
+});
+
+test("Stop leaves an unreadable owner and its section unsettled until its current body is available", async (t) => {
+  const f = await fixture(t);
+  const filename = path.join(f.system, "Rule/Rule.md");
+  const raw =
+    "---\nid: node-rule\ntype: prompt\nsources:\n  - resource: ../../notes.md#Tracked\n---\nOriginal body\n";
+  await fs.mkdir(path.dirname(filename));
+  await fs.writeFile(filename, raw);
+  await f.write("notes.md", "# Tracked\nbefore\n");
+  await recordSectionFingerprints(f.system, f.root, await loadStopMaterialIndex(f.system, f.root));
+  await f.hook("UserPromptSubmit");
+  const record = (await readTurnRecord(f.system, "codex", "session", "turn"))!;
+  await f.write("notes.md", "# Tracked\nafter\n");
+  const changedTime = new Date(record.baseline.startedAt + 2000);
+  await fs.utimes(path.join(f.root, "notes.md"), changedTime, changedTime);
+  await fs.writeFile(filename, "invalid selected bytes");
+  assert.equal(await f.hook("Stop"), "{}\n");
+  const sections = new Map([
+    [sectionKey("notes.md", "Tracked"), { path: "notes.md", heading: "Tracked" }],
+  ]);
+  assert.equal((await changedSections(f.system, f.root, sections)).size, 1);
+  for (const key of [
+    ["turn", "node", "node-rule"],
+    ["turn", "turn-stop"],
+  ])
+    assert.equal(
+      await hasStopReviewClaim(f.system, "codex", "session", JSON.stringify(key)),
+      false,
+    );
+  await fs.writeFile(filename, raw);
+  assert.match(await f.hook("Stop"), /Original body/);
+  assert.equal((await changedSections(f.system, f.root, sections)).size, 0);
 });
 
 test("status-listed paths use Git scope while tracked submodules stay excluded", async (t) => {

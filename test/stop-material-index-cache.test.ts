@@ -71,7 +71,7 @@ test("Stop header equivalence ignores provenance but preserves identity, validit
     assert.equal(sameStopMaterialHeader(original, replacement), false);
 });
 
-test("Stop updates a generated-only header record while retaining the same projection", async (t) => {
+test("Stop updates a generated-only header digest while retaining material and rule semantics", async (t) => {
   const { root, systemRoot, cacheFile } = await fixture(t);
   stableClock(t);
   const expected = await loadStopMaterialIndex(systemRoot, root);
@@ -81,13 +81,17 @@ test("Stop updates a generated-only header record while retaining the same proje
     "type: goal\ngenerated: {at: new}",
   );
   await fs.writeFile(filename, changed);
-  assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
+  const refreshed = await loadStopMaterialIndex(systemRoot, root);
+  const semantics = (index: typeof expected) =>
+    index.nodes.map(({ headerDigest: _headerDigest, ...node }) => node);
+  assert.deepEqual(semantics(refreshed), semantics(expected));
+  assert.notEqual(refreshed.nodes[0].headerDigest, expected.nodes[0].headerDigest);
   const cached = JSON.parse(await fs.readFile(cacheFile, "utf8"));
   assert.match(
     cached.headers.find(([name]: [string]) => name === "A/A.md")[1].content,
     /generated/,
   );
-  assert.deepEqual(cached.index, expected);
+  assert.deepEqual(cached.index, refreshed);
   assert.equal(cached.indexDigest, indexDigest(cached));
   await fs.writeFile(filename, changed.replace("type: goal", "type: output"));
   assert.equal(
@@ -266,7 +270,7 @@ test("Stop index rejects corrupt, obsolete and incomplete cache records and surv
   const expected = await loadStopMaterialIndex(systemRoot, root);
   const valid = await fs.readFile(cacheFile, "utf8");
   const baseline = JSON.parse(valid);
-  assert.equal(baseline.schema, 10);
+  assert.equal(baseline.schema, 11);
   assert.equal(baseline.sourceDigest, sourceDigest(baseline));
   assert.equal(baseline.indexDigest, indexDigest(baseline));
   const directories = t.mock.method(NodeFs.prototype, "listDir");

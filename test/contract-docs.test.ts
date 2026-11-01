@@ -81,7 +81,7 @@ test("material paths are defined once, in node-maintenance", async () => {
   assert.doesNotMatch(cards, /`\.\/docs\/req\.md`|`\/docs\/req\.md`/);
 });
 
-test("PLUGIN.md matches SPEC frozen outputs, goal ancestry and brief counts", async () => {
+test("PLUGIN.md points to SPEC for frozen outputs and brief rules", async () => {
   const spec = flat(await read("docs/SPEC.md"));
   const plugin = await read("docs/PLUGIN.md");
   assert.match(
@@ -103,14 +103,11 @@ test("PLUGIN.md matches SPEC frozen outputs, goal ancestry and brief counts", as
     /up to ten recently changed Nodes.*up to ten of the Role's unfinished Cards.*up to ten workspace problems/,
   );
   assert.match(spec, /titles can be shortened, ids never are/);
-  assert.match(plugin, /全部 goal 祖先/);
-  assert.match(plugin, /`changedSince`/);
+  assert.match(plugin, /SPEC\.md#Brief%20and%20drift/);
+  assert.match(plugin, /SPEC\.md#5\.%20What%20the%20Agent%20is%20told/);
+  assert.match(plugin, /SPEC\.md#6\.%20What%20a%20reader%20gets/);
   assert.doesNotMatch(plugin, /最近的 goal 祖先提供隐式来源/);
-  assert.match(plugin, /落后与领先两种同步状态计数/);
   assert.doesNotMatch(plugin, /四种同步状态计数/);
-  assert.match(plugin, /16 KiB/);
-  assert.match(plugin, /各最多 10 条/);
-  assert.match(plugin, /根 Node.*`node list`/);
   assert.doesNotMatch(plugin, /按 4 KiB 预算裁剪|待收回结果不省略/);
 });
 

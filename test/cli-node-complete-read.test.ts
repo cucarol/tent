@@ -205,6 +205,93 @@ test("batch, create, read-back and excerpt outputs expose no unrestricted replac
   assertIncomplete(created, createdRaw);
 });
 
+test("write read-back and create pages reserve their complete problem receipts before paging", async (t) => {
+  const { adapter, cli } = await fixture(t);
+  const body =
+    '"\\\n正文😀\n'.repeat(5000) +
+    Array.from({ length: 12 }, (_, index) => `[missing ${index}](node-missing${index})`).join("\n");
+  const full = await cli("get", ["node-alpha", "--full"]);
+  const saved = await cli("write", [
+    "node-alpha",
+    "--base-etag",
+    full.etag,
+    "--body",
+    body,
+    "--read-back",
+  ]);
+  assert.equal(saved.problems.length, 12);
+  assert.equal(saved.readBack.partial, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(saved) + "\n") <= 16 * 1024);
+  assert.equal(saved.readBack.text, body.slice(0, saved.readBack.range.end));
+  assertIncomplete(saved, await adapter.readFile("A/A.md"));
+  const continued = await cli("get", [
+    "node-alpha",
+    "--cursor",
+    saved.readBack.page.nextCursor,
+    "--expected-etag",
+    saved.readBack.page.next.expectedEtag,
+  ]);
+  assert.equal(continued.range.start, saved.readBack.range.end);
+  const created = await cli("create", ["Receipt", "--type", "prompt", "--body", body]);
+  assert.equal(created.problems.length, 12);
+  assert.equal(created.node.partial, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(created) + "\n") <= 16 * 1024);
+  assert.equal(
+    created.node.text,
+    parseFrontmatter(await adapter.readFile("Receipt/Receipt.md")).body.slice(
+      0,
+      created.node.range.end,
+    ),
+  );
+  assertIncomplete(created.node, await adapter.readFile("Receipt/Receipt.md"));
+});
+
+test("oversized complete problem receipts preserve successful writes with safe identity-only reads", async (t) => {
+  const { adapter, cli } = await fixture(t);
+  const body =
+    "Saved content.\n".repeat(3000) +
+    Array.from({ length: 120 }, (_, index) => `[missing ${index}](node-missing${index})`).join(
+      "\n",
+    );
+  const full = await cli("get", ["node-alpha", "--full"]);
+  const command = async (sub: string, args: string[]) => {
+    const result = await runNodeCommand(sub, args, {
+      workspace: adapter.workspaceRoot,
+      json: true,
+    });
+    assert.equal(result.exitCode, 0, result.stderr);
+    const receipt = JSON.parse(result.stdout);
+    assert.equal(receipt.problems.length, 120);
+    assert.ok(Buffer.byteLength(JSON.stringify(receipt.problems)) > 16 * 1024);
+    return receipt;
+  };
+  const saved = await command("write", [
+    "node-alpha",
+    "--base-etag",
+    full.etag,
+    "--body",
+    body,
+    "--read-back",
+  ]);
+  assert.equal(parseFrontmatter(await adapter.readFile("A/A.md")).body, body);
+  assert.equal(saved.readBack.partial, true);
+  assert.equal(saved.readBack.metadataOmitted, true);
+  assert.equal(saved.readBack.metadataRead.nodeId, "node-alpha");
+  assert.equal("text" in saved.readBack, false);
+  assertIncomplete(saved, await adapter.readFile("A/A.md"));
+  const created = await command("create", ["Oversized", "--type", "prompt", "--body", body]);
+  assert.equal(created.node.partial, true);
+  assert.equal(created.node.metadataOmitted, true);
+  assert.equal(created.node.metadataRead.nodeId, created.node.nodeId);
+  assert.equal("text" in created.node, false);
+  assert.equal(
+    parseFrontmatter(await adapter.readFile("Oversized/Oversized.md")).body,
+    body + "\n",
+  );
+  assertIncomplete(created.node, await adapter.readFile("Oversized/Oversized.md"));
+  assert.equal((await cli("get", ["node-alpha", "--full"])).text, body);
+});
+
 test("incomplete bases support metadata-only edits and retain revision conflict detection", async (t) => {
   const { adapter, raw, body, globals, cli } = await fixture(t);
   const page = await cli("get", ["node-alpha"]);

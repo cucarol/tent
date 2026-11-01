@@ -22,7 +22,7 @@ async function readPreparedIndex(
       ),
     );
     if (
-      cached.schema !== 10 ||
+      cached.schema !== 11 ||
       typeof cached.workspaceRoot !== "string" ||
       path.relative(cached.workspaceRoot, workspaceRoot) !== "" ||
       cached.rootMarkerDigest !== rootMarkerDigest(marker) ||
@@ -46,6 +46,10 @@ async function readPreparedIndex(
         typeof node.path !== "string" ||
         !Array.isArray(node.names) ||
         !node.names.every((name: unknown) => typeof name === "string") ||
+        !Array.isArray(node.ruleNodeIds) ||
+        !node.ruleNodeIds.every((id: unknown) => typeof id === "string") ||
+        typeof node.headerDigest !== "string" ||
+        !/^[a-f0-9]{64}$/.test(node.headerDigest) ||
         !Array.isArray(node.moduleCoverage) ||
         !node.moduleCoverage.every(
           (coverage: { kind?: unknown; prefix?: unknown }) =>

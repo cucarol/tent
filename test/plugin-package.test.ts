@@ -393,8 +393,14 @@ test(
     const start = JSON.parse(await hook("SessionStart")).hookSpecificOutput.additionalContext;
     assert.ok(start.includes(workspace));
     assert.ok(start.includes(JSON.stringify(path.join(bundle, "cli.mjs"))));
-    assert.match(start, /workspace brief/);
-    assert.doesNotMatch(start, /SKILL\.md|\$tent-|reconcile|baseline|sessionToken/);
+    assert.equal(start.split("\n").length, 4);
+    assert.match(start, /\nBuild: Tent /);
+    assert.ok(
+      start.endsWith(
+        "Tent shows you the Nodes that cover each file you change, right after the change. No Tent command is needed before working.",
+      ),
+    );
+    assert.doesNotMatch(start, /workspace brief|SKILL\.md|\$tent-|reconcile|baseline|sessionToken/);
     assert.ok(hooks.Stop);
     assert.ok(hooks.UserPromptSubmit);
     await assert.rejects(fs.access(dataDir), { code: "ENOENT" });

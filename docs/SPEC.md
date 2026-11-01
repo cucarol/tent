@@ -34,6 +34,8 @@ A write that replaces content presents the ETag of a complete read. The ETag of 
 
 Write receipts also give advice without changing anything stored. A goal or prompt that declares a local file Git does not track gets a hint to use an output, because Tent keeps no old bytes of that file to compare. A newly declared whole Markdown file with several sections gets a hint to cite the sections the Node depends on.
 
+Node mutation receipts also list `problems` for the Node documents that command actually wrote, using the same address, document and material checks as `workspace check`. They do not inspect unrelated Node bodies or judge ahead and behind. The findings are advisory: the write stays saved, and a failure to inspect it is reported as a problem of that Node rather than a failed write. A receipt lists every problem in full; its read-back text is paged to keep the receipt within 16 KiB, but problems alone can take it past that.
+
 ### Native edits
 
 Agents read Node files with their own reader and edit them with their own tools; creation, material declarations, confirmation and Card operations go through the CLI. Before any Node, Role or Card write, and in `workspace brief`, `check`, `drift`, `export` and SessionStart, Tent compares the Node files with their latest retained versions and records valid changes byte for byte. A new Node file written by hand is not recorded; `workspace check` lists it. Invalid frontmatter is left untouched, not recorded, and listed by `workspace check`. Each of these points keeps the bytes it sees, so intermediate edits between two points are not recoverable. Pure reads and the per-tool and per-turn hooks do not collect edits.
@@ -101,7 +103,7 @@ An output keeps comparison bases for its own materials and for every goal above 
 
 ## 5. What the Agent is told
 
-Tent speaks to the Agent at the start of a session, after a file write, after the user answers a question, and at the end of a turn. Each notice says what to do, and notices about changed files name the Nodes that cover them; none proves that a Node is right, and the Agent maintains Nodes through the ordinary operations. When nothing needs recording, the Agent says nothing about it.
+Tent speaks to the Agent at the start of a session, after a file write, after the user answers a question, and at the end of a turn. Each notice says what to do, and notices about changed files copy the Nodes that cover them; none proves that a Node is right, and the Agent maintains Nodes through the ordinary operations. When nothing needs recording, the Agent says nothing about it.
 
 ### Brief and drift
 
@@ -113,15 +115,39 @@ Tent speaks to the Agent at the start of a session, after a file write, after th
 
 Both plugins register SessionStart, UserPromptSubmit, PostToolUse and Stop. Speed is held by acceptance guardrails, each the median of eleven alternating pairs of a hook run and a bare `node` start on each host: an ordinary tool hook adds at most 100 ms, loads no full CLI and starts no Git; on a repository of 7,570 files UserPromptSubmit adds at most 100 ms, and Stop at most 600 ms when few files changed and two seconds when all did. A write to a Node file refreshes the index through the full CLI under the workspace lock, a write to a linked Markdown section briefly locks that file's section record, and SessionStart can take longer when it prepares the index. Until the index is prepared for this workspace the hooks stay quiet; init, SessionStart and Tent's own graph writes prepare it, so Node edits made by shell or other tools reach it at the next SessionStart. No hook registers a session or reads a transcript.
 
-**SessionStart** collects native Node edits, prepares the index of which Node covers which file, records a fingerprint of every linked Markdown section, and tells the Agent the workspace, the CLI path, the build and a `workspace brief` hint without running the brief.
-
-**PostToolUse** speaks after a supported file tool succeeds with a reliable write path: Claude Code's Write, Edit, MultiEdit and NotebookEdit, and Codex `apply_patch` with its published paths. Reads, errors, shell commands, and writes inside `.tent/` or under `.git`, `.scratch`, `node_modules` and `.venv` produce nothing. A written file names its most specific covering modules and every Node that links it as a material, whole or as a section that actually changed, each Node at most once per turn:
+**SessionStart** collects native Node edits, prepares the index of which Node covers which file and its governing rules, and records a fingerprint of every linked Markdown section. It gives only the workspace, CLI, build and this instruction, without running or suggesting a brief:
 
 ```text
-Tent: these Nodes cover the file you just changed:
-- <names> (<nodeId>, <path>): <files>
-Check them before you end this turn. If one now says something the change made wrong, edit that sentence in its file. If the change settled a rule or a rejected option that also binds code it did not touch, or hit a dead end, add one short section: tent node append <nodeId> --heading <title> --body -. A lesson about these lines belongs in a code comment or a test. Otherwise say nothing about it.
+Tent Workspace: <workspace>
+Tent CLI: <command>
+Build: <build>
+Tent shows you the Nodes that cover each file you change, right after the change. No Tent command is needed before working.
 ```
+
+**PostToolUse** speaks after a supported file tool succeeds with a reliable write path: Claude Code's Write, Edit, MultiEdit and NotebookEdit, and Codex `apply_patch` with its published paths. Reads, errors, shell commands, and writes under `.git`, `.scratch`, `node_modules` and `.venv` produce nothing. A written project file selects its most specific covering modules and every Node that links it as a material, whole or as a section that actually changed, and copies their current bodies, then the direct prompts of those Nodes and of every goal above them, nearest first; a Node reached twice is copied once:
+
+```text
+Tent: these Nodes cover the file you just changed.
+
+<name> (<nodeId>, <path>) covers <files>:
+<text>
+
+Rules over it:
+<name> (<nodeId>, <path>):
+<text>
+
+If one now says something the change made wrong, edit that sentence in its file. If the change settled a rule or a rejected option that also binds code it did not touch, or hit a dead end, add one short section: tent node append <nodeId> --heading <title> --body -. A lesson about these lines belongs in a code comment or a test. Otherwise say nothing about Tent.
+```
+
+A successful native write to a Node file inside `.tent/` checks that Node with the same rules as `workspace check`, without collecting edits, confirming it or checking unrelated Node bodies. If it has problems, it says:
+
+```text
+Tent: <path> has problems:
+- <problem>
+Fix them before you end this turn.
+```
+
+A clean Node produces no notice. Other writes inside `.tent/` produce no covering-Node notice; explicit graph writes still refresh the prepared index. CLI Node mutations return the same problems in their receipts, so the Agent does not run a separate `workspace check` after saving.
 
 Hand-written product code that no module owns gets, once per session per file:
 
@@ -137,19 +163,19 @@ Tent: the user just answered. If the answer settles a requirement or a decision,
 
 **UserPromptSubmit** records the time and HEAD at the start of the turn, without starting Git.
 
-**Stop** finds the files that changed during the turn, including shell and external edits, from one `git status` and file times since the turn started, plus the committed paths if HEAD moved. Committing older changes stays quiet; a deletion counts only if the file was not dirty at the end of the previous turn, as recorded by the last Stop or SessionStart, and stays quiet without that record; ignored files and submodules never count; Git runs the repository's own filters as usual; and a write that preserves file times can be missed. Nodes already named during the turn are left out. If any remain, Stop asks the Agent to continue once, with the PostToolUse list under this header:
+**Stop** finds the files that changed during the turn, including shell and external edits, from one `git status` and file times since the turn started, plus the committed paths if HEAD moved. Committing older changes stays quiet; a deletion counts only if the file was not dirty at the end of the previous turn, as recorded by the last Stop or SessionStart, and stays quiet without that record; ignored files and submodules never count; Git runs the repository's own filters as usual; and a write that preserves file times can be missed. Nodes already delivered during the turn are left out. If any remain, Stop asks the Agent to continue once, with the PostToolUse list under this header:
 
 ```text
-Tent: these Nodes cover files changed during this turn:
+Tent: these Nodes cover files changed during this turn.
 ```
 
 A turn already continued by Stop, a turn with no start record and a workspace outside Git stay quiet.
 
-A notice is at most 2 KiB of JSON and names at most five Nodes with eight files each; Nodes left out by the limits are not marked as named and can come up again. Shell and external edits are seen only at Stop, never immediately.
+A covering-Node notice is at most 8 KiB including its JSON envelope. Each Node's body is copied without summarizing, at most 1600 Unicode code points; a shorter excerpt ends with `… (cut; the rest is in <path>)`. Nodes that do not fit are counted as `<n> more Nodes: tent node search --resource <file>`. The first line and final action always remain; Node bodies take priority in selected order, then recovery lines in file order while they fit, with space reserved for the rest as `<n> more Nodes cover <m> other changed files: run tent node search --resource on each.`; recovery lines must not make the whole notice disappear. Only Nodes actually copied are marked as delivered, at most once per turn; a rule omitted after its owner was delivered can appear through another covering Node or in a later turn. A problem notice is held to the same 8 KiB: whole problems are listed in order while they fit, a first problem too long to fit is cut, and the rest are counted on a line before the last, `<n> more problems: tent workspace check --json`. Shell and external edits are seen only at Stop, never immediately.
 
 ## 6. What a reader gets
 
-When an Agent reads a Node or takes a Card, Tent hands it the related context from the graph. The first page of `card show`, `card take`, `node get` and `node search --resource` carries an `agentContext`, gathered from the Card's sources, the Node, or the Nodes whose materials cover the file. It has eight lists, each with at most ten entries and its complete total:
+Ordinary code work needs no Tent read first: the Hooks copy the covering Nodes and their rules after a change (§5). When an Agent reads a Node or takes a Card, Tent hands it the related context from the graph. The first page of `card show`, `card take`, `node get` and `node search --resource` carries an `agentContext`, gathered from the Card's sources, the Node, or the Nodes whose materials cover the file. It has eight lists, each with at most ten entries and its complete total:
 
 - `references`: the source body or selected section, copied, up to 1600 code points;
 - `rules`: the goals whose materials cover those files, their direct prompts, and the goals above the Node or Card source being read, each with its first authored sentence;

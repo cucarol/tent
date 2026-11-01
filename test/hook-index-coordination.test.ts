@@ -228,7 +228,12 @@ test(
     release.resolve();
     const result = await holder;
     assert.equal(result.exitCode, 0, result.stderr);
-    assert.equal(await refresh, "{}\n");
+    const notice = JSON.parse(await refresh).hookSpecificOutput;
+    assert.equal(notice.hookEventName, "PostToolUse");
+    assert.equal(
+      notice.additionalContext,
+      "Tent: .tent/A/A.md has problems:\n- missing-material-file: ../../new-a/ — Local material does not exist as a directory\nFix them before you end this turn.",
+    );
     assert.match(await f.tool(["new-a/x.ts"], "source"), /node-racea/);
     t.diagnostic(
       JSON.stringify({
