@@ -3,6 +3,7 @@ import { type FsAdapter } from "../store/adapter.js";
 import { WORKSPACE_SETTINGS_PATH } from "../base/paths.js";
 
 const settingsSchema = z.looseObject({
+  // The identity travels with a copied graph; it does not claim exclusive ownership.
   workspaceId: z.string().trim().min(1).optional(),
 });
 

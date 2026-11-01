@@ -208,8 +208,8 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   assert.match(installation, /codex plugin marketplace add "<交付根目录的绝对路径>\/codex"/);
   assert.match(installation, /claude plugin marketplace add "<交付根目录的绝对路径>\/claude-code"/);
   assert.ok(pkg.files.includes("README.zh-CN.md"), "npm package carries the linked Chinese README");
-  assert.match(spec, /three semantic concepts are Node, Role, and Card/i);
-  assert.match(spec, /Retired commands and wire fields are removed rather than kept as aliases/);
+  assert.match(spec, /Node, Role and Card are the only concepts/);
+  assert.match(spec, /Retired commands and fields are removed, not aliased/);
   assert.doesNotMatch(spec, /temp\/<role>\/reports\//);
   // Installation metadata and resources are contracts; prose remains editable.
   const { parseFrontmatter } = await import("../src/core/base/frontmatter.js");
@@ -266,9 +266,9 @@ test("docs/skill drift: current Node/Role/Card protocol and canonical type", asy
   const spec = await fs.readFile(path.join(repoRoot, "docs", "SPEC.md"), "utf8");
 
   // SPEC: canonical Node type, immutable Card, and optional Role.
-  assert.match(spec, /a Node has one `type`, exactly `goal`, `prompt` or `output`/);
+  assert.match(spec, /`type` is exactly `goal`, `prompt` or `output`/);
   assert.doesNotMatch(spec, /NODE_TYPE_PRESETS|primary\[-secondary\]/);
-  assert.match(spec, /three semantic concepts are Node, Role, and Card/i);
+  assert.match(spec, /Node, Role and Card are the only concepts/);
   assert.doesNotMatch(spec, /TaskResult|WorkspaceLane|currentResultId|acceptMode|task\.bindOutput/);
   assert.doesNotMatch(spec, /Base type definitions may set optional `workspacePointer: true`/);
   assert.doesNotMatch(spec, /Built-in `output` enables the flag/);

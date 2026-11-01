@@ -424,6 +424,8 @@ export function rustCargo(
         });
     };
     add(library, table(data.lib), lib.edition ?? edition);
+    // Binary roots accumulate by path: an explicit target with the same name
+    // does not currently replace an automatically inferred root.
     if (autoBins) {
       add(path.posix.join(directory, "src/main.rs"));
       const prefix = path.posix.join(directory, "src/bin") + "/";

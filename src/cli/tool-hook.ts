@@ -15,7 +15,10 @@ import { turnReviewIdentity } from "../fs/turn-review-state.js";
 import { answeredQuestion, successfulWritePaths } from "./tool-write-event.js";
 import { refreshNativeGraphWrite } from "./native-graph-write.js";
 
-/** Deliberately separate from the CLI, transcript readers, Git and live catalog loader. */
+/** Ordinary file events avoid the CLI, transcripts, Git and live catalogue; graph refresh is explicit. */
+// Ordinary PTU guard: each host x ordinary/uncovered/claimed/changed-section/unowned-code,
+// 11 adjacent alternating hook-minus-bare `node -e 0` pairs; median <=100ms.
+// Keep every raw pair/outlier; never subtract two medians. Graph preparation is excluded.
 export async function runToolHook(
   host: "codex" | "claude-code",
   event: Record<string, unknown>,

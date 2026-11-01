@@ -15,7 +15,11 @@ import {
 } from "../core/check/workspace-draft.js";
 import { serializeWorkspaceDraftReport } from "../core/check/workspace-draft-report.js";
 
-/** The explicit draft is a new editable file, never a replacement for live collaboration state. */
+/**
+ * The explicit draft is a new editable file, never a replacement for live collaboration state.
+ * The two artifacts publish separately: ordinary errors remove only this call's files,
+ * but a process crash may leave one artifact behind.
+ */
 export async function writeWorkspaceDraft(
   workspaceRoot: string,
   destination: string,

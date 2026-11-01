@@ -84,22 +84,25 @@ test("material paths are defined once, in node-maintenance", async () => {
 test("PLUGIN.md matches SPEC frozen outputs, goal ancestry and brief counts", async () => {
   const spec = flat(await read("docs/SPEC.md"));
   const plugin = await read("docs/PLUGIN.md");
-  assert.match(spec, /An output retains comparison bases for every goal ancestor/);
-  assert.match(spec, /Only an explicit `stale_after` expiry makes an output behind/);
-  assert.match(spec, /informational `changedSince` entries/);
+  assert.match(
+    spec,
+    /An output keeps comparison bases for its own materials and for every goal above it/,
+  );
+  assert.match(spec, /never make it behind; only `stale_after` does/);
+  assert.match(spec, /A complete read of an output lists `changedSince`/);
   assert.doesNotMatch(
     spec,
     /An output depends on every goal ancestor|Behind outputs do not enter completed goal counts/,
   );
   assert.match(
     spec,
-    /`workspace brief \[--role <id>\]` keeps its existing native-edit collection boundary.*within the same 16 KiB response/,
+    /`workspace brief \[--role <role>\]` first collects native edits, then reports within 16 KiB/,
   );
   assert.match(
     spec,
-    /Recently changed Nodes, unfinished Cards and workspace problems each have at most ten entries/,
+    /up to ten recently changed Nodes.*up to ten of the Role's unfinished Cards.*up to ten workspace problems/,
   );
-  assert.match(spec, /identities are never cut/);
+  assert.match(spec, /titles can be shortened, ids never are/);
   assert.match(plugin, /全部 goal 祖先/);
   assert.match(plugin, /`changedSince`/);
   assert.doesNotMatch(plugin, /最近的 goal 祖先提供隐式来源/);
@@ -115,18 +118,21 @@ test("type guidance names exactly three types and the preset tags", async () => 
   const formerTypes =
     /\b(goal|prompt|output)-(direction|requirement|decision|spec|reference|procedure|asset|evidence|analysis|issue)\b|NODE_TYPE_PRESETS|implementing it/;
   const spec = flat(await read("docs/SPEC.md"));
-  assert.match(spec, /a Node has one `type`, exactly `goal`, `prompt` or `output`/);
-  assert.match(spec, /retains its own semantic intent basis on creation or explicit confirmation/);
-  assert.match(spec, /Ordinary saves and native capture preserve it/);
-  assert.match(spec, /Matching that basis clears ahead independently of outputs/);
+  assert.match(spec, /`type` is exactly `goal`, `prompt` or `output`/);
   assert.match(
     spec,
-    /For goals without this coverage, a goal without any active `output` anywhere in its subtree is ahead/,
+    /keeps its own intent basis, its body and declarations, from creation or confirmation/,
   );
-  assert.match(spec, /Single files, Node\/Role references and external URLs do not qualify/);
+  assert.match(spec, /Ordinary saves, metadata edits, native edits and reads keep the old one/);
+  assert.match(spec, /While that basis matches, the goal is not ahead/);
   assert.match(
     spec,
-    /One output must match the whole goal; partial matches from different outputs cannot be combined/,
+    /Any other goal is ahead when no current output in its subtree has bases matching the goal's current body and all its materials/,
+  );
+  assert.match(spec, /A single file, a Node or Role reference or a URL does not count as covering/);
+  assert.match(
+    spec,
+    /One output must match the whole goal; an output under a nested goal also satisfies its ancestors/,
   );
   assert.doesNotMatch(spec, formerTypes);
   const types = await read("skill-resources/references/node-types.md");
@@ -181,7 +187,10 @@ test("Card contract gives delivery state one completion source independent of go
     spec,
     /Without `returnTo`, consumed means complete; with it, returned means complete/,
   );
-  assert.match(spec, /No Card read surface derives `progress`, goal counts or output lists/);
+  assert.match(
+    spec,
+    /A Card shows delivery state only: no progress, goal counts or output lists are derived from it/,
+  );
   assert.doesNotMatch(
     spec,
     /progress is `needs-review`|progress is `received-no-output`|`progress: null`/,
@@ -197,26 +206,19 @@ test("Card contract gives delivery state one completion source independent of go
 
 test("SPEC records the Node name, rename rollback, check and Card warning contracts", async () => {
   const spec = flat(await read("docs/SPEC.md"));
-  assert.match(spec, /Names must be portable Windows file names on every platform/);
+  assert.match(spec, /Names must be valid Windows file names on every platform/);
   assert.match(
     spec,
-    /`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, `COM¹`, `COM²`, `COM³`, `LPT¹`, `LPT²` and `LPT³` in any case, with or without an extension/,
+    /`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, `COM¹`–`COM³` and `LPT¹`–`LPT³`, with or without an extension/,
   );
   assert.match(
     spec,
-    /The raw input is rejected if it contains a C0 control character \(U\+0000–U\+001F, including tab, CR and LF\), DEL \(U\+007F\), U\+2028 or U\+2029, even at either end; leading and trailing whitespace as JavaScript `trim\(\)` defines it is then removed\. C1 controls \(U\+0080–U\+009F\) are not rejected/,
+    /C0 control characters \(U\+0000–U\+001F\), DEL \(U\+007F\), U\+2028, U\+2029 and the reserved device names/,
   );
   // The CLI reports a rejected name; the rule lives in SPEC and the maintainer guide.
   const plugin = flat(await read("docs/PLUGIN.md"));
   assert.match(plugin, /`COM1`–`COM9`、`LPT1`–`LPT9`、`COM¹`–`COM³`、`LPT¹`–`LPT³`/);
-  assert.match(
-    spec,
-    /If recording a completed rename in Tent history fails, recovery uses actual publication to keep the old or new name/,
-  );
-  assert.match(
-    spec,
-    /Legacy move\/rename plans without a file transaction retain their structural recovery rules/,
-  );
-  assert.match(spec, /`node-git-mismatch` names a Node identity document/);
+  assert.match(spec, /settles an interrupted write to all old or all new before it reads anything/);
+  assert.match(spec, /Node files that disagree with retained history \(`node-git-mismatch`\)/);
   assert.match(spec, /`card create` warns on stderr, without changing what it stores/);
 });
