@@ -66,6 +66,78 @@ async function fixture() {
   return { fs, node, save };
 }
 
+test("resource file evidence expands only specific structure modules and exact-file material Nodes", async () => {
+  const { fs, node } = await fixture();
+  await node("Aggregate", "node-aggregate", "goal", "Keep the project rules.", {
+    sources: [{ resource: "../../src/" }],
+  });
+  await node("Module", "node-broadmodule", "goal", "Broad module rule.", {
+    sources: [{ resource: "../../src/", track: "structure" }],
+  });
+  await node("Module/Narrow", "node-narrow", "goal", "Specific module.", {
+    sources: [
+      { resource: "../../../src/a*", track: "structure" },
+      { resource: "../../../src/a*", track: "structure" },
+    ],
+  });
+  await node("Module/Narrow/Rule", "node-narrowrule", "prompt", "Keep this rule.");
+  await node("Tie", "node-tie", "goal", "Equal specificity.", {
+    sources: [{ resource: "../../src/a*", track: "structure" }],
+  });
+  await node("Material", "node-material", "prompt", "An explicit material rule.", {
+    resource: "../../src/a.ts",
+    sources: [{ resource: "../../docs/policy.md" }],
+  });
+  const repo: AgentContextRepository = {
+    trackedFiles: [
+      "src/a.ts",
+      "src/a2.ts",
+      "src/b.ts",
+      "docs/policy.md",
+      "test/a.test.ts",
+      "test/b.test.ts",
+    ],
+    sources: {
+      errors: [],
+      files: [
+        { path: "src/a.ts", content: "export const A = 1;" },
+        { path: "src/a2.ts", content: "export const A2 = 2;" },
+        { path: "src/b.ts", content: "export const B = 3;" },
+        { path: "test/a.test.ts", content: 'import { A } from "../src/a"; A;' },
+        { path: "test/b.test.ts", content: 'import { B } from "../src/b"; B;' },
+      ],
+    },
+  };
+  const result = await assembleAgentContext(
+    fs,
+    root,
+    { kind: "resource", resource: "../src/a.ts" },
+    { repository: repo },
+  );
+  assert.deepEqual(
+    section(result, "paths")
+      .items.map((item) => item.path)
+      .sort(),
+    ["docs/policy.md", "src/a.ts", "src/a2.ts"],
+  );
+  assert.equal(section(result, "paths").total, 3);
+  assert.deepEqual(
+    section(result, "tests").items.map((item) => item.path),
+    ["test/a.test.ts"],
+  );
+  assert.ok(section(result, "references").items.some((item) => item.nodeId === "node-aggregate"));
+  assert.ok(section(result, "references").items.some((item) => item.nodeId === "node-broadmodule"));
+  assert.ok(section(result, "references").items.some((item) => item.nodeId === "node-tie"));
+  assert.ok(section(result, "rules").items.some((item) => item.nodeId === "node-narrowrule"));
+  const explicit = await assembleAgentContext(
+    fs,
+    root,
+    { kind: "node", nodeId: "node-aggregate" },
+    { repository: repo },
+  );
+  assert.ok(section(explicit, "paths").items.some((item) => item.path === "src/b.ts"));
+});
+
 test("node and file starts assemble direct rules, real re-export test evidence, decisions and open goals deterministically", async () => {
   const { fs, node } = await fixture();
   await node("Module", "node-module", "goal", "Module invariant.", {

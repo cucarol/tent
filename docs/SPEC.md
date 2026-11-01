@@ -186,6 +186,8 @@ Ordinary code work needs no Tent read first: the Hooks copy the covering Nodes a
 - `open`: unfinished Cards whose sources are these Nodes, and the read goal or its direct child goals with no output below them, which shows only that none was recorded;
 - `unknown`: what could not be determined, and why.
 
+For file-start reads, `paths` and `tests` come only from the most specific covering structure modules and exact-file material Nodes, deduplicated before pagination; higher goals contribute rules without expanding their files.
+
 Every assembled entry states the relationship that selected it. Text is copied, never summarized, and gathering it confirms, records and repairs nothing. The whole response fits 16 KiB, with the primary body taking at most half; when room runs out, later lists shrink to titles and then drop out, each marked, and ids and addresses are never shortened. The source commands it prints recover the bodies and a raw Card read every source address and version; no command lists every omitted entry. A Card source keeps its pinned version. `node-xxxxxx#Heading`, a link ending in `#Heading`, or `node-xxxxxx「Heading」` selects one section of a source; a missing or duplicate heading becomes an unknown, and the source's pinned opening stands in for the section, never today's text. Tent keeps no old project-file bytes, so code changes since a basis show only as changed versions, and since it records no session boundary, what the last session did is unknown. Raw views, `--full`, continuation pages and `read-many` carry no `agentContext`.
 
 ## 7. Mapping a project

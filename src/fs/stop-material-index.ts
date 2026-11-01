@@ -1,7 +1,5 @@
 import * as fs from "node:fs/promises";
-import { createHash } from "node:crypto";
 import path from "node:path";
-import * as z from "zod/v4";
 import type { RejectedRootMarker } from "../core/workspace/root-discovery.js";
 import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import { isValidTentIndexMarker } from "../core/store/scaffold.js";
@@ -14,144 +12,31 @@ import {
   sameStopMaterialHeader,
   type StopMaterialIndex,
 } from "../core/return/stop-material-index.js";
-import {
-  isOperationalPath,
-  isSystemNoteName,
-  nodeNotePath,
-  OPERATIONAL_TOP_LEVEL,
-  MUTATION_LOCK_PATH,
-} from "../core/base/paths.js";
+import { nodeNotePath, MUTATION_LOCK_PATH } from "../core/base/paths.js";
 import { TRANSACTION_PATH } from "../core/store/file-transaction.js";
 import { withFileMutationLock } from "./mutation-lock.js";
 import { turnReviewHeaderDigest } from "../core/return/turn-review-document.js";
-
-const coverageSchema = z.strictObject({
-  kind: z.enum(["directory", "prefix"]),
-  prefix: z.string(),
-});
-const indexSchema = z.strictObject({
-  nodes: z.array(
-    z.strictObject({
-      nodeId: z.string(),
-      path: z.string(),
-      names: z.array(z.string()),
-      type: z.string().optional(),
-      ruleNodeIds: z.array(z.string()),
-      headerDigest: z.string().regex(/^[a-f0-9]{64}$/),
-      moduleCoverage: z.array(coverageSchema),
-      materialFiles: z.array(z.strictObject({ path: z.string(), heading: z.string().optional() })),
-      moduleMaterials: z.array(coverageSchema),
-    }),
-  ),
-});
-const integer = z.string().regex(/^-?\d+$/);
-const stateSchema = z.strictObject({
-  size: integer,
-  mtimeNs: integer,
-  ctimeNs: integer,
-  dev: integer,
-  ino: integer,
-});
-const validSegment = (value: string) =>
-  value.length > 0 && !/[\\/]/.test(value) && value !== "." && value !== "..";
-const segment = z.string().refine(validSegment);
-const relativePath = z
-  .string()
-  .refine((value) => value === "" || value.split("/").every(validSegment));
-const directorySchema = z.strictObject({
-  state: stateSchema,
-  entries: z.array(z.strictObject({ name: segment, isDir: z.boolean() })),
-});
-const headerSchema = z.strictObject({ state: stateSchema, content: z.string() });
-const cacheSchema = z.strictObject({
-  schema: z.literal(11),
-  rootMarkerDigest: z.string().regex(/^[a-f0-9]{64}$/),
-  rejectedRootMarkers: z.array(
-    z.strictObject({ root: z.string(), digest: z.string().regex(/^[a-f0-9]{64}$/) }),
-  ),
-  workspaceRoot: z.string(),
-  writtenAtNs: z.string().regex(/^\d+$/),
-  directories: z.array(z.tuple([relativePath, directorySchema])),
-  headers: z.array(z.tuple([relativePath, headerSchema])),
-  sourceDigest: z.string(),
-  indexDigest: z.string(),
-  index: indexSchema,
-});
-type DirectoryRecord = z.infer<typeof directorySchema>;
-type HeaderRecord = z.infer<typeof headerSchema>;
-type Cache = z.infer<typeof cacheSchema>;
-const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-const sorted = <T>(records: Map<string, T>) => [...records].sort(([a], [b]) => a.localeCompare(b));
-
-function childDirectories(directory: string, entries: DirectoryRecord["entries"]): string[] {
-  return entries
-    .filter(
-      (entry) =>
-        entry.isDir &&
-        !OPERATIONAL_TOP_LEVEL.has(entry.name) &&
-        !isOperationalPath(directory ? `${directory}/${entry.name}` : entry.name) &&
-        (directory !== "" || !isSystemNoteName(entry.name)),
-    )
-    .map((entry) => (directory ? `${directory}/${entry.name}` : entry.name));
-}
-
-async function readCache(cacheFile: string, workspaceRoot: string): Promise<Cache | undefined> {
-  try {
-    const cached = cacheSchema.parse(JSON.parse(await fs.readFile(cacheFile, "utf8")));
-    if (
-      cached.workspaceRoot !== workspaceRoot ||
-      cached.sourceDigest !==
-        hash([
-          cached.writtenAtNs,
-          cached.directories,
-          cached.headers,
-          cached.rootMarkerDigest,
-          cached.rejectedRootMarkers,
-        ]) ||
-      cached.indexDigest !==
-        hookIndexDigest(cached.index, cached.rootMarkerDigest, cached.rejectedRootMarkers)
-    )
-      return undefined;
-    const directories = new Map(cached.directories),
-      headers = new Map(cached.headers);
-    if (directories.size !== cached.directories.length || headers.size !== cached.headers.length)
-      return undefined;
-    // A partial cache must never turn an omitted subtree or header into an authority hit.
-    const pending = [""],
-      seen = new Set<string>(),
-      filenames = new Set<string>();
-    while (pending.length) {
-      const directory = pending.pop()!;
-      const record = directories.get(directory);
-      if (
-        !record ||
-        seen.has(directory) ||
-        new Set(record.entries.map((entry) => entry.name)).size !== record.entries.length
-      )
-        return undefined;
-      seen.add(directory);
-      if (directory) {
-        const filename = nodeNotePath(directory);
-        if (
-          record.entries.some(
-            (entry) => !entry.isDir && entry.name === path.posix.basename(filename),
-          )
-        )
-          filenames.add(filename);
-      }
-      pending.push(...childDirectories(directory, record.entries));
-    }
-    if (
-      seen.size !== directories.size ||
-      filenames.size !== headers.size ||
-      [...filenames].some((filename) => !headers.has(filename))
-    )
-      return undefined;
-    return cached;
-  } catch {
-    return undefined;
-  }
-}
+import {
+  prepareRepositoryObservation,
+  validateRepositoryObservation,
+  type PreparedRepositoryObservation,
+} from "./prepared-repository.js";
+import { isPreparedWorkspace, type PreparedWorkspace } from "./prepared-workspace.js";
+import { readAgentContextRepository } from "./agent-context-repository.js";
+import { sourceDirectoryPaths } from "./directory-observation.js";
+import { readStructureSource, observeMaterialResource } from "./source-observation.js";
+import { materialOccurrences, materialLocator, localMaterialPath } from "../core/base/material.js";
+import { parseFrontmatter } from "../core/base/frontmatter.js";
+import { isImportSource, isImportConfig } from "../core/base/repository-imports.js";
+import {
+  childDirectories,
+  hash,
+  readCache,
+  sorted,
+  type DirectoryRecord,
+  type HeaderRecord,
+} from "./prepared-graph.js";
+export { preparedGraphSnapshot, type PreparedGraphSnapshot } from "./prepared-graph.js";
 
 /** Directory topology and frontmatter are reused only while their file state remains trustworthy. */
 export async function loadStopMaterialIndex(
@@ -274,14 +159,21 @@ async function loadStopMaterialIndexUnlocked(
           const hit =
             previous && cached && stateCacheHit(state, previous.state, cached.writtenAtNs);
           const observed = hit
-            ? { state, content: previous.content }
-            : await adapter.readFrontmatterObservation(filename);
+            ? { ...previous, state }
+            : await (async () => {
+                const raw = await adapter.readFile(filename);
+                return { ...(await adapter.readFrontmatterObservation(filename)), raw };
+              })();
           if (!hit) {
             refreshed = true;
             if (!previous || !sameStopMaterialHeader(previous.content, observed.content))
               changed = true;
           }
-          headers.set(filename, { state: observed.state, content: observed.content });
+          headers.set(filename, {
+            state: observed.state,
+            content: observed.content,
+            ...(observed.raw === undefined ? {} : { raw: observed.raw }),
+          });
         }),
       );
     }
@@ -306,8 +198,7 @@ async function loadStopMaterialIndexUnlocked(
     });
     index = buildStopMaterialIndex(await loadNodeCatalog(snapshot), workspaceRoot);
   } else if (refreshed) {
-    // A provenance-only edit preserves membership and rules, but live content must
-    // still be bound to the exact current validated prefix without parsing YAML in Hooks.
+    // Provenance-only changes retain membership, but Hooks need the current header identity.
     index = {
       nodes: index.nodes.map((node) => ({
         ...node,
@@ -316,6 +207,91 @@ async function loadStopMaterialIndexUnlocked(
         ),
       })),
     };
+  }
+  let repository = cached?.repository as
+    PreparedRepositoryObservation<PreparedWorkspace> | undefined;
+  if (
+    !repository ||
+    !isPreparedWorkspace(repository.value) ||
+    !(await validateRepositoryObservation(workspaceRoot, repository))
+  ) {
+    repository = await prepareRepositoryObservation(workspaceRoot, async () => {
+      const [facts, live, tracked] = await Promise.all([
+        readAgentContextRepository(workspaceRoot),
+        sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir),
+        sourceDirectoryPaths(workspaceRoot, workspaceRoot, cacheDir, true),
+      ]);
+      // An I/O failure can recover without changing file metadata. Incomplete
+      // source facts must be reobserved through the live repository reader.
+      if (facts.sources.errors.length)
+        throw new Error("Cannot prepare incomplete repository facts");
+      const structureTexts: PreparedWorkspace["structureTexts"] = [];
+      // Keep the structure reader's strict UTF-8 and no-NUL contract. These
+      // bytes may differ from the permissive repository evidence reader.
+      for (const filename of live.filter(
+        (filename) => isImportSource(filename) || isImportConfig(filename),
+      )) {
+        const text = await readStructureSource(workspaceRoot, filename, cacheDir);
+        const relative = path.relative(workspaceRoot, filename).split(path.sep).join("/");
+        structureTexts.push([
+          filename,
+          facts.sources.files.find((source) => source.path === relative)?.content === text
+            ? null
+            : text,
+        ]);
+      }
+      const materials: PreparedWorkspace["materials"] = [];
+      for (const [documentPath, header] of headers) {
+        let declarations;
+        try {
+          declarations = materialOccurrences(parseFrontmatter(header.content).data);
+        } catch {
+          continue;
+        }
+        const structureResources = declarations
+          .filter((entry) => entry.track === "structure")
+          .map((entry) => entry.resource);
+        for (const entry of declarations.filter((entry) => entry.track === "structure")) {
+          const filename = localMaterialPath(
+            materialLocator(entry.resource, documentPath, true),
+            workspaceRoot,
+          );
+          if (!filename) continue;
+          const relative = path.relative(workspaceRoot, filename);
+          if (
+            relative === ".." ||
+            relative.startsWith(".." + path.sep) ||
+            path.isAbsolute(relative) ||
+            relative.split(path.sep)[0]?.toLowerCase() === ".tent"
+          )
+            continue;
+          const resource = /^(?:\.{1,2}\/|\/)/.test(entry.resource.trim())
+            ? entry.resource
+            : `./${entry.resource.trim()}`;
+          const key = JSON.stringify([documentPath, resource, entry.track, structureResources]);
+          try {
+            materials.push([
+              key,
+              {
+                value: await observeMaterialResource(
+                  workspaceRoot,
+                  documentPath,
+                  resource,
+                  cacheDir,
+                  entry.track,
+                  structureResources,
+                ),
+              },
+            ]);
+          } catch {
+            // Failed observations stay on the live path so recovery is visible
+            // even when the source's filesystem identity has not changed.
+          }
+        }
+      }
+      return { repository: facts, live, tracked, structureTexts, materials };
+    });
+    if (repository) refreshed = true;
   }
   if (hasGit && refreshed) {
     const temp = `${cacheFile}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`;
@@ -326,19 +302,21 @@ async function loadStopMaterialIndexUnlocked(
       await fs.writeFile(
         temp,
         JSON.stringify({
-          schema: 11,
+          schema: 12,
           rootMarkerDigest: markerDigest,
           rejectedRootMarkers,
           workspaceRoot,
           writtenAtNs,
           directories: directoryRecords,
           headers: headerRecords,
+          ...(repository ? { repository } : {}),
           sourceDigest: hash([
             writtenAtNs,
             directoryRecords,
             headerRecords,
             markerDigest,
             rejectedRootMarkers,
+            repository ?? null,
           ]),
           indexDigest: hookIndexDigest(index, markerDigest, rejectedRootMarkers),
           index,

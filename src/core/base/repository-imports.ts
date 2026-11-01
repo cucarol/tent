@@ -11,6 +11,7 @@ import { deferredImportTokens } from "./import-execution.js";
 import { pythonImports } from "./python-imports.js";
 import { sourceTokens as tokens } from "./source-tokens.js";
 import { traceTestReexports } from "./test-reexports.js";
+import { cachedSemanticContent } from "./semantic-content-cache.js";
 
 /** Workspace-relative POSIX paths. Omit content for files that need no parsing. */
 export type RepositorySource = { path: string; content?: string };
@@ -138,6 +139,20 @@ export type RepositoryImportOptions = {
 export function extractRepositoryTestImports(
   input: readonly RepositorySource[],
   options: RepositoryImportOptions = {},
+) {
+  // This is a pure parse, keyed by every supplied path, byte and language option.
+  // Reusing it never substitutes a previous filesystem observation.
+  return JSON.parse(
+    cachedSemanticContent(
+      () => ["repository-test-imports-v1", input, options],
+      () => JSON.stringify(computeRepositoryTestImports(input, options)),
+    ),
+  ) as ReturnType<typeof computeRepositoryTestImports>;
+}
+
+function computeRepositoryTestImports(
+  input: readonly RepositorySource[],
+  options: RepositoryImportOptions,
 ) {
   const direct = extractImports(input, options, true);
   const extra = traceTestReexports(input, direct.edges, isTestSource);

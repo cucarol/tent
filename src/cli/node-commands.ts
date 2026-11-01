@@ -1,64 +1,12 @@
 import { workspaceReadPaths, nodeReadMaterials } from "./read-paths.js";
 import { transactionResult } from "./transaction-result.js";
-import { agentContextOutput } from "./agent-context.js";
 import { contextExcerpt, originalContextBytes } from "../core/read/agent-context-page.js";
 import { formatCliTime } from "./time-text.js";
-import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
-import path from "node:path";
-import { openNodeDraft } from "../fs/node-draft-consumption.js";
-import { writeNodesDraft } from "../core/write/node-write-draft.js";
-import { linkOutputResource, workspaceMaterialFields } from "./material-input.js";
-import { validateNodeName } from "../core/store/scaffold.js";
-import { nodeActorSchema } from "../core/base/node-provenance.js";
 import { isNodeId } from "../core/base/id.js";
-// Agent-facing parsing and rendering; document semantics and locking belong to Core.
-
-import { materialFields } from "../core/base/material.js";
-import { nodeMaterialWarnings } from "../core/graph/node-material-warnings.js";
-import { isNodeType } from "../core/base/node-type.js";
 import { normalizeTagName, NODE_TAG_PRESETS, type NodeTagCount } from "../core/base/tags.js";
-import { nodeWriteInputSchema } from "../core/write/node-write.js";
-import {
-  writeNodesBatch,
-  nodeWriteBatchInputSchema,
-  NodeBatchWriteError,
-  validateBatchItemName,
-} from "../core/write/node-write-batch.js";
-import { NodeFs, SystemClock } from "../fs/node-fs.js";
-import { resolveWorkspacePaths } from "./workspace-path.js";
-import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
-import {
-  readNode,
-  readNodeForEdit,
-  readFullNodeTree,
-  listNodes,
-  listNodeTags,
-  searchNodes,
-  nodeResourceSearchSchema,
-  relatedNodes,
-} from "../core/read/node-query.js";
-import { prepareNodeBatch } from "../core/write/node-batch.js";
-import { nodeNotePath } from "../core/base/paths.js";
-import {
-  createNode,
-  renameNode,
-  moveNode,
-  archiveNode,
-  restoreNode,
-  deleteNode,
-} from "../core/graph/ops.js";
-import { writeNodeDocument, NodeWriteError } from "../core/graph/node-document-write.js";
-import { appendNodeBody } from "../core/write/node-lightwrite.js";
-import { NodeSectionError } from "../core/base/markdown-section.js";
-import { NodeLifecycleError } from "../core/graph/node-lifecycle.js";
-import { ContextReader } from "../core/graph/context-reader.js";
-import { documentLifecycle } from "../core/base/document-status.js";
-import { parseFrontmatter } from "../core/base/frontmatter.js";
-import { loadNodeCatalog } from "../core/graph/node-catalog.js";
-import { readerReadSchema, readerRelationsSchema } from "../core/graph/context-reader.js";
+import type { NodeFs } from "../fs/node-fs.js";
 import { readerFlags } from "./reader-flags.js";
-import { readerBatchSchema } from "../core/read/reader-batch.js";
 import {
   pageItems,
   itemPageStart,
@@ -69,16 +17,14 @@ import {
   compactReadItem,
   incompleteNodeRead,
 } from "./reader-page.js";
-import { inspectNodeSync, confirmNodeSync, linkNodeOutput } from "../core/graph/node-sync.js";
-import { goalContextText } from "./goal-context.js";
-import { retainedDocumentFs } from "../core/graph/retained-read.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
-import { checkNodeWriteProblems } from "../fs/node-write-problems.js";
 import {
   formatNodeWriteProblems,
   type NodeWriteProblem,
 } from "../core/check/node-write-problems.js";
-import { isNodeNotePath } from "../core/base/paths.js";
+import { isNodeNotePath, nodeNotePath } from "../core/base/paths.js";
+
+// Agent-facing parsing and rendering; document semantics and locking belong to Core.
 
 export type NodeCommandOptions = {
   workspace?: string;
@@ -199,7 +145,8 @@ async function runNodeCommandOpened(
       return usage("--input-json supplies the entire write; do not combine it with write fields");
     }
     const json = globals.json === true || flags.json === "true";
-    if (flags.by !== undefined) validateActor(flags.by, "--by");
+    if (flags.by !== undefined) await validateActor(flags.by, "--by");
+    const { resolveWorkspacePaths } = await import("./workspace-path.js");
     const { systemRoot, workspaceRoot } = await resolveWorkspacePaths({
       cwd: globals.cwd,
       workspace: flags.workspace ?? globals.workspace,
@@ -208,6 +155,8 @@ async function runNodeCommandOpened(
     const collectsNativeEdits =
       !["get", "read-many", "list", "search", "relations", "history"].includes(sub) &&
       sub !== "tags";
+    const { NodeFs, SystemClock } = await import("../fs/node-fs.js");
+    const { readWorkspaceSettings } = await import("../core/workspace/workspace-settings.js");
     const fs = new NodeFs(systemRoot, "cli");
     await opened(fs);
     const { workspaceId } = await readWorkspaceSettings(fs);
@@ -216,7 +165,8 @@ async function runNodeCommandOpened(
         "Tent workspace identity is missing; explicitly initialize or convert this workspace",
       );
     const invalidNativeNodes = collectsNativeEdits
-      ? (await captureNativeNodeEdits(fs)).invalidNodes
+      ? (await (await import("../core/graph/node-native-capture.js")).captureNativeNodeEdits(fs))
+          .invalidNodes
       : [];
     if (sub === "check" && invalidNativeNodes.some((node) => node.nodeId === target))
       throw new Error(invalidNativeNodes.find((node) => node.nodeId === target)!.reason);
@@ -234,7 +184,10 @@ async function runNodeCommandOpened(
     };
     let inspectedProblems: Promise<NodeWriteProblem[]> | undefined;
     const mutationProblems = () =>
-      (inspectedProblems ??= checkNodeWriteProblems(fs, workspaceRoot, [...writtenNodePaths]));
+      (inspectedProblems ??= import("../fs/node-write-problems.js").then(
+        ({ checkNodeWriteProblems }) =>
+          checkNodeWriteProblems(fs, workspaceRoot, [...writtenNodePaths]),
+      ));
     const env = { fs, clock: new SystemClock(), tentName: workspaceRoot, tentRoot: systemRoot };
     const mutationPrint = async <T>(result: T, json: boolean, format: (value: T) => string) => {
       const readable = workspaceReadPaths(result, workspaceRoot);
@@ -254,6 +207,7 @@ async function runNodeCommandOpened(
 
     switch (sub) {
       case "check": {
+        const { inspectNodeSync } = await import("../core/graph/node-sync.js");
         const target = oneTarget(positionals, nodeHelpText("check"));
         if (typeof target !== "string") return target;
         if (Object.keys(flags).some((key) => !["json", "workspace"].includes(key)))
@@ -264,6 +218,8 @@ async function runNodeCommandOpened(
         );
       }
       case "link-output": {
+        const { linkNodeOutput } = await import("../core/graph/node-sync.js");
+        const { linkOutputResource, workspaceMaterialFields } = await import("./material-input.js");
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
         const allowed = ["json", "workspace", "resource", "name", "by", "card", "role", "tags"];
@@ -291,6 +247,7 @@ async function runNodeCommandOpened(
         );
       }
       case "confirm": {
+        const { confirmNodeSync } = await import("../core/graph/node-sync.js");
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
         const allowed = ["json", "workspace", "base-etag", "by"];
@@ -317,6 +274,13 @@ async function runNodeCommandOpened(
         );
       }
       case "write-many": {
+        const path = await import("node:path");
+        const { openNodeDraft } = await import("../fs/node-draft-consumption.js");
+        const { writeNodesDraft } = await import("../core/write/node-write-draft.js");
+        const { writeNodesBatch, nodeWriteBatchInputSchema, validateBatchItemName } =
+          await import("../core/write/node-write-batch.js");
+        const { workspaceMaterialFields } = await import("./material-input.js");
+        const { readNodeForEdit } = await import("../core/read/node-query.js");
         if (
           positionals.length ||
           (flags["input-json"] === undefined) === (flags.draft === undefined)
@@ -343,7 +307,7 @@ async function runNodeCommandOpened(
             );
         if (Array.isArray(supplied?.items))
           for (const item of supplied.items)
-            if (item?.by !== undefined) validateActor(item.by, "by");
+            if (item?.by !== undefined) await validateActor(item.by, "by");
         const prepareInput = async (input: ReturnType<typeof nodeWriteBatchInputSchema.parse>) => {
           const paths = new Map<string, string>();
           const creates = new Map(
@@ -419,6 +383,8 @@ async function runNodeCommandOpened(
         return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
       }
       case "list": {
+        const { readFullNodeTree, listNodes } = await import("../core/read/node-query.js");
+        const { isNodeType } = await import("../core/base/node-type.js");
         if (positionals.length > 0) return usage("tent node list [--full] [--json]");
         if (flags.type !== undefined && !isNodeType(flags.type))
           return usage("--type must be goal, prompt or output.");
@@ -453,101 +419,111 @@ async function runNodeCommandOpened(
         return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
       }
       case "get": {
-        const target = oneTarget(positionals, "tent node get <nodeId> [--full] [--json]");
-        if (typeof target !== "string") return target;
-        const ref = nodeRef(target);
-        let assemble = flags.full !== "true" && flags.view !== "raw" && !flags.cursor;
-        const withContext = async <T>(value: T) =>
-          flags.context === "true" && !flags["version-json"] && !flags.cursor
-            ? { ...value, context: await goalContextText(await retainedDocumentFs(fs), ref) }
-            : value;
-        if (flags.full === "true") {
-          const { view, ...filters } = readerFlags(flags);
-          if (
-            Object.keys(filters).length ||
-            (view !== undefined && view !== "body" && view !== "raw")
-          )
-            return usage("--full cannot be combined with reader filters or paging.");
-          const edit = await readNodeForEdit(fs, ref, { uncaptured: true, changes: true });
-          return print(
-            await withContext({
-              nodeId: edit.nodeId,
-              text: view === "raw" ? edit.raw : edit.body,
-              etag: edit.etag,
-              materials: nodeReadMaterials(edit.frontmatter, edit.path, workspaceRoot),
-              ...(edit.uncaptured ? { uncaptured: true } : {}),
-              ...(edit.changedSince ? { changedSince: edit.changedSince } : {}),
-            }),
+        const { readNode, readNodeForEdit } = await import("../core/read/node-query.js");
+        const { readerReadSchema } = await import("../core/graph/context-reader.js");
+        return await fs.observationScope(async () => {
+          const target = oneTarget(positionals, "tent node get <nodeId> [--full] [--json]");
+          if (typeof target !== "string") return target;
+          const ref = nodeRef(target);
+          let assemble = flags.full !== "true" && flags.view !== "raw" && !flags.cursor;
+          const withContext = async <T>(value: T) => {
+            if (flags.context !== "true" || flags["version-json"] || flags.cursor) return value;
+            const { goalContextText } = await import("./goal-context.js");
+            const { retainedDocumentFs } = await import("../core/graph/retained-read.js");
+            return { ...value, context: await goalContextText(await retainedDocumentFs(fs), ref) };
+          };
+          if (flags.full === "true") {
+            const { view, ...filters } = readerFlags(flags);
+            if (
+              Object.keys(filters).length ||
+              (view !== undefined && view !== "body" && view !== "raw")
+            )
+              return usage("--full cannot be combined with reader filters or paging.");
+            const edit = await readNodeForEdit(fs, ref, { uncaptured: true, changes: true });
+            return print(
+              await withContext({
+                nodeId: edit.nodeId,
+                text: view === "raw" ? edit.raw : edit.body,
+                etag: edit.etag,
+                materials: nodeReadMaterials(edit.frontmatter, edit.path, workspaceRoot),
+                ...(edit.uncaptured ? { uncaptured: true } : {}),
+                ...(edit.changedSince ? { changedSince: edit.changedSince } : {}),
+              }),
+              json,
+              formatNodeRead,
+            );
+          }
+          const { nodeId, ...options } = readerReadSchema.parse({
+            nodeId: ref,
+            ...coreReaderFlags(flags),
+          });
+          assemble &&= !options.range || options.range.start === 0;
+          const { node } = await readNode(
+            fs,
+            workspaceId,
+            { nodeId, ...options },
+            { uncaptured: true },
+          );
+          const output =
+            node.view === "summary"
+              ? workspaceReadPaths(compactItem(node), workspaceRoot)
+              : (() => {
+                  const paged = pageText(
+                    { ...node, materials: nodeReadMaterials(node, node.path, workspaceRoot) },
+                    `node.get:${nodeId}`,
+                    {
+                      cursor: flags.cursor,
+                      maxBytes: assemble
+                        ? originalContextBytes - 1024 - (flags.context === "true" ? 1024 : 0)
+                        : 16 * 1024 - 1280,
+                      ...(assemble
+                        ? {
+                            pageEnd: node.range.start + contextExcerpt(node.text, 1600).text.length,
+                          }
+                        : {}),
+                    },
+                  );
+                  return {
+                    nodeId: paged.nodeId,
+                    text: paged.text,
+                    etag: paged.etag,
+                    materials: paged.materials,
+                    ...(!paged.materials ? { materialsOmitted: true } : {}),
+                    ...("uncaptured" in paged && paged.uncaptured ? { uncaptured: true } : {}),
+                    ...(paged.partial
+                      ? {
+                          view: paged.view,
+                          range: paged.range,
+                          viewLength: paged.viewLength,
+                          partial: true,
+                          page: paged.page,
+                        }
+                      : {}),
+                    ...(!paged.partial && "changedSince" in paged
+                      ? { changedSince: paged.changedSince }
+                      : {}),
+                  };
+                })();
+          const value = await withContext(output);
+          if (!assemble) return print(value, json, formatNodeRead);
+          const { agentContextOutput } = await import("./agent-context.js");
+          return agentContextOutput(
+            fs,
+            workspaceRoot,
+            {
+              kind: "node",
+              nodeId: ref,
+              ...(options.version ? { version: options.version } : {}),
+            },
+            value,
             json,
             formatNodeRead,
           );
-        }
-        const { nodeId, ...options } = readerReadSchema.parse({
-          nodeId: ref,
-          ...coreReaderFlags(flags),
         });
-        assemble &&= !options.range || options.range.start === 0;
-        const { node } = await readNode(
-          fs,
-          workspaceId,
-          { nodeId, ...options },
-          { uncaptured: true },
-        );
-        const output =
-          node.view === "summary"
-            ? workspaceReadPaths(compactItem(node), workspaceRoot)
-            : (() => {
-                const paged = pageText(
-                  { ...node, materials: nodeReadMaterials(node, node.path, workspaceRoot) },
-                  `node.get:${nodeId}`,
-                  {
-                    cursor: flags.cursor,
-                    maxBytes: assemble
-                      ? originalContextBytes - 1024 - (flags.context === "true" ? 1024 : 0)
-                      : 16 * 1024 - 1280,
-                    ...(assemble
-                      ? { pageEnd: node.range.start + contextExcerpt(node.text, 1600).text.length }
-                      : {}),
-                  },
-                );
-                return {
-                  nodeId: paged.nodeId,
-                  text: paged.text,
-                  etag: paged.etag,
-                  materials: paged.materials,
-                  ...(!paged.materials ? { materialsOmitted: true } : {}),
-                  ...("uncaptured" in paged && paged.uncaptured ? { uncaptured: true } : {}),
-                  ...(paged.partial
-                    ? {
-                        view: paged.view,
-                        range: paged.range,
-                        viewLength: paged.viewLength,
-                        partial: true,
-                        page: paged.page,
-                      }
-                    : {}),
-                  ...(!paged.partial && "changedSince" in paged
-                    ? { changedSince: paged.changedSince }
-                    : {}),
-                };
-              })();
-        const value = await withContext(output);
-        return assemble
-          ? agentContextOutput(
-              fs,
-              workspaceRoot,
-              {
-                kind: "node",
-                nodeId: ref,
-                ...(options.version ? { version: options.version } : {}),
-              },
-              value,
-              json,
-              formatNodeRead,
-            )
-          : print(value, json, formatNodeRead);
       }
       case "read-many": {
+        const { readerBatchSchema } = await import("../core/read/reader-batch.js");
+        const { prepareNodeBatch } = await import("../core/write/node-batch.js");
         if (flags.full === "true") return usage("read-many uses paged output");
         const input = readerBatchSchema.parse({ nodeIds: positionals, view: flags.view });
         const start = numberFlag(flags, "start") ?? 0;
@@ -581,43 +557,51 @@ async function runNodeCommandOpened(
         return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
       }
       case "search": {
-        if (positionals.length || flags["include-archived"] !== undefined)
-          return usage("tent node search --resource <address> [--json]");
-        const input = nodeResourceSearchSchema.parse({
-          ...coreReaderFlags(flags),
-          ...(flags.resource === undefined
-            ? {}
-            : await workspaceMaterialFields(
-                { resource: flags.resource },
-                "index.md",
-                workspaceRoot,
-              )),
-        });
-        const result = pageItems(
-          workspaceReadPaths(
-            await searchNodes(fs, workspaceId, workspaceRoot, input, { uncaptured: true }),
-            workspaceRoot,
-          ),
-          "node.search",
-          {
-            limit: numberFlag(flags, "limit"),
-            cursor: flags.cursor,
-            ...(!flags.cursor ? { maxBytes: originalContextBytes / 2 } : {}),
-          },
-        );
-        const output = workspaceReadPaths(result, workspaceRoot);
-        return !flags.cursor && flags.resource
-          ? agentContextOutput(
-              fs,
+        const { searchNodes, nodeResourceSearchSchema } =
+          await import("../core/read/node-query.js");
+        const { workspaceMaterialFields } = await import("./material-input.js");
+        return await fs.observationScope(async () => {
+          if (positionals.length || flags["include-archived"] !== undefined)
+            return usage("tent node search --resource <address> [--json]");
+          const input = nodeResourceSearchSchema.parse({
+            ...coreReaderFlags(flags),
+            ...(flags.resource === undefined
+              ? {}
+              : await workspaceMaterialFields(
+                  { resource: flags.resource },
+                  "index.md",
+                  workspaceRoot,
+                )),
+          });
+          const result = pageItems(
+            workspaceReadPaths(
+              await searchNodes(fs, workspaceId, workspaceRoot, input, { uncaptured: true }),
               workspaceRoot,
-              { kind: "resource", resource: input.resource! },
-              output,
-              json,
-              formatReader,
-            )
-          : print(output, json, formatReader);
+            ),
+            "node.search",
+            {
+              limit: numberFlag(flags, "limit"),
+              cursor: flags.cursor,
+              ...(!flags.cursor ? { maxBytes: originalContextBytes / 2 } : {}),
+            },
+          );
+          const output = workspaceReadPaths(result, workspaceRoot);
+          if (flags.cursor || !flags.resource) return print(output, json, formatReader);
+          const { agentContextOutput } = await import("./agent-context.js");
+          return agentContextOutput(
+            fs,
+            workspaceRoot,
+            { kind: "resource", resource: input.resource! },
+            output,
+            json,
+            formatReader,
+          );
+        });
       }
       case "relations": {
+        const { relatedNodes } = await import("../core/read/node-query.js");
+        const { readerRelationsSchema } = await import("../core/graph/context-reader.js");
+        const { retainedDocumentFs } = await import("../core/graph/retained-read.js");
         const target = oneTarget(
           positionals,
           `tent node ${sub} <nodeId> [--direction parent|children|outgoing|incoming] [--json]`,
@@ -644,6 +628,12 @@ async function runNodeCommandOpened(
         );
       }
       case "create": {
+        const { materialFields } = await import("../core/base/material.js");
+        const { workspaceMaterialFields } = await import("./material-input.js");
+        const { validateNodeName } = await import("../core/store/scaffold.js");
+        const { createNode } = await import("../core/graph/ops.js");
+        const { readNode } = await import("../core/read/node-query.js");
+        const { nodeMaterialWarnings } = await import("../core/graph/node-material-warnings.js");
         const materials = materialFields({
           resource: flags.resource,
           sources:
@@ -722,6 +712,7 @@ async function runNodeCommandOpened(
         return await mutationPrint(output, json, (value) => `Created ${formatNode(value)}`);
       }
       case "append": {
+        const { appendNodeBody } = await import("../core/write/node-lightwrite.js");
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
         const allowed = ["json", "workspace", "heading", "body", "by"];
@@ -746,6 +737,13 @@ async function runNodeCommandOpened(
         return await mutationPrint(result, json, () => `Updated ${nodeId}  ${saved.etag}`);
       }
       case "write": {
+        const { nodeWriteInputSchema } = await import("../core/write/node-write.js");
+        const { writeNodeDocument } = await import("../core/graph/node-document-write.js");
+        const { readNodeForEdit } = await import("../core/read/node-query.js");
+        const { workspaceMaterialFields } = await import("./material-input.js");
+        const { ContextReader } = await import("../core/graph/context-reader.js");
+        const { documentLifecycle } = await import("../core/base/document-status.js");
+        const { parseFrontmatter } = await import("../core/base/frontmatter.js");
         const target = oneTarget(
           positionals,
           "tent node write <nodeId> --input-json <JSON>|- | --body <text>|- --base-etag <etag> [--read-back] [--json]",
@@ -775,7 +773,7 @@ async function runNodeCommandOpened(
                 ...(flags.by !== undefined ? { by: flags.by } : {}),
                 ...(flags["read-back"] === "true" ? { readBack: true } : {}),
               };
-        if (writeInput?.by !== undefined) validateActor(writeInput.by, "by");
+        if (writeInput?.by !== undefined) await validateActor(writeInput.by, "by");
         const input = nodeWriteInputSchema.parse(writeInput);
         errorContext.baseEtag = input.baseEtag;
         const ref = nodeRef(target);
@@ -855,6 +853,7 @@ async function runNodeCommandOpened(
         });
       }
       case "rename": {
+        const { renameNode } = await import("../core/graph/rename-ops.js");
         if (positionals.length !== 2) return usage("tent node rename <nodeId> <new-name> [--json]");
         const result = await renameNode(env, nodeRef(positionals[0]), positionals[1]);
         for (const [from, to] of Object.entries(result.pathMap))
@@ -862,6 +861,7 @@ async function runNodeCommandOpened(
         return await mutationPrint(result, json, (value) => `Renamed ${formatNode(value)}`);
       }
       case "move": {
+        const { moveNode } = await import("../core/graph/move-ops.js");
         const target = oneTarget(
           positionals,
           "tent node move <nodeId> --parent <nodeId|root> [--json]",
@@ -887,6 +887,7 @@ async function runNodeCommandOpened(
       }
       case "archive":
       case "restore": {
+        const { archiveNode, restoreNode } = await import("../core/graph/node-lifecycle.js");
         const target = oneTarget(positionals, `tent node ${sub} <nodeId> [--json]`);
         if (typeof target !== "string") return target;
         const archiveCommit = flagValue(flags, "archive-commit");
@@ -903,12 +904,14 @@ async function runNodeCommandOpened(
         );
       }
       case "delete": {
+        const { deleteNode } = await import("../core/graph/ops.js");
         const target = oneTarget(positionals, "tent node delete <nodeId> [--json]");
         if (typeof target !== "string") return target;
         const result = await deleteNode(env, nodeRef(target));
         return await mutationPrint(result, json, () => `Deleted ${target}`);
       }
       case "tags": {
+        const { listNodeTags } = await import("../core/read/node-query.js");
         if (
           positionals.length ||
           Object.keys(flags).some((key) => !["json", "workspace", "include-archived"].includes(key))
@@ -924,6 +927,10 @@ async function runNodeCommandOpened(
     }
   } catch (error) {
     const inputJson = args.some((arg) => arg === "--input-json" || arg.startsWith("--input-json="));
+    const { NodeWriteError } = await import("../core/graph/node-document-write.js");
+    const { NodeSectionError } = await import("../core/base/markdown-section.js");
+    const { NodeLifecycleError } = await import("../core/graph/node-lifecycle.js");
+    const { NodeBatchWriteError } = await import("../core/write/node-write-batch.js");
     const details =
       error instanceof NodeWriteError ||
       error instanceof NodeSectionError ||
@@ -1066,12 +1073,14 @@ function nodeRef(value: string): string {
   return value;
 }
 
-function validateActor(value: unknown, field: string): void {
+async function validateActor(value: unknown, field: string): Promise<void> {
+  const { nodeActorSchema } = await import("../core/base/node-provenance.js");
   if (!nodeActorSchema.safeParse(value).success)
     throw new Error(`${field} must use human:<id>, process:<id>, or <producer>/<version>.`);
 }
 
 async function selectedPath(fs: NodeFs, id: string) {
+  const { loadNodeCatalog } = await import("../core/graph/node-catalog.js");
   const node = (await loadNodeCatalog(fs)).byId.get(id);
   if (!node) throw new Error(`Node not found: ${id}`);
   return node.path;

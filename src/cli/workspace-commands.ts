@@ -1,36 +1,6 @@
 import { transactionResult } from "./transaction-result.js";
-import { assembleAgentContext } from "../core/read/agent-context.js";
-import { projectAgentBrief, formatAgentBrief } from "../core/read/agent-brief.js";
-import { workspaceReadPaths } from "./read-paths.js";
-import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
-import { stat } from "node:fs/promises";
-import { NodeFs } from "../fs/node-fs.js";
-import { withDocumentHeaderCache } from "../fs/document-header-cache.js";
-import { exportGraph } from "../fs/graph-export.js";
-import { resolveWorkspacePaths } from "./workspace-path.js";
-import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
-import { checkGraph } from "../core/check/graph-check.js";
-import { scanWorkspace, formatWorkspaceScan } from "../core/check/workspace-scan.js";
-import {
-  prepareWorkspaceDraft,
-  formatWorkspaceDraft,
-  workspaceDraftExitCode,
-} from "../core/check/workspace-draft.js";
-import { formatModuleImportIssues } from "../core/check/module-map.js";
-import {
-  readWorkspaceScanRepository,
-  readModuleMapRepository,
-  scanFileKind,
-  writeWorkspaceDraft,
-} from "../fs/workspace-scan.js";
-import {
-  checkWorkspaceModules,
-  formatWorkspaceModules,
-} from "../core/check/workspace-module-map.js";
-import { inspectCurrentContext, inspectWorkspaceDrift } from "../core/read/context-brief.js";
-import { canonicalSha256 } from "../core/base/canonical-digest.js";
-import { pageItems } from "./reader-page.js";
+import type { NodeFs } from "../fs/node-fs.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
 
@@ -118,6 +88,11 @@ async function runWorkspaceCommandOpened(
       [values.output, values.limit, values.cursor].some((value) => value !== undefined)
     )
       throw new Error(workspaceHelpText);
+    const [{ resolveWorkspacePaths }, { NodeFs }, { readWorkspaceSettings }] = await Promise.all([
+      import("./workspace-path.js"),
+      import("../fs/node-fs.js"),
+      import("../core/workspace/workspace-settings.js"),
+    ]);
     const roots = await resolveWorkspacePaths({
       cwd: globals.cwd,
       workspace: values.workspace ?? globals.workspace,
@@ -130,6 +105,15 @@ async function runWorkspaceCommandOpened(
         "Tent workspace identity is missing; explicitly initialize or convert this workspace",
       );
     if (sub === "check-modules") {
+      const [
+        { checkWorkspaceModules, formatWorkspaceModules },
+        { readModuleMapRepository },
+        { formatModuleImportIssues },
+      ] = await Promise.all([
+        import("../core/check/workspace-module-map.js"),
+        import("../fs/workspace-scan.js"),
+        import("../core/check/module-map.js"),
+      ]);
       const result = await checkWorkspaceModules(
         fs,
         roots.workspaceRoot,
@@ -163,6 +147,13 @@ async function runWorkspaceCommandOpened(
       };
     }
     if (sub === "scan") {
+      const [
+        { scanWorkspace, formatWorkspaceScan },
+        { readModuleMapRepository, readWorkspaceScanRepository, scanFileKind, writeWorkspaceDraft },
+      ] = await Promise.all([
+        import("../core/check/workspace-scan.js"),
+        import("../fs/workspace-scan.js"),
+      ]);
       const draftRepository =
         values.draft !== undefined
           ? await readModuleMapRepository(roots.workspaceRoot, { includeProductManifests: true })
@@ -172,6 +163,8 @@ async function runWorkspaceCommandOpened(
       const result = await scanWorkspace(fs, roots.workspaceRoot, repository, scanFileKind);
       if (values.draft !== undefined) {
         if (!values.draft.trim()) throw new Error("--draft requires a new file path");
+        const { prepareWorkspaceDraft, formatWorkspaceDraft, workspaceDraftExitCode } =
+          await import("../core/check/workspace-draft.js");
         const draft = await prepareWorkspaceDraft(
           fs,
           result,
@@ -208,15 +201,27 @@ async function runWorkspaceCommandOpened(
                 .join(""),
       };
     }
+    const { captureNativeNodeEdits } = await import("../core/graph/node-native-capture.js");
     const captureFs = new NodeFs(roots.systemRoot, "cli");
     await opened(captureFs);
     const captureNodes = () =>
-      captureNativeNodeEdits(captureFs).then((result) => {
-        fs.invalidNodeEdits = captureFs.invalidNodeEdits;
-        return result;
-      });
+      captureFs
+        .observationScope(() => captureNativeNodeEdits(captureFs))
+        .then((result) => {
+          fs.invalidNodeEdits = captureFs.invalidNodeEdits;
+          return result;
+        });
     if (sub === "brief") {
-      const brief = await withDocumentHeaderCache(roots.systemRoot, async () => {
+      const [
+        { assembleAgentContext },
+        { projectAgentBrief, formatAgentBrief },
+        { inspectCurrentContext },
+      ] = await Promise.all([
+        import("../core/read/agent-context.js"),
+        import("../core/read/agent-brief.js"),
+        import("../core/read/context-brief.js"),
+      ]);
+      const brief = await fs.observationScope(async () => {
         const context = await inspectCurrentContext(fs, {
           roleId: values.role,
           nodes: captureNodes(),
@@ -235,6 +240,17 @@ async function runWorkspaceCommandOpened(
       };
     }
     if (sub === "drift") {
+      const [
+        { inspectWorkspaceDrift },
+        { workspaceReadPaths },
+        { canonicalSha256 },
+        { pageItems },
+      ] = await Promise.all([
+        import("../core/read/context-brief.js"),
+        import("./read-paths.js"),
+        import("../core/base/canonical-digest.js"),
+        import("./reader-page.js"),
+      ]);
       await captureNodes();
       const inspected = await inspectWorkspaceDrift(fs);
       const result = pageItems(
@@ -267,6 +283,10 @@ async function runWorkspaceCommandOpened(
       return { exitCode: 0, stdout: output + "\n", stderr: "" };
     }
     if (sub === "check") {
+      const [{ checkGraph }, { stat }] = await Promise.all([
+        import("../core/check/graph-check.js"),
+        import("node:fs/promises"),
+      ]);
       return await fs.observationScope(async () => {
         const { invalidNodes: invalidNativeNodes, catalog } = await captureNodes();
         const checked = await checkGraph(
@@ -319,6 +339,7 @@ async function runWorkspaceCommandOpened(
       });
     }
     await captureNodes();
+    const { exportGraph } = await import("../fs/graph-export.js");
     const result = await exportGraph(
       { ...roots, workspaceId, env: { fs } },
       { outputDir: values.output! },

@@ -30,7 +30,6 @@ import { isNodeId } from "../base/id.js";
 import { NODE_TYPES } from "../base/node-type.js";
 import { NODE_TAG_PRESETS, countNodeTags, normalizeTagName } from "../base/tags.js";
 import { uncapturedChecker } from "../graph/retained-read.js";
-import { readOutputChanges } from "../graph/node-sync.js";
 import { isOutputNode } from "../graph/node-sync-record.js";
 
 /** Short-lived callers share these queries; no mount, registry, watcher or read-time repair. */
@@ -95,7 +94,7 @@ export async function readNode(
     options.uncaptured && !request.capture ? reader.documentBytes(request.nodeId) : undefined;
   const changedSince =
     "partial" in delivered && !delivered.partial && isOutputNode(delivered)
-      ? await readOutputChanges(fs, request.nodeId)
+      ? await (await import("../graph/node-sync.js")).readOutputChanges(fs, request.nodeId)
       : undefined;
   return {
     workspaceId,
@@ -124,7 +123,9 @@ export async function readNodeForEdit(
       ? await captureReadDocument(fs, nodeNotePath(node.path), document.raw)
       : undefined;
     const changedSince =
-      options.changes && isOutputNode(data) ? await readOutputChanges(fs, nodeId) : undefined;
+      options.changes && isOutputNode(data)
+        ? await (await import("../graph/node-sync.js")).readOutputChanges(fs, nodeId)
+        : undefined;
     return {
       nodeId,
       path: node.path,

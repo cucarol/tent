@@ -5,19 +5,16 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { NodeFs } from "../fs/node-fs.js";
 
 import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
-import { cardHelpText, runCardCommand } from "./card-commands.js";
-import { runNodeCommand, nodeHelpText } from "./node-commands.js";
-import { runRoleCommand, roleHelpText } from "./role-commands.js";
-import { runWorkspaceCommand, workspaceHelpText } from "./workspace-commands.js";
-import { runHookCommand } from "./hook.js";
 import { readBuildIdentity, formatBuildIdentity } from "./build-identity.js";
 import { cliErrorText, unknownCommandError } from "./error-text.js";
 
-export { refreshNativeHookIndex } from "../fs/native-hook-index-refresh.js";
-export { checkNativeNodeWrites } from "../fs/node-write-problems.js";
+export const refreshNativeHookIndex: typeof import("../fs/native-hook-index-refresh.js").refreshNativeHookIndex =
+  async (...args) =>
+    (await import("../fs/native-hook-index-refresh.js")).refreshNativeHookIndex(...args);
+export const checkNativeNodeWrites: typeof import("../fs/node-write-problems.js").checkNativeNodeWrites =
+  async (...args) => (await import("../fs/node-write-problems.js")).checkNativeNodeWrites(...args);
 
 export function isInWorkspaceSystemRoot(systemRoot: string): boolean {
   return workspaceRootFromSystemRoot(systemRoot) !== undefined;
@@ -54,19 +51,25 @@ async function main() {
     return;
   }
 
-  const commandHelp = new Map([
-    ["node", nodeHelpText],
-    ["role", roleHelpText],
-    ["card", cardHelpText],
-    ["workspace", () => workspaceHelpText],
-  ]).get(cmd);
-  if (commandHelp && (!args[0] || ["help", "--help", "-h"].includes(args[0]))) {
-    console.log(commandHelp());
+  if (
+    ["node", "role", "card", "workspace"].includes(cmd) &&
+    (!args[0] || ["help", "--help", "-h"].includes(args[0]))
+  ) {
+    const help =
+      cmd === "node"
+        ? (await import("./node-commands.js")).nodeHelpText()
+        : cmd === "role"
+          ? (await import("./role-commands.js")).roleHelpText()
+          : cmd === "card"
+            ? (await import("./card-commands.js")).cardHelpText()
+            : (await import("./workspace-commands.js")).workspaceHelpText;
+    console.log(help);
     return;
   }
 
   // Commands that do not require an existing system root
   if (cmd === "hook") {
+    const { runHookCommand } = await import("./hook.js");
     const [sub, ...rest] = args;
     const result = await runHookCommand(sub ?? "help", rest, { packageRoot: packageRoot() });
     process.stdout.write(result.stdout);
@@ -97,6 +100,7 @@ async function main() {
     return;
   }
   if (cmd === "card") {
+    const { runCardCommand } = await import("./card-commands.js");
     const [sub, ...rest] = args;
     const result = await runCardCommand(sub, rest);
     if (result.stdout) process.stdout.write(result.stdout);
@@ -105,6 +109,7 @@ async function main() {
     return;
   }
   if (cmd === "workspace") {
+    const { runWorkspaceCommand } = await import("./workspace-commands.js");
     const [sub, ...rest] = args;
     const result = await runWorkspaceCommand(sub ?? "help", rest);
     if (result.stdout) process.stdout.write(result.stdout);
@@ -114,6 +119,7 @@ async function main() {
   }
   // Persistent Role context; selection is explicit.
   if (cmd === "role") {
+    const { runRoleCommand } = await import("./role-commands.js");
     const [sub, ...rest] = args;
     const result = await runRoleCommand(sub, rest);
     if (result.stdout) process.stdout.write(result.stdout);
@@ -124,6 +130,7 @@ async function main() {
 
   // Direct Core Node reads and mutations.
   if (cmd === "node") {
+    const { runNodeCommand } = await import("./node-commands.js");
     const [sub, ...rest] = args;
     const result = await runNodeCommand(sub, rest);
     if (result.stdout) process.stdout.write(result.stdout);
@@ -188,6 +195,7 @@ More
  * `target` is the workspace root. Existing project files remain untouched.
  */
 async function newTent(target: string): Promise<void> {
+  const { NodeFs } = await import("../fs/node-fs.js");
   const { initializeTentWorkspace } = await import("../fs/workspace-init.js");
   const workspaceRoot = path.resolve(target);
   const fsa = new NodeFs(workspaceRoot);

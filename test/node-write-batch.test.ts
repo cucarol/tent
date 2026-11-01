@@ -145,6 +145,15 @@ test("batch material preparation shares workspace metadata and the next batch ob
     mocked.mock.restore();
     syncBuiltinESMExports();
   });
+  const observeMaterial = fs.observeMaterial.bind(fs);
+  let materialPreparationStats: number | undefined;
+  fs.observeMaterial = async (...args) => {
+    const value = await observeMaterial(...args);
+    // Successful writes also prepare the Hook index after material preflight.
+    // Count metadata sharing at the material boundary, before that publication.
+    materialPreparationStats = unrelatedStats;
+    return value;
+  };
   const saved = await writeNodesBatch(env, {
     items: ["a", "b"].map((folder) => ({
       op: "create" as const,
@@ -154,7 +163,11 @@ test("batch material preparation shares workspace metadata and the next batch ob
       sources: [{ resource: `../../${folder}/`, track: "structure" as const }],
     })),
   });
-  assert.equal(unrelatedStats, 1, "one preparation shares the full-workspace metadata pass");
+  assert.equal(
+    materialPreparationStats,
+    1,
+    "one preparation shares the full-workspace metadata pass",
+  );
   const records = await fs.history.nodeRecords();
   for (const result of saved.results)
     assert.deepEqual(records[result.nodeId]?.materials[0].structureDependencies, ["out/"]);

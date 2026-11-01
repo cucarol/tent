@@ -162,8 +162,10 @@ async function observeStructureMaterialInScope(
     snapshot?.paths,
     JSON.stringify([workspaceRoot, cacheDir ?? null]),
     async () => {
-      const livePaths = await listing(false);
-      const trackedPaths = repository ? await listing(true) : [];
+      const [livePaths, trackedPaths] = await Promise.all([
+        listing(false),
+        repository ? listing(true) : Promise.resolve([]),
+      ]);
       const relative = (filename: string) =>
         path.relative(workspaceRoot, filename).split(path.sep).join("/");
       return {

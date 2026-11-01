@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { withSemanticContentCache } from "../src/core/base/semantic-content-cache.js";
 import {
   extractRepositoryImports,
   extractRepositoryTestImports,
@@ -14,6 +15,40 @@ import { testScratchRoot } from "./scratch.js";
 const source = (path: string, content = ""): RepositorySource => ({ path, content });
 const pairs = (files: RepositorySource[]) =>
   extractRepositoryTestImports(files).edges.map(({ from, to }) => [from, to]);
+
+test("cached test evidence observes changed bytes, paths and language options", async () => {
+  const files = [source("src/value.ts"), source("test/value.test.ts", 'import "../src/value.js";')];
+  const first = await withSemanticContentCache(new Map(), async () =>
+    extractRepositoryTestImports(files),
+  );
+  assert.equal(first.result.edges.length, 1);
+  const reused = await withSemanticContentCache(first.used, async () =>
+    extractRepositoryTestImports(files),
+  );
+  assert.deepEqual(reused.result, first.result);
+  for (const changed of [
+    [files[0]!, source("test/value.test.ts", 'import "../src/missing.js";')],
+    [source("src/renamed.ts"), files[1]!],
+  ]) {
+    const current = await withSemanticContentCache(first.used, async () =>
+      extractRepositoryTestImports(changed),
+    );
+    assert.equal(current.result.edges.length, 0);
+    assert.notDeepEqual(current.result.issues, first.result.issues);
+  }
+  const rust = [
+    source("src/lib.rs", "pub fn value() {}"),
+    source("tests/value.rs", "use crate::value;"),
+  ];
+  const enabled = await withSemanticContentCache(new Map(), async () =>
+    extractRepositoryTestImports(rust),
+  );
+  const disabled = await withSemanticContentCache(enabled.used, async () =>
+    extractRepositoryTestImports(rust, { rust: false }),
+  );
+  assert.deepEqual(disabled.result.edges, []);
+  assert.notDeepEqual([...disabled.used.keys()], [...enabled.used.keys()]);
+});
 
 test("test script imports reuse aliases and literal import forms without following helpers", () => {
   const files = [

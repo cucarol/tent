@@ -41,6 +41,7 @@ async function tentFiles(workspace: string) {
     path.join(".git", "tent-history-index.json"),
     path.join(".git", "tent-material-cache", "document-headers.bin"),
     path.join(".git", "tent-material-cache", "file-state.json"),
+    path.join(".git", "tent-material-cache", "semantic-content.bin"),
   ]);
   const files: Array<{ path: string; sha256: string; mtimeMs: number }> = [];
   const visit = async (directory: string) => {

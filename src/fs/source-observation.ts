@@ -1,4 +1,5 @@
 import { constants } from "node:fs";
+import { currentPreparedWorkspace } from "./prepared-workspace.js";
 import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -61,6 +62,15 @@ export async function observeSourceFile(
 
 /** Structure parsers need the validated text as well as its state-bound fingerprint. */
 export async function readStructureSource(root: string, filename: string, cacheDir?: string) {
+  const snapshot = currentPreparedWorkspace(root);
+  const prepared = snapshot?.structureTexts.find(([file]) => file === filename);
+  if (prepared) {
+    const relative = path.relative(root, filename).split(path.sep).join("/");
+    const text =
+      prepared[1] ??
+      snapshot!.repository.sources.files.find((source) => source.path === relative)?.content;
+    if (text !== undefined) return text;
+  }
   const observed = await observeSourceFile(root, filename, cacheDir, {
     key: "structure-source-text-v1",
     retainText: true,

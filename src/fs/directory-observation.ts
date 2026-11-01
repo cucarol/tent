@@ -6,6 +6,7 @@ import { withFileReadScope } from "./file-state-cache.js";
 import { directoryRepository } from "./repository-material.js";
 import { isTentWorkspacePath } from "../core/base/material-coverage.js";
 import { GIT_IGNORE_CONTEXT } from "./git-ignore-context.js";
+import { currentPreparedWorkspace } from "./prepared-workspace.js";
 
 type SourcePathType = "file" | "directory" | "link" | "other";
 /** Listing metadata only; reading source bytes still performs its own safety checks. */
@@ -184,6 +185,17 @@ export async function sourceDirectoryPaths(
   cacheDir?: string,
   trackedOnly = false,
 ): Promise<string[]> {
+  const prepared = currentPreparedWorkspace(root);
+  if (prepared) {
+    const prefix = path.relative(root, directory);
+    if (prefix !== ".." && !prefix.startsWith(".." + path.sep) && !path.isAbsolute(prefix))
+      return (trackedOnly ? prepared.tracked : prepared.live).filter((filename) => {
+        const relative = path.relative(directory, filename);
+        return (
+          relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative)
+        );
+      });
+  }
   return withFileReadScope(() =>
     sourceDirectoryPathsInScope(root, directory, cacheDir, trackedOnly),
   );

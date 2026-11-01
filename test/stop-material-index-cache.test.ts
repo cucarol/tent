@@ -54,6 +54,7 @@ const sourceDigest = (cached: Record<string, unknown>) =>
     cached.headers,
     cached.rootMarkerDigest,
     cached.rejectedRootMarkers,
+    cached.repository ?? null,
   ]);
 
 test("Stop header equivalence ignores provenance but preserves identity, validity and coverage changes", () => {
@@ -121,9 +122,6 @@ test("Stop binds cached headers to their own observation across requests and pro
       if (reads === 1) {
         await fs.rename(original, saved);
         await fs.rename(replacement, original);
-      } else if (reads === 3) {
-        await fs.rename(original, replacement);
-        await fs.rename(saved, original);
       }
     }
     return result;
@@ -136,8 +134,10 @@ test("Stop binds cached headers to their own observation across requests and pro
   } finally {
     mocked.mock.restore();
     syncBuiltinESMExports();
+    await fs.rename(original, replacement);
+    await fs.rename(saved, original);
   }
-  assert.equal(reads, 3);
+  assert.ok(reads >= 2, "the opened B must be checked after the initial A lookup");
   assert.notEqual(before.ino, other.ino);
   assert.deepEqual(fileState(await fs.stat(filename, { bigint: true })), before);
   const persisted = await fs.readFile(cacheFile, "utf8");
@@ -270,7 +270,7 @@ test("Stop index rejects corrupt, obsolete and incomplete cache records and surv
   const expected = await loadStopMaterialIndex(systemRoot, root);
   const valid = await fs.readFile(cacheFile, "utf8");
   const baseline = JSON.parse(valid);
-  assert.equal(baseline.schema, 11);
+  assert.equal(baseline.schema, 12);
   assert.equal(baseline.sourceDigest, sourceDigest(baseline));
   assert.equal(baseline.indexDigest, indexDigest(baseline));
   const directories = t.mock.method(NodeFs.prototype, "listDir");

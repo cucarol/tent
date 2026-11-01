@@ -1,7 +1,7 @@
 import type { FsAdapter } from "../core/store/adapter.js";
 import { assembleAgentContext, type AgentContextStart } from "../core/read/agent-context.js";
 import { projectAgentContext, formatAgentContextPage } from "../core/read/agent-context-page.js";
-import { readAgentContextRepository } from "../fs/workspace-scan.js";
+import { readAgentContextRepository } from "../fs/agent-context-repository.js";
 import { readNode } from "../core/read/node-query.js";
 import { readWorkspaceSettings } from "../core/workspace/workspace-settings.js";
 

@@ -20,7 +20,6 @@ import {
 } from "../base/material-coverage.js";
 import { extractRepositoryTestImports, type RepositorySource } from "../base/repository-imports.js";
 import { verifyCardSourceVersions, listCardDocuments } from "../graph/card-document.js";
-import { readOutputChanges } from "../graph/node-sync.js";
 import { canonicalSha256 } from "../base/canonical-digest.js";
 import { contentEtag } from "../base/etag.js";
 import { isNodeId } from "../base/id.js";
@@ -160,6 +159,19 @@ export async function assembleAgentContext(
     const unknown = (why: string, extra: Partial<AgentContextItem> = {}) =>
       items.unknown.push({ why, ...extra });
     const historicalOnly = start.kind === "node" && !!start.version;
+    // Repository and Node reads are independent. Preserve the original error
+    // diagnostics below, without serializing Git/source I/O behind the tree.
+    const repositoryRead =
+      start.kind !== "brief" && !historicalOnly
+        ? Promise.resolve()
+            .then(async () => ({
+              repository:
+                typeof options.repository === "function"
+                  ? await options.repository()
+                  : options.repository,
+            }))
+            .catch((error) => ({ error }))
+        : undefined;
     const tree = historicalOnly ? undefined : await loadTent(fs);
     const live: ContextNode[] = await Promise.all(
       [...(tree?.byPath.values() ?? [])]
@@ -193,14 +205,10 @@ export async function assembleAgentContext(
     const files = new Map<string, string>();
     let repository: AgentContextRepository | undefined;
     if (start.kind !== "brief" && !(start.kind === "node" && start.version)) {
-      try {
-        repository =
-          typeof options.repository === "function"
-            ? await options.repository()
-            : options.repository;
-      } catch (error) {
-        unknown(`Current repository evidence unavailable: ${String(error)}`);
-      }
+      const observed = await repositoryRead!;
+      if ("error" in observed)
+        unknown(`Current repository evidence unavailable: ${String(observed.error)}`);
+      else repository = observed.repository;
       if (!repository)
         unknown(
           "Current repository file/import evidence unavailable; no test coverage can be inferred",
@@ -223,7 +231,7 @@ export async function assembleAgentContext(
         return;
       return { relative, locator };
     };
-    const addMaterials = (node: ContextNode) => {
+    const addMaterials = (node: ContextNode, expandFiles = true) => {
       for (const occurrence of materialOccurrences(node.data)) {
         try {
           const local = localPath(occurrence.resource, nodeNotePath(node.path));
@@ -243,12 +251,12 @@ export async function assembleAgentContext(
             const members = repository.trackedFiles.filter((file) =>
               materialCoverageContains(coverage, file),
             );
-            for (const member of members) addFile(member, why);
+            if (expandFiles) for (const member of members) addFile(member, why);
             if (!members.length)
               unknown(`No tracked members found for ${occurrence.resource}`, {
                 nodeId: node.nodeId,
               });
-          } else addFile(local.relative, why);
+          } else if (expandFiles) addFile(local.relative, why);
         } catch (error) {
           unknown(`Material address unavailable: ${String(error)}`, { nodeId: node.nodeId });
         }
@@ -259,6 +267,7 @@ export async function assembleAgentContext(
       why: string,
       universe: readonly ContextNode[],
       heading?: string,
+      expandFiles = true,
     ) => {
       let text = node.body;
       if (heading !== undefined) {
@@ -288,7 +297,7 @@ export async function assembleAgentContext(
             " --version-json",
           ),
       });
-      addMaterials(node);
+      addMaterials(node, expandFiles);
     };
     if (start.kind === "node") {
       const universe = start.version
@@ -313,6 +322,41 @@ export async function assembleAgentContext(
       const local = localPath(start.resource, "index.md");
       if (local) addFile(local.relative, "Explicit file starting point");
       else unknown("Starting resource is not a local workspace file");
+      // Coverage discovery still returns every matching Node. Only the most
+      // specific structure modules and exact-file materials expand file evidence.
+      const moduleMatches = local
+        ? live.filter(active).flatMap((node) => {
+            const sources = node.data.sources;
+            const coverage = materialOccurrences(node.data).flatMap((occurrence) => {
+              if (
+                occurrence.field !== "sources" ||
+                !Array.isArray(sources) ||
+                sources[occurrence.index!]?.track !== "structure"
+              )
+                return [];
+              const member = structureMaterialCoverage(
+                occurrence.resource,
+                nodeNotePath(node.path),
+                workspaceRoot,
+              );
+              return member && materialCoverageContains(member, local.relative) ? [member] : [];
+            });
+            return coverage.length
+              ? [
+                  {
+                    nodeId: node.nodeId,
+                    specificity: Math.max(...coverage.map((c) => c.prefix.length)),
+                  },
+                ]
+              : [];
+          })
+        : [];
+      const specificity = Math.max(...moduleMatches.map((match) => match.specificity));
+      const modules = new Set(
+        moduleMatches
+          .filter((match) => match.specificity === specificity)
+          .map((match) => match.nodeId),
+      );
       if (local)
         for (const node of live.filter(active)) {
           if (
@@ -332,7 +376,31 @@ export async function assembleAgentContext(
               }
             })
           )
-            addRoot(node, `Node material directly matches starting file ${local.relative}`, live);
+            addRoot(
+              node,
+              `Node material directly matches starting file ${local.relative}`,
+              live,
+              undefined,
+              modules.has(node.nodeId) ||
+                materialOccurrences(node.data).some((occurrence) => {
+                  if (
+                    structureMaterialCoverage(
+                      occurrence.resource,
+                      nodeNotePath(node.path),
+                      workspaceRoot,
+                    )
+                  )
+                    return false;
+                  try {
+                    return (
+                      localPath(occurrence.resource, nodeNotePath(node.path))?.relative ===
+                      local.relative
+                    );
+                  } catch {
+                    return false;
+                  }
+                }),
+            );
         }
     } else if (start.kind === "card") {
       try {
@@ -506,13 +574,10 @@ export async function assembleAgentContext(
           }
         }
         // Only exact existing repository paths are recognized in prose; no filename or semantic guessing.
+        const prose = withoutCode(body.card.body);
         for (const file of repository?.trackedFiles ?? []) {
           const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          if (
-            new RegExp(`(^|[^\\w/.-])${escaped}(?=$|[^\\w/.-]|[.](?=\\s|$))`).test(
-              withoutCode(body.card.body),
-            )
-          )
+          if (new RegExp(`(^|[^\\w/.-])${escaped}(?=$|[^\\w/.-]|[.](?=\\s|$))`).test(prose))
             items.decisions.push({
               path: file,
               why: "Literal file reference in published Card prose; publication file presence is unknown",
@@ -564,13 +629,10 @@ export async function assembleAgentContext(
       const selectedBody = root.heading
         ? selectSection(root.node.body, root.heading).text
         : root.node.body;
+      const selectedProse = withoutCode(selectedBody);
       for (const file of repository?.trackedFiles ?? []) {
         const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        if (
-          new RegExp(`(^|[^\\w/.-])${escaped}(?=$|[^\\w/.-]|[.](?=\\s|$))`).test(
-            withoutCode(selectedBody),
-          )
-        )
+        if (new RegExp(`(^|[^\\w/.-])${escaped}(?=$|[^\\w/.-]|[.](?=\\s|$))`).test(selectedProse))
           items.decisions.push({
             path: file,
             why: `Literal file reference in selected prose of ${root.node.nodeId}`,
@@ -633,6 +695,7 @@ export async function assembleAgentContext(
       }
       if (!root.node.version && root.node.data.type === "output") {
         try {
+          const { readOutputChanges } = await import("../graph/node-sync.js");
           const changed = await readOutputChanges(fs, root.node.nodeId);
           observedEffects.push(changed ?? null);
           if (changed)
