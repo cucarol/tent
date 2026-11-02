@@ -1,3 +1,4 @@
+import { readGoalOpenStates } from "./open-goals.js";
 import path from "node:path";
 import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
 import type { DocumentVersion } from "../store/history-port.js";
@@ -128,7 +129,7 @@ function missingProseId(ref: BodyNodeReference, nodes: readonly ContextNode[]) {
   );
 }
 
-/** Assemble evidence only. No capture, confirmation, repair, clocks, Git commands or persistent summary. */
+/** Assemble evidence only. No capture, repair, clocks, Git commands or persistent summary. */
 export async function assembleAgentContext(
   inputFs: FsAdapter,
   workspaceRoot: string,
@@ -710,24 +711,6 @@ export async function assembleAgentContext(
             );
         }
       }
-      if (!root.node.version && root.node.data.type === "output") {
-        try {
-          const { readOutputChanges } = await import("../graph/node-sync.js");
-          const changed = await readOutputChanges(fs, root.node.nodeId);
-          observedEffects.push(changed ?? null);
-          if (changed)
-            items.changes.push({
-              nodeId: root.node.nodeId,
-              why: "Existing retained output basis comparison",
-              ...excerpt(JSON.stringify(changed)),
-              command: `tent node get ${root.node.nodeId} --full --workspace ${quote(workspaceRoot)}`,
-            });
-        } catch (error) {
-          unknown(`Output basis comparison unavailable: ${String(error)}`, {
-            nodeId: root.node.nodeId,
-          });
-        }
-      }
       if (root.node.version && !historicalOnly) {
         const current = liveById.get(root.node.nodeId);
         if (!current)
@@ -901,31 +884,47 @@ export async function assembleAgentContext(
           });
       }
     }
-    for (const root of roots) {
-      for (const goal of root.universe.filter(
-        (node) =>
-          node.data.type === "goal" &&
-          active(node) &&
-          (node.nodeId === root.node.nodeId || path.posix.dirname(node.path) === root.node.path),
-      )) {
-        if (
-          !root.universe.some(
-            (node) =>
-              active(node) && node.data.type === "output" && node.path.startsWith(goal.path + "/"),
-          )
-        )
-          items.open.push(
-            summarize(
-              goal,
-              `No active output in this root/direct-child goal; not proof of unfinished work; ${root.node.nodeId} scope`,
-            ),
-          );
+    if (start.kind !== "brief") {
+      const selectedGoals = new Map<string, ContextNode>();
+      for (const root of roots) {
+        const currentRoot = historicalOnly ? root.node : liveById.get(root.node.nodeId);
+        if (!currentRoot) continue;
+        for (const goal of (historicalOnly ? root.universe : live).filter(
+          (node) =>
+            node.data.type === "goal" &&
+            active(node) &&
+            (node.nodeId === currentRoot.nodeId ||
+              path.posix.dirname(node.path) === currentRoot.path),
+        ))
+          selectedGoals.set(goal.nodeId, goal);
+      }
+      if (historicalOnly) {
+        for (const goal of selectedGoals.values())
+          unknown("Current goal result state is unavailable in a historical-only read", {
+            nodeId: goal.nodeId,
+          });
+      } else {
+        const goalStates = await readGoalOpenStates(fs, workspaceRoot, live, [
+          ...selectedGoals.keys(),
+        ]);
+        observedEffects.push(goalStates);
+        for (const state of goalStates) {
+          const goal = selectedGoals.get(state.nodeId)!;
+          if (state.state === "open")
+            items.open.push(
+              summarize(
+                goal,
+                "No current output has been placed in this goal's subtree since its latest body change",
+              ),
+            );
+          else if (state.state === "unknown")
+            unknown(
+              "Retained history cannot establish this goal's latest body change or current output placement",
+              { nodeId: goal.nodeId },
+            );
+        }
       }
     }
-    if (files.size)
-      unknown(
-        "Material baselines retain fingerprints, not old project source bytes. Source-code line diffs since confirmation cannot be reconstructed from those baselines; retained Node versions are compared separately above.",
-      );
     const complete = categories.map((kind) => {
       const grouped = new Map<string, { item: AgentContextItem; reasons: Set<string> }>();
       for (const item of items[kind]) {

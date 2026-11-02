@@ -13,10 +13,6 @@ import {
 import { extractCFamilyImports } from "../src/core/base/cfamily-imports.js";
 import { repositoryFacts } from "../src/core/base/repository-facts.js";
 import { readRepositorySources } from "../src/fs/repository-sources.js";
-import {
-  observeStructureMaterial,
-  withStructureSnapshot,
-} from "../src/fs/structure-observation.js";
 import { initializeFixtureRepository, testScratchRoot } from "./scratch.js";
 
 const source = (path: string, content?: string): RepositorySource => ({ path, content });
@@ -196,44 +192,4 @@ test("C/C++ recognized build configuration is diagnostic and scoped to containin
     extractCFamilyImports([source("CMakeLists.txt"), source("app.c", "")]).issues[0]!.reason,
     /unavailable/,
   );
-});
-
-test("C/C++ collector and narrow structure use the shared extractor", async () => {
-  const root = await fs.mkdtemp(path.join(testScratchRoot(), "cfamily-imports-"));
-  try {
-    initializeFixtureRepository(root);
-    const files = [
-      source("src/app.cpp", '#include "../api/public.h"'),
-      source("api/public.h", ""),
-      source("other/broken.cpp", "/*"),
-    ];
-    for (const file of files) {
-      await fs.mkdir(path.dirname(path.join(root, file.path)), { recursive: true });
-      await fs.writeFile(path.join(root, file.path), file.content!);
-    }
-    const collected = await readRepositorySources(
-      root,
-      files.map((file) => file.path),
-    );
-    assert.deepEqual(collected.errors, []);
-    assert.deepEqual(pairs(extractRepositoryImports(collected.files)), [
-      "src/app.cpp -> api/public.h",
-    ]);
-    const observe = () =>
-      withStructureSnapshot(() => observeStructureMaterial(root, "Module/Module.md", "../../src/"));
-    assert.deepEqual((await observe()).structureDependencies, ["api/"]);
-    await fs.writeFile(path.join(root, "other/broken.cpp"), Buffer.from([0xff, 0xfe]));
-    assert.deepEqual((await observe()).structureDependencies, ["api/"]);
-    await fs.writeFile(path.join(root, "src/app.cpp"), '#include "../api/missing.h"');
-    await assert.rejects(observe, /Structure unavailable:.*Quoted C\/C\+\+ include/);
-    await fs.writeFile(path.join(root, "src/app.cpp"), Buffer.from([0xff, 0xfe]));
-    await assert.rejects(observe);
-    await fs.writeFile(path.join(root, "src/app.cpp"), '#include "../api/public.h"');
-    await fs.writeFile(path.join(root, "CMakeLists.txt"), "project(example)");
-    await assert.rejects(observe, /C\/C\+\+ build include search paths are not evaluated/);
-    const config = await readRepositorySources(root, ["CMakeLists.txt"]);
-    assert.equal(config.files[0]?.content, "project(example)");
-  } finally {
-    await removeTestFixture(root, { recursive: true, force: true });
-  }
 });

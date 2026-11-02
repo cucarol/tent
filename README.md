@@ -2,9 +2,9 @@
 
 [中文](README.zh-CN.md)
 
-**A context graph for your project: what you decided, what got built, and what has gone stale.**
+**A context graph for your project: what you decided, what got built.**
 
-A code graph shows how the code fits together. Tent keeps what the code cannot hold: your goals, the prompts you give, and the outputs that come of them. Your agents read it before they start and update it as they work. When the code or a document changes under a recorded fact, Tent marks the fact as stale so it gets fixed instead of misleading the next session.
+A code graph shows how the code fits together. Tent keeps what the code cannot hold: your goals, the prompts you give, and the outputs that come of them. Your agents read it before they start and update it as they work.
 
 You decide, agents do the work, and Tent keeps the record. It works with Claude Code and Codex and stays on your machine as plain Markdown.
 
@@ -19,7 +19,7 @@ You decide, agents do the work, and Tent keeps the record. It works with Claude 
 
    The agent maps the existing code into Nodes, one per part of the project. Each Node owns that part's code and records the rules a change must keep, what else changes with it, and how to verify it. A project you are halfway through can join this way.
 
-3. **Read it.** Each Node is a Markdown file under `.tent/`, nested under its parent. Open them in any editor, or ask your agent what has gone stale.
+3. **Read it.** Each Node is a Markdown file under `.tent/`, nested under its parent. Open them in any editor.
 
 ## What Tent keeps
 
@@ -33,9 +33,6 @@ Most work needs no Role and no Card.
 
 ## What Tent tells you
 
-- **Behind**: a goal or prompt whose material, the file or Node it points to, has changed or gone missing since it was recorded. The fact may be out of date.
-- **Ahead**: a goal that nothing carries out yet, or that changed after its output. A goal that owns code counts as carried out by that code until you change the goal.
-- **At the start of a session**, the agent reads a short summary: what is behind or ahead, and the Cards waiting for it.
 - **At the end of a turn** that changed files, Tent names the Nodes covering them. The agent fixes any sentence the turn made wrong, records what is worth keeping, or says nothing needs recording.
 
 Dependencies between parts come from imports in TypeScript, JavaScript, Python, Go, Rust, Java, C#, C, C++ and PHP. Code in other languages is still mapped by directory and by what changes together in Git history.
@@ -85,31 +82,7 @@ Then, from the clone, run `claude plugin marketplace add "$PWD/release/claude-co
 
 ## The CLI by hand
 
-Agents run these commands through the Skills; you rarely need to. Below, `tent` is the npm command; with a plugin, the agent runs the bundled `cli.mjs`. Each command prints the id the next one needs.
-
-```sh
-tent new .
-echo "export function signIn(email) {}" > login.js
-
-# A goal: nothing carries it out yet, so the summary lists it as ahead.
-tent node create "Email sign-in" --type goal --body "Users sign in with an email address and a one-time code."
-tent workspace brief
-
-# A rule under it, resting on login.js, and an output that records the work.
-tent node create "One-time codes" --type prompt --parent <goal-id> --resource login.js --body "A code works once and expires after 10 minutes."
-tent node link-output <goal-id> --resource login.js
-
-# Change the code: the rule is now behind.
-echo "export const CODE_TTL_MINUTES = 30;" >> login.js
-tent workspace brief
-```
-
-Fix whichever is wrong, the rule or the code. Then confirm the rule with the `etag` from a full read, and the summary reports `behind 0 · ahead 0`:
-
-```sh
-tent node get <prompt-id> --full --json
-tent node confirm <prompt-id> --base-etag <etag>
-```
+Agents run these commands through the Skills; you rarely need to. `tent` is the npm command; with a plugin, the agent runs the bundled `cli.mjs`.
 
 Writes that replace content must present the ETag they read, so two sessions cannot silently overwrite each other. The exact rules are in [docs/SPEC.md](docs/SPEC.md).
 

@@ -8,7 +8,6 @@ import { syncBuiltinESMExports } from "node:module";
 import test, { type TestContext } from "node:test";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { observeMaterialResource as observeResource } from "../src/fs/source-observation.js";
 import {
   materialLocator,
@@ -18,7 +17,6 @@ import {
   isCardResponseSource,
   materialFields,
 } from "../src/core/base/material.js";
-import { syncMaterialIdentity } from "../src/core/graph/node-sync-record.js";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 import { ContextReader } from "../src/core/graph/context-reader.js";
 import { contentEtag } from "../src/core/base/etag.js";
@@ -29,36 +27,6 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
-import { sourceDirectoryPaths } from "../src/fs/directory-observation.js";
-import { nodeBasisRecordSchema } from "../src/core/base/node-basis-record.js";
-import { prepareNodeSyncSave } from "../src/core/graph/node-sync-record.js";
-import { inspectNodeSync } from "../src/core/graph/node-sync.js";
-
-test("old directory manifests and repository locators are opaque extensions", () => {
-  for (const directoryFiles of [null, "malformed", [{ path: "../unsafe", version: "bad" }]]) {
-    const material = { identity: "coverage", directoryFiles, repository: { blob: "bad" } };
-    const record = {
-      v: 1,
-      materials: [material],
-      goals: [
-        {
-          nodeId: "node-goal",
-          version: "a".repeat(64),
-          fingerprintVersion: 2,
-          materials: [material],
-        },
-      ],
-    };
-    assert.deepEqual(nodeBasisRecordSchema.parse(record), record);
-  }
-  assert.equal(
-    nodeBasisRecordSchema.safeParse({
-      v: 1,
-      materials: [{ identity: "file", version: "bad", fingerprintVersion: 2 }],
-    }).success,
-    false,
-  );
-});
 
 for (const repository of [false, true])
   test(`directory and prefix coverage only inspect their address (${repository ? "Git" : "non-Git"})`, async (t) => {
@@ -83,7 +51,7 @@ for (const repository of [false, true])
       ]) {
         const observation = await adapter.observeMaterial(resource, "index.md");
         assert.equal(observation.coverage, true);
-        assert.equal(observation.observedVersion, undefined);
+
         assert.equal("directoryFiles" in observation, false);
       }
       await assert.rejects(adapter.observeMaterial("../missing/", "index.md"), /ENOENT/);
@@ -96,78 +64,6 @@ for (const repository of [false, true])
       syncBuiltinESMExports();
     }
   });
-
-test("directory and prefix declarations have no baselines or sync details, including ancestor goals", async (t) => {
-  const workspace = await fixture(t, true);
-  await scaffoldInWorkspace(openTestFs(workspace), { name: "Coverage", nodes: [] });
-  const adapter = openTestFs(path.join(workspace, ".tent"));
-  await initializeFixtureHistory(path.join(workspace, ".tent"));
-  const run = async (command: string, args: string[]) => {
-    const result = await runNodeCommand(command, args, { cwd: workspace, json: true });
-    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
-    return JSON.parse(result.stdout);
-  };
-  const goal = (
-    await run("create", [
-      "Goal",
-      "--type",
-      "goal",
-      "--sources-json",
-      JSON.stringify([{ resource: "src/" }, { resource: "src/a*" }]),
-    ])
-  ).node.nodeId;
-  const prompt = (await run("create", ["Rule", "--type", "prompt", "--resource", "src/"])).node
-    .nodeId;
-  const output = (await run("link-output", [goal, "--resource", "src/"])).nodeId;
-  const before = await inspectNodeSync(adapter, output);
-  assert.equal(before.state, "synced");
-  assert.deepEqual((await inspectNodeSync(adapter, prompt)).materials, []);
-  const record = (await adapter.history.nodeRecords())[output]!;
-  assert.deepEqual(record.materials, []);
-  assert.deepEqual(record.goals![0]!.materials, []);
-  await fs.writeFile(path.join(workspace, "src/a.txt"), "changed\n");
-  await fs.rename(
-    path.join(workspace, "src/nested/b.txt"),
-    path.join(workspace, "src/nested/new.txt"),
-  );
-  await fs.writeFile(path.join(workspace, "src/binary.bin"), Buffer.from([0xff, 0x00]));
-  assert.deepEqual(await inspectNodeSync(adapter, output), before);
-  assert.equal((await inspectNodeSync(adapter, prompt)).state, "unanchored");
-  const node = await readNodeForEdit(adapter, output);
-  const goalNode = await readNodeForEdit(adapter, goal);
-  const previous = {
-    ...record,
-    materials: [
-      {
-        identity: syncMaterialIdentity(
-          node.frontmatter.resource as string,
-          `${node.path}/${node.name}.md`,
-        ),
-        version: "a".repeat(64),
-        fingerprintVersion: 2 as const,
-        directoryFiles: "old malformed manifest",
-        repository: "old locator",
-      },
-    ],
-    goals: record.goals!.map((basis) => ({
-      ...basis,
-      extension: "preserve goal extension",
-      materials: materialFields(goalNode.frontmatter).sources!.map((source) => ({
-        identity: syncMaterialIdentity(source.resource, `${goalNode.path}/${goalNode.name}.md`),
-        version: "a".repeat(64),
-        fingerprintVersion: 2 as const,
-        directoryFiles: "old malformed manifest",
-        repository: "old locator",
-      })),
-    })),
-  };
-  const prepared = await prepareNodeSyncSave(adapter, `${node.path}/${node.name}.md`, node.raw, {
-    previous,
-  });
-  assert.deepEqual(prepared.record!.materials, []);
-  assert.deepEqual(prepared.record!.goals![0]!.materials, []);
-  assert.equal(prepared.record!.goals![0]!.extension, "preserve goal extension");
-});
 
 test("coverage address checks preserve missing directory and prefix-parent diagnostics", async (t) => {
   const workspace = await fixture(t, true);
@@ -196,42 +92,7 @@ test("coverage address checks preserve missing directory and prefix-parent diagn
   assert.ok(result.errors.some((error: { reason: string }) => /ENOENT/.test(error.reason)));
 });
 
-test("structure enumeration excludes tracked and untracked Tent state without ignore rules", async (t) => {
-  const workspace = await fixture(t, true);
-  await fs.writeFile(path.join(workspace, ".gitignore"), "");
-  await fs.mkdir(path.join(workspace, ".tent"));
-  await fs.writeFile(path.join(workspace, ".tent/state.ts"), "internal state");
-  await git(workspace, "add", "-f", ".tent/state.ts");
-  await fs.writeFile(path.join(workspace, ".tent/untracked.ts"), "internal state");
-  for (const trackedOnly of [false, true]) {
-    const paths = await sourceDirectoryPaths(workspace, workspace, undefined, trackedOnly);
-    assert.ok(paths.some((file) => file.endsWith(path.join("src", "a.txt"))));
-    assert.ok(paths.every((file) => !path.relative(workspace, file).startsWith(".tent")));
-  }
-});
-
-test("standalone structure enumeration skips Tent state before traversing its directory", async (t) => {
-  const workspace = await fixture(t);
-  await fs.writeFile(path.join(workspace, ".gitignore"), "");
-  await fs.writeFile(path.join(workspace, ".tent/internal.ts"), "internal state");
-  const original = fs.readdir;
-  const mocked = t.mock.method(fs, "readdir", (...args: Parameters<typeof original>) => {
-    if (String(args[0]) === path.join(workspace, ".tent"))
-      throw new Error("Tent state must be excluded before traversal");
-    return original(...args);
-  });
-  syncBuiltinESMExports();
-  try {
-    const files = await sourceDirectoryPaths(workspace, workspace);
-    assert.ok(files.every((file) => !path.relative(workspace, file).startsWith(".tent")));
-    assert.ok(files.some((file) => file.endsWith(path.join("src", "a.txt"))));
-  } finally {
-    mocked.mock.restore();
-    syncBuiltinESMExports();
-  }
-});
-
-test("file materials observe live bytes despite clean filters, ident and assume-unchanged", async (t) => {
+test("material text reads live bytes despite clean filters, ident and assume-unchanged", async (t) => {
   const workspace = await fixture(t, true);
   await fs.writeFile(
     path.join(workspace, ".gitattributes"),
@@ -245,28 +106,18 @@ test("file materials observe live bytes despite clean filters, ident and assume-
   await fs.unlink(path.join(workspace, "src/ident.txt"));
   await git(workspace, "checkout", "--", "src/ident.txt");
   const adapter = openTestFs(path.join(workspace, ".tent"));
-  const read = (file: string) => adapter.observeMaterial(`../src/${file}`, "index.md");
-  const filtered = await read("data.filter"),
-    ident = await read("ident.txt"),
-    ordinary = await read("a.txt");
+  const read = (file: string) => adapter.readMaterialText("../src/" + file, "index.md");
   await fs.writeFile(path.join(workspace, "src/data.filter"), "changed actual bytes\n");
   await fs.writeFile(path.join(workspace, "src/ident.txt"), "$Id: replaced $\n");
   assert.equal((await git(workspace, "diff", "--name-only")).trim(), "");
-  assert.notEqual((await read("data.filter")).observedVersion, filtered.observedVersion);
-  assert.notEqual((await read("ident.txt")).observedVersion, ident.observedVersion);
+  assert.equal(await read("data.filter"), "changed actual bytes\n");
+  assert.equal(await read("ident.txt"), "$Id: replaced $\n");
   await git(workspace, "update-index", "--assume-unchanged", "src/a.txt");
   await fs.writeFile(path.join(workspace, "src/a.txt"), "changed while assumed unchanged\n");
-  assert.notEqual((await read("a.txt")).observedVersion, ordinary.observedVersion);
+  assert.equal(await read("a.txt"), "changed while assumed unchanged\n");
 });
 async function observeMaterialResource(workspace: string, owner: string, resource: string) {
-  const gitDir = path.join(workspace, ".tent/.git");
-  const existing = await fs.stat(path.join(gitDir, "HEAD")).catch(() => undefined);
-  return observeResource(
-    workspace,
-    owner,
-    resource,
-    existing ? path.join(gitDir, "tent-material-cache") : undefined,
-  );
+  return observeResource(workspace, owner, resource);
 }
 
 async function fixture(t: TestContext, repository = false) {
@@ -341,7 +192,7 @@ test("directory declarations preserve slash, reject fragments and enforce safe s
   );
 });
 
-test("directory markers cannot select Node semantic content, pinned Card files or response evidence", async (t) => {
+test("directory markers cannot select pinned Card files or response evidence", async (t) => {
   const workspace = await fixture(t, true);
   await scaffoldInWorkspace(openTestFs(workspace), {
     name: "Directory boundaries",
@@ -350,10 +201,6 @@ test("directory markers cannot select Node semantic content, pinned Card files o
   const adapter = openTestFs(path.join(workspace, ".tent"));
   await initializeFixtureHistory(path.join(workspace, ".tent"));
   const catalog = await loadNodeCatalog(adapter);
-  assert.notEqual(
-    syncMaterialIdentity("/Main/Main.md/", "index.md", catalog.byId),
-    "node:node-main",
-  );
   assert.equal(isCardResponseSource("/cards/card-response.md/", "index.md"), false);
   const card = await createCardDocument(adapter, {
     prompt: "Directory declaration",
@@ -452,136 +299,4 @@ test("CLI Workspace-root directory declarations and link-output retain the root 
   );
   assert.equal(missing.exitCode, 1);
   assert.match(missing.stderr, /not found/);
-});
-
-test("non-Git ignore inheritance, negation, globstar and ignored subtree match Git", async (t) => {
-  const workspace = await fixture(t);
-  await fs.writeFile(
-    path.join(workspace, ".gitignore"),
-    "*.tmp\n!keep.tmp\n/cache/\nsrc/**/noise?.txt\n",
-  );
-  await fs.writeFile(path.join(workspace, "src/.gitignore"), "nested/*.txt\n!nested/b.txt\n");
-  await fs.writeFile(path.join(workspace, "src/keep.tmp"), "kept");
-  await fs.writeFile(path.join(workspace, "src/drop.tmp"), "ignored");
-  await fs.writeFile(path.join(workspace, "src/nested/noise1.txt"), "ignored");
-  await fs.mkdir(path.join(workspace, "cache"));
-  await fs.writeFile(path.join(workspace, "cache/file"), "ignored");
-  const plain = await sourceDirectoryPaths(
-    workspace,
-    path.join(workspace, "src"),
-    path.join(workspace, ".tent/.git/tent-material-cache"),
-  );
-  const ignored = await sourceDirectoryPaths(
-    workspace,
-    path.join(workspace, "cache"),
-    path.join(workspace, ".tent/.git/tent-material-cache"),
-  );
-  assert.deepEqual(ignored, []);
-  await git(workspace, "init", "--quiet");
-  const indexed = await sourceDirectoryPaths(
-    workspace,
-    path.join(workspace, "src"),
-    path.join(workspace, ".tent/.git/tent-material-cache"),
-  );
-  assert.deepEqual(indexed, plain);
-});
-
-test("non-Git escaped patterns, character classes and directory pruning agree with Git", async (t) => {
-  const workspace = await fixture(t);
-  await fs.writeFile(
-    path.join(workspace, ".gitignore"),
-    "\\#hash.txt\n\\!bang.txt\nspace\\ .txt\n[ab].tmp\n!b.tmp\n**/drop[0-9].txt\nclass[[:digit:]].txt\n[]a].class\npruned/\n!pruned/keep.txt\nopen/*\n!open/keep/\n",
-  );
-  for (const filename of [
-    "#hash.txt",
-    "!bang.txt",
-    "space .txt",
-    "a.tmp",
-    "b.tmp",
-    "c.tmp",
-    "drop7.txt",
-    "dropx.txt",
-    "deep/drop2.txt",
-    "class4.txt",
-    "classx.txt",
-    "].class",
-    "a.class",
-    "b.class",
-    "pruned/keep.txt",
-    "open/drop/file.txt",
-    "open/keep/file.txt",
-  ]) {
-    const target = path.join(workspace, "src", filename);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, "file\n");
-  }
-  const plain = await sourceDirectoryPaths(
-    workspace,
-    path.join(workspace, "src"),
-    path.join(workspace, ".tent/.git/tent-material-cache"),
-  );
-  await git(workspace, "init", "--quiet");
-  const indexed = await sourceDirectoryPaths(
-    workspace,
-    path.join(workspace, "src"),
-    path.join(workspace, ".tent/.git/tent-material-cache"),
-  );
-  assert.deepEqual(indexed, plain);
-});
-
-test("non-Git Unicode byte wildcards and special globstars retain Git semantics without writing the tool context", async (t) => {
-  const workspace = await fixture(t),
-    cache = path.join(workspace, ".tent/.git/tent-material-cache"),
-    tool = path.join(workspace, ".tent/.git/ignore-context/.git");
-  await fs.writeFile(
-    path.join(workspace, ".gitignore"),
-    "src/x?y.txt\nsrc/É*.txt\nsrc/a**/b.txt\nsrc/**\\/q.txt\nsrc/x\\/**/z.txt\n",
-  );
-  for (const name of [
-    "xéy.txt",
-    "xay.txt",
-    "éclair.txt",
-    "axy/b.txt",
-    "axy/deep/b.txt",
-    "other/q.txt",
-    "x/deep/z.txt",
-    "keep.txt",
-  ]) {
-    const file = path.join(workspace, "src", name);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, "input\n");
-  }
-  const state = async () => {
-    const rows = [];
-    for (const item of await fs.readdir(tool, { recursive: true, withFileTypes: true }))
-      if (item.isFile()) {
-        const file = path.join(item.parentPath, item.name);
-        rows.push([
-          path.relative(tool, file),
-          await fs.readFile(file, "hex"),
-          (await fs.stat(file)).mtimeMs,
-        ]);
-      }
-    return rows.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-  };
-  const before = await state(),
-    plain = await sourceDirectoryPaths(workspace, path.join(workspace, "src"), cache);
-  assert.ok(
-    plain.includes(path.join(workspace, "src/xéy.txt")),
-    "Git ? matches one UTF8 byte, not one Unicode character",
-  );
-  assert.ok(!plain.includes(path.join(workspace, "src/xay.txt")));
-  assert.deepEqual(
-    await state(),
-    before,
-    "observation must not initialize or write Git tool metadata",
-  );
-  assert.equal(
-    (await git(path.dirname(tool), "rev-list", "--all")).trim(),
-    "",
-    "the context has no history commits",
-  );
-  await git(workspace, "init", "--quiet");
-  const project = await sourceDirectoryPaths(workspace, path.join(workspace, "src"), cache);
-  assert.deepEqual(project, plain);
 });

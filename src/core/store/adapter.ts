@@ -31,18 +31,12 @@ export interface FsAdapter {
   observeMaterial?(
     resource: string,
     documentPath: string,
-    track?: "structure",
-    structureResources?: readonly string[],
   ): Promise<{
-    observedVersion?: string;
     coverage?: true;
-    structureDependencies?: string[];
     systemPath?: string;
   }>;
   /** Share one Workspace observation among the materials of a single inspection. */
   observationScope?<T>(action: () => Promise<T>, options?: ObservationOptions): Promise<T>;
-  /** Git index membership of an explicit local file; undefined when it cannot be established. */
-  materialIsTracked?(resource: string, documentPath: string): Promise<boolean | undefined>;
   /** Validated local text for explicit-write advice; never fetch remote materials. */
   readMaterialText?(resource: string, documentPath: string): Promise<string | undefined>;
   readonly history?: DocumentHistory;

@@ -198,13 +198,6 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const capture = async () => {
-    const unportableRecords = (await mount.env.fs.history?.available())
-      ? await mount.env.fs.history?.unportableNodeRecordIds()
-      : [];
-    if (unportableRecords?.length)
-      throw new Error(
-        `Workspace export stopped: versioned Node records contain local machine paths (${unportableRecords.join(", ")})`,
-      );
     if (await mount.env.fs.exists(NODE_MOVE_PENDING_PATH))
       throw new Error("Finish the pending Node move before exporting");
     if (await mount.env.fs.exists(DELETE_PENDING_PATH))

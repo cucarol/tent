@@ -1,6 +1,5 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import childProcess from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,9 +9,8 @@ import test, { type TestContext } from "node:test";
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { createNode } from "../src/core/graph/ops.js";
-import { inspectNodeSync, linkNodeOutput } from "../src/core/graph/node-sync.js";
+import { linkNodeOutput } from "../src/core/graph/node-output.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
@@ -50,49 +48,26 @@ test("missing declared worktree remains unavailable even after merging its mater
   );
   const resource = pathToFileURL(filename).href;
   const output = await linkNodeOutput(adapter, goal, { resource });
-  const record = (await adapter.history.nodeRecords())[output.nodeId]!;
-  assert.equal(record.materials[0]!.repository, undefined);
-  assert.equal((await inspectNodeSync(adapter, output.nodeId)).state, "synced");
-  await fs.writeFile(filename, "declared live change\n");
-  assert.equal((await inspectNodeSync(adapter, output.nodeId)).materials[0]!.state, "changed");
-  await fs.writeFile(filename, "completed\n");
-  // Old locators remain readable but cannot authorize another checkout.
-  await adapter.history.captureUnlocked([], {
-    operation: "test.legacy-material",
-    nodeRecords: {
-      [output.nodeId]: {
-        ...record,
-        materials: record.materials.map((material) => ({
-          ...material,
-          repository: { commonDir: ".git", path: "assets/result.txt", blob: "a".repeat(40) },
-        })),
-      },
-    },
-  });
   await git(main, "merge", "--quiet", "topic");
   await git(main, "worktree", "remove", "--force", worktree);
   assert.equal(await fs.readFile(path.join(main, "assets/result.txt"), "utf8"), "completed\n");
-  const unavailable = await inspectNodeSync(adapter, output.nodeId);
-  assert.equal(unavailable.state, "synced");
-  assert.equal(unavailable.materials[0]!.state, "unavailable");
-  assert.match(unavailable.materials[0]!.reason!, /ENOENT|no such file/);
+  await assert.rejects(
+    adapter.observeMaterial(resource, "Output/Output.md"),
+    /ENOENT|no such file/,
+  );
   const checked = await runWorkspaceCommand("check", [], { workspace: main, json: true });
-  const result = JSON.parse(checked.stdout);
   assert.equal(checked.exitCode, 1);
   assert.ok(
-    result.issues.some((issue: { kind: string }) => issue.kind === "missing-material-file"),
+    JSON.parse(checked.stdout).issues.some(
+      (issue: { kind: string }) => issue.kind === "missing-material-file",
+    ),
   );
-  assert.deepEqual(result.notices, []);
   const node = await readNodeForEdit(adapter, output.nodeId);
   await writeNodeDocument(adapter, output.nodeId, { baseEtag: node.etag, body: "More context" });
-  assert.equal(
-    (await adapter.history.nodeRecords())[output.nodeId]!.materials[0]!.repository,
-    undefined,
-  );
   assert.equal((await readNodeForEdit(adapter, output.nodeId)).frontmatter.resource, resource);
 });
 
-test("file observation reads declared bytes and sections without repository discovery", async (t) => {
+test("file observation checks declared sections without repository discovery", async (t) => {
   const { main } = await fixture(t);
   await initializeTentWorkspace(main);
   const filename = path.join(main, "assets/report.md");
@@ -104,23 +79,15 @@ test("file observation reads declared bytes and sections without repository disc
     childProcess,
     "execFile",
     (..._args: Parameters<typeof original>) => {
-      throw new Error("material content does not need Git discovery");
+      throw new Error("material checks do not need Git discovery");
     },
   );
   syncBuiltinESMExports();
   try {
     const initial = await adapter.observeMaterial(resource, "Output/Output.md");
-    await fs.writeFile(filename, "# Result\nselected\n# Other\nchanged\n");
-    assert.equal(
-      (await adapter.observeMaterial(resource, "Output/Output.md")).observedVersion,
-      initial.observedVersion,
-    );
-    await fs.writeFile(filename, "# Result\nchanged\n# Other\nignored\n");
-    assert.notEqual(
-      (await adapter.observeMaterial(resource, "Output/Output.md")).observedVersion,
-      initial.observedVersion,
-    );
-    assert.equal("repository" in initial, false);
+    assert.equal(initial.canonicalPath, await fs.realpath(filename));
+    await fs.writeFile(filename, "# Other\nno selected section\n");
+    await assert.rejects(adapter.observeMaterial(resource, "Output/Output.md"), /not found/i);
     assert.equal(mocked.mock.callCount(), 0);
   } finally {
     mocked.mock.restore();
@@ -152,12 +119,13 @@ test("declared file safety and access errors remain authoritative", async (t) =>
   });
   syncBuiltinESMExports();
   try {
-    await assert.rejects(adapter.observeMaterial(resource, "Output/Output.md"), /access denied/);
+    await assert.rejects(adapter.readMaterialText(resource, "Output/Output.md"), /access denied/);
   } finally {
     blocked.mock.restore();
     syncBuiltinESMExports();
   }
 });
+
 test("committed main deletion stays unavailable with a retained or reused worktree path", async (t) => {
   const { main, worktree } = await fixture(t, true);
   await initializeTentWorkspace(main);
@@ -166,17 +134,14 @@ test("committed main deletion stays unavailable with a retained or reused worktr
     { fs: adapter, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Deletion" },
     { name: "Goal", parentPath: "", type: "goal", body: "Requirement" },
   );
-  const output = await linkNodeOutput(adapter, goal, { resource: "assets/result.txt" });
-  assert.equal((await inspectNodeSync(adapter, output.nodeId)).state, "synced");
+  await linkNodeOutput(adapter, goal, { resource: "assets/result.txt" });
   await git(main, "rm", "assets/result.txt");
   await git(main, "commit", "--quiet", "-m", "test: delete material in main");
   const unavailable = async () => {
-    const state = await inspectNodeSync(adapter, output.nodeId);
-    assert.equal(state.state, "synced");
-    assert.equal(state.materials[0]!.state, "unavailable");
-    assert.match(state.materials[0]!.reason!, /ENOENT|no such file/);
-    const node = await runNodeCommand("check", [output.nodeId], { workspace: main, json: true });
-    assert.equal(JSON.parse(node.stdout).materials[0].state, "unavailable");
+    await assert.rejects(
+      adapter.observeMaterial("../../assets/result.txt", "Output/Output.md"),
+      /ENOENT|no such file/,
+    );
     const check = await runWorkspaceCommand("check", [], { workspace: main, json: true });
     assert.equal(check.exitCode, 1, check.stderr || check.stdout);
     assert.ok(
@@ -184,29 +149,23 @@ test("committed main deletion stays unavailable with a retained or reused worktr
         (issue: { kind: string }) => issue.kind === "missing-material-file",
       ),
     );
-    assert.deepEqual(JSON.parse(check.stdout).notices, []);
   };
   assert.equal(await fs.readFile(path.join(worktree, "assets/result.txt"), "utf8"), "initial\n");
   await unavailable();
-  // The same declared main path cannot follow a new branch reusing the old checkout.
   await git(main, "worktree", "remove", worktree);
   await git(main, "worktree", "add", "--quiet", "-b", "reused", worktree, "topic");
   await fs.writeFile(path.join(worktree, "assets/result.txt"), "new branch WIP\n");
   await unavailable();
-  // A live main file is still authoritative after an earlier deletion of its path.
   await fs.mkdir(path.join(main, "assets"), { recursive: true });
   await fs.writeFile(path.join(main, "assets/result.txt"), "initial\n");
-  assert.equal((await inspectNodeSync(adapter, output.nodeId)).materials[0]!.state, "current");
+  await adapter.observeMaterial("../../assets/result.txt", "Output/Output.md");
   await git(main, "add", "assets/result.txt");
   await git(main, "commit", "--quiet", "-m", "test: restore material");
   await fs.unlink(path.join(main, "assets/result.txt"));
   await unavailable();
-  // A moved main HEAD is inspected afresh, including removal of the deletion history.
   await git(main, "reset", "--hard", "HEAD~2");
   await fs.unlink(path.join(main, "assets/result.txt"));
-  const legal = await inspectNodeSync(adapter, output.nodeId);
-  assert.equal(legal.materials[0]!.state, "unavailable");
-  assert.match(legal.materials[0]!.reason!, /ENOENT|no such file/);
+  await unavailable();
 });
 
 test("worktree path warnings preserve creation and the declared live-path observation contract", async (t) => {
@@ -226,25 +185,19 @@ test("worktree path warnings preserve creation and the declared live-path observ
   const receipt = JSON.parse(linked.stdout);
   assert.ok(receipt.nodeId);
   assert.match(receipt.warnings[0], /先合并到主检出，再挂产出/);
-  const text = await runNodeCommand("link-output", [goal, "--resource", `/${relative}`], {
+  const text = await runNodeCommand("link-output", [goal, "--resource", "/" + relative], {
     workspace: main,
   });
   assert.equal(text.exitCode, 0, text.stderr);
   assert.match(text.stdout, /先合并到主检出，再挂产出/);
-  const uri = await linkNodeOutput(adapter, goal, {
-    resource: pathToFileURL(path.join(worktree, "assets/result.txt")).href,
-  });
-  assert.match(uri.warnings![0]!, /先合并到主检出，再挂产出/);
+  const resource = pathToFileURL(path.join(worktree, "assets/result.txt")).href;
+  const uri = await linkNodeOutput(adapter, goal, { resource });
+  assert.ok(uri.warnings);
+  assert.match(uri.warnings[0], /先合并到主检出，再挂产出/);
   await fs.writeFile(path.join(main, "assets/result.txt"), "main changed\n");
-  const retained = await inspectNodeSync(adapter, receipt.nodeId);
-  assert.equal(
-    retained.materials[0]!.state,
-    "current",
-    "a surviving declared worktree file still wins",
-  );
-  assert.equal(retained.materials[0]!.reason, undefined);
+  assert.equal(await adapter.readMaterialText(resource, "Output/Output.md"), "initial\n");
   await git(main, "worktree", "remove", worktree);
   await git(main, "worktree", "add", "--quiet", "-b", "reused", worktree, "topic");
   await fs.writeFile(path.join(worktree, "assets/result.txt"), "reused branch WIP\n");
-  assert.equal((await inspectNodeSync(adapter, receipt.nodeId)).materials[0]!.state, "changed");
+  assert.equal(await adapter.readMaterialText(resource, "Output/Output.md"), "reused branch WIP\n");
 });

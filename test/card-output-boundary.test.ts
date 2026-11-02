@@ -10,7 +10,7 @@ import {
   returnCardDocument,
   takeCardDocument,
 } from "../src/core/graph/card-document.js";
-import { linkNodeOutput } from "../src/core/graph/node-sync.js";
+import { linkNodeOutput } from "../src/core/graph/node-output.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { nodeNotePath } from "../src/core/base/paths.js";
 import { PropagationMemoryFs } from "./propagation-memory.js";
@@ -71,7 +71,6 @@ async function assertRejectedWithoutWrites(
     files: [...fs.files],
     directories: [...fs.directories],
     head: await fs.history.currentCommit(),
-    records: await fs.history.nodeRecords(),
   };
   const writes = [
     t.mock.method(fs, "writeFile"),
@@ -98,7 +97,6 @@ async function assertRejectedWithoutWrites(
       files: [...fs.files],
       directories: [...fs.directories],
       head: await fs.history.currentCommit(),
-      records: await fs.history.nodeRecords(),
     },
     before,
   );

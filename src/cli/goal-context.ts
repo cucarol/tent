@@ -1,6 +1,5 @@
 import type { FsAdapter } from "../core/store/adapter.js";
 import { readGoalContext, type GoalContextItem } from "../core/read/goal-context.js";
-import { inspectNodesSync } from "../core/graph/node-sync.js";
 
 const budget = 1024;
 const labels = {
@@ -51,21 +50,9 @@ export async function goalContextText(fs: FsAdapter, nodeId: string): Promise<st
   ];
   for (const item of priority) {
     if (selected.includes(item)) continue;
-    const reserved = [...selected, item].map((entry) =>
-      entry.sync ? { ...entry, state: `${entry.state}/unanchored` } : entry,
-    );
-    if (bytes(render(reserved)) > budget) continue;
+    if (bytes(render([...selected, item])) > budget) continue;
     selected.push(item);
   }
-  const outputIds = [...new Set(selected.filter((item) => item.sync).map((item) => item.id))];
-  const sync = new Map(
-    (outputIds.length ? await inspectNodesSync(fs, outputIds) : []).map((inspection) => [
-      inspection.nodeId,
-      inspection.state,
-    ]),
-  );
-  for (const item of selected)
-    if (item.sync && sync.has(item.id)) item.state = `${item.state}/${sync.get(item.id)}`;
   selected.sort((a, b) => items.indexOf(a) - items.indexOf(b));
   for (const nameLength of [64, 32, 24, 16, 12]) {
     const text = render(selected, nameLength);

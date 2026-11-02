@@ -55,7 +55,7 @@ async function fixture(t: TestContext) {
   return { root, adapter, save, commit };
 }
 
-test("content time ignores confirmation and metadata, tracks body/address edits and retained reverts", async (t) => {
+test("content time ignores metadata, tracks body and material-address edits and retained reverts", async (t) => {
   const { adapter, save, commit } = await fixture(t);
   const base = { id: "node-rule", type: "prompt", resource: "../../a.txt" };
   const out = { id: "node-out", type: "output", generated: { by: "test/1", at: stamp(1) } };
@@ -174,9 +174,7 @@ test("missing or partial history cannot invent times or discard another Node's r
   t.mock.method(adapter.history, "changesInRange", async () => {
     throw new Error("unavailable history");
   });
-  assert.deepEqual(await readNodeTimes(adapter, ["node-b"]), [
-    { nodeId: "node-b", contentChangedAt: null },
-  ]);
+  await assert.rejects(readNodeTimes(adapter, ["node-b"]), /unavailable history/);
   assert.deepEqual(await readNodeTimes(adapter, []), []);
   await assert.rejects(readNodeTimes(adapter, ["../A"]), /canonical Node/);
   await assert.rejects(readNodeTimes(adapter, ["node-missing"]), /Node not found/);

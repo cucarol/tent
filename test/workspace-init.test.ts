@@ -86,22 +86,6 @@ test("direct CLI initializes and writes SQLite history when Git is absent from P
     ),
     false,
   );
-  await fs.mkdir(path.join(workspace, "src"));
-  await fs.writeFile(path.join(workspace, "src/a-kept.ts"), "export const a = 1;\n");
-  await fs.writeFile(path.join(workspace, ".gitignore"), "src/a-drop.ts\n");
-  const moduleUrl = new URL("../src/fs/node-fs.ts", import.meta.url).href;
-  const coreUrl = new URL("../src/core/graph/node-sync-record.ts", import.meta.url).href;
-  const code = `import {observeNodeMaterials} from ${JSON.stringify(coreUrl)};import {NodeFs} from ${JSON.stringify(moduleUrl)};const fs=new NodeFs(${JSON.stringify(path.join(workspace, ".tent"))});try{console.log(JSON.stringify((await observeNodeMaterials(fs,{sources:[{resource:"../../src/a-*",track:"structure"}]},"NoGit/NoGit.md"))[0]));}finally{await fs.close();}`;
-  const observed = spawnSync(
-    process.execPath,
-    ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", code],
-    { env, encoding: "utf8", windowsHide: true },
-  );
-  assert.equal(observed.status, 0, observed.stderr);
-  assert.equal(observed.stderr, "");
-  const material = JSON.parse(observed.stdout);
-  assert.equal(material.version, undefined);
-  assert.ok(material.reason, "missing Git leaves ignore-dependent observation explicitly unknown");
 });
 
 test("initialization preserves all outer Git bytes even when Git metadata writes are denied", async (t) => {

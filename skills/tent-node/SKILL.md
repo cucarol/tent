@@ -28,7 +28,6 @@ Make the Node changes together, once, at the end. Tent reports a problem in a No
 | What changed and what waits | `tent workspace brief` |
 | A Node by id | `tent node get <id>` |
 | The rules for a file | `tent node search --resource <file>` |
-| A behind Node still holds | `tent node get <id> --full --json`, then `tent node confirm <id> --base-etag <etag>` |
 
 More: [input](../../skill-resources/references/input.md).
 

@@ -50,9 +50,7 @@ async function fixture(t: TestContext) {
       async () => ({
         repository: await readAgentContextRepository(root),
         live: await sourceDirectoryPaths(root, root),
-        material: await adapter.observeMaterial("../../src/", "A/A.md", "structure", [
-          "../../src/",
-        ]),
+        material: await adapter.observeMaterial("../../src/", "A/A.md"),
       }),
       { forceContent },
     );
@@ -74,10 +72,7 @@ test("the shared Hook snapshot preserves repository, listing and material observ
   await fs.writeFile(path.join(f.root, "src/main.ts"), 'import "../other/value.js";');
   const current = await f.read();
   assert.deepEqual(current, await f.read(true));
-  assert.notDeepEqual(
-    current.material.structureDependencies,
-    original.material.structureDependencies,
-  );
+  assert.notDeepEqual(current.repository, original.repository);
   await f.prepare();
   await fs.writeFile(path.join(f.root, "src/new.ts"), "new file");
   assert.ok((await f.read()).live.includes(path.join(f.root, "src/new.ts")));
@@ -126,33 +121,6 @@ test("recovered transient source errors are reobserved rather than retained", as
   assert.ok(injected);
   assert.deepEqual(await f.read(), await f.read(true));
   await f.prepare();
-  assert.ok((await preparedGraphSnapshot(path.join(f.root, ".tent"), f.root))?.repository);
-  assert.deepEqual(await f.read(), await f.read(true));
-});
-
-test("recovered transient structure errors are retried even when repository reuse is valid", async (t) => {
-  const f = await fixture(t),
-    original = fs.lstat;
-  let injected = false;
-  const mocked = t.mock.method(fs, "lstat", async (...args: Parameters<typeof fs.lstat>) => {
-    if (
-      !injected &&
-      path.resolve(String(args[0])) === path.join(f.root, ".git") &&
-      new Error().stack?.includes("observeStructureMaterialInScope")
-    ) {
-      injected = true;
-      throw Object.assign(new Error("EIO: temporary structure read failure"), { code: "EIO" });
-    }
-    return original(...args);
-  });
-  syncBuiltinESMExports();
-  try {
-    await f.prepare();
-  } finally {
-    mocked.mock.restore();
-    syncBuiltinESMExports();
-  }
-  assert.ok(injected);
   assert.ok((await preparedGraphSnapshot(path.join(f.root, ".tent"), f.root))?.repository);
   assert.deepEqual(await f.read(), await f.read(true));
 });

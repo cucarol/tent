@@ -43,7 +43,12 @@ async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(scratch, "agent's text-"));
   t.after(async () => {
     assert.equal(path.dirname(root), scratch);
-    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    });
   });
   await scaffoldInWorkspace(openTestFs(root), {
     name: "Text",
@@ -99,7 +104,15 @@ async function fixture(t: TestContext) {
     assert.ok(run, last);
     return ok(await run(sub, words));
   };
-  return { root, node, card, role, workspace, next, adapter: openTestFs(path.join(root, ".tent")) };
+  return {
+    root,
+    node,
+    card,
+    role,
+    workspace,
+    next,
+    adapter: openTestFs(path.join(root, ".tent")),
+  };
 }
 
 test("text lists/details identify their objects, body reads preserve text, and all relation directions describe endpoints", async (t) => {
@@ -142,7 +155,6 @@ test("text lists/details identify their objects, body reads preserve text, and a
     [() => node("get", ["node-child", "--view", "summary"]), [/node-child/, /Child/]],
     [() => node("get", ["node-child", "--view", "raw", "--full"]), [/node-child/, /Child body/]],
     [() => node("history", ["node-child"]), [/node-child/, /Child\/Child.md/]],
-    [() => node("check", ["node-child"]), [/node-child/, /Child/]],
     [
       () => node("read-many", ["node-child", "node-peer"]),
       [/node-child/, /node-peer/, /Child body/, /Peer body/],
@@ -197,23 +209,20 @@ test("text lists/details identify their objects, body reads preserve text, and a
     ]),
   );
   await fs.writeFile(path.join(root, "input.md"), "After\n");
-  const drift = ok(await workspace("drift"));
-  assert.match(drift, /behind  node-material  \.tent\/Material\/Material.md  /);
-  assert.match(drift, /Material changed:/);
   ok(await workspace("brief"));
   ok(await workspace("check"));
   ok(await node("tags", []));
   assert.match(cardHelpText(), /newest first/);
 });
 
-test("complete first-page ETags authorize writes and confirmations; partial and stale bases fail with runnable recovery commands", async (t) => {
+test("complete first-page ETags authorize writes; partial and stale reads fail with runnable recovery commands", async (t) => {
   const { node, next, adapter } = await fixture(t);
   const first = etag(ok(await node("get", ["node-peer"])));
   assert.doesNotMatch(first, /^read:/);
   ok(await node("write", ["node-peer", "--body", "Changed body", "--base-etag", first]));
   const completeRaw = etag(ok(await node("get", ["node-peer", "--view", "raw"])));
   assert.doesNotMatch(completeRaw, /^read:/);
-  ok(await node("confirm", ["node-peer", "--base-etag", completeRaw]));
+  ok(await node("write", ["node-peer", "--body", "Raw-read body", "--base-etag", completeRaw]));
   await next(
     await node("write", ["node-peer", "--body", "Stale", "--base-etag", first]),
     /node get node-peer --full/,
@@ -235,10 +244,6 @@ test("complete first-page ETags authorize writes and confirmations; partial and 
   const head = await adapter.history.currentCommit();
   await next(
     await node("write", ["node-long", "--body", "Incomplete", "--base-etag", partial]),
-    /node get node-long --full/,
-  );
-  await next(
-    await node("confirm", ["node-long", "--base-etag", partial]),
     /node get node-long --full/,
   );
   assert.equal(await adapter.readFile("Long/Long.md"), before);
@@ -370,7 +375,7 @@ test("unknown subcommands preserve the command diagnosis and leave existing Card
   const beforeRole = await adapter.readFile("roles/role-existing.md");
   const head = await adapter.history.currentCommit();
   for (const [group, run, args, required] of [
-    ["node", node, ["node-peer"], ["get", "write", "confirm"]],
+    ["node", node, ["node-peer"], ["get", "write"]],
     ["card", card, ["card-existing"], ["show", "take", "return"]],
     ["role", role, ["role-existing"], ["list", "show", "write"]],
     ["workspace", workspace, [], ["brief", "check", "scan"]],
@@ -437,7 +442,7 @@ test("missing ETags name the command and recover through a complete Node read or
   ok(await role("create", ["--id", "role-existing", "--title", "Existing role"]));
   const before = await adapter.readFile("Peer/Peer.md");
   const head = await adapter.history.currentCommit();
-  for (const sub of ["write", "confirm"]) {
+  for (const sub of ["write"]) {
     const failed = await node(sub, ["node-peer", ...(sub === "write" ? ["--body", "Lost"] : [])]);
     assert.equal(
       failed.stderr.split("\n")[0],
@@ -552,12 +557,6 @@ test("judge W1-W4 wording is exact, Next runs, and text conflicts do not expose 
     `A read: ETag comes from a partial read and allows metadata edits only.\n${nextLine("get node-peer --full")}\n`,
   );
   await next(incomplete, /node get node-peer --full/);
-  const confirm = await node("confirm", ["node-peer", "--base-etag", partial]);
-  assert.equal(
-    confirm.stderr,
-    `Confirmation requires a complete live Node read.\n${nextLine("get node-peer --full")}\n`,
-  );
-  await next(confirm, /node get node-peer --full/);
   for (const [sub, input] of [
     ["create", ["Bad type", "--type", "decision"]],
     [
@@ -594,7 +593,7 @@ test("judge help explains stable ids and partial-read limits once", () => {
   const createText =
     "--id fixes the new id, so a retry cannot create a duplicate. Names follow Windows file-name rules on every platform.";
   const getText =
-    "An ETag that starts with read: comes from a partial page and allows only metadata edits; read with --full before replacing or confirming content.";
+    "An ETag that starts with read: comes from a partial page and allows only metadata edits; read with --full before replacing content.";
   assert.equal(create.split(createText).length, 2);
   assert.equal(get.split(getText).length, 2);
   assert.doesNotMatch(
@@ -659,7 +658,11 @@ for (const state of [undefined, "pending"] as const) {
     const { adapter } = await fixture(t);
     await createRoleContext(adapter, { roleId: "role-sort", title: "Sort" });
     for (const cardId of ["card-zold", "card-bnew", "card-anew"])
-      await createCardDocument(adapter, { cardId, prompt: cardId, target: "role-sort" });
+      await createCardDocument(adapter, {
+        cardId,
+        prompt: cardId,
+        target: "role-sort",
+      });
     const times = new Map([
       ["cards/card-zold.md", "2026-01-01T00:00:00.000Z"],
       ["cards/card-bnew.md", "2026-02-01T00:00:00.000Z"],
@@ -698,7 +701,11 @@ for (const state of [undefined, "pending"] as const) {
     );
     assert.throws(
       () =>
-        pageItems(changed, "card.list", { start: 1, limit: 1, expectedRevision: listed.revision }),
+        pageItems(changed, "card.list", {
+          start: 1,
+          limit: 1,
+          expectedRevision: listed.revision,
+        }),
       /changed/i,
     );
   });

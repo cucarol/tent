@@ -1,10 +1,9 @@
 import { briefLine, projectAgentContext, type AgentContextPage } from "./agent-context-page.js";
-import { baselineOnlyBehind, type CurrentContext } from "./context-brief.js";
+import { type CurrentContext } from "./context-brief.js";
 import type { AgentContext } from "./agent-context.js";
 
 type Problem = { kind: string; line: string; nodeId?: string; cardId?: string; truncated?: true };
 export type AgentBrief = {
-  counts: { ahead: number; behind: number };
   workspaceIssues: { items: Problem[]; total: number; omitted: number };
   agentContext: AgentContextPage;
   roleId?: string;
@@ -24,49 +23,20 @@ export function projectAgentBrief(
     identity: { nodeId?: string; cardId?: string } = {},
   ) => problems.push({ kind, ...identity, ...briefLine(prefix, title) });
   for (const item of context.recoveryConflicts ?? []) add("recovery", "Recovery", item);
-  for (const item of context.sync.invalidNodes ?? [])
+  for (const item of context.invalidNodes)
     add("invalid", item.nodeId ?? "Invalid", `${item.path}: ${item.reason}`, {
       nodeId: item.nodeId,
     });
-  for (const item of context.sync.nodes.filter((node) => node.ahead))
-    add("ahead", item.nodeId, `${item.path}: ${item.ahead!.reasons.join("; ")}`, {
-      nodeId: item.nodeId,
-    });
-  for (const item of context.changedCardSources.items.filter((item) =>
-    context.sync.nodes.some((node) => node.nodeId === item.nodeId && node.ahead),
-  ))
+  for (const item of context.changedCardSources.items)
     add(
       "changed-source",
       `${item.cardId} → ${item.nodeId}`,
       `${item.path ?? item.publishedVersion.path}: ${item.reason}`,
       { nodeId: item.nodeId, cardId: item.cardId },
     );
-  let baselineOnly = 0;
-  for (const item of context.sync.nodes.filter((node) => node.behind)) {
-    if (baselineOnlyBehind(item)) {
-      baselineOnly++;
-      continue;
-    }
-    add("behind", item.nodeId, `${item.path}: ${item.behind!.reasons.join("; ")}`, {
-      nodeId: item.nodeId,
-    });
-  }
-  if (baselineOnly)
-    add(
-      "baseline",
-      "Baseline",
-      `${baselineOnly} behind Nodes lack retained baselines; inspect workspace drift`,
-    );
   if (context.changedCardSources.diagnostics.length)
     add("uncertain-source", "Unknown", "Some received Card sources could not be compared");
-  if (context.sync.nodes.some((node) => node.uncertain))
-    add(
-      "uncertain-sync",
-      "Unknown",
-      "Some Nodes changed during inspection; synchronization is incomplete",
-    );
   const base = {
-    counts: { ahead: context.sync.counts.ahead, behind: context.sync.counts.behind },
     workspaceIssues: {
       items: problems.slice(0, 10),
       total: problems.length,
@@ -79,11 +49,11 @@ export function projectAgentBrief(
     readNotice: `${page.readNotice} Card rows show identity, state and title; reception/return details are in the Card reads below.`,
     sourceReads: [
       ...page.sourceReads,
-      ...(base.counts.ahead || base.counts.behind
+      ...(context.invalidNodes.length
         ? [
             {
-              title: "Ahead/behind details",
-              command: `tent workspace drift --workspace '${workspaceRoot.replace(/'/g, process.platform === "win32" ? "''" : `'"'"'`)}'`,
+              title: "Invalid Nodes",
+              command: `tent workspace check --workspace '${workspaceRoot.replace(/'/g, process.platform === "win32" ? "''" : `'"'"'`)}'`,
             },
           ]
         : []),
@@ -116,7 +86,6 @@ export function formatAgentBrief(value: AgentBrief) {
     );
   const more = (total: number) => (total ? [`${total} more; read with the commands below.`] : []);
   return [
-    `behind ${value.counts.behind} · ahead ${value.counts.ahead}`,
     ...value.workspaceIssues.items
       .filter((item) => early.has(item.kind))
       .map((item) => `- ${item.line}`),

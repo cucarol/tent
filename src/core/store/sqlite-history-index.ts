@@ -84,18 +84,10 @@ export class SqliteHistoryIndex {
         .all()
         .map((row) => String(row.name));
       if (tables.length) {
-        const expected = [
-          "events",
-          "identities",
-          "node_events",
-          "nodes",
-          "records",
-          "state",
-          "versions",
-        ];
+        const expected = ["events", "identities", "node_events", "nodes", "state", "versions"];
         if (
           JSON.stringify(tables) !== JSON.stringify(expected) ||
-          db.prepare("PRAGMA user_version").get()?.user_version !== 1
+          db.prepare("PRAGMA user_version").get()?.user_version !== 2
         )
           throw new HistoryIndexDamage("Incompatible history projection");
         db.exec("COMMIT");
@@ -108,8 +100,7 @@ export class SqliteHistoryIndex {
         CREATE TABLE IF NOT EXISTS node_events(id TEXT NOT NULL, seq INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(id,seq));
         CREATE TABLE IF NOT EXISTS nodes(id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS versions(id TEXT PRIMARY KEY, first TEXT NOT NULL, latest TEXT);
-        CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY, value TEXT NOT NULL);
-        PRAGMA user_version=1;
+        PRAGMA user_version=2;
         COMMIT;`);
       return disposable(db);
     } catch (error) {
@@ -137,7 +128,7 @@ export class SqliteHistoryIndex {
 
   reset(db: DatabaseSync) {
     db.exec(
-      "DELETE FROM state; DELETE FROM events; DELETE FROM identities; DELETE FROM node_events; DELETE FROM nodes; DELETE FROM versions; DELETE FROM records;",
+      "DELETE FROM state; DELETE FROM events; DELETE FROM identities; DELETE FROM node_events; DELETE FROM nodes; DELETE FROM versions;",
     );
   }
 

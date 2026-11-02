@@ -1,7 +1,5 @@
 import { constants } from "node:fs";
-import { currentPreparedWorkspace } from "./prepared-workspace.js";
 import { open } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   checkedSourceFile,
@@ -14,101 +12,30 @@ import {
   isDirectoryMaterial,
   isPrefixMaterial,
 } from "../core/base/material.js";
-import { observeStructureMaterial } from "./structure-observation.js";
 import { markdownMaterialHeading, materialContent } from "../core/base/material-section.js";
-import { parseFrontmatter } from "../core/base/frontmatter.js";
-import { isNodeId } from "../core/base/id.js";
-import { nodeSemanticContent } from "../core/graph/node-sync-record.js";
-import { systemMaterialPath } from "../core/graph/material-target.js";
 import {
-  cachedFileValue,
   fileState,
   sameFileState,
   withFileReadScope,
   scopedRead,
   peekScopedRead,
-  rememberFileValue,
   type FileState,
 } from "./file-state-cache.js";
 
-type Selection = {
-  key: string;
-  content: (bytes: Buffer) => string | Buffer;
-  retainText?: true;
-};
-type Fingerprint = { version: string; blobs: { sha1: string; sha256: string }; text?: string };
-function isFingerprint(value: unknown): value is Fingerprint {
-  const record = value as Fingerprint | undefined;
-  return (
-    !!record &&
-    typeof record.version === "string" &&
-    /^[a-f0-9]{64}$/.test(record.version) &&
-    typeof record.blobs?.sha1 === "string" &&
-    /^[a-f0-9]{40}$/.test(record.blobs.sha1) &&
-    typeof record.blobs?.sha256 === "string" &&
-    /^[a-f0-9]{64}$/.test(record.blobs.sha256)
-  );
+export async function readSourceFile(root: string, filename: string) {
+  return withFileReadScope(() => readSourceFileInScope(root, filename));
 }
 
-/** Safely read and hash bytes; the Core caller supplies any content selection. */
-export async function observeSourceFile(
-  root: string,
-  filename: string,
-  cacheDir?: string,
-  selection?: Selection,
-) {
-  return withFileReadScope(() => observeSourceFileInScope(root, filename, cacheDir, selection));
+/** Validated local UTF-8 text, without a material comparison cache. */
+export async function readStructureSource(root: string, filename: string) {
+  const observed = await readSourceFile(root, filename);
+  const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(observed.bytes);
+  if (text.includes("\0")) throw new Error(`Structure source is not valid text: ${filename}`);
+  return text;
 }
 
-/** Structure parsers need the validated text as well as its state-bound fingerprint. */
-export async function readStructureSource(root: string, filename: string, cacheDir?: string) {
-  const snapshot = currentPreparedWorkspace(root);
-  const prepared = snapshot?.structureTexts.find(([file]) => file === filename);
-  if (prepared) {
-    const relative = path.relative(root, filename).split(path.sep).join("/");
-    const text =
-      prepared[1] ??
-      snapshot!.repository.sources.files.find((source) => source.path === relative)?.content;
-    if (text !== undefined) return text;
-  }
-  const observed = await observeSourceFile(root, filename, cacheDir, {
-    key: "structure-source-text-v1",
-    retainText: true,
-    content: (bytes) => {
-      const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-      if (text.includes("\0")) throw new Error(`Structure source is not valid text: ${filename}`);
-      return text;
-    },
-  });
-  return observed.text!;
-}
-
-async function observeSourceFileInScope(
-  root: string,
-  filename: string,
-  cacheDir?: string,
-  selection?: Selection,
-) {
-  const { stat, canonicalPath } = await initialSourceFile(root, filename);
-  const initial = fileState(stat);
-  const cachePath = cacheDir ? path.join(cacheDir, "file-state.json") : undefined;
-  const cacheKey = `material:${JSON.stringify([canonicalPath, selection?.key])}`;
-  const cached = await cachedFileValue(
-    cachePath,
-    cacheKey,
-    initial,
-    (value): value is Fingerprint =>
-      isFingerprint(value) && (!selection?.retainText || typeof value.text === "string"),
-  );
-  if (cached) {
-    return {
-      canonicalPath,
-      observedVersion: cached.version,
-      cacheHit: true,
-      blobs: cached.blobs,
-      ...(cached.text === undefined ? {} : { text: cached.text }),
-    };
-  }
+async function readSourceFileInScope(root: string, filename: string) {
+  const { canonicalPath } = await initialSourceFile(root, filename);
   const handle = await open(
     filename,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
@@ -156,26 +83,7 @@ async function observeSourceFileInScope(
     if (!sameFileState(fileState(final), signature) || !sameFileState(observed.state, signature)) {
       throw new Error("Material changed while observing");
     }
-    const bytes = observed.bytes;
-    const selected = selection ? selection.content(bytes) : bytes;
-    const text = selection?.retainText && typeof selected === "string" ? selected : undefined;
-    const observedVersion = createHash("sha256").update(selected).digest("hex");
-    const blobs = {
-      sha1: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
-      sha256: createHash("sha256").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
-    };
-    await rememberFileValue(cachePath, cacheKey, signature, {
-      version: observedVersion,
-      blobs,
-      ...(text === undefined ? {} : { text }),
-    });
-    return {
-      canonicalPath,
-      observedVersion,
-      cacheHit: false,
-      blobs,
-      ...(text === undefined ? {} : { text }),
-    };
+    return { canonicalPath, bytes: observed.bytes };
   } finally {
     await handle.close();
   }
@@ -186,30 +94,14 @@ export async function observeMaterialResource(
   workspaceRoot: string,
   documentPath: string,
   resource: string,
-  cacheDir?: string,
-  track?: "structure",
-  structureResources?: readonly string[],
 ): Promise<{
   canonicalPath: string;
-  observedVersion?: string;
   coverage?: true;
-  cacheHit?: boolean;
-  blobs?: { sha1: string; sha256: string };
-  structureDependencies?: string[];
 }> {
   const locator = materialLocator(resource, documentPath, true);
   const filename = localMaterialPath(locator, workspaceRoot);
   if (filename === undefined)
     throw new Error("Mechanical checks require an explicit local path or file: URI");
-  if (track === "structure") {
-    return observeStructureMaterial(
-      workspaceRoot,
-      documentPath,
-      resource,
-      cacheDir,
-      structureResources,
-    );
-  }
   // An absolute file URI explicitly addresses another location. Check every path
   // segment from its filesystem root; relative addresses remain in this workspace.
   const root = locator.kind === "uri" ? path.parse(filename).root : workspaceRoot;
@@ -224,38 +116,7 @@ export async function observeMaterialResource(
     };
   }
   const heading = markdownMaterialHeading(locator);
-  return observeSourceFile(root, filename, cacheDir, {
-    key: JSON.stringify([
-      "semantic-text-v4",
-      systemMaterialPath(locator, workspaceRoot) ?? "",
-      heading,
-    ]),
-    content: (bytes) => {
-      let raw: string;
-      try {
-        raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-      } catch (error) {
-        if (heading !== undefined) throw error;
-        return bytes;
-      }
-      if (raw.includes("\0")) return bytes;
-      const normalized = raw.replace(/\r\n?/g, "\n");
-      if (/\.(?:md|markdown)$/i.test(path.extname(filename))) {
-        try {
-          const parsed = parseFrontmatter(normalized);
-          if (typeof parsed.data.id === "string" && isNodeId(parsed.data.id))
-            return nodeSemanticContent(
-              parsed.data,
-              heading === undefined ? parsed.body : materialContent(normalized, locator),
-              systemMaterialPath(locator, workspaceRoot) ?? "",
-              undefined,
-              workspaceRoot,
-            );
-        } catch {
-          // Ordinary Markdown is material text even when its optional YAML is malformed.
-        }
-      }
-      return materialContent(normalized, locator);
-    },
-  });
+  const { canonicalPath } = await initialSourceFile(root, filename);
+  if (heading !== undefined) materialContent(await readStructureSource(root, filename), locator);
+  return { canonicalPath };
 }

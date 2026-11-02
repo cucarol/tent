@@ -15,7 +15,6 @@ export type GoalContextItem = {
   type?: string;
   relationKinds?: WorkspaceRelation["via"][];
   state?: string;
-  sync?: true;
   target?: string;
   returnTo?: string;
   receivedBy?: string;
@@ -42,11 +41,6 @@ export async function readGoalContext(fs: FsAdapter, nodeId: string): Promise<Go
       ...(nodeTypeOf(node.type) === "output"
         ? {
             state: documentLifecycle(data).status ?? "invalid",
-            ...(kind === "self" ||
-            kind === "output" ||
-            (kind === "child" && nodeTypeOf(selected.type) === "goal")
-              ? { sync: true as const }
-              : {}),
           }
         : {}),
     };

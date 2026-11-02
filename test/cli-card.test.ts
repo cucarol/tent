@@ -265,7 +265,6 @@ test("Card list reads live headers and diagnostics without derived progress or c
   const file = path.join(root, card.path);
   const original = parseFrontmatter(await fs.readFile(file, "utf8"));
   const head = await adapter.history.currentCommit();
-  const records = await adapter.history.nodeRecords();
   const edited = serializeFrontmatter(
     { ...original.data, title: "Live title", state: "consumed" },
     original.body,
@@ -305,7 +304,6 @@ test("Card list reads live headers and diagnostics without derived progress or c
   assert.equal(await fs.readFile(file, "utf8"), invalid);
   assert.equal((await fs.stat(file)).mtimeMs, invalidMtime);
   assert.equal(await adapter.history.currentCommit(), head);
-  assert.deepEqual(await adapter.history.nodeRecords(), records);
 });
 
 test("Card CLI deprecates tasks with CAS, filters them and displays a reception notice", async (t) => {

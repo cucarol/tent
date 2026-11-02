@@ -13,10 +13,6 @@ import {
 import { extractPhpImports } from "../src/core/base/php-imports.js";
 import { repositoryFacts } from "../src/core/base/repository-facts.js";
 import { readRepositorySources } from "../src/fs/repository-sources.js";
-import {
-  observeStructureMaterial,
-  withStructureSnapshot,
-} from "../src/fs/structure-observation.js";
 import { initializeFixtureRepository, testScratchRoot } from "./scratch.js";
 
 const source = (path: string, content?: string): RepositorySource => ({ path, content });
@@ -557,52 +553,4 @@ test("PHP focused Core requests only member source and closest containing Compos
   assert.deepEqual(result.issues, []);
   assert.equal(result.edges.length, 2);
   assert.deepEqual(extractPhpImports(files, []), { edges: [], issues: [], requiredFiles: [] });
-});
-
-test("PHP FS collection and narrow structure share Core resolution and preserve relevant failures", async () => {
-  const root = await fs.mkdtemp(path.join(testScratchRoot(), "php-imports-"));
-  try {
-    initializeFixtureRepository(root);
-    const files = [
-      config({ "psr-4": { "Lib\\": "lib/" } }),
-      source("app/main.php", String.raw`<?php use Lib\Thing; require __DIR__ . '/../api/a.php';`),
-      source("lib/Thing.php", "<?php"),
-      source("api/a.php", "<?php"),
-      source("other/broken.php", "<?php /*"),
-      source("other/composer.json", "{"),
-    ];
-    for (const file of files) {
-      await fs.mkdir(path.dirname(path.join(root, file.path)), { recursive: true });
-      await fs.writeFile(path.join(root, file.path), file.content!);
-    }
-    const collected = await readRepositorySources(
-      root,
-      files.map((file) => file.path),
-    );
-    assert.deepEqual(collected.errors, []);
-    assert.deepEqual(pairs(extractRepositoryImports(collected.files)), [
-      "app/main.php -> api/a.php",
-      "app/main.php -> lib/Thing.php",
-    ]);
-    const observe = () =>
-      withStructureSnapshot(() => observeStructureMaterial(root, "Module/Module.md", "../../app/"));
-    assert.deepEqual((await observe()).structureDependencies, ["api/", "lib/"]);
-    await fs.writeFile(path.join(root, "lib/Thing.php"), Buffer.from([0xff]));
-    await fs.writeFile(path.join(root, "other/composer.json"), Buffer.from([0xff]));
-    assert.deepEqual((await observe()).structureDependencies, ["api/", "lib/"]);
-    await fs.writeFile(path.join(root, "composer.json"), "{");
-    await assert.rejects(observe, /Cannot parse PHP Composer/);
-    await fs.writeFile(path.join(root, "composer.json"), files[0]!.content!);
-    await fs.writeFile(path.join(root, "app/main.php"), "<?php require '../api/a.php';");
-    await assert.rejects(
-      observe,
-      /candidate api\/a.php: runtime include_path and working directory/,
-    );
-    await fs.writeFile(path.join(root, "app/main.php"), "<?php require $dynamic;");
-    await assert.rejects(observe, /PHP include\/require expression/);
-    await fs.writeFile(path.join(root, "app/main.php"), Buffer.from([0xff]));
-    await assert.rejects(observe);
-  } finally {
-    await removeTestFixture(root, { recursive: true, force: true });
-  }
 });

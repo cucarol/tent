@@ -4,7 +4,6 @@ import { extractNodeMentions } from "../src/core/base/links.js";
 import { ContextReader, type ReaderDocument } from "../src/core/graph/context-reader.js";
 import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { contentEtag } from "../src/core/base/etag.js";
-import { nodeSemanticFingerprint } from "../src/core/graph/node-sync-record.js";
 
 test("mentions retain each bare known token range, including code and HTML text, outside Markdown links", () => {
   const body =
@@ -25,9 +24,7 @@ test("mentions retain each bare known token range, including code and HTML text,
     mentions.map((m) => body.slice(m.range.start, m.range.end)),
     mentions.map((m) => m.targetNodeId),
   );
-  const before = nodeSemanticFingerprint({ type: "prompt" }, body);
   extractNodeMentions(body, new Set());
-  assert.equal(nodeSemanticFingerprint({ type: "prompt" }, body), before);
 });
 
 test("materialized Node readers expose mentions in both directions with exact read addresses", () => {

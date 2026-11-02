@@ -8,7 +8,7 @@ The `type` says how to treat a Node; `tags` name its form and topic.
 | `prompt` | Take it as given; propose an update when reality contradicts it. |
 | `output` | It records one moment. Check its material first; your conclusions stay `output` until the user agrees. |
 
-Any undeprecated `output` under a goal counts as its result, and a goal that owns code is carried out by that code; keep the goal's open questions in `prompt` Nodes. Leave commit ids, test counts and delivery status to Git and Cards.
+Keep the goal's open questions in `prompt` Nodes. Leave commit ids, test counts and delivery status to Git and Cards.
 
 A Node takes zero or more tags. Reuse one from `tent node tags` or a preset, and add the topic words the project uses:
 

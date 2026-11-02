@@ -17,12 +17,24 @@ import { git } from "./helpers.js";
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "cli-path-contract-"));
   t.after(() =>
-    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    removeTestFixture(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    }),
   );
   initializeFixtureRepository(root);
   await scaffoldInWorkspace(openTestFs(root), {
     name: "CLI path contract",
-    nodes: [{ id: "node-goal", name: "Goal", type: "goal", body: "Deliver evidence." }],
+    nodes: [
+      {
+        id: "node-goal",
+        name: "Goal",
+        type: "goal",
+        body: "Deliver evidence.",
+      },
+    ],
   });
   await initializeFixtureHistory(path.join(root, ".tent"));
   await fs.mkdir(path.join(root, "docs"));
@@ -233,14 +245,8 @@ test("help explains Git Bash path conversion where paths are described", () => {
   assert.doesNotMatch(nodeHelpText("history"), /MSYS_NO_PATHCONV/);
 });
 
-test("confirm names the missing ETag, node get shows it and role create prints one line", async (t) => {
+test("node get shows the ETag and role create prints one line", async (t) => {
   const { root, globals, text, parse } = await fixture(t);
-  const confirm = await runNodeCommand("confirm", ["node-goal"], text);
-  assert.equal(confirm.exitCode, 1);
-  assert.match(confirm.stderr, /^tent node confirm needs --base-etag from a complete read\./);
-  assert.match(confirm.stderr, /Next: tent node get node-goal --full/);
-  assert.match(confirm.stderr, /etag/);
-
   const etag = parse(await runNodeCommand("get", ["node-goal"], globals)).etag as string;
   const paged = await runNodeCommand("get", ["node-goal"], text);
   assert.equal(paged.exitCode, 0, paged.stderr);

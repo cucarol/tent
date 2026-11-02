@@ -175,7 +175,7 @@ test("material index retains draft coverage and excludes deprecated owners witho
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 13);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 14);
   assert.equal(await adapter.readFile("Core/Core.md"), draftRaw);
   await adapter.writeFile("Core/Core.md", draftRaw.replace("status: draft", "status: deprecated"));
   const retired = buildStopMaterialIndex(await loadNodeCatalog(adapter), root);
@@ -240,7 +240,7 @@ test("material index excludes unknown lifecycle from modules and ordinary materi
   legacy.indexDigest = createHash("sha256").update(JSON.stringify(legacy.index)).digest("hex");
   await fs.writeFile(cacheFile, JSON.stringify(legacy));
   assert.deepEqual(await loadStopMaterialIndex(systemRoot, root), expected);
-  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 13);
+  assert.equal(JSON.parse(await fs.readFile(cacheFile, "utf8")).schema, 14);
   assert.deepEqual(modulesForIndexedTurn(expected, event(["unknown/a.ts"])), []);
   await fs.writeFile(
     path.join(systemRoot, unknownModulePath),

@@ -15,7 +15,9 @@ import { git } from "./helpers.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
 test("Node help is offline and does not parse or read requested content", async () => {
-  const globals = { workspace: path.resolve(testScratchRoot(), "missing-help-workspace") };
+  const globals = {
+    workspace: path.resolve(testScratchRoot(), "missing-help-workspace"),
+  };
   for (const [sub, args] of [
     ["help", []],
     ["--help", []],
@@ -42,7 +44,12 @@ test("CLI validation errors name the command, argument and field instead of issu
   await mkdir(scratch, { recursive: true });
   const root = await mkdtemp(path.join(scratch, "cli-validation-"));
   t.after(() =>
-    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    removeTestFixture(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    }),
   );
   const workspace = path.join(root, "workspace");
   await scaffoldInWorkspace(openTestFs(workspace), { name: "Validation" });
@@ -112,7 +119,14 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
     const workspace = path.join(root, "workspace");
     await scaffoldInWorkspace(openTestFs(workspace), {
       name: "CLI tools",
-      nodes: [{ id: "node-fact", name: "Fact", type: "prompt", body: "Original fact" }],
+      nodes: [
+        {
+          id: "node-fact",
+          name: "Fact",
+          type: "prompt",
+          body: "Original fact",
+        },
+      ],
     });
     await initializeFixtureHistory(path.join(workspace, ".tent"));
     await captureFixtureDocuments(path.join(workspace, ".tent"));
@@ -217,7 +231,10 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
         [
           "node-fact",
           "--input-json",
-          JSON.stringify({ baseEtag: concurrent.etag, frontmatter: { type: "output" } }),
+          JSON.stringify({
+            baseEtag: concurrent.etag,
+            frontmatter: { type: "output" },
+          }),
         ],
         globals,
       ),
@@ -230,7 +247,10 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
           [
             "node-fact",
             "--input-json",
-            JSON.stringify({ baseEtag: (await readFact()).etag, frontmatter: { tags } }),
+            JSON.stringify({
+              baseEtag: (await readFact()).etag,
+              frontmatter: { tags },
+            }),
           ],
           globals,
         ),
@@ -238,7 +258,10 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
       assert.deepEqual((await readFact()).tags ?? [], tags);
     }
     await initializeFixtureHistory(path.join(workspace, ".tent"));
-    const source = { resource: "./refs/example.pdf", title: "Reference document" };
+    const source = {
+      resource: "./refs/example.pdf",
+      title: "Reference document",
+    };
     const input = result(
       await runCardCommand(
         "create",
@@ -279,7 +302,12 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
     assert.equal(stale.exitCode, 1);
     assert.equal(result(await runRoleCommand("show", [roleId], globals)).etag, after.etag);
   } finally {
-    await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await removeTestFixture(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    });
   }
 });
 
@@ -294,8 +322,6 @@ test("Node help separates the overview from command notes and applicable footers
   assert.match(nodeHelpText("append"), /unique matching section/);
   assert.doesNotMatch(nodeHelpText("write-many"), /JSON by records/);
   assert.doesNotMatch(nodeHelpText("write-many"), /--by records/);
-  for (const sub of ["confirm", "write"])
-    assert.match(nodeHelpText(sub), /--by records who confirmed it:/);
   assert.match(nodeHelpText("create"), /preset \(direction,/);
   assert.doesNotMatch(nodeHelpText("create"), /\$\{presets\}/);
 });

@@ -4,7 +4,6 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { randomBytes } from "node:crypto";
 import { DatabaseSync, type SQLInputValue } from "../src/fs/sqlite-runtime.js";
 import {
   SqliteDocumentHistory,
@@ -258,56 +257,6 @@ test("damaged projection values rebuild, but damaged authoritative content retai
   source.prepare("UPDATE blobs SET raw=?").run("damaged authority");
   source.close();
   await assert.rejects(history.nodeVersions("node-a"), /Damaged SQLite content: [a-f0-9]{64}/);
-});
-
-test("records and identity projections remain independent and a superseded invalid record stays superseded", async (t) => {
-  const root = await fs.mkdtemp(path.join(testScratchRoot(), "history-records-"));
-  const history = new SqliteDocumentHistory(root);
-  t.after(async () => {
-    await history.close();
-    await fs.rm(root, { recursive: true, force: true });
-  });
-  await history.initialize();
-  const valid = { v: 1 as const, materials: [] };
-  await history.captureUnlocked([{ path: "A/A.md", raw: raw("node-a", "A") }], {
-    operation: "test.records",
-    nodeRecords: { "node-a": valid },
-  });
-  const authority = new DatabaseSync(path.join(root, ".git/history.sqlite"));
-  const append = (value: unknown) => {
-    const parent = authority.prepare("SELECT id FROM events ORDER BY seq DESC LIMIT 1").get()!.id;
-    const seq = authority
-      .prepare("INSERT INTO events(id,parent,time,metadata) VALUES(?,?,?,?)")
-      .run(
-        randomBytes(32).toString("hex"),
-        parent!,
-        new Date().toISOString(),
-        '{"operation":"test.imported-record"}',
-      ).lastInsertRowid;
-    authority
-      .prepare("INSERT INTO records VALUES(?,?,?)")
-      .run(seq, "node-a", JSON.stringify(value));
-  };
-  try {
-    append({ invalid: true });
-    assert.equal(
-      (await history.nodeVersions("node-a")).length,
-      1,
-      "history never reads unrelated records",
-    );
-    await assert.rejects(history.nodeRecords());
-    append(valid);
-    assert.deepEqual(await history.nodeRecords(), { "node-a": valid });
-    authority.prepare("UPDATE blobs SET raw=?").run("damaged history content");
-    assert.deepEqual(
-      await history.nodeRecords(),
-      { "node-a": valid },
-      "record reads do not parse unrelated historical documents",
-    );
-    await assert.rejects(history.nodeVersions("node-a"), /Damaged SQLite content/);
-  } finally {
-    authority.close();
-  }
 });
 
 test("initialization refreshes earlier negative availability without weakening legacy or closed errors", async (t) => {

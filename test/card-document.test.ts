@@ -7,7 +7,6 @@ import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import {
   createCardDocument,
@@ -31,10 +30,9 @@ import { renameNode } from "../src/core/graph/rename-ops.js";
 import { contentEtag } from "../src/core/base/etag.js";
 import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { git } from "./helpers.js";
-import { runCardCommand } from "../src/cli/card-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
-import { linkNodeOutput, confirmNodeSync } from "../src/core/graph/node-sync.js";
+import { linkNodeOutput } from "../src/core/graph/node-output.js";
 import { ReaderError } from "../src/core/graph/context-reader.js";
 import { cliErrorText } from "../src/cli/error-text.js";
 
@@ -465,7 +463,7 @@ test("interrupted reception recovery rejects simultaneous status, target and inp
   assert.equal((await adapter.history.pathVersions(card.path)).latest!.commit, card.version.commit);
 });
 
-test("Card delivery stays independent of output attribution, confirmation and goal edits", async (t) => {
+test("Card delivery stays independent of output attribution and goal edits", async (t) => {
   const { adapter } = await fixture(t);
   await adapter.writeFile(
     "Main/Main.md",
@@ -487,9 +485,6 @@ test("Card delivery stays independent of output attribution, confirmation and go
   assert.deepEqual(parseFrontmatter(await adapter.readFile(outputPath)).data.sources, [
     { resource: "/cards/" + card.cardId + ".md" },
   ]);
-  await confirmNodeSync(adapter, output.nodeId, {
-    baseEtag: contentEtag(await adapter.readFile(outputPath)),
-  });
   await writeNodeDocument(adapter, "node-main", {
     baseEtag: contentEtag(await adapter.readFile("Main/Main.md")),
     body: "Changed goal",
@@ -606,11 +601,7 @@ test("goal and output material changes preserve explicit Card delivery", async (
   assert.equal(cli.exitCode, 0, cli.stderr);
   const output = JSON.parse(cli.stdout);
   assert.equal(output.cardId, card.cardId);
-  const outputPath = path.join(workspace, output.path);
-  await confirmNodeSync(adapter, output.nodeId, {
-    baseEtag: contentEtag(await fs.readFile(outputPath, "utf8")),
-    by: "human:cuca",
-  });
+
   const cardRaw = await adapter.readFile(card.path);
   assert.equal(((await readCardDocument(adapter, card.cardId)) as any).state, "consumed");
   await fs.writeFile(path.join(workspace, "result.txt"), "changed");
@@ -629,10 +620,6 @@ test("goal and output material changes preserve explicit Card delivery", async (
     linkNodeOutput(adapter, "node-goal", { resource: "result.txt", roleId: "role-b" }),
     /--card/,
   );
-  await confirmNodeSync(adapter, output.nodeId, {
-    baseEtag: contentEtag(await fs.readFile(outputPath, "utf8")),
-    by: "human:cuca",
-  });
   assert.equal(((await readCardDocument(adapter, card.cardId)) as any).state, "consumed");
 });
 

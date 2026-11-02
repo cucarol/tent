@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
 import { runNodeCommand } from "../src/cli/node-commands.js";
+import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { createNode } from "../src/core/graph/ops.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
@@ -18,14 +19,7 @@ import {
 } from "../src/core/base/material.js";
 import { NodeWriteError, writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";
-import type { FsAdapter } from "../src/core/store/adapter.js";
-import {
-  observeNodeMaterials,
-  nodeSemanticFingerprint,
-  nodeMaterialObservationScope,
-} from "../src/core/graph/node-sync-record.js";
 import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
 import {
   createRoleContext,
@@ -34,35 +28,6 @@ import {
 } from "../src/core/read/role-context.js";
 import { createCardDocument, verifyCardSourceVersion } from "../src/core/graph/card-document.js";
 import { renameNode } from "../src/core/graph/rename-ops.js";
-import { git } from "./helpers.js";
-
-test("query observations distinguish descriptive sources from file resources", async () => {
-  let reads = 0;
-  const adapter = {
-    observeMaterial: async () => {
-      reads++;
-      return { observedVersion: "a".repeat(64) };
-    },
-  } as unknown as FsAdapter;
-  const data = {
-    resource: "../../notes.md",
-    sources: [{ resource: "notes.md" }, { resource: "../../notes.md" }],
-  };
-  const expected = await observeNodeMaterials(adapter, data, "A/A.md");
-  reads = 0;
-  const actual = await observeNodeMaterials(
-    adapter,
-    data,
-    "A/A.md",
-    undefined,
-    undefined,
-    nodeMaterialObservationScope(new Map()),
-  );
-  assert.deepEqual(actual, expected);
-  assert.equal(actual[1]!.version, undefined);
-  assert.match(actual[1]!.reason!, /not an explicit local address/);
-  assert.equal(reads, 1);
-});
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-material-"));
@@ -193,7 +158,7 @@ test("legacy addresses survive body/raw/metadata edits, source reorder and remov
   await edit({ frontmatter: { resource: "../../../spec/x.md", sources: [] } });
 });
 
-test("CLI writes retain legacy addresses and read-only node check reports their repair", async (t) => {
+test("CLI writes retain legacy addresses and workspace check reports their repair", async (t) => {
   const { root, adapter, id, note } = await fixture(t);
   await adapter.writeFile(
     note,
@@ -213,13 +178,9 @@ test("CLI writes retain legacy addresses and read-only node check reports their 
   const rejected = await cli("write", [id, "--input-json", JSON.stringify(input)]);
   assert.equal(rejected.exitCode, 1);
   assert.match(rejected.stderr, /Material outside the Workspace requires an absolute URI/);
-  const checked = await cli("check", [id]);
-  assert.equal(checked.exitCode, 0, checked.stderr);
-  assert.equal(JSON.parse(checked.stdout).state, "unanchored");
-  assert.match(
-    JSON.parse(checked.stdout).materials[0].reason,
-    /escapes \.tent; use "\.\.\/\.\.\/\.\.\/spec\/x.md"/,
-  );
+  const checked = await runWorkspaceCommand("check", [], { workspace: root, json: true });
+  assert.equal(checked.exitCode, 1, checked.stderr);
+  assert.match(checked.stdout, /escapes|outside|invalid-material/i);
   assert.equal(await adapter.readFile(note), live.raw);
   for (const fields of [
     { resource: "/../spec/x.md" },
@@ -368,13 +329,6 @@ test("ordinary .tent files are rejected consistently by new declarations and liv
   await adapter.writeFile(note, legacy);
   const retained = await readNodeForEdit(adapter, id);
   await writeNodeDocument(adapter, id, { baseEtag: retained.etag, body: "editable legacy" });
-  const observed = await observeNodeMaterials(
-    adapter,
-    { resource: "/attachments/ordinary.md" },
-    note,
-  );
-  assert.equal(observed[0]!.version, undefined);
-  assert.match(observed[0]!.reason!, /Materials must point/);
 });
 
 test("file URI Node, Role and Card addresses retain native history and response semantics", async (t) => {
@@ -405,30 +359,4 @@ test("file URI Node, Role and Card addresses retain native history and response 
     resource: uri(note),
     sources: [{ resource: uri(card.path) }, { resource: uri("roles/role-review.md") }],
   });
-  const native = await observeNodeMaterials(
-    adapter,
-    { resource: `/${note}` },
-    "Consumer/Consumer.md",
-  );
-  const absolute = await observeNodeMaterials(
-    adapter,
-    { resource: uri(note) },
-    "Consumer/Consumer.md",
-  );
-  assert.equal(absolute[0]!.version, native[0]!.version);
-  assert.ok(absolute[0]!.version);
-  assert.deepEqual(
-    await observeNodeMaterials(adapter, { sources: [{ resource: uri(card.path) }] }, note),
-    [],
-  );
-  assert.equal(
-    nodeSemanticFingerprint(
-      { sources: [{ resource: uri(card.path) }] },
-      "body",
-      note,
-      undefined,
-      root,
-    ),
-    nodeSemanticFingerprint({}, "body", note, undefined, root),
-  );
 });

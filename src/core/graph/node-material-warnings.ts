@@ -7,7 +7,6 @@ import {
   type MaterialLocator,
   resolvedMaterialOccurrences,
 } from "../base/material.js";
-import { systemMaterialPath } from "./material-target.js";
 import { markdownMaterialHeading } from "../base/material-section.js";
 import { markdownSyntax } from "../base/markdown-syntax.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
@@ -42,9 +41,9 @@ function hasSeveralSections(raw: string) {
   return sections.filter((heading) => heading.depth === depth).length >= 2;
 }
 
-/** Advice for explicit writes only; no warning changes a Node's type or synchronization basis. */
+/** Advice for explicit writes only; no warning changes a Node's type. */
 export async function nodeMaterialWarnings(
-  fs: Pick<FsAdapter, "workspaceRoot" | "materialIsTracked" | "readMaterialText">,
+  fs: Pick<FsAdapter, "workspaceRoot" | "readMaterialText">,
   data: Record<string, unknown>,
   documentPath: string,
   previous: Record<string, unknown> = {},
@@ -74,30 +73,10 @@ export async function nodeMaterialWarnings(
       /* Advice cannot fail a write when a material cannot be read. */
     }
   }
-  const untracked: string[] = [];
-  for (const { resource, locator } of resolvedMaterialOccurrences(data, documentPath)) {
-    if (
-      !locator ||
-      locator.kind === "unresolved" ||
-      (locator.kind === "uri" && !locator.uri.startsWith("file:")) ||
-      isDirectoryMaterial(locator) ||
-      isPrefixMaterial(locator) ||
-      systemMaterialPath(locator, fs.workspaceRoot) !== undefined ||
-      untracked.includes(resource)
-    )
-      continue;
-    // A hint must never turn a successful write into a failed receipt or guess from a Git error.
-    if ((await fs.materialIsTracked?.(resource, documentPath).catch(() => undefined)) === false)
-      untracked.push(resource);
-  }
-  const warnings = untracked.length
-    ? [
-        `${String(data.id ?? "Node")}: Local material is not tracked by Git; Tent cannot inspect how it changed. Record a result from one point in time as output. Materials: ${untracked.map((resource) => JSON.stringify(resource)).join(", ")}`,
-      ]
-    : [];
+  const warnings: string[] = [];
   if (whole.length)
     warnings.push(
-      `${String(data.id ?? "Node")}: Material is a whole document with several sections; an edit to any of them marks this Node behind. If the Node depends on particular sections, cite those instead (path#Heading). Materials: ${whole.map((resource) => JSON.stringify(resource)).join(", ")}`,
+      `${String(data.id ?? "Node")}: Material is a whole document with several sections. If the Node depends on particular sections, cite those instead (path#Heading). Materials: ${whole.map((resource) => JSON.stringify(resource)).join(", ")}`,
     );
   return warnings;
 }

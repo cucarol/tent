@@ -180,7 +180,7 @@ test("node and file starts assemble direct rules, real re-export test evidence, 
       (item) => item.nodeId === "node-rejectedlong" && item.text?.startsWith("Abandoned option"),
     ),
   );
-  assert.ok(section(first, "open").items.some((item) => item.nodeId === "node-tasklong"));
+  assert.ok(section(first, "unknown").items.some((item) => item.nodeId === "node-tasklong"));
   assert.ok(first.sections.every((section) => section.items.every((item) => item.why)));
   const byFile = await assembleAgentContext(
     fs,

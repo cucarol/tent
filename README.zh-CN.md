@@ -2,9 +2,9 @@
 
 [English](README.md)
 
-Tent 是项目的上下文图谱：记下你定了什么、做出了什么、哪些已经过时。
+Tent 是项目的上下文图谱：记下你定了什么、做出了什么。
 
-代码图谱画出代码怎样连在一起。Tent 记的是代码装不下的东西：你的 goal、你给的 prompt，以及由此做出来的 output。Agent 开工前读它，干活时更新它。一条记录依据的代码或文档变了，Tent 会把它标成过时，让它被改正，而不是误导下一个会话。
+代码图谱画出代码怎样连在一起。Tent 记的是代码装不下的东西：你的 goal、你给的 prompt，以及由此做出来的 output。Agent 开工前读它，干活时更新它。
 
 你拍板，Agent 干活，Tent 记账。它支持 Claude Code 和 Codex，数据是你电脑上的 Markdown 文件。
 
@@ -19,7 +19,7 @@ Tent 是项目的上下文图谱：记下你定了什么、做出了什么、哪
 
    Agent 会把现有代码画成一组 Node，项目的每一块各一个。每个 Node 挂着那块代码，写明改动时必须守住的规则、要跟着一起改的地方，以及怎么验证。做到一半的项目也是这样接进来。
 
-3. **读图谱。** 每个 Node 是 `.tent/` 下的一个 Markdown 文件，套在它的上级下面。用任何编辑器都能打开，也可以直接问 Agent 哪些过时了。
+3. **读图谱。** 每个 Node 是 `.tent/` 下的一个 Markdown 文件，套在它的上级下面。用任何编辑器都能打开。
 
 ## Tent 记什么
 
@@ -33,9 +33,6 @@ Tent 是项目的上下文图谱：记下你定了什么、做出了什么、哪
 
 ## Tent 告诉你什么
 
-- **落后**：goal 或 prompt 依据的材料，也就是它指向的文件或 Node，在记下之后改了或不见了。这条事实可能已经过时。
-- **领先**：还没有东西实现的 goal，或者在产出之后又改过的 goal。挂着代码的 goal，在你改动它之前，都算由那块代码实现着。
-- **会话开始时**，Agent 先读一份简短的摘要：哪些落后、哪些领先，有哪些 Card 在等它。
 - **一轮结束时**，如果这一轮改了文件，Tent 会点出覆盖这些文件的 Node。Agent 改掉这一轮弄错的句子，记下值得留的东西，或者说一句不用记。
 
 各块之间的依赖从 TypeScript、JavaScript、Python、Go、Rust、Java、C#、C、C++ 和 PHP 的 import 里分析出来。其他语言的代码照样按目录、按 Git 历史里哪些文件总一起改来画图。
@@ -85,31 +82,7 @@ npm run plugin:build
 
 ## 手动用 CLI
 
-这些命令平时由 Agent 通过 Skill 运行，你很少需要自己敲。下面的 `tent` 是 npm 装的命令；用插件时，Agent 运行包里的 `cli.mjs`。每条命令都会打印下一步要用的 id。
-
-```sh
-tent new .
-echo "export function signIn(email) {}" > login.js
-
-# 一个 goal：还没有东西实现它，摘要把它列为领先。
-tent node create "Email sign-in" --type goal --body "Users sign in with an email address and a one-time code."
-tent workspace brief
-
-# 它下面的一条规则，依据 login.js；再记一个 output，表示工作已经做出来了。
-tent node create "One-time codes" --type prompt --parent <goal-id> --resource login.js --body "A code works once and expires after 10 minutes."
-tent node link-output <goal-id> --resource login.js
-
-# 改代码：这条规则现在落后了。
-echo "export const CODE_TTL_MINUTES = 30;" >> login.js
-tent workspace brief
-```
-
-规则和代码哪个错了就改哪个，然后用完整读取返回的 `etag` 确认这条规则，摘要就会报告 `behind 0 · ahead 0`：
-
-```sh
-tent node get <prompt-id> --full --json
-tent node confirm <prompt-id> --base-etag <etag>
-```
+这些命令平时由 Agent 通过 Skill 运行，你很少需要自己敲。`tent` 是 npm 装的命令；用插件时，Agent 运行包里的 `cli.mjs`。
 
 替换内容的写入必须带上读到的 ETag，两个会话不会悄悄覆盖对方。精确规则见 [docs/SPEC.md](docs/SPEC.md)。
 

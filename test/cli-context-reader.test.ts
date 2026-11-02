@@ -16,8 +16,6 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 import { git } from "./helpers.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { createNode } from "../src/core/graph/ops.js";
-import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
 
 test("material display preserves directory and prefix selectors without opening files", () => {
@@ -56,7 +54,12 @@ test("material display preserves directory and prefix selectors without opening 
 test("node get preserves foreign file URIs when the host cannot map them", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-foreign-material-"));
   t.after(() =>
-    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    removeTestFixture(workspace, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    }),
   );
   await initializeFixtureWorkspace(workspace);
   const resource =
@@ -71,7 +74,10 @@ test("node get preserves foreign file URIs when the host cannot map them", async
   const adapter = openTestFs(path.join(workspace, ".tent"));
   const head = await adapter.history.currentCommit();
   for (const flags of [[], ["--full"], ["--view", "raw"], ["--full", "--view", "raw"]]) {
-    const read = await runNodeCommand("get", [nodeId, ...flags], { workspace, json: true });
+    const read = await runNodeCommand("get", [nodeId, ...flags], {
+      workspace,
+      json: true,
+    });
     assert.equal(read.exitCode, 0, read.stderr);
     const value = JSON.parse(read.stdout);
     assert.deepEqual(value.materials, [resource]);
@@ -86,7 +92,12 @@ test("node get preserves foreign file URIs when the host cannot map them", async
 test("node get shows decoded own material paths below ETag even with an empty body", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-material-paths-"));
   t.after(() =>
-    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    removeTestFixture(workspace, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    }),
   );
   await initializeFixtureWorkspace(workspace);
   const adapter = openTestFs(path.join(workspace, ".tent"));
@@ -131,82 +142,17 @@ test("node get shows decoded own material paths below ETag even with an empty bo
   assert.equal(await adapter.history.currentCommit(), head);
 });
 
-test("complete output CLI reads expose changedSince in JSON and approved text without saving it", async (t) => {
-  const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "cli-output-freeze-"));
-  t.after(() =>
-    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
-  );
-  await initializeFixtureWorkspace(workspace);
-  const adapter = openTestFs(path.join(workspace, ".tent"));
-  const env = {
-    fs: adapter,
-    clock: { now: () => "2026-10-06T00:00:00.000Z" },
-    tentName: "Read output",
-  };
-  const outer = await createNode(env, { parentPath: "", name: "Outer", type: "goal" });
-  const inner = await createNode(env, { parentPath: "Outer", name: "Inner", type: "goal" });
-  await fs.writeFile(path.join(workspace, "result.txt"), "before");
-  const output = await createNode(env, {
-    parentPath: "Outer/Inner",
-    name: "Result",
-    type: "output",
-    body: "Recorded result",
-    resource: "../../../../result.txt",
-  });
-  const version = {
-    commit: await adapter.history.currentCommit(),
-    path: "Outer/Inner/Result/Result.md",
-  };
-  for (const id of [outer, inner])
-    await writeNodeDocument(adapter, id, {
-      baseEtag: (await readNodeForEdit(adapter, id)).etag,
-      body: "Changed requirement",
-    });
-  await fs.writeFile(path.join(workspace, "result.txt"), "after");
-  const expected = [
-    { kind: "material", resource: "../../../../result.txt" },
-    { kind: "goal", nodeId: inner, name: "Inner" },
-  ];
-  const head = await adapter.history.currentCommit();
-  const before = await adapter.readFile(version.path);
-  const run = async (sub: string, args: string[], json = true) => {
-    const result = await runNodeCommand(sub, args, { workspace, json });
-    assert.equal(result.exitCode, 0, result.stderr);
-    return json ? JSON.parse(result.stdout) : result.stdout;
-  };
-  for (const args of [[output], [output, "--full"], [output, "--full", "--view", "raw"]]) {
-    assert.deepEqual((await run("get", args)).changedSince, expected);
-    const text = await run("get", args, false);
-    assert.ok(
-      text.includes(
-        `Changed since this output was saved or confirmed:\n- material ../../../../result.txt\n- goal Inner (${inner})\nIt still records what it saw then. If a change makes it wrong for current work, record a new output; if it still holds, confirm it.`,
-      ),
-      text,
-    );
-  }
-  assert.deepEqual((await run("read-many", [output])).items[0].changedSince, expected);
-  assert.match(
-    await run("read-many", [output], false),
-    /Changed since this output was saved or confirmed:/,
-  );
-  assert.equal((await run("get", [output, "--view", "summary"])).changedSince, undefined);
-  assert.equal(
-    (await run("get", [output, "--version-json", JSON.stringify(version)])).changedSince,
-    undefined,
-  );
-  assert.equal(await adapter.history.currentCommit(), head);
-  assert.equal(await adapter.readFile(version.path), before);
-  await run("confirm", [output, "--base-etag", (await run("get", [output, "--full"])).etag]);
-  assert.equal((await run("get", [output, "--full"])).changedSince, undefined);
-  assert.doesNotMatch(await run("get", [output, "--full"], false), /Changed since/);
-});
-
 test("CLI exposes bounded live and frozen readers without losing pages, ranges or sources", async (t) => {
   const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "cli-reader-"));
   t.after(() =>
-    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    removeTestFixture(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    }),
   );
   const workspace = path.join(root, "workspace");
   const body = "😀reader fidelity\n" + "正文".repeat(12000) + "\n[B](../B/B.md)\n";
@@ -294,7 +240,9 @@ test("CLI exposes bounded live and frozen readers without losing pages, ranges o
           "--prompt",
           "large".repeat(25000),
           "--source",
-          JSON.stringify({ resource: "https://example.invalid/" + "a".repeat(30000) }),
+          JSON.stringify({
+            resource: "https://example.invalid/" + "a".repeat(30000),
+          }),
         ],
         globals,
       ),

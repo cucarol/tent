@@ -18,28 +18,21 @@ import {
 } from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PreparedGraphSnapshot } from "./prepared-graph.js";
-import { withPreparedWorkspace, currentPreparedWorkspace } from "./prepared-workspace.js";
+import { withPreparedWorkspace } from "./prepared-workspace.js";
 import type { CaptureMetadata } from "../core/store/history-port.js";
 import { SqliteDocumentHistory, sqliteContentFingerprint } from "../core/store/sqlite-history.js";
 import { isHistoryDocument } from "../core/store/document-history.js";
 import { durableMkdir, durableReplace, syncDirectory } from "./durable-file.js";
 import { observeMaterialResource, readStructureSource } from "./source-observation.js";
-import { withStructureSnapshot, withoutStructureSnapshot } from "./structure-observation.js";
 import {
   isHookGraphFile,
   isNodeNotePath,
   workspaceRootFromSystemRoot,
 } from "../core/base/paths.js";
-import {
-  prepareNodeSyncSave,
-  relocateNodeRecord,
-  retainedNodeRecords,
-} from "../core/graph/node-sync-record.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { loadNodeCatalog } from "../core/graph/node-catalog.js";
 import { materialLocator, localMaterialPath, type MaterialLocator } from "../core/base/material.js";
 import { assertSystemMaterial } from "../core/graph/material-target.js";
-import { materialIsTracked } from "./material-tracking.js";
 import { documentHeader } from "../core/graph/node-catalog.js";
 import { ReaderError } from "../core/graph/context-reader.js";
 import {
@@ -285,12 +278,9 @@ export class NodeFs implements FsAdapter {
   }
 
   private observe<T>(action: () => Promise<T>, options?: { forceContent?: boolean }): Promise<T> {
-    if (hasFileReadScope() && !options?.forceContent) return withStructureSnapshot(action);
+    if (hasFileReadScope() && !options?.forceContent) return action();
     return withFileReadScope(
-      () =>
-        withDocumentHeaderCache(this.root, () =>
-          withStructureSnapshot(action, options?.forceContent),
-        ),
+      () => withDocumentHeaderCache(this.root, () => action()),
       options?.forceContent,
     );
   }
@@ -301,12 +291,6 @@ export class NodeFs implements FsAdapter {
         ? this.abs(".git/tent-material-cache/file-state.json")
         : undefined,
     );
-  }
-
-  async materialIsTracked(resource: string, documentPath: string) {
-    return this.workspaceRoot
-      ? materialIsTracked(this.workspaceRoot, resource, documentPath)
-      : undefined;
   }
 
   async readMaterialText(resource: string, documentPath: string) {
@@ -321,29 +305,11 @@ export class NodeFs implements FsAdapter {
     );
   }
 
-  async observeMaterial(
-    resource: string,
-    documentPath: string,
-    track?: "structure",
-    structureResources?: readonly string[],
-  ) {
+  async observeMaterial(resource: string, documentPath: string) {
     const workspaceRoot = workspaceRootFromSystemRoot(this.root);
     if (!workspaceRoot) throw new Error("Material observation requires a Workspace .tent root");
     await this.assertMaterial(materialLocator(resource, documentPath, true));
-    const cacheDir = (await this.exists(".git")) ? this.abs(".git/tent-material-cache") : undefined;
-    const prepared = currentPreparedWorkspace(workspaceRoot)?.materials.find(
-      ([key]) => key === JSON.stringify([documentPath, resource, track, structureResources]),
-    );
-    const observed =
-      prepared?.[1].value ??
-      (await observeMaterialResource(
-        workspaceRoot,
-        documentPath,
-        resource,
-        cacheDir,
-        track,
-        structureResources,
-      ));
+    const observed = await observeMaterialResource(workspaceRoot, documentPath, resource);
     const relative = nodePath.relative(this.root, observed.canonicalPath);
     const inside =
       relative !== ".." &&
@@ -781,58 +747,9 @@ export class NodeFs implements FsAdapter {
               throw new Error(`Document changed during save: ${change.path}`);
           }
           if (changes.length) {
-            const nodeRecords = { ...metadata?.nodeRecords };
-            if (metadata?.operation === "node.move" || metadata?.operation === "node.rename") {
-              const nodes = (await loadNodeCatalog(this)).byId,
-                beforeNodes = new Map(nodes),
-                retained = await retainedNodeRecords(this);
-              const originals = new Map<string, { path: string; raw: string }>();
-              for (const [path, raw] of this.historyPreimages.getStore()!) {
-                if (raw === null || !isHistoryDocument(path)) continue;
-                const id = parseFrontmatter(raw).data.id;
-                if (typeof id !== "string" || !nodes.has(id)) continue;
-                const originalPath = path.slice(0, path.lastIndexOf("/"));
-                beforeNodes.set(id, { ...nodes.get(id)!, path: originalPath });
-                originals.set(id, { path, raw });
-              }
-              for (const change of changes) {
-                if (
-                  change.raw === null ||
-                  !isHistoryDocument(change.path) ||
-                  change.path.startsWith("roles/") ||
-                  change.path.startsWith("cards/")
-                )
-                  continue;
-                const id = parseFrontmatter(change.raw).data.id;
-                if (typeof id !== "string" || !nodes.has(id)) continue;
-                const original = originals.get(id),
-                  previous = retained[id];
-                const relocated =
-                  previous && original
-                    ? relocateNodeRecord(
-                        previous,
-                        original.raw,
-                        original.path,
-                        change.raw,
-                        change.path,
-                        beforeNodes,
-                        nodes,
-                      )
-                    : previous;
-                const prepared = await prepareNodeSyncSave(this, change.path, change.raw, {
-                  nodes,
-                  previous: relocated ?? undefined,
-                  ...(original
-                    ? { previousLocation: { documentPath: original.path, nodes: beforeNodes } }
-                    : {}),
-                });
-                if (prepared.record) nodeRecords[id] = prepared.record;
-              }
-            }
             await this.history.captureUnlocked(changes, {
               operation: metadata?.operation ?? "document.capture",
               ...metadata,
-              nodeRecords,
             });
           }
         } catch (error) {
@@ -908,41 +825,39 @@ export class NodeFs implements FsAdapter {
         withFileMutationLock(
           this.abs(path),
           async () =>
-            withoutStructureSnapshot(() =>
-              withoutFileReadScope(() =>
-                this.raw(() => hasDocumentHistory(this)).then((hasGit) => {
-                  if (!hasGit || this.transactionBypass.getStore()) return action();
-                  const transaction = this.transaction();
-                  return this.boundaryReady.run(true, async () => {
-                    this.recoveryConflicts = await transaction.recover();
-                    return this.transactionScope.run(transaction, () =>
-                      this.history.withPublicationObserver(
-                        {
-                          before: (commit) => transaction.beforePublish(commit),
-                          after: () => transaction.finish(),
-                        },
-                        async () => {
+            withoutFileReadScope(() =>
+              this.raw(() => hasDocumentHistory(this)).then((hasGit) => {
+                if (!hasGit || this.transactionBypass.getStore()) return action();
+                const transaction = this.transaction();
+                return this.boundaryReady.run(true, async () => {
+                  this.recoveryConflicts = await transaction.recover();
+                  return this.transactionScope.run(transaction, () =>
+                    this.history.withPublicationObserver(
+                      {
+                        before: (commit) => transaction.beforePublish(commit),
+                        after: () => transaction.finish(),
+                      },
+                      async () => {
+                        try {
+                          const result = await action();
+                          await transaction.finish();
+                          return result;
+                        } catch (error) {
                           try {
-                            const result = await action();
-                            await transaction.finish();
-                            return result;
-                          } catch (error) {
-                            try {
-                              this.recoveryConflicts = await transaction.recover();
-                            } catch (recovery) {
-                              throw new AggregateError(
-                                [error, recovery],
-                                `${String(error)}; transaction recovery also failed: ${String(recovery)}`,
-                              );
-                            }
-                            throw error;
+                            this.recoveryConflicts = await transaction.recover();
+                          } catch (recovery) {
+                            throw new AggregateError(
+                              [error, recovery],
+                              `${String(error)}; transaction recovery also failed: ${String(recovery)}`,
+                            );
                           }
-                        },
-                      ),
-                    );
-                  });
-                }),
-              ),
+                          throw error;
+                        }
+                      },
+                    ),
+                  );
+                });
+              }),
             ),
           {
             waitMs: 8_000,

@@ -81,21 +81,17 @@ test("material paths are defined once, in node-maintenance", async () => {
   assert.doesNotMatch(cards, /`\.\/docs\/req\.md`|`\/docs\/req\.md`/);
 });
 
-test("PLUGIN.md points to SPEC for frozen outputs and brief rules", async () => {
+test("PLUGIN.md points to SPEC for results and brief rules", async () => {
   const spec = flat(await read("docs/SPEC.md"));
   const plugin = await read("docs/PLUGIN.md");
+  assert.match(spec, /## 4\. Results/);
   assert.match(
     spec,
-    /An output keeps comparison bases for its own materials and for every goal above it/,
+    /`node link-output <goal-id> --resource <address>` creates an output under a goal/,
   );
-  assert.match(
-    spec,
-    /An output records one moment, so changes to its materials or its goals never make it behind/,
-  );
-  assert.match(spec, /A complete read of an output lists `changedSince`/);
   assert.doesNotMatch(
     spec,
-    /An output depends on every goal ancestor|Behind outputs do not enter completed goal counts/,
+    /comparison bases|intent basis|changedSince|node confirm|node check|workspace drift|--confirm/,
   );
   assert.match(
     spec,
@@ -106,7 +102,7 @@ test("PLUGIN.md points to SPEC for frozen outputs and brief rules", async () => 
     /up to ten recently changed Nodes.*up to ten of the Role's unfinished Cards.*up to ten workspace problems/,
   );
   assert.match(spec, /titles can be shortened, ids never are/);
-  assert.match(plugin, /SPEC\.md#Brief%20and%20drift/);
+  assert.match(plugin, /SPEC\.md#Brief/);
   assert.match(plugin, /SPEC\.md#5\.%20What%20the%20Agent%20is%20told/);
   assert.match(plugin, /SPEC\.md#6\.%20What%20a%20reader%20gets/);
   assert.doesNotMatch(plugin, /最近的 goal 祖先提供隐式来源/);
@@ -119,21 +115,6 @@ test("type guidance names exactly three types and the preset tags", async () => 
     /\b(goal|prompt|output)-(direction|requirement|decision|spec|reference|procedure|asset|evidence|analysis|issue)\b|NODE_TYPE_PRESETS|implementing it/;
   const spec = flat(await read("docs/SPEC.md"));
   assert.match(spec, /`type` is exactly `goal`, `prompt` or `output`/);
-  assert.match(
-    spec,
-    /keeps its own intent basis, its body and declarations, from creation or confirmation/,
-  );
-  assert.match(spec, /Ordinary saves, metadata edits, native edits and reads keep the old one/);
-  assert.match(spec, /While that basis matches, the goal is not ahead/);
-  assert.match(
-    spec,
-    /Any other goal is ahead when no current output in its subtree has bases matching the goal's current body and all its materials/,
-  );
-  assert.match(spec, /A single file, a Node or Role reference or a URL does not count as covering/);
-  assert.match(
-    spec,
-    /One output must match the whole goal; an output under a nested goal also satisfies its ancestors/,
-  );
   assert.doesNotMatch(spec, formerTypes);
   const types = await read("skill-resources/references/node-types.md");
   for (const type of ["goal", "prompt", "output"])
@@ -152,7 +133,7 @@ test("type guidance names exactly three types and the preset tags", async () => 
     "issue",
   ])
     assert.match(types, new RegExp(`^\\| \`${tag}\` \\|`, "m"), tag);
-  assert.match(flat(types), /Any undeprecated `output` under a goal counts as its result/);
+  assert.match(flat(types), /Keep the goal's open questions in `prompt` Nodes/);
   assert.match(flat(types), /from `tent node tags`/);
   assert.doesNotMatch(types, formerTypes);
   assert.doesNotMatch(types, /an `output` counts as implementing it/);
@@ -166,15 +147,9 @@ test("type guidance names exactly three types and the preset tags", async () => 
 test("goal material guidance distinguishes intent grounds from implementation coverage", async () => {
   const text = flat(await read("skill-resources/references/node-maintenance.md"));
   assert.match(text, /A `goal` or `prompt` takes its grounds as material, not code/);
-  assert.match(
-    text,
-    /a `goal` may still own the code that carries it out, through a plain directory or prefix/,
-  );
-  assert.match(text, /owns a directory or prefix, itself or through a child goal/);
+  assert.match(text, /a `goal` may still own the code that carries it out\./);
   const plugin = flat(await read("docs/PLUGIN.md"));
-  assert.match(plugin, /goal 也可通过本工作区的目录或前缀材料持有实现它的代码/);
-  assert.match(plugin, /单个文件、Node\/Role 引用和外部 URL 不获得这项豁免/);
-  assert.match(plugin, /自身基线或一份完整匹配的现行 output 任一成立即可清除领先/);
+  assert.match(plugin, /`goal` 与 `prompt` 用材料指明意图和规则的依据/);
   assert.doesNotMatch(plugin, /不以 `src\/` 下代码为材料/);
   assert.match(plugin, /\[Codex Hooks\]\(https:\/\/learn\.chatgpt\.com\/docs\/hooks\)/);
 });

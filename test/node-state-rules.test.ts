@@ -5,7 +5,7 @@ import { PropagationMemoryFs } from "./propagation-memory.js";
 import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 import { buildStopMaterialIndex } from "../src/core/return/stop-material-index.js";
-import { goalAncestors } from "../src/core/graph/node-sync-record.js";
+import { goalAncestors } from "../src/core/graph/node-relations.js";
 import { readGoalContext } from "../src/core/read/goal-context.js";
 import { searchNodeResources } from "../src/core/read/node-resource-search.js";
 

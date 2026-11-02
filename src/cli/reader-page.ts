@@ -2,7 +2,6 @@ import * as z from "zod/v4";
 import { canonicalSha256 } from "../core/base/canonical-digest.js";
 import { boundary, ReaderError } from "../core/graph/context-reader.js";
 import { incompleteNodeReadEtag } from "../core/base/node-read-basis.js";
-import type { OutputChange } from "../core/graph/node-sync.js";
 
 const nodeReadContainers = new Set([
   "node",
@@ -118,43 +117,6 @@ export function compactReadItem<T>(item: T): T {
   return { ...identity, metadataOmitted: true, metadataRead: exactRead(original) } as T;
 }
 
-/** Computed evidence must continue through inspection, not a raw document metadata read. */
-function compactDriftItem<T>(item: T): T {
-  if (fits(item, 8 * 1024)) return item;
-  const original = item as Record<string, unknown> & { nodeId: string; reasons: string[] };
-  const { materials, ...summary } = original;
-  const result = {
-    ...summary,
-    ...(Array.isArray(materials)
-      ? { materialsOmitted: true, materialCount: materials.length }
-      : {}),
-    inspectionRead: {
-      nodeId: original.nodeId,
-      command: `tent node check ${original.nodeId} --json`,
-    },
-  };
-  if (fits(result, 8 * 1024)) return result as T;
-
-  // Preserve kind, identity and a usable reason even when the reasons themselves are large.
-  const bounded: Record<string, unknown> & { reasons: string[] } = {
-    ...result,
-    reasons: original.reasons.map((reason) => Array.from(reason).slice(0, 256).join("")),
-    reasonsTruncated: original.reasons.some((reason) => Array.from(reason).length > 256),
-    reasonsOmitted: 0,
-  };
-  for (const key of ["path", "address"]) {
-    const value = bounded[key];
-    if (typeof value === "string" && Array.from(value).length > 256) {
-      bounded[key] = Array.from(value).slice(0, 256).join("");
-      bounded[`${key}Truncated`] = true;
-    }
-  }
-  while (!fits(bounded, 8 * 1024) && bounded.reasons.length > 1) {
-    bounded.reasons.pop();
-    bounded.reasonsOmitted = original.reasons.length - bounded.reasons.length;
-  }
-  return bounded as T;
-}
 export const uncapturedNotice = "有未收录的改动，下一次写命令、brief 或 hook 时收录。";
 
 export function formatTextPage(value: unknown): string {
@@ -163,22 +125,10 @@ export function formatTextPage(value: unknown): string {
     page?: { hasMore: boolean; next?: unknown; nextCursor?: string };
     version?: unknown;
     uncaptured?: boolean;
-    changedSince?: OutputChange[];
   };
   return (
     (result.uncaptured ? `${uncapturedNotice}\n` : "") +
     result.text +
-    (result.changedSince?.length
-      ? `\n\nChanged since this output was saved or confirmed:\n${result.changedSince
-          .map((change) =>
-            change.kind === "material"
-              ? `- material ${change.resource}`
-              : `- goal ${change.name} (${change.nodeId})`,
-          )
-          .join(
-            "\n",
-          )}\nIt still records what it saw then. If a change makes it wrong for current work, record a new output; if it still holds, confirm it.`
-      : "") +
     (result.page?.hasMore
       ? `\n\n[Partial text]\nNext: ${JSON.stringify(result.page.next)}${result.page.nextCursor ? `\nCursor: ${result.page.nextCursor}` : ""}${result.version ? `\nVersion: ${JSON.stringify(result.version)}` : ""}`
       : "")
@@ -243,9 +193,7 @@ export function pageItems<T extends { items: unknown[]; revision?: string }>(
     input: "scope" in result ? result.scope : undefined,
   });
   const compacted = result.items.map((item) =>
-    operation === "workspace.drift"
-      ? compactDriftItem(item)
-      : compactItem(operation.startsWith("node.") ? incompleteNodeRead(item) : item),
+    compactItem(operation.startsWith("node.") ? incompleteNodeRead(item) : item),
   );
   const { scope: visibleScope, ...other } = result as T & { scope?: unknown };
   const base =
@@ -333,13 +281,9 @@ export function pageText<
   ) {
     throw new ReaderError("INVALID_RANGE", "Invalid text page range");
   }
-  const { changedSince, ...metadata } = result as T & { changedSince?: OutputChange[] };
-  const base = compactItem({ ...metadata, text: "" });
+  const base = compactItem({ ...result, text: "" });
   const makePage = (end: number) => ({
     ...base,
-    ...(start === 0 && end === (result.total ?? result.viewLength) && changedSince
-      ? { changedSince }
-      : {}),
     text: result.text.slice(start - lower, end - lower),
     range: { unit: "utf16" as const, start, end },
     partial: start !== 0 || end !== (result.total ?? result.viewLength),

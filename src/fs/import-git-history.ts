@@ -6,14 +6,9 @@ import { createHash } from "node:crypto";
 import { parseDocument, isScalar } from "yaml";
 import { DatabaseSync } from "./sqlite-runtime.js";
 import { durableMkdir, durableReplace } from "./durable-file.js";
-import {
-  SqliteDocumentHistory,
-  sqliteContentFingerprint,
-  hasLocalMachinePath,
-} from "../core/store/sqlite-history.js";
+import { SqliteDocumentHistory, sqliteContentFingerprint } from "../core/store/sqlite-history.js";
 import { isHistoryDocument } from "../core/store/document-history.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
-import { nodeBasisRecordSchema } from "../core/base/node-basis-record.js";
 import { isNodeId, isRoleId, isCardId } from "../core/base/id.js";
 import { initializeGitIgnoreContext } from "./git-ignore-context.js";
 import { materialLocator, isDirectoryMaterial, isPrefixMaterial } from "../core/base/material.js";
@@ -480,7 +475,7 @@ export async function importGitHistory(sourceRoot: string, targetRoot: string) {
       sequence.set(event.id, seq);
       db.prepare("INSERT INTO migration_events VALUES(?,?)").run(
         mapping.get(event.id)!,
-        event.message,
+        event.message.replace(/^Tent-Node-Record: [^\r\n]*(?:\r?\n|$)/gm, ""),
       );
       for (const c of event.changes) {
         const before = c.before ? content(c.before, c.path).raw : null,
@@ -503,32 +498,6 @@ export async function importGitHistory(sourceRoot: string, targetRoot: string) {
           ).run(c.path, b, seq);
         imported++;
       }
-      for (const line of event.message.split(/\r?\n/))
-        if (line.startsWith("Tent-Node-Record: ")) {
-          let id: string | undefined, value: unknown;
-          try {
-            const pair = JSON.parse(line.slice(18));
-            if (Array.isArray(pair) && typeof pair[0] === "string") {
-              id = pair[0];
-              value = pair[1];
-            }
-          } catch {
-            const match = /^Tent-Node-Record: \["(node-[a-z0-9]+)"/.exec(line);
-            id = match?.[1];
-          }
-          if (!id || !isNodeId(id)) continue;
-          if (
-            value &&
-            typeof value === "object" &&
-            (value as { v?: unknown }).v === 1 &&
-            hasLocalMachinePath(value)
-          )
-            db.prepare("INSERT OR IGNORE INTO unportable_records VALUES(?)").run(id);
-          const parsed = nodeBasisRecordSchema.safeParse(value);
-          db.prepare(
-            "INSERT INTO records VALUES(?,?,?) ON CONFLICT(event,id) DO UPDATE SET value=excluded.value",
-          ).run(seq, id, JSON.stringify(parsed.success ? parsed.data : null));
-        }
     }
     db.exec("COMMIT");
   } catch (error) {

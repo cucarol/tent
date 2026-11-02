@@ -20,11 +20,7 @@ import {
   validateMaterialAddresses,
 } from "../base/material.js";
 import { loadNodeCatalog, readCatalogDocument } from "../graph/node-catalog.js";
-import {
-  NODE_WRITE_BY_REQUIRES_CONFIRM,
-  NodeWriteError,
-  prepareNodeDocumentWrite,
-} from "../graph/node-document-write.js";
+import { NodeWriteError, prepareNodeDocumentWrite } from "../graph/node-document-write.js";
 import { isIncompleteNodeReadEtag } from "../base/node-read-basis.js";
 import { normalizeOptionalNodeType } from "../base/node-type.js";
 import type { OpsEnv } from "../graph/ops-context.js";
@@ -37,15 +33,6 @@ import { rewriteMarkdownDestinations } from "../base/links.js";
 import { ReaderError } from "../graph/context-reader.js";
 import { recoverPendingNodeMoveUnlocked } from "../store/node-move-recovery.js";
 import { recoverPendingDeleteUnlocked } from "../store/delete-recovery.js";
-import {
-  prepareNodeSyncSave,
-  retainedNodeRecords,
-  isOutputNode,
-  type NodeBasisRecord,
-} from "../graph/node-sync-record.js";
-
-import { nodeActorSchema, recordNodeVerification } from "../base/node-provenance.js";
-
 const requiredString = (field: string) =>
   z.string({ error: (issue) => (issue.input === undefined ? `${field} is required` : undefined) });
 const localRef = requiredString("ref").regex(/^[A-Za-z][A-Za-z0-9_-]*$/);
@@ -73,16 +60,12 @@ const updateItem = z
     raw: z.string().optional(),
     body: z.string().optional(),
     frontmatter: z.record(z.string(), z.unknown()).optional(),
-    confirm: z.boolean().optional(),
-    by: nodeActorSchema.optional(),
   })
-  .refine((p) => p.by === undefined || p.confirm === true, NODE_WRITE_BY_REQUIRES_CONFIRM)
   .refine(
     (p) =>
       p.raw !== undefined
         ? p.body === undefined && p.frontmatter === undefined
-        : p.confirm === true ||
-          p.body !== undefined ||
+        : p.body !== undefined ||
           (p.frontmatter !== undefined && Object.keys(p.frontmatter).length > 0),
     "Supply raw alone, or body and/or frontmatter",
   );
@@ -108,8 +91,6 @@ type PlannedNode = {
   before: string | null;
   raw: string;
   parentId?: string;
-  confirm?: boolean;
-  by?: string;
 };
 
 export class NodeBatchWriteError extends Error {
@@ -301,12 +282,9 @@ export async function writeNodesBatchUnlocked(
         path: node.path,
         before: document.raw,
         raw,
-        by: item.by,
-        confirm: item.confirm,
       });
     }
   }
-  const now = env.clock.now();
   const nodePaths = new Set([
     ...[...catalog.byId.values()]
       .filter((node) => !node.invalid)
@@ -321,63 +299,11 @@ export async function writeNodesBatchUnlocked(
       node.before === null ? {} : parseFrontmatter(node.before).data,
       nodePaths,
     );
-  const finalDocuments = new Map<string, string>();
-  const nodes = new Map(catalog.byId);
-  const nodeRecords: Record<string, NodeBasisRecord> = {};
-  for (const node of planned) {
-    if (node.confirm) {
-      const parsed = parseFrontmatter(node.raw);
-      recordNodeVerification(parsed.data, node.by, now);
-      node.raw = serializeFrontmatter(parsed.data, parsed.body, parsed.keyOrder);
-    }
-    finalDocuments.set(nodeNotePath(node.path), node.raw);
-    const parsed = parseFrontmatter(node.raw);
-    nodes.set(node.nodeId, {
-      nodeId: node.nodeId,
-      name: node.path.split("/").at(-1)!,
-      path: node.path,
-      type: parsed.data.type as string,
-      header: node.raw.slice(0, node.raw.length - parsed.body.length),
-      parentNodeId: node.parentId ?? nodes.get(node.nodeId)?.parentNodeId ?? null,
-      childNodeIds: [],
-      status: documentLifecycle(parsed.data).status,
-      invalid: false,
-    });
-  }
-  const basisRecords = await retainedNodeRecords(fs);
-  const prepareBases = async () => {
-    for (const node of [...planned].sort(
-      (a, b) =>
-        Number(isOutputNode(parseFrontmatter(a.raw).data)) -
-        Number(isOutputNode(parseFrontmatter(b.raw).data)),
-    )) {
-      const prepared = await prepareNodeSyncSave(fs, nodeNotePath(node.path), node.raw, {
-        now,
-        created: node.before === null,
-        previousRaw: node.before ?? undefined,
-        confirm: node.confirm,
-        by: node.by,
-        nodes,
-        finalDocuments,
-        records: basisRecords,
-      });
-      node.raw = prepared.raw;
-      if (prepared.record) {
-        nodeRecords[node.nodeId] = prepared.record;
-        basisRecords[node.nodeId] = prepared.record;
-      }
-    }
-  };
-  // All final documents are known, but none has been published. Share one fresh
-  // material inspection, then leave it before the live CAS and physical writes.
-  if (fs.observationScope)
-    await fs.observationScope(prepareBases, { forceContent: true, nodePaths });
-  else await prepareBases();
+  const finalDocuments = new Map(planned.map((node) => [nodeNotePath(node.path), node.raw]));
   const beforeOrder = (await fs.exists(ORDER_PATH)) ? await fs.readFile(ORDER_PATH) : null;
   const warnings: string[] = [];
   const warningFs = {
     workspaceRoot: fs.workspaceRoot,
-    materialIsTracked: fs.materialIsTracked?.bind(fs),
     readMaterialText: async (resource: string, documentPath: string) => {
       const target = systemMaterialPath(
         materialLocator(resource, documentPath, true),
@@ -457,7 +383,7 @@ export async function writeNodesBatchUnlocked(
     const captured = history
       ? await history.captureUnlocked(
           planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
-          { operation: "node.write-many", nodeRecords },
+          { operation: "node.write-many" },
         )
       : undefined;
     return {

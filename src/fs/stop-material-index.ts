@@ -24,10 +24,6 @@ import {
 import { isPreparedWorkspace, type PreparedWorkspace } from "./prepared-workspace.js";
 import { readAgentContextRepository } from "./agent-context-repository.js";
 import { sourceDirectoryPaths } from "./directory-observation.js";
-import { readStructureSource, observeMaterialResource } from "./source-observation.js";
-import { materialOccurrences, materialLocator, localMaterialPath } from "../core/base/material.js";
-import { parseFrontmatter } from "../core/base/frontmatter.js";
-import { isImportSource, isImportConfig } from "../core/base/repository-imports.js";
 import {
   childDirectories,
   hash,
@@ -225,71 +221,7 @@ async function loadStopMaterialIndexUnlocked(
       // source facts must be reobserved through the live repository reader.
       if (facts.sources.errors.length)
         throw new Error("Cannot prepare incomplete repository facts");
-      const structureTexts: PreparedWorkspace["structureTexts"] = [];
-      // Keep the structure reader's strict UTF-8 and no-NUL contract. These
-      // bytes may differ from the permissive repository evidence reader.
-      for (const filename of live.filter(
-        (filename) => isImportSource(filename) || isImportConfig(filename),
-      )) {
-        const text = await readStructureSource(workspaceRoot, filename, cacheDir);
-        const relative = path.relative(workspaceRoot, filename).split(path.sep).join("/");
-        structureTexts.push([
-          filename,
-          facts.sources.files.find((source) => source.path === relative)?.content === text
-            ? null
-            : text,
-        ]);
-      }
-      const materials: PreparedWorkspace["materials"] = [];
-      for (const [documentPath, header] of headers) {
-        let declarations;
-        try {
-          declarations = materialOccurrences(parseFrontmatter(header.content).data);
-        } catch {
-          continue;
-        }
-        const structureResources = declarations
-          .filter((entry) => entry.track === "structure")
-          .map((entry) => entry.resource);
-        for (const entry of declarations.filter((entry) => entry.track === "structure")) {
-          const filename = localMaterialPath(
-            materialLocator(entry.resource, documentPath, true),
-            workspaceRoot,
-          );
-          if (!filename) continue;
-          const relative = path.relative(workspaceRoot, filename);
-          if (
-            relative === ".." ||
-            relative.startsWith(".." + path.sep) ||
-            path.isAbsolute(relative) ||
-            relative.split(path.sep)[0]?.toLowerCase() === ".tent"
-          )
-            continue;
-          const resource = /^(?:\.{1,2}\/|\/)/.test(entry.resource.trim())
-            ? entry.resource
-            : `./${entry.resource.trim()}`;
-          const key = JSON.stringify([documentPath, resource, entry.track, structureResources]);
-          try {
-            materials.push([
-              key,
-              {
-                value: await observeMaterialResource(
-                  workspaceRoot,
-                  documentPath,
-                  resource,
-                  cacheDir,
-                  entry.track,
-                  structureResources,
-                ),
-              },
-            ]);
-          } catch {
-            // Failed observations stay on the live path so recovery is visible
-            // even when the source's filesystem identity has not changed.
-          }
-        }
-      }
-      return { repository: facts, live, tracked, structureTexts, materials };
+      return { repository: facts, live, tracked };
     });
     if (repository) refreshed = true;
   }
@@ -302,7 +234,7 @@ async function loadStopMaterialIndexUnlocked(
       await fs.writeFile(
         temp,
         JSON.stringify({
-          schema: 13,
+          schema: 14,
           rootMarkerDigest: markerDigest,
           rejectedRootMarkers,
           workspaceRoot,

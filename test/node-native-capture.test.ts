@@ -17,7 +17,6 @@ import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runHookCommand } from "../src/cli/hook.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
-import { inspectWorkspaceSync } from "../src/core/graph/node-sync.js";
 import { ReaderError } from "../src/core/graph/context-reader.js";
 import { appendNodeBody } from "../src/core/write/node-lightwrite.js";
 
@@ -189,21 +188,6 @@ test("native capture skips an unchanged lock and rereads bytes and HEAD after ac
   assert.equal(await adapter.history.currentCommit(), advanced);
 });
 
-test("sync rechecks native boundary snapshots before returning a judgment", async (t) => {
-  const { adapter, output, goal } = await fixture(t);
-  const observed = await captureNativeNodeEdits(adapter);
-  const goalFile = "需求/需求.md";
-  await adapter.writeFile(goalFile, (await adapter.readFile(goalFile)) + "\nChanged after capture");
-  const sync = await inspectWorkspaceSync(adapter, observed.invalidNodes, observed.catalog);
-  assert.equal(sync.nodes.find((node) => node.nodeId === output)?.behind, undefined);
-  assert.ok(sync.nodes.find((node) => node.nodeId === goal)?.ahead);
-  assert.ok(
-    sync.nodes
-      .find((node) => node.nodeId === output)
-      ?.materials.some((material) => material.goalId === goal && material.state === "changed"),
-  );
-});
-
 test("pure CLI reads leave native Node, Role and Card edits unretained", async (t) => {
   const { workspace, adapter, goal, output, options, parse } = await fixture(t);
   const role = parse(
@@ -231,7 +215,6 @@ test("pure CLI reads leave native Node, Role and Card edits unretained", async (
   ])
     await promisify(execFile)("git", ["-C", workspace, ...args], { windowsHide: true });
   const beforeHead = await adapter.history.currentCommit();
-  const beforeRecords = await adapter.history.nodeRecords();
   const nodeFile = "需求/结果/结果.md";
   const roleFile = `roles/${role.roleId}.md`;
   const cardFile = `cards/${card.cardId}.md`;
@@ -275,7 +258,6 @@ test("pure CLI reads leave native Node, Role and Card edits unretained", async (
   for (const { label, run } of reads) {
     parse(await run());
     assert.equal(await adapter.history.currentCommit(), beforeHead, label);
-    assert.deepEqual(await adapter.history.nodeRecords(), beforeRecords, label);
     assert.equal(await adapter.readFile(nodeFile), nativeNode, label);
     assert.equal(await adapter.readFile(roleFile), nativeRole, label);
     assert.equal(await adapter.readFile(cardFile), nativeCard, label);
@@ -284,7 +266,6 @@ test("pure CLI reads leave native Node, Role and Card edits unretained", async (
   const collectedHead = await adapter.history.currentCommit();
   assert.notEqual(collectedHead, beforeHead);
   assert.equal(await adapter.history.read({ commit: collectedHead!, path: nodeFile }), nativeNode);
-  assert.deepEqual(await adapter.history.nodeRecords(), beforeRecords);
 });
 
 test("pure readers return live bytes and mark them while relations wait for capture", async (t) => {
@@ -299,13 +280,12 @@ test("pure readers return live bytes and mark them while relations wait for capt
   );
   assert.equal(before.uncaptured, undefined);
   const head = await adapter.history.currentCommit();
-  const records = await adapter.history.nodeRecords();
   const raw = (await adapter.readFile(file)) + "\n[Live role](../../roles/role-live.md)";
   await adapter.writeFile(file, raw);
   const live = parse(await runNodeCommand("get", [output, "--context"], options));
   assert.equal(live.uncaptured, true);
   assert.match(live.text, /Live role/);
-  assert.equal(live.context, before.context);
+
   assert.deepEqual(
     parse(await runNodeCommand("relations", [output, "--direction", "outgoing"], options)),
     relations,
@@ -317,7 +297,6 @@ test("pure readers return live bytes and mark them while relations wait for capt
   await adapter.writeFile(roleFile, (await adapter.readFile(roleFile)) + "\nNative role body");
   assert.equal(parse(await runRoleCommand("show", [role.roleId], options)).uncaptured, true);
   assert.equal(await adapter.history.currentCommit(), head);
-  assert.deepEqual(await adapter.history.nodeRecords(), records);
   assert.equal(await adapter.readFile(file), raw);
   parse(await runWorkspaceCommand("brief", [], options));
   assert.equal(parse(await runNodeCommand("get", [output], options)).uncaptured, undefined);
@@ -332,7 +311,7 @@ test("pure readers return live bytes and mark them while relations wait for capt
   assert.equal(parse(await runNodeCommand("get", [goal], options)).uncaptured, undefined);
 });
 
-test("Card delivery stays consumed across output and goal changes without advancing bases", async (t) => {
+test("Card delivery stays consumed across output and goal changes", async (t) => {
   const { workspace, adapter, goal, options, parse } = await fixture(t);
   const card = parse(
     await runCardCommand(
@@ -353,7 +332,6 @@ test("Card delivery stays consumed across output and goal changes without advanc
   const read = () => runCardCommand("show", [card.cardId], options).then(parse);
   assert.equal((await read()).state, "consumed");
   const head = await adapter.history.currentCommit();
-  const records = await adapter.history.nodeRecords();
   const file = "需求/Delivered/Delivered.md";
   const original = await adapter.readFile(file);
   const parsed = parseFrontmatter(original);
@@ -384,7 +362,6 @@ test("Card delivery stays consumed across output and goal changes without advanc
   await fs.writeFile(path.join(workspace, "input.txt"), "original material");
   assert.equal((await read()).state, "consumed");
   assert.equal(await adapter.history.currentCommit(), head);
-  assert.deepEqual(await adapter.history.nodeRecords(), records);
   assert.equal(await adapter.readFile(file), edited);
   parse(await runWorkspaceCommand("brief", [], options));
   assert.equal((await read()).state, "consumed");
@@ -393,7 +370,6 @@ test("Card delivery stays consumed across output and goal changes without advanc
 test("uncaptured new and moved Nodes remain live in discovery and export", async (t) => {
   const { workspace, adapter, goal, output, options, parse } = await fixture(t);
   const head = await adapter.history.currentCommit();
-  const records = await adapter.history.nodeRecords();
   await fs.rename(path.join(workspace, ".tent/需求/结果"), path.join(workspace, ".tent/结果"));
   await adapter.writeFile(
     "结果/结果.md",
@@ -447,64 +423,36 @@ test("uncaptured new and moved Nodes remain live in discovery and export", async
     assert.match(text.stdout, /有未收录的改动，下一次写命令、brief 或 hook 时收录。/);
   }
   assert.equal(await adapter.history.currentCommit(), head);
-  assert.deepEqual(await adapter.history.nodeRecords(), records);
   assert.equal(await adapter.exists("需求/结果/结果.md"), false);
 });
 
-test("native body saves retain exact bytes and old bases; node get is pure and two observed edits survive", async (t) => {
-  const { workspace, adapter, goal, output, options, parse } = await fixture(t);
+test("native body saves retain exact bytes; node get is pure and two observed edits survive", async (t) => {
+  const { workspace, adapter, output, options, parse } = await fixture(t);
   const file = "需求/结果/结果.md";
   const beforeHead = await adapter.history.currentCommit();
-  const beforeRecord = (await adapter.history.nodeRecords())[output];
   const original = await adapter.readFile(file);
   await fs.writeFile(path.join(workspace, "input.txt"), "changed material");
   const first = original + "\nAgent A adds a note.";
   await adapter.writeFile(file, first);
   for (const args of [[], ["--full"], ["--view", "raw"]]) {
     const read = parse(await runNodeCommand("get", [output, ...args], options));
-    assert.deepEqual(Object.keys(read).sort(), [
-      ...(!args.length ? ["agentContext"] : []),
-      "changedSince",
-      "etag",
-      "materials",
-      "nodeId",
-      "text",
-      "uncaptured",
-    ]);
-    assert.deepEqual(read.materials, [], "ancestor material declarations are not own materials");
     assert.equal(!!read.agentContext, !args.length);
-    assert.ok(
-      read.changedSince.some(
-        (change: { kind: string; nodeId?: string }) =>
-          change.kind === "goal" && change.nodeId === goal,
-      ),
-    );
     assert.equal(read.uncaptured, true);
+    assert.match(read.text, /Agent A adds a note/);
     assert.equal(await adapter.history.currentCommit(), beforeHead);
     assert.equal(await adapter.readFile(file), first);
   }
-  const brief = parse(await runWorkspaceCommand("brief", [], options));
-  assert.equal(brief.counts.behind, 1);
+  parse(await runWorkspaceCommand("brief", [], options));
   const firstHead = await adapter.history.currentCommit();
   assert.notEqual(firstHead, beforeHead);
   assert.equal(await adapter.history.read({ commit: firstHead!, path: file }), first);
-  assert.deepEqual(
-    (await openTestFs(path.join(workspace, ".tent")).history.nodeRecords())[output],
-    beforeRecord,
-  );
   const second = first + "\nAgent B preserves A and adds a note.";
   await adapter.writeFile(file, second);
-  const checked = parse(await runNodeCommand("check", [goal], options));
-  assert.ok(checked.behind);
+  parse(await runWorkspaceCommand("brief", [], options));
   const secondHead = await adapter.history.currentCommit();
   assert.notEqual(secondHead, firstHead);
   assert.equal(await adapter.history.read({ commit: secondHead!, path: file }), second);
   assert.equal(await adapter.history.read({ commit: firstHead!, path: file }), first);
-  assert.deepEqual(
-    (await openTestFs(path.join(workspace, ".tent")).history.nodeRecords())[output],
-    beforeRecord,
-  );
-  // A complete pure read remains usable when a following command records those exact native bytes.
   const third = second + "\nThird note";
   await adapter.writeFile(file, third);
   const read = parse(await runNodeCommand("get", [output], options));
@@ -520,30 +468,19 @@ test("native body saves retain exact bytes and old bases; node get is pure and t
     .at(-1);
   assert.ok(nativeWrite);
   assert.equal(await adapter.history.read({ commit: nativeWrite.commit, path: file }), third);
-  assert.deepEqual(
-    (await openTestFs(path.join(workspace, ".tent")).history.nodeRecords())[output],
-    beforeRecord,
-  );
-  const full = parse(await runNodeCommand("get", [output], options));
-  parse(await runNodeCommand("confirm", [output, "--base-etag", full.etag], options));
-  assert.equal(parse(await runNodeCommand("check", [output], options)).behind, undefined);
 });
 
-test("valid native metadata retains old material bases and records newly declared materials", async (t) => {
-  const { workspace, adapter, goal, options, parse } = await fixture(t);
-  const previous = (await adapter.history.nodeRecords())[goal]!;
-  await fs.writeFile(path.join(workspace, "input.txt"), "changed old material");
-  await fs.writeFile(path.join(workspace, "新材料.txt"), "new material");
+test("valid native metadata retains exact declarations and opaque verified values", async (t) => {
+  const { adapter } = await fixture(t);
   const document = parseFrontmatter(await adapter.readFile("需求/需求.md"));
   document.data.sources = [{ resource: "../../新材料.txt" }];
+  document.data.verified = ["opaque", { imported: false }];
   const raw = serializeFrontmatter(document.data, document.body, document.keyOrder);
   await adapter.writeFile("需求/需求.md", raw);
-  const checked = parse(await runNodeCommand("check", [goal], options));
-  assert.ok(checked.behind);
-  const current = (await openTestFs(path.join(workspace, ".tent")).history.nodeRecords())[goal]!;
-  assert.deepEqual(current.materials[0], previous.materials[0]);
-  assert.equal(current.materials.length, 2);
-  assert.match(current.materials[1]!.version!, /^[a-f0-9]{64}$/);
+  await captureNativeNodeEdits(adapter);
+  const head = await adapter.history.currentCommit();
+  assert.ok(head);
+  assert.equal(await adapter.history.read({ commit: head, path: "需求/需求.md" }), raw);
   assert.equal(await adapter.readFile("需求/需求.md"), raw);
 });
 
@@ -566,10 +503,10 @@ for (const malformed of ["yaml", "schema"] as const)
     assert.ok(invalidNodes[0].line.includes(file));
     const text = await runWorkspaceCommand("brief", [], { ...options, json: false });
     const lines = text.stdout.trimEnd().split("\n");
-    assert.match(lines[0]!, /^behind \d+ · ahead \d+$/);
+    assert.ok(lines.length);
     const invalidLine = lines.findIndex((line) => line.includes(file));
-    assert.ok(invalidLine > 0 && invalidLine < lines.indexOf("Input Cards"));
-    assert.ok(lines.some((line) => line.includes("tent workspace drift --workspace")));
+    assert.ok(invalidLine >= 0 && invalidLine < lines.indexOf("Input Cards"));
+    assert.ok(lines.some((line) => line.includes("tent workspace check --workspace")));
     const checked = await runWorkspaceCommand("check", [], options);
     assert.equal(checked.exitCode, 1);
     assert.match(checked.stdout, /结果/);

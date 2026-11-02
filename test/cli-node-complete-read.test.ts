@@ -295,9 +295,6 @@ test("oversized complete problem receipts preserve successful writes with safe i
 test("incomplete bases support metadata-only edits and retain revision conflict detection", async (t) => {
   const { adapter, raw, body, globals, cli } = await fixture(t);
   const page = await cli("get", ["node-alpha"]);
-  const checked = await cli("check", ["node-alpha"]);
-  assert.equal(checked.state, "unanchored");
-  assert.equal("etag" in checked, false, "sync inspection is not a complete document read");
   const saved = await cli("write", [
     "node-alpha",
     "--input-json",

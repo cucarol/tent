@@ -20,7 +20,7 @@ test("draft Nodes enter ordinary discovery without a separate draft warning", as
   const context = await inspectCurrentContext(fs, {
     nodes: Promise.resolve({ invalidNodes: [], catalog }),
   });
-  assert.deepEqual(context.sync.nodes.map((node) => node.nodeId).sort(), [
+  assert.deepEqual(context.roots.map((node) => node.nodeId).sort(), [
     "node-goal",
     "node-output",
     "node-prompt",
@@ -39,7 +39,7 @@ test("draft discovery preserves transaction recovery reporting", async () => {
   );
   const context = await inspectCurrentContext(fs);
   assert.deepEqual(context.recoveryConflicts, ["B/B.md"]);
-  assert.ok(context.sync.nodes.some((node) => node.nodeId === "node-draft"));
+  assert.ok(context.roots.some((node) => node.nodeId === "node-draft"));
   const brief = makeContextBrief(context);
   assert.deepEqual(brief.recoveryConflicts, ["B/B.md"]);
   assert.match(

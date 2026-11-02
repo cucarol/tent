@@ -6,10 +6,7 @@ import {
   listCardDocuments,
   inspectReceivedCardSourceChanges,
 } from "../graph/card-document.js";
-import { inspectWorkspaceSync } from "../graph/node-sync.js";
 import { nodeNotePath } from "../base/paths.js";
-
-export type WorkspaceSync = Awaited<ReturnType<typeof inspectWorkspaceSync>>;
 
 export async function inspectCurrentContext(
   fs: FsAdapter,
@@ -31,12 +28,6 @@ async function inspectCurrentContextInScope(
 ) {
   const nativeNodes = Promise.resolve(options.nodes);
   const catalog = nativeNodes.then((nodes) => nodes?.catalog ?? loadNodeCatalog(fs));
-  const syncPromise = Promise.all([nativeNodes, catalog]).then(([nodes, currentCatalog]) =>
-    inspectWorkspaceSync(fs, nodes?.invalidNodes, currentCatalog),
-  );
-  // Card queries can finish without consuming these shared results. The main
-  // syncPromise below remains responsible for reporting capture/sync failures.
-  void catalog.catch(() => undefined);
   const cardOptions = {
     unfinishedOnly: true,
     ...(options.roleId ? { roleId: options.roleId, includeOpen: true } : {}),
@@ -45,13 +36,17 @@ async function inspectCurrentContextInScope(
   const cardsPromise = headersPromise.then((headers) =>
     listCardDocuments(fs, cardOptions, headers),
   );
-  const [sync, cards, sourceChanges, currentCatalog] = await Promise.all([
-    syncPromise,
+  const [nodes, cards, sourceChanges, currentCatalog] = await Promise.all([
+    nativeNodes,
     cardsPromise,
     headersPromise.then((cards) => inspectReceivedCardSourceChanges(fs, options, cards, catalog)),
     catalog,
   ]);
-  const currentIds = new Set(sync.nodes.map((node) => node.nodeId));
+  const currentIds = new Set(
+    [...currentCatalog.byId.values()]
+      .filter((node) => !node.invalid && (node.status === "draft" || node.status === "stable"))
+      .map((node) => node.nodeId),
+  );
   const roots = currentCatalog.rootNodeIds.flatMap((nodeId) => {
     const node = currentCatalog.byId.get(nodeId);
     return node && currentIds.has(nodeId)
@@ -65,15 +60,10 @@ async function inspectCurrentContextInScope(
         ]
       : [];
   });
-  const aheadIds = new Set(sync.nodes.filter((node) => node.ahead).map((node) => node.nodeId));
-  const changedCardSources = {
-    ...sourceChanges,
-    items: sourceChanges.items.filter((item) => aheadIds.has(item.nodeId)),
-  };
   return {
-    sync,
+    invalidNodes: nodes?.invalidNodes ?? [],
     cards,
-    changedCardSources,
+    changedCardSources: sourceChanges,
     roots,
     ...(fs.workspaceRoot ? { workspaceRoot: fs.workspaceRoot } : {}),
     ...(fs.recoveryConflicts?.length ? { recoveryConflicts: [...fs.recoveryConflicts] } : {}),
@@ -81,50 +71,10 @@ async function inspectCurrentContextInScope(
 }
 
 export type CurrentContext = Awaited<ReturnType<typeof inspectCurrentContext>>;
-export async function inspectWorkspaceDrift(fs: FsAdapter) {
-  const sync = await inspectWorkspaceSync(fs);
-  return {
-    items: contextDriftItems({ sync }),
-    synchronizationUncertain: sync.nodes.some((node) => node.uncertain),
-  };
-}
-
-export function contextDriftItems(context: Pick<CurrentContext, "sync">) {
-  return context.sync.nodes.flatMap((node) => [
-    ...(node.behind
-      ? [
-          {
-            kind: "node-behind" as const,
-            nodeId: node.nodeId,
-            path: node.path,
-            address: node.resource,
-            reasons: node.behind.reasons,
-            materials: node.materials,
-          },
-        ]
-      : []),
-    ...(node.ahead
-      ? [
-          {
-            kind: "node-ahead" as const,
-            nodeId: node.nodeId,
-            path: node.path,
-            address: node.resource,
-            reasons: node.ahead.reasons,
-          },
-        ]
-      : []),
-  ]);
-}
-
 type BriefItem = Record<string, string | number | boolean | undefined>;
 type BriefRead = { total: number; command: string };
 export type ContextBrief = {
-  counts: Pick<WorkspaceSync["counts"], "ahead" | "behind">;
   invalidNodes: InvalidNativeNode[];
-  baselineOnlyBehind: number;
-  behind: BriefItem[];
-  ahead: BriefItem[];
   cardInputs: BriefItem[];
   changedCardSources: BriefItem[];
   roots: Pick<CurrentContext["roots"][number], "nodeId" | "name" | "type">[];
@@ -135,9 +85,7 @@ export type ContextBrief = {
   unknownCardsRead?: BriefRead;
   invalidNodesRead?: BriefRead;
   rootsRead?: BriefRead;
-  driftRead?: { command: string };
   changedCardSourcesRead?: BriefRead;
-  synchronizationUncertain?: true;
   cardSourcesUncertain?: true;
   recoveryConflicts?: string[];
   roleId?: string;
@@ -175,22 +123,6 @@ export function compareBriefCards(
   return aid === bid ? 0 : aid < bid ? -1 : 1;
 }
 
-export function baselineOnlyBehind(node: WorkspaceSync["nodes"][number]) {
-  const missing = node.materials.filter(
-    (material) => material.state !== "current" && material.state !== "unanchored",
-  );
-  return (
-    !!node.behind &&
-    missing.length > 0 &&
-    missing.every(
-      (material) =>
-        material.state === "unavailable" &&
-        !material.recordedVersion &&
-        material.reason?.includes("no retained baseline"),
-    )
-  );
-}
-
 /** Discovery facts; the Agent brief projection separately bounds its final CLI response. */
 export function makeContextBrief(
   context: CurrentContext,
@@ -217,7 +149,6 @@ export function makeContextBrief(
       ...(options.roleId && state === "pending" ? ["--include-open"] : []),
       ...(state ? ["--state", state] : []),
     ]);
-  const baselineOnly = baselineOnlyBehind;
   const candidates = {
     cardInputs: context.cards.items
       .filter(
@@ -249,17 +180,13 @@ export function makeContextBrief(
         ...(typeof card.returnTo === "string" ? { returnTo: card.returnTo } : {}),
         ...(typeof card.receivedBy === "string" ? { receivedBy: card.receivedBy } : {}),
       })),
-    changedCardSources: context.changedCardSources.items
-      .filter((item) =>
-        context.sync.nodes.some((node) => node.nodeId === item.nodeId && node.ahead),
-      )
-      .map((item) => ({
-        cardId: item.cardId,
-        nodeId: item.nodeId,
-        path: `.tent/${item.path ?? item.publishedVersion.path}`,
-        state: item.state,
-        reason: shorten(item.reason, 160),
-      })),
+    changedCardSources: context.changedCardSources.items.map((item) => ({
+      cardId: item.cardId,
+      nodeId: item.nodeId,
+      path: `.tent/${item.path ?? item.publishedVersion.path}`,
+      state: item.state,
+      reason: shorten(item.reason, 160),
+    })),
   } satisfies Record<string, BriefItem[]>;
   const pending = candidates.cardInputs.filter((item) => item.state === "pending");
   const returned = candidates.cardInputs.filter((item) => item.state === "returned");
@@ -267,11 +194,10 @@ export function makeContextBrief(
   const unknown = candidates.cardInputs.filter(
     (item) => item.state !== "pending" && item.state !== "returned" && item.state !== "consumed",
   );
-  const invalidNodes = context.sync.invalidNodes ?? [];
+  const invalidNodes = context.invalidNodes;
   const omitted = (items: readonly unknown[]) => Math.max(0, items.length - 10);
   const shown = { pending: 0, returned: 0, consumed: 0, unknown: 0 };
   const brief: ContextBrief = {
-    counts: { ahead: context.sync.counts.ahead, behind: context.sync.counts.behind },
     invalidNodes: invalidNodes.slice(0, 10),
     cardInputs: candidates.cardInputs.filter((item) => {
       const state =
@@ -280,38 +206,19 @@ export function makeContextBrief(
           : "unknown";
       return shown[state]++ < 10;
     }),
-    ahead: [],
     changedCardSources: candidates.changedCardSources.slice(0, 10),
-    behind: [],
     roots: context.roots.slice(0, 10).map(({ nodeId, name, type }) => ({ nodeId, name, type })),
-    baselineOnlyBehind: context.sync.nodes.filter(baselineOnly).length,
     omitted: {
       roots: omitted(context.roots),
       invalidNodes: omitted(invalidNodes),
-      ahead: context.sync.counts.ahead,
       changedCardSources: omitted(candidates.changedCardSources),
       cardInputs: [pending, returned, unknown, consumed].reduce(
         (sum, items) => sum + omitted(items),
         0,
       ),
-      behind: context.sync.counts.behind,
     },
-    ...(context.sync.counts.ahead || context.sync.counts.behind
-      ? {
-          driftRead: {
-            command: command([
-              "workspace",
-              "drift",
-              ...(!context.workspaceRoot ? ["--workspace", "<root>"] : []),
-            ]),
-          },
-        }
-      : {}),
     ...(context.recoveryConflicts?.length ? { recoveryConflicts: context.recoveryConflicts } : {}),
     ...(context.changedCardSources.diagnostics.length ? { cardSourcesUncertain: true } : {}),
-    ...(context.sync.nodes.some((node) => node.uncertain)
-      ? { synchronizationUncertain: true }
-      : {}),
     ...(options.roleId ? { roleId: options.roleId } : {}),
   };
   const reads: [
@@ -342,8 +249,7 @@ export function makeContextBrief(
 }
 
 export function formatContextBrief(brief: ContextBrief): string {
-  const lines = [`behind ${brief.counts.behind} · ahead ${brief.counts.ahead}`];
-  if (brief.driftRead) lines.push(brief.driftRead.command);
+  const lines: string[] = [];
   if (brief.recoveryConflicts?.length)
     lines.push(
       "Transaction recovery kept external edits:",
@@ -401,16 +307,8 @@ export function formatContextBrief(brief: ContextBrief): string {
       }
     } else if (read) lines.push(`+${read.total - 10} more: ${read.command}`);
   }
-  if (brief.baselineOnlyBehind)
-    lines.push(`${brief.baselineOnlyBehind} behind Nodes have no retained baseline.`);
   if (brief.cardSourcesUncertain)
     lines.push("Some received Card sources could not be compared; inspect their published inputs.");
-  if (brief.synchronizationUncertain)
-    lines.push(
-      "Some Nodes changed during inspection; synchronization findings are incomplete. Retry workspace brief.",
-    );
-  if (brief.roleId)
-    lines.push(`Card filter: ${brief.roleId}; synchronization counts cover the whole Workspace.`);
   if (brief.roots.length) {
     lines.push(`Root Nodes${brief.rootsRead ? ` (${brief.rootsRead.total} total)` : ""}:`);
     for (const node of brief.roots)

@@ -2,7 +2,6 @@ import { DatabaseSync, type SQLInputValue } from "../../fs/sqlite-runtime.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import * as fs from "node:fs/promises";
 import { scopedRead, forgetScopedRead } from "../../fs/file-state-cache.js";
 import { durableMkdir, syncDirectory } from "../../fs/durable-file.js";
@@ -15,7 +14,6 @@ import {
 import { canonicalSha256 } from "../base/canonical-digest.js";
 import { unifiedLineDiff } from "./line-diff.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
-import { nodeBasisRecordSchema, type NodeBasisRecord } from "../base/node-basis-record.js";
 import { isNodeId, isRoleId, isCardId } from "../base/id.js";
 import { isHistoryDocument } from "./document-history.js";
 import type { DocumentHistory } from "./history-port.js";
@@ -58,23 +56,6 @@ function objectId(raw: string | null): string | undefined {
     return undefined;
   }
 }
-export function hasLocalMachinePath(value: unknown): boolean {
-  if (typeof value === "string") {
-    if (/^(?:[\\/]|file:)|(?:^|[^a-z0-9])[a-z]:[\\/]|\\\\[?.]\\/i.test(value)) return true;
-    try {
-      return hasLocalMachinePath(JSON.parse(value));
-    } catch {
-      return false;
-    }
-  }
-  if (Array.isArray(value)) return value.some(hasLocalMachinePath);
-  return (
-    !!value &&
-    typeof value === "object" &&
-    Object.entries(value).some(([k, v]) => hasLocalMachinePath(k) || hasLocalMachinePath(v))
-  );
-}
-
 /** Content-addressed bytes, immutable event versions, current membership; caller owns mutation.lock. */
 export class SqliteDocumentHistory implements DocumentHistory {
   private closed = false;
@@ -118,8 +99,12 @@ export class SqliteDocumentHistory implements DocumentHistory {
         // Even the first format read can race another connection's exclusive commit.
         db.exec("PRAGMA busy_timeout=8000");
         const version = db.prepare("PRAGMA user_version").get()?.user_version;
-        if (!create && version !== 1)
-          throw new Error(`Unsupported Tent SQLite history format: ${version}`);
+        if (version !== 2 && !(create && version === 0))
+          throw new Error(
+            version === 1
+              ? "Tent SQLite history format 1 requires offline conversion; run node scripts/one-off/remove-node-records-history.mjs <workspaceRoot>"
+              : `Unsupported Tent SQLite history format: ${version}`,
+          );
         db.exec("PRAGMA synchronous=EXTRA; PRAGMA foreign_keys=ON");
         if (create)
           db.exec(`PRAGMA journal_mode=DELETE;
@@ -127,10 +112,8 @@ export class SqliteDocumentHistory implements DocumentHistory {
           CREATE TABLE IF NOT EXISTS blobs(digest TEXT PRIMARY KEY, raw TEXT NOT NULL) STRICT;
           CREATE TABLE IF NOT EXISTS changes(event INTEGER NOT NULL REFERENCES events(seq), path TEXT NOT NULL, before_digest TEXT REFERENCES blobs(digest), after_digest TEXT REFERENCES blobs(digest), PRIMARY KEY(event,path)) STRICT;
           CREATE INDEX IF NOT EXISTS changes_path ON changes(path,event);
-          CREATE TABLE IF NOT EXISTS current(path TEXT PRIMARY KEY, digest TEXT NOT NULL REFERENCES blobs(digest), event INTEGER NOT NULL REFERENCES events(seq)) STRICT;
-          CREATE TABLE IF NOT EXISTS records(event INTEGER NOT NULL REFERENCES events(seq), id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(event,id)) STRICT;
-          CREATE TABLE IF NOT EXISTS unportable_records(id TEXT PRIMARY KEY) STRICT;`);
-        if (create) db.exec("PRAGMA user_version=1");
+          CREATE TABLE IF NOT EXISTS current(path TEXT PRIMARY KEY, digest TEXT NOT NULL REFERENCES blobs(digest), event INTEGER NOT NULL REFERENCES events(seq)) STRICT;`);
+        if (create) db.exec("PRAGMA user_version=2");
         this.database = db;
         if (create) {
           forgetScopedRead(this.availabilityScope);
@@ -275,17 +258,6 @@ export class SqliteDocumentHistory implements DocumentHistory {
         throw new Error(`Invalid history identity: ${id}`);
     if (metadata.entry !== undefined && !["cli", "ui", "core"].includes(metadata.entry))
       throw new Error("Invalid history entry");
-    const previousRecords = await this.nodeRecords();
-    const nodeRecords: Record<string, NodeBasisRecord> = {};
-    for (const [id, value] of Object.entries(metadata.nodeRecords ?? {})) {
-      if (!isNodeId(id)) throw new Error(`Invalid Node record: ${id}`);
-      if (hasLocalMachinePath(value))
-        throw new Error(
-          "Node records cannot contain local machine paths; use workspace-relative paths",
-        );
-      const record = nodeBasisRecordSchema.parse(value);
-      if (!isDeepStrictEqual(previousRecords[id], record)) nodeRecords[id] = record;
-    }
     const db = await this.db(),
       before = await this.currentCommit();
     const current = new Map(
@@ -302,7 +274,7 @@ export class SqliteDocumentHistory implements DocumentHistory {
     const changed = selected.filter((c) => c.before !== c.digest);
     const publication =
       metadata.operation === "document.external-capture" ? undefined : this.observer.getStore();
-    if (!changed.length && !Object.keys(nodeRecords).length) {
+    if (!changed.length) {
       const handle = await fs.open(path.join(this.systemRoot, ".git/history.sqlite"), "r+");
       try {
         await handle.sync();
@@ -333,7 +305,7 @@ export class SqliteDocumentHistory implements DocumentHistory {
         (db.prepare("SELECT id FROM events ORDER BY seq DESC LIMIT 1").get()?.id ?? null) !== before
       )
         throw new Error("SQLite history changed during capture; reread before retrying");
-      const saved = { ...metadata, entry: metadata.entry ?? this.entry, nodeRecords };
+      const saved = { ...metadata, entry: metadata.entry ?? this.entry };
       const seq = Number(
         db
           .prepare("INSERT INTO events(id,parent,time,metadata) VALUES(?,?,?,?)")
@@ -351,12 +323,6 @@ export class SqliteDocumentHistory implements DocumentHistory {
             "INSERT INTO current(path,digest,event) VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET digest=excluded.digest,event=excluded.event",
           ).run(c.path, c.digest, seq);
       }
-      for (const [key, value] of Object.entries(nodeRecords))
-        db.prepare("INSERT INTO records(event,id,value) VALUES(?,?,?)").run(
-          seq,
-          key,
-          JSON.stringify(value),
-        );
       // Current retained identities must remain unique, including moves captured as delete + add.
       const ids = new Map<string, string>();
       for (const r of db.prepare("SELECT path,raw FROM current JOIN blobs USING(digest)").all()) {
@@ -535,29 +501,6 @@ export class SqliteDocumentHistory implements DocumentHistory {
     }
     return result;
   }
-  async nodeRecords(): Promise<Record<string, NodeBasisRecord | null>> {
-    return this.projection(
-      (index) =>
-        Object.fromEntries(
-          index
-            .prepare("SELECT id,value FROM records")
-            .all()
-            .map((r) => [String(r.id), readIndexValue<NodeBasisRecord | null>(r.value)]),
-        ),
-      "records",
-    );
-  }
-  async unportableNodeRecordIds() {
-    const current = (await this.all("SELECT DISTINCT id,value FROM records"))
-      .filter((r) => hasLocalMachinePath(JSON.parse(String(r.value))))
-      .map((r) => String(r.id));
-    return [
-      ...new Set([
-        ...current,
-        ...(await this.all("SELECT id FROM unportable_records")).map((r) => String(r.id)),
-      ]),
-    ].sort();
-  }
   async pathVersions(file: string) {
     checkedPath(file);
     const rows = await this.all(
@@ -618,12 +561,9 @@ export class SqliteDocumentHistory implements DocumentHistory {
     return this.projection((index) => this.index.identities(index));
   }
 
-  private async projection<T>(
-    read: (index: DatabaseSync) => T | Promise<T>,
-    kind: "events" | "records" = "events",
-  ): Promise<T> {
+  private async projection<T>(read: (index: DatabaseSync) => T | Promise<T>): Promise<T> {
     try {
-      return await read(await this.historyIndex(kind));
+      return await read(await this.historyIndex());
     } catch (error) {
       if (!(error instanceof HistoryIndexDamage)) throw error;
       if (!this.repairing) {
@@ -632,16 +572,16 @@ export class SqliteDocumentHistory implements DocumentHistory {
         });
       }
       await this.repairing;
-      return await read(await this.historyIndex(kind));
+      return await read(await this.historyIndex());
     }
   }
 
-  private async historyIndex(kind: "events" | "records"): Promise<DatabaseSync> {
+  private async historyIndex(): Promise<DatabaseSync> {
     if (this.repairing) await this.repairing;
     const previous = this.indexing;
     const pending = (async () => {
       if (previous) await previous.catch(() => undefined);
-      return this.updateIndex(kind);
+      return this.updateIndex();
     })();
     this.indexing = pending;
     try {
@@ -651,8 +591,7 @@ export class SqliteDocumentHistory implements DocumentHistory {
     }
   }
 
-  private async updateIndex(kind: "events" | "records"): Promise<DatabaseSync> {
-    const events = kind === "events";
+  private async updateIndex(): Promise<DatabaseSync> {
     const source = await this.db(),
       index = await this.index.open();
     const stat = await fs.stat(path.join(this.systemRoot, ".git/history.sqlite"), { bigint: true });
@@ -672,7 +611,7 @@ export class SqliteDocumentHistory implements DocumentHistory {
         throw new HistoryIndexDamage("Invalid history projection position");
       const anchor = from ? source.prepare("SELECT id FROM events WHERE seq=?").get(from)?.id : "";
       if (
-        state.version !== "1" ||
+        state.version !== "3" ||
         from > to ||
         anchor !== (state.head ?? "") ||
         (from === to && state.stamp !== stamp)
@@ -680,11 +619,8 @@ export class SqliteDocumentHistory implements DocumentHistory {
         this.index.reset(index);
         from = 0;
       }
-      const cursor = events ? "identitySeq" : "recordsSeq";
-      const processed = from === 0 ? 0 : Number(state[cursor] ?? 0);
-      if (!Number.isSafeInteger(processed) || processed < 0 || processed > from)
-        throw new HistoryIndexDamage("Invalid history projection position");
-      if (processed < to && events) {
+      const processed = from;
+      if (processed < to) {
         const affected = new Set<string>();
         const batch = this.index.batch(index);
         const knownIdentity = index.prepare("SELECT id FROM identities WHERE digest=?");
@@ -714,31 +650,12 @@ export class SqliteDocumentHistory implements DocumentHistory {
         }
         batch.finish(affected);
       }
-      if (processed < to && !events) {
-        const latest = new Map<string, string>();
-        const putRecord = index.prepare("INSERT OR REPLACE INTO records VALUES(?,?)");
-        for (const row of source
-          .prepare("SELECT id,value FROM records WHERE event>? AND event<=? ORDER BY event,rowid")
-          .all(processed, to)) {
-          latest.delete(String(row.id));
-          latest.set(String(row.id), String(row.value));
-        }
-        for (const [id, raw] of latest) {
-          const value = JSON.parse(raw);
-          const clean =
-            value === null || hasLocalMachinePath(value)
-              ? null
-              : nodeBasisRecordSchema.parse(value);
-          putRecord.run(id, indexValue(clean));
-        }
-      }
       const putState = index.prepare("INSERT OR REPLACE INTO state VALUES(?,?)");
       for (const [key, value] of Object.entries({
-        version: "1",
+        version: "3",
         seq: String(to),
         head: String(head?.id ?? ""),
         stamp,
-        [cursor]: String(to),
       }))
         putState.run(key, indexValue(value));
       index.exec("COMMIT");
@@ -760,7 +677,7 @@ export class SqliteDocumentHistory implements DocumentHistory {
   ): HistoryCommit {
     const metadata = JSON.parse(event.metadata) as CaptureMetadata,
       changes: HistoryChange[] = [],
-      byId = new Map<string, HistoryChange>(),
+      byId = new Map<string, HistoryChange[]>(),
       objectIds = new Set(metadata.objectIds ?? []);
     for (const c of rows) {
       const file = String(c.path),
@@ -776,24 +693,30 @@ export class SqliteDocumentHistory implements DocumentHistory {
         after: DocumentVersion | undefined,
       ) => {
         if (id) objectIds.add(id);
-        const current = id ? byId.get(id) : undefined;
-        if (current) {
-          if (before) current.before = before;
-          if (after) current.after = after;
-        } else {
-          const change = {
-            ...(id ? { objectId: id } : {}),
-            ...(before ? { before } : {}),
-            ...(after ? { after } : {}),
-          };
-          changes.push(change);
-          if (id) byId.set(id, change);
-        }
+        const change = {
+          ...(id ? { objectId: id } : {}),
+          ...(before ? { before } : {}),
+          ...(after ? { after } : {}),
+        };
+        if (!id) changes.push(change);
+        else byId.set(id, [...(byId.get(id) ?? []), change]);
       };
       if (a && b && a !== b) {
         add(a, before, undefined);
         add(b, undefined, after);
       } else add(b ?? a, before, after);
+    }
+    for (const [objectId, entries] of byId) {
+      const before = entries.flatMap((change) => (change.before ? [change.before] : []));
+      const after = entries.flatMap((change) => (change.after ? [change.after] : []));
+      // Coalesce a unique identity's move, never competing documents on either side.
+      if (before.length <= 1 && after.length <= 1)
+        changes.push({
+          objectId,
+          ...(before[0] ? { before: before[0] } : {}),
+          ...(after[0] ? { after: after[0] } : {}),
+        });
+      else changes.push(...entries);
     }
     return {
       commit: event.id,

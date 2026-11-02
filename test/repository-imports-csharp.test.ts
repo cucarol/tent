@@ -12,10 +12,6 @@ import {
 import { extractCSharpImports } from "../src/core/base/csharp-imports.js";
 import { repositoryFacts } from "../src/core/base/repository-facts.js";
 import { readRepositorySources } from "../src/fs/repository-sources.js";
-import {
-  observeStructureMaterial,
-  withStructureSnapshot,
-} from "../src/fs/structure-observation.js";
 import { initializeFixtureRepository, testScratchRoot } from "./scratch.js";
 
 const source = (path: string, content?: string): RepositorySource => ({ path, content });
@@ -277,52 +273,4 @@ test("C# visible namespace shadowing is preserved for own and referenced project
     assert.deepEqual(focused.edges, full.edges);
     assert.deepEqual(focused.issues, full.issues);
   }
-});
-
-test("C# FS collection and narrow structure observations read required context and preserve failures", async (t) => {
-  const root = await fs.mkdtemp(path.join(testScratchRoot(), "csharp-imports-"));
-  t.after(() =>
-    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
-  );
-  initializeFixtureRepository(root);
-  const files = [
-    project("app", '<ItemGroup><ProjectReference Include="../api/api.csproj" /></ItemGroup>'),
-    project("api"),
-    project("independent"),
-    source("app/Main.cs", "using T = Api.Target; class Main {}"),
-    source("api/UnusualName.cs", "namespace Api; class Target {}"),
-    source("independent/Bad.cs", "class Bad {}"),
-    source("web/main.ts", "export {}"),
-  ];
-  for (const file of files) {
-    await fs.mkdir(path.dirname(path.join(root, file.path)), { recursive: true });
-    await fs.writeFile(path.join(root, file.path), file.content!);
-  }
-  const collected = await readRepositorySources(
-    root,
-    files.map((file) => file.path),
-  );
-  assert.deepEqual(collected.errors, []);
-  assert.deepEqual(pairs(extractRepositoryImports(collected.files)), [
-    "app/Main.cs -> api/UnusualName.cs",
-  ]);
-  await fs.writeFile(path.join(root, "independent/Bad.cs"), Buffer.from([0xff, 0xfe]));
-  const observe = () =>
-    withStructureSnapshot(() => observeStructureMaterial(root, "Module/Module.md", "../../app/"));
-  assert.deepEqual((await observe()).structureDependencies, ["api/"]);
-  await fs.writeFile(path.join(root, "api/UnusualName.cs"), Buffer.from([0xff, 0xfe]));
-  await assert.rejects(observe, /encoded data|valid text/i);
-  await fs.writeFile(path.join(root, "api/UnusualName.cs"), "namespace Api; class Target { /*");
-  await assert.rejects(observe, /Unterminated block/);
-  await fs.writeFile(path.join(root, "api/UnusualName.cs"), "namespace Api; class Target {}");
-  await fs.writeFile(path.join(root, "app/app.csproj"), "<broken");
-  await assert.rejects(observe, /C# project configuration/);
-  assert.deepEqual(
-    (
-      await withStructureSnapshot(() =>
-        observeStructureMaterial(root, "Module/Module.md", "../../web/"),
-      )
-    ).structureDependencies,
-    [],
-  );
 });

@@ -22,7 +22,7 @@ async function readPreparedIndex(
       ),
     );
     if (
-      cached.schema !== 13 ||
+      cached.schema !== 14 ||
       typeof cached.workspaceRoot !== "string" ||
       path.relative(cached.workspaceRoot, workspaceRoot) !== "" ||
       cached.rootMarkerDigest !== rootMarkerDigest(marker) ||

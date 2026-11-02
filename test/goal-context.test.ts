@@ -125,8 +125,11 @@ test("goal get exposes bounded HEAD context without changing document bytes or c
   assert.match(first.context, /^Context\nAncestor Scope node-scope\n/);
   assert.doesNotMatch(first.context, /useful description/);
   assert.match(first.context, /\[consumed\] received by role-worker return to role-requester/);
-  // Imported outputs have no retained goal basis, but unknown comparisons do not make them behind.
-  assert.match(first.context, /stable\/unanchored/);
+  assert.match(first.context, /node-result \[stable\]/);
+  assert.deepEqual(
+    context.filter((item) => item.type === "output").map((item) => item.state),
+    ["stable", "stable"],
+  );
   assert.doesNotMatch(first.context, /received-no-output|has-output|needs-review|0\/1/);
   const continuation = await node(
     "node-goal",
@@ -373,8 +376,8 @@ test("all Node types disclose complete live association categories and incoming 
     await runNodeCommand("get", ["node-outp00", "--full", "--context"], globals),
   );
   assert.match(output.context, /Goal.*node-goal00/);
-  assert.match(output.context, /Self.*stable\/unanchored/);
-  assert.equal(output.changedSince, undefined, "unknown comparisons are not known changes");
+  assert.match(output.context, /Self.*node-outp00 \[stable\]/);
+  assert.doesNotMatch(output.context, /stable\/|synced|ahead|behind|unanchored/);
   const historical = parse(
     await runNodeCommand(
       "get",

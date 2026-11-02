@@ -3,17 +3,52 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { NodeFs } from "../../src/fs/node-fs.js";
-import { loadNodeCatalog, readCatalogDocument } from "../../src/core/graph/node-catalog.js";
+import {
+  loadNodeCatalog,
+  readCatalogDocument,
+  type CatalogNode,
+} from "../../src/core/graph/node-catalog.js";
 import { parseFrontmatter } from "../../src/core/base/frontmatter.js";
 import { rewriteMarkdownDestinations } from "../../src/core/base/links.js";
 import { isCoverageGoal } from "../../src/core/base/material-coverage.js";
-import { coverageGoalAncestors } from "../../src/core/graph/node-sync-record.js";
 import { normalizeTagList } from "../../src/core/base/tags.js";
 import { nodeNotePath } from "../../src/core/base/paths.js";
 import {
   writeNodesBatch,
   type NodeWriteBatchInput,
 } from "../../src/core/write/node-write-batch.js";
+
+/** Ancestors of current coverage goals; callers still require the owner itself to be a goal. */
+function coverageGoalAncestors(
+  nodes: Map<string, CatalogNode>,
+  workspaceRoot: string | undefined,
+): Set<string> {
+  const ancestors = new Set<string>();
+  if (!workspaceRoot) return ancestors;
+  for (const node of nodes.values()) {
+    if (
+      node.invalid ||
+      (node.status !== "draft" && node.status !== "stable") ||
+      node.type !== "goal"
+    )
+      continue;
+    if (
+      !isCoverageGoal(
+        { ...parseFrontmatter(node.header).data, type: node.type },
+        nodeNotePath(node.path),
+        workspaceRoot,
+      )
+    )
+      continue;
+    let parent = node.parentNodeId ? nodes.get(node.parentNodeId) : undefined;
+    while (parent && !parent.invalid) {
+      // Lifecycle is local: an inactive intermediary does not retire its descendants.
+      if (parent.status === "draft" || parent.status === "stable") ancestors.add(parent.nodeId);
+      parent = parent.parentNodeId ? nodes.get(parent.parentNodeId) : undefined;
+    }
+  }
+  return ancestors;
+}
 
 export type ModuleGoalConversion = {
   nodeId: string;
@@ -81,7 +116,6 @@ export async function convertModuleGoals(
         baseEtag: document.etag,
         frontmatter: { type: "goal" },
         body: entry.goalBody,
-        confirm: true,
       });
       items.push({
         op: "create",

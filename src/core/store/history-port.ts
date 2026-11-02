@@ -1,6 +1,5 @@
 import * as z from "zod/v4";
 import type { FsAdapter } from "./adapter.js";
-import type { NodeBasisRecord } from "../base/node-basis-record.js";
 
 /** commit is an opaque immutable event identity, not a content fingerprint. */
 export type DocumentVersion = { commit: string; path: string };
@@ -13,7 +12,6 @@ export type CaptureMetadata = {
   operation: string;
   objectIds?: readonly string[];
   entry?: "cli" | "ui" | "core";
-  nodeRecords?: Record<string, NodeBasisRecord>;
 };
 export type CaptureResult = {
   commit: string | null;
@@ -63,8 +61,6 @@ export interface DocumentHistory {
   changedRetainedDocuments(
     documents: readonly { path: string; raw: string }[],
   ): Promise<{ path: string; raw: string; previousRaw: string }[]>;
-  nodeRecords(): Promise<Record<string, NodeBasisRecord | null>>;
-  unportableNodeRecordIds(): Promise<string[]>;
   pathVersions(file: string): Promise<{ first?: DocumentVersion; latest?: DocumentVersion }>;
   firstCommitTimes(files: readonly string[]): Promise<Map<string, string>>;
   cardQueueTimes(

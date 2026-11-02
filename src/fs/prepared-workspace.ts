@@ -2,15 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { AgentContextRepository } from "../core/read/agent-context.js";
 import type { PreparedRepositoryObservation } from "./prepared-repository.js";
-import type { observeMaterialResource } from "./source-observation.js";
 
 export type PreparedWorkspace = {
   repository: AgentContextRepository;
   live: string[];
   tracked: string[];
-  /** null shares the identical, strictly validated repository text. */
-  structureTexts: Array<[string, string | null]>;
-  materials: Array<[string, { value: Awaited<ReturnType<typeof observeMaterialResource>> }]>;
 };
 
 const snapshots = new AsyncLocalStorage<PreparedRepositoryObservation<PreparedWorkspace> | null>();
@@ -44,24 +40,6 @@ export function isPreparedWorkspace(value: unknown): value is PreparedWorkspace 
     Array.isArray(item.repository.sources.errors) &&
     item.repository.sources.errors.length === 0 &&
     strings(item.live) &&
-    strings(item.tracked) &&
-    Array.isArray(item.materials) &&
-    item.materials.every(
-      (entry) =>
-        Array.isArray(entry) &&
-        entry.length === 2 &&
-        typeof entry[0] === "string" &&
-        !!entry[1] &&
-        !("error" in entry[1]) &&
-        typeof entry[1].value?.canonicalPath === "string",
-    ) &&
-    Array.isArray(item.structureTexts) &&
-    item.structureTexts.every(
-      (entry) =>
-        Array.isArray(entry) &&
-        entry.length === 2 &&
-        typeof entry[0] === "string" &&
-        (entry[1] === null || typeof entry[1] === "string"),
-    )
+    strings(item.tracked)
   );
 }

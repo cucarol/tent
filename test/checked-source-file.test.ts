@@ -5,7 +5,7 @@ import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { test } from "node:test";
 import { checkedSourceFile, initialSourceFile } from "../src/fs/checked-source-file.js";
-import { observeSourceFile } from "../src/fs/source-observation.js";
+import { readSourceFile } from "../src/fs/source-observation.js";
 import { testScratchRoot } from "./scratch.js";
 import { withFileReadScope } from "../src/fs/file-state-cache.js";
 
@@ -136,81 +136,11 @@ test("final material identity check does not share an earlier in-flight ancestry
   );
   syncBuiltinESMExports();
   try {
-    await assert.rejects(observeSourceFile(root, file), /Material changed while observing/);
+    await assert.rejects(readSourceFile(root, file), /Material changed while observing/);
     assert.equal(heldOnce, true);
   } finally {
     release();
     await secondary;
-    statMock.mock.restore();
-    pathMock.mock.restore();
-    openMock.mock.restore();
-    syncBuiltinESMExports();
-  }
-});
-
-test("warm source checks share one file state and parent resolution only within a request", async (t) => {
-  const root = await fs.mkdtemp(path.join(testScratchRoot(), "checked-warm-"));
-  t.after(() =>
-    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
-  );
-  const directory = path.join(root, "src");
-  await fs.mkdir(directory);
-  const filenames = ["a.ts", "b.ts"].map((name) => path.join(directory, name));
-  const cache = path.join(root, "cache"),
-    old = new Date(Date.now() - 5_000);
-  for (const filename of filenames) {
-    await fs.writeFile(filename, "original");
-    await fs.utimes(filename, old, old);
-  }
-  const read = () =>
-    withFileReadScope(async () => {
-      const first = await observeSourceFile(root, filenames[0]!, cache);
-      const rest = await Promise.all(
-        filenames.map((filename) => observeSourceFile(root, filename, cache)),
-      );
-      return [first, ...rest];
-    });
-  await read();
-  const originalStat = fs.lstat,
-    originalPath = fs.realpath,
-    originalOpen = fs.open;
-  const stats = new Map<string, number>(),
-    paths = new Map<string, number>();
-  let opens = 0;
-  const statMock = t.mock.method(fs, "lstat", (...args: Parameters<typeof originalStat>) => {
-    const name = String(args[0]);
-    stats.set(name, (stats.get(name) ?? 0) + 1);
-    return originalStat(...args);
-  });
-  const pathMock = t.mock.method(fs, "realpath", (...args: Parameters<typeof originalPath>) => {
-    const name = String(args[0]);
-    paths.set(name, (paths.get(name) ?? 0) + 1);
-    return originalPath(...args);
-  });
-  const openMock = t.mock.method(fs, "open", (...args: Parameters<typeof originalOpen>) => {
-    if (filenames.includes(String(args[0]))) opens++;
-    return originalOpen(...args);
-  });
-  syncBuiltinESMExports();
-  try {
-    assert.ok((await read()).every((result) => result.cacheHit));
-    for (const filename of filenames) {
-      assert.equal(stats.get(filename), 1);
-      assert.equal(paths.has(filename), false);
-    }
-    assert.equal(paths.get(root), 1);
-    assert.equal(paths.get(directory), 1);
-    assert.equal(opens, 0);
-    await Promise.all([read(), read()]);
-    for (const filename of filenames) assert.equal(stats.get(filename), 3);
-    assert.equal(paths.get(directory), 3, "parallel requests cannot reuse parent observations");
-    await fs.rename(directory, path.join(root, "saved"));
-    await fs.mkdir(path.join(root, "other"));
-    for (const filename of filenames)
-      await fs.writeFile(path.join(root, "other", path.basename(filename)), "original");
-    await fs.symlink(path.join(root, "other"), directory, "junction");
-    await assert.rejects(read(), /Symbolic links/);
-  } finally {
     statMock.mock.restore();
     pathMock.mock.restore();
     openMock.mock.restore();
@@ -244,7 +174,7 @@ test("a forced content read independently rejects a parent reported as a link af
   await fs.writeFile(filename, "original");
   const old = new Date(Date.now() - 5_000);
   await fs.utimes(filename, old, old);
-  await observeSourceFile(root, filename, cache);
+  await readSourceFile(root, filename);
   const originalOpen = fs.open,
     originalStat = fs.lstat;
   let replaced = false;
@@ -280,7 +210,7 @@ test("a forced content read independently rejects a parent reported as a link af
   syncBuiltinESMExports();
   try {
     await assert.rejects(
-      withFileReadScope(() => observeSourceFile(root, filename, cache), true),
+      withFileReadScope(() => readSourceFile(root, filename), true),
       /Symbolic links|changed/,
     );
     assert.equal(replaced, true);

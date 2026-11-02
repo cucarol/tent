@@ -1,5 +1,4 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
-import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,10 +7,8 @@ import { createHash } from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { withFileReadScope } from "../src/fs/file-state-cache.js";
-import { observeSourceFile, readStructureSource } from "../src/fs/source-observation.js";
-import { inspectNodeSync } from "../src/core/graph/node-sync.js";
+import { readStructureSource } from "../src/fs/source-observation.js";
 import { testScratchRoot } from "./scratch.js";
-import { git } from "./helpers.js";
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const raw = (id = "node-first") =>
@@ -94,48 +91,29 @@ function sourceIo(t: TestContext, filenames: string[]) {
   return counts;
 }
 
-async function readCached(
-  adapter: NodeFs,
-  relative: string,
-  root: string,
-  filename: string,
-  cacheDir: string,
-) {
+async function readCached(adapter: NodeFs, relative: string) {
   return withFileReadScope(async () => ({
     header: await adapter.readFrontmatter(relative),
-    material: await observeSourceFile(root, filename, cacheDir),
   }));
 }
 
-test("header and material caches persist across requests without reading unchanged source bytes", async (t) => {
+test("header caches persist across requests without reading unchanged source bytes", async (t) => {
   const f = await fixture(t);
   const io = sourceIo(t, [f.filename]);
-  const cold = await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
-  assert.equal(cold.material.observedVersion, digest(raw()));
-  assert.equal(
-    io.bytes,
-    Buffer.byteLength(raw()),
-    "prefix and remainder must acquire each byte once",
-  );
+  const cold = await readCached(f.adapter, f.relative);
+  assert.match(cold.header, /node-first/);
+  assert.ok(io.bytes > 0 && io.bytes < Buffer.byteLength(raw()));
   io.reset();
-  const warm = await readCached(
-    openTestFs(f.systemRoot),
-    f.relative,
-    f.systemRoot,
-    f.filename,
-    f.cacheDir,
-  );
+  const warm = await readCached(openTestFs(f.systemRoot), f.relative);
   assert.equal(warm.header, cold.header);
-  assert.equal(warm.material.observedVersion, cold.material.observedVersion);
-  assert.equal(warm.material.cacheHit, true);
   assert.equal(io.bytes, 0);
   assert.equal(io.reads, 0);
   assert.equal(io.opens, 0);
 });
 
-test("same-size native edits with restored mtime invalidate header and material caches through ctime", async (t) => {
+test("same-size native edits with restored mtime invalidate header caches through ctime", async (t) => {
   const f = await fixture(t);
-  await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
+  await readCached(f.adapter, f.relative);
   const before = await fs.stat(f.filename, { bigint: true });
   const oldTimes = await fs.stat(f.filename);
   const changed = raw("node-other");
@@ -151,11 +129,9 @@ test("same-size native edits with restored mtime invalidate header and material 
   );
   assert.notEqual(after.ctimeNs, before.ctimeNs, "fixture must change ctime");
   const io = sourceIo(t, [f.filename]);
-  const observed = await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
+  const observed = await readCached(f.adapter, f.relative);
   assert.match(observed.header, /id: node-other/);
-  assert.equal(observed.material.observedVersion, digest(changed));
-  assert.equal(observed.material.cacheHit, false);
-  assert.equal(io.bytes, Buffer.byteLength(changed));
+  assert.ok(io.bytes > 0 && io.bytes < Buffer.byteLength(changed));
 });
 
 test("racy files are read again even when their recorded file state still matches", async (t) => {
@@ -163,64 +139,42 @@ test("racy files are read again even when their recorded file state still matche
   const now = new Date();
   await fs.utimes(f.filename, now, now);
   const io = sourceIo(t, [f.filename]);
-  await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
+  await readCached(f.adapter, f.relative);
   io.reset();
-  const observed = await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
-  assert.equal(observed.material.cacheHit, false);
-  assert.equal(io.bytes, Buffer.byteLength(raw()));
+  const observed = await readCached(f.adapter, f.relative);
+  assert.ok(io.bytes > 0 && io.bytes < Buffer.byteLength(raw()));
 });
 
-test("structure text survives a fresh read scope, invalidates on native edits and bypasses cache for checks", async (t) => {
+test("structure text reads fresh bytes across requests and observes native edits", async (t) => {
   const f = await fixture(t);
   const io = sourceIo(t, [f.filename]);
-  const read = () => readStructureSource(f.root, f.filename, f.cacheDir);
+  const read = () => readStructureSource(f.root, f.filename);
   assert.equal(await read(), raw());
   assert.equal(io.bytes, Buffer.byteLength(raw()));
   io.reset();
   assert.equal(await read(), raw());
-  assert.equal(io.opens, 0, "a warm structure parser must receive text without reopening sources");
-  assert.equal(await withFileReadScope(read, true), raw());
-  assert.equal(io.bytes, Buffer.byteLength(raw()), "explicit checks must still acquire bytes");
+  assert.equal(io.bytes, Buffer.byteLength(raw()));
   const oldTimes = await fs.stat(f.filename);
   const changed = raw("node-other");
   await fs.writeFile(f.filename, changed);
   await fs.utimes(f.filename, oldTimes.atime, oldTimes.mtime);
-  io.reset();
   assert.equal(await read(), changed);
-  assert.equal(io.bytes, Buffer.byteLength(changed));
-  await fs.utimes(f.filename, new Date(), new Date());
-  await read();
-  io.reset();
-  assert.equal(await read(), changed);
-  assert.equal(io.bytes, Buffer.byteLength(changed), "racy text must not become a cache hit");
 });
 
-test("invalid or missing cached structure text falls back to validated source bytes", async (t) => {
+test("structure text rejects invalid UTF-8 and NUL bytes", async (t) => {
   const f = await fixture(t);
-  const read = () => readStructureSource(f.root, f.filename, f.cacheDir);
-  await read();
-  const valid = await fs.readFile(f.cacheFile, "utf8");
-  const io = sourceIo(t, [f.filename]);
-  for (const mode of ["missing", "damaged", "json", "deleted"]) {
-    const parsed = JSON.parse(valid);
-    const entry = Object.values(parsed.entries)[0] as { value: { text?: string } };
-    if (mode === "missing") delete entry.value.text;
-    if (mode === "damaged") entry.value.text = "incorrect source";
-    if (mode === "deleted") await fs.rm(f.cacheFile);
-    else await fs.writeFile(f.cacheFile, mode === "json" ? "broken" : JSON.stringify(parsed));
-    io.reset();
-    assert.equal(await read(), raw());
-    assert.equal(io.bytes, Buffer.byteLength(raw()));
-  }
   for (const invalid of [Buffer.from([0xff]), Buffer.from("source\0text")]) {
     await fs.writeFile(f.filename, invalid);
-    await assert.rejects(read(), /encoded data was not valid|encoding|UTF-8|not valid text/i);
+    await assert.rejects(
+      readStructureSource(f.root, f.filename),
+      /encoded data was not valid|encoding|UTF-8|not valid text/i,
+    );
   }
 });
 
 test("deleted, corrupt, obsolete and tampered persisted entries fall back to source bytes", async (t) => {
   const f = await fixture(t);
-  const expected = await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
+  const expected = await readCached(f.adapter, f.relative);
   const valid = await fs.readFile(f.cacheFile, "utf8");
   const io = sourceIo(t, [f.filename]);
   const variants = [
@@ -247,15 +201,13 @@ test("deleted, corrupt, obsolete and tampered persisted entries fall back to sou
     if (invalid === undefined) await fs.rm(f.cacheFile);
     else await fs.writeFile(f.cacheFile, invalid);
     io.reset();
-    const actual = await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
+    const actual = await readCached(f.adapter, f.relative);
     assert.equal(actual.header, expected.header);
-    assert.equal(actual.material.observedVersion, expected.material.observedVersion);
-    assert.equal(actual.material.cacheHit, false);
-    assert.equal(io.bytes, Buffer.byteLength(raw()));
+    assert.ok(io.bytes > 0 && io.bytes < Buffer.byteLength(raw()));
   }
 });
 
-test("one request shares prefix and remaining bytes across text, binary and material reads", async (t) => {
+test("one request shares prefix and remaining bytes across text, binary and structure reads", async (t) => {
   const f = await fixture(t);
   const io = sourceIo(t, [f.filename]);
   await withFileReadScope(async () => {
@@ -265,10 +217,7 @@ test("one request shares prefix and remaining bytes across text, binary and mate
     const acquired = io.bytes;
     assert.equal(acquired, Buffer.byteLength(raw()));
     assert.equal(Buffer.from(await f.adapter.readBinary(f.relative)).toString("utf8"), raw());
-    assert.equal(
-      (await observeSourceFile(f.systemRoot, f.filename, f.cacheDir)).observedVersion,
-      digest(raw()),
-    );
+    assert.equal(await readStructureSource(f.systemRoot, f.filename), raw());
     assert.equal(
       io.bytes,
       acquired,
@@ -641,14 +590,11 @@ test("overlapping independent scopes observe separate native file versions", asy
 
 test("forced scopes bypass persisted values and a parent request's acquired bytes", async (t) => {
   const f = await fixture(t);
-  const expected = await readCached(f.adapter, f.relative, f.systemRoot, f.filename, f.cacheDir);
+  const expected = await readCached(f.adapter, f.relative);
   const io = sourceIo(t, [f.filename]);
   await withFileReadScope(async () => {
     assert.equal(await f.adapter.readFrontmatter(f.relative), expected.header);
-    assert.equal(
-      (await observeSourceFile(f.systemRoot, f.filename, f.cacheDir)).observedVersion,
-      expected.material.observedVersion,
-    );
+    assert.equal(await readStructureSource(f.systemRoot, f.filename), raw());
   }, true);
   assert.equal(io.bytes, Buffer.byteLength(raw()));
   await withFileReadScope(async () => {
@@ -660,29 +606,7 @@ test("forced scopes bypass persisted values and a parent request's acquired byte
   });
 });
 
-test("single Node sync inspection rechecks material bytes despite a stable persisted fingerprint", async (t) => {
-  const f = await fixture(t);
-  await initializeFixtureHistory(f.systemRoot);
-  const source = path.join(f.root, "source.txt"),
-    sourceText = "Material contents\n";
-  await fs.writeFile(source, sourceText);
-  await age(source);
-  await fs.writeFile(
-    f.filename,
-    "---\nid: node-first\ntype: prompt\nsources:\n  - resource: ../../source.txt\n---\nNode\n",
-  );
-  await age(f.filename);
-  const initial = await inspectNodeSync(f.adapter, "node-first");
-  assert.equal(initial.materials[0]?.currentVersion, digest(sourceText));
-  const warm = await f.adapter.observeMaterial("../../source.txt", f.relative);
-  assert.equal(warm.cacheHit, true);
-  const io = sourceIo(t, [source]);
-  const checked = await inspectNodeSync(f.adapter, "node-first");
-  assert.equal(checked.materials[0]?.currentVersion, digest(sourceText));
-  assert.equal(io.bytes, Buffer.byteLength(sourceText));
-});
-
-test("concurrent readers in one request acquire source bytes once across header, text, binary and material APIs", async (t) => {
+test("concurrent readers in one request acquire source bytes once across header, text, binary and structure APIs", async (t) => {
   const f = await fixture(t);
   const io = sourceIo(t, [f.filename]);
   const [header, text, binary, observed] = await withFileReadScope(() =>
@@ -690,13 +614,13 @@ test("concurrent readers in one request acquire source bytes once across header,
       f.adapter.readFrontmatter(f.relative),
       f.adapter.readFile(f.relative),
       f.adapter.readBinary(f.relative),
-      observeSourceFile(f.systemRoot, f.filename, f.cacheDir),
+      readStructureSource(f.systemRoot, f.filename),
     ]),
   );
   assert.match(header, /id: node-first/);
   assert.equal(text, raw());
   assert.equal(Buffer.from(binary).toString("utf8"), raw());
-  assert.equal(observed.observedVersion, digest(raw()));
+  assert.equal(observed, raw());
   assert.equal(io.bytes, Buffer.byteLength(raw()));
 });
 
@@ -710,46 +634,4 @@ test("a later read in one request revalidates acquired bytes after a native edit
     assert.equal(await f.adapter.readFile(f.relative), changed);
   });
   assert.equal(io.bytes, Buffer.byteLength(raw()) + Buffer.byteLength(changed));
-});
-
-test("Node sync retries a native Node body edit made during material observation", async (t) => {
-  const f = await fixture(t);
-  await initializeFixtureHistory(f.systemRoot);
-  const source = path.join(f.root, "source.txt");
-  await fs.writeFile(source, "Material contents\n");
-  const before =
-    "---\nid: node-first\ntype: prompt\nsources:\n  - resource: ../../source.txt\n---\nOriginal body\n";
-  const changed = before.replace("Original body", "Native changed body");
-  await fs.writeFile(f.filename, before);
-  const nodeReads: string[] = [];
-  const readFile = f.adapter.readFile.bind(f.adapter);
-  t.mock.method(f.adapter, "readFile", async (filename: string) => {
-    const content = await readFile(filename);
-    if (filename === f.relative) nodeReads.push(content);
-    return content;
-  });
-  let observations = 0;
-  const observe = f.adapter.observeMaterial.bind(f.adapter);
-  t.mock.method(f.adapter, "observeMaterial", async (...args: Parameters<typeof observe>) => {
-    const observed = await observe(...args);
-    observations++;
-    if (observations === 1) {
-      assert.ok(
-        nodeReads.includes(before),
-        "the edit must happen after the initial Node bytes were acquired",
-      );
-      await fs.writeFile(f.filename, changed);
-    }
-    return observed;
-  });
-  const inspection = await inspectNodeSync(f.adapter, "node-first");
-  assert.ok(
-    nodeReads.includes(changed),
-    "the final source boundary must observe the new Node body",
-  );
-  assert.ok(
-    observations > 1 || inspection.uncertain,
-    "the Node edit must trigger a material retry or an explicitly uncertain result",
-  );
-  assert.equal(await fs.readFile(f.filename, "utf8"), changed);
 });

@@ -13,10 +13,6 @@ import { extractJavaImports } from "../src/core/base/java-imports.js";
 import { javaBuildRoots } from "../src/core/base/java-build.js";
 import { repositoryFacts } from "../src/core/base/repository-facts.js";
 import { readRepositorySources } from "../src/fs/repository-sources.js";
-import {
-  observeStructureMaterial,
-  withStructureSnapshot,
-} from "../src/fs/structure-observation.js";
 import { initializeFixtureRepository, testScratchRoot } from "./scratch.js";
 
 const source = (path: string, content?: string): RepositorySource => ({ path, content });
@@ -360,49 +356,4 @@ test("Java FS collection reads supplied Java/config files and leaves unrelated b
   const missing = await readRepositorySources(root, ["missing/Main.java"]);
   assert.equal(missing.errors.length, 1);
   assert.match(extractRepositoryImports(missing.files).issues[0]!.reason, /unavailable/);
-});
-
-test("Java narrow structure materials resolve supporting packages and reject required byte/config failures", async (t) => {
-  const { root } = await fixture(t);
-  await fs.writeFile(
-    path.join(root, "other/src/main/java/unrelated/Broken.java"),
-    Buffer.from([0xff, 0xfe]),
-  );
-  await fs.writeFile(path.join(root, "src/main/java/Unrelated.java"), Buffer.from([0xff, 0xfe]));
-  const observe = () =>
-    withStructureSnapshot(() =>
-      observeStructureMaterial(root, "Module/Module.md", "../../src/main/java/client/"),
-    );
-  assert.deepEqual((await observe()).structureDependencies, ["src/main/java/api/"]);
-  await fs.writeFile(path.join(root, "src/main/java/api/Api.java"), Buffer.from([0xff, 0xfe]));
-  await assert.rejects(observe, /encoded data|valid text/i);
-  await fs.writeFile(path.join(root, "src/main/java/api/Api.java"), "package api; class Api { /*");
-  await assert.rejects(observe, /Unterminated block comment/);
-  await fs.writeFile(path.join(root, "src/main/java/api/Api.java"), "package api; class Api {}");
-  await fs.writeFile(path.join(root, "pom.xml"), "<broken");
-  await assert.rejects(observe, /Java build configuration/);
-  const web = await withStructureSnapshot(() =>
-    observeStructureMaterial(root, "Module/Module.md", "../../web/"),
-  );
-  assert.deepEqual(web.structureDependencies, []);
-});
-
-test("Java structure availability follows complete Gradle include argument diagnostics", async (t) => {
-  const { root } = await fixture(t);
-  const observe = () =>
-    withStructureSnapshot(() =>
-      observeStructureMaterial(root, "Module/Module.md", "../../src/main/java/client/"),
-    );
-  for (const [file, content, available] of [
-    ["settings.gradle.kts", 'include(":api", ":app",)', true],
-    ["settings.gradle.kts", 'include(":lib-" + suffix)', false],
-    ["settings.gradle.kts", 'include(":API".lowercase())', false],
-    ["settings.gradle", "include ':lib-' + suffix", false],
-  ] as const) {
-    await fs.writeFile(path.join(root, file), content);
-    if (available)
-      assert.deepEqual((await observe()).structureDependencies, ["src/main/java/api/"]);
-    else await assert.rejects(observe, /Dynamic Gradle project include/);
-    await fs.writeFile(path.join(root, file), "");
-  }
 });

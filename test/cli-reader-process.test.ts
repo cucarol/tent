@@ -89,7 +89,8 @@ test("separate CLI processes continue discovery, live and Git reads with checked
   await reject(["get", "node-alpha", "--cursor", first.page.nextCursor], /source changed/);
   assert.equal(await collect(versionArgs, historical), body);
   const current = await read("get", "node-alpha");
-  await read("check", "node-alpha");
+  const collected = await cli(root, "workspace", "brief", "--workspace", root, "--json");
+  assert.equal(collected.code, 0, collected.stderr);
   const currentVersion = { commit: (await adapter.history.currentCommit())!, path: "A/A.md" };
   const diff = await adapter.history.diff(firstVersion, currentVersion);
   assert.ok(diff.includes("-DATA") && diff.includes("+NEW"));

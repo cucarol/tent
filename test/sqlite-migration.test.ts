@@ -14,6 +14,9 @@ import { testScratchRoot } from "./scratch.js";
 import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { cardSourceIdentityError } from "../src/core/graph/card-context.js";
 import { createHash } from "node:crypto";
+import { readNodeTimes } from "../src/core/read/node-times.js";
+import { readGoalOpenStates } from "../src/core/read/open-goals.js";
+import { indexValue } from "../src/core/store/sqlite-history-index.js";
 
 async function fixture(t: TestContext) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "sqlite-migration-")),
@@ -41,6 +44,69 @@ async function fixture(t: TestContext) {
   );
   return { workspace, source, target, write, commit };
 }
+
+for (const editMetadata of [false, true])
+  test(`imported duplicate goal stays unknown after repair (survivor metadata ${editMetadata})`, async (t) => {
+    const f = await fixture(t);
+    const raw = (body: string, metadata = "") =>
+      `---\nid: node-goal\ntype: goal\n${metadata}---\n${body}\n`;
+    await f.write("A/A.md", raw("A body"));
+    await f.write("Z/Z.md", raw("Z body"));
+    await f.commit("duplicate identities");
+    await fs.unlink(path.join(f.source, "A/A.md"));
+    if (editMetadata) await f.write("Z/Z.md", raw("Z body", "tags: [repaired]\n"));
+    await f.commit("repair without a unique body change");
+    await importGitHistory(f.source, f.target);
+    let adapter = openTestFs(f.target);
+    t.after(() => adapter.close());
+    const read = async () => {
+      const current = await adapter.readFile("Z/Z.md");
+      const { data, body } = parseFrontmatter(current);
+      const nodes = [{ nodeId: "node-goal", name: "Z", path: "Z", raw: current, data, body }];
+      return {
+        times: await readNodeTimes(adapter, ["node-goal"]),
+        open: await readGoalOpenStates(adapter, path.dirname(f.target), nodes, ["node-goal"]),
+      };
+    };
+    const unknown = {
+      times: [{ nodeId: "node-goal", contentChangedAt: null }],
+      open: [{ nodeId: "node-goal", state: "unknown", basis: "history" }],
+    };
+    assert.deepEqual(await read(), unknown);
+    const events = await adapter.history.changesInRange();
+    assert.equal(events[0]!.changes.filter((c) => c.objectId === "node-goal" && c.after).length, 2);
+    assert.equal((await adapter.history.nodeVersions("node-goal"))[0]!.changes.length, 2);
+    await adapter.close();
+    // An existing projection made by the collapsing reader must also rebuild.
+    const cache = new DatabaseSync(
+      path.join(f.target, ".git/tent-material-cache/history-index.sqlite"),
+    );
+    cache.prepare("UPDATE state SET value=? WHERE key='version'").run(indexValue("2"));
+    cache.prepare("UPDATE events SET value=? WHERE seq=(SELECT min(seq) FROM events)").run(
+      indexValue({
+        ...events[0],
+        changes: events[0]!.changes.slice(-1),
+      }),
+    );
+    cache.close();
+    adapter = openTestFs(f.target);
+    assert.deepEqual(await read(), unknown);
+    await adapter.withDocumentHistory(() =>
+      adapter.writeFile("Z/Z.md", raw("Z body", "description: still metadata\n")),
+    );
+    assert.deepEqual(await read(), unknown);
+    await adapter.withDocumentHistory(() =>
+      adapter.writeFile("Z/Z.md", raw("A later unique body")),
+    );
+    const known = await read();
+    assert.ok(known.times[0]!.contentChangedAt);
+    assert.deepEqual(known.open, [{ nodeId: "node-goal", state: "open", basis: "no-output" }]);
+    await adapter.withDocumentHistory(() => adapter.move("Z/Z.md", "Moved/Moved.md"));
+    assert.equal(
+      (await readNodeTimes(adapter, ["node-goal"]))[0]!.contentChangedAt,
+      known.times[0]!.contentChangedAt,
+    );
+  });
 
 test("migration rewrites only exact pin scalars, audits nested historical targets, and preserves dirty/binary current files", async (t) => {
   const f = await fixture(t),

@@ -4,7 +4,7 @@ import { parseFrontmatter } from "../base/frontmatter.js";
 import { documentVersionSchema, type DocumentVersion } from "../store/history-port.js";
 import { materialLocator, isDirectoryMaterial, type MaterialSource } from "../base/material.js";
 import { systemMaterialPath } from "./material-target.js";
-import { isRequirementNode } from "./node-sync-record.js";
+import { isRequirementNode } from "./node-relations.js";
 import { cardRecordPath } from "../base/paths.js";
 import { parseRoleDocument } from "../store/role-document.js";
 import { canonicalIdentityError } from "../store/tree.js";

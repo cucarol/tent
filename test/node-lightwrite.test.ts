@@ -17,9 +17,8 @@ import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontma
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { appendNodeBody } from "../src/core/write/node-lightwrite.js";
 import { NodeSectionError, selectSection } from "../src/core/base/markdown-section.js";
-import { inspectNodeSync } from "../src/core/graph/node-sync.js";
 import { runNodeCommand, nodeHelpText } from "../src/cli/node-commands.js";
-import { cli, extendTestLockWait, git } from "./helpers.js";
+import { cli, extendTestLockWait } from "./helpers.js";
 
 const lockTimeoutMessage =
   /^Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying\.\nNext: tent node get node-note --full\n$/;
@@ -193,7 +192,7 @@ test("append keeps peer ATX and Setext headings intact without a payload final n
   );
 });
 
-test("lightweight ordinary saves retain material behind and standard material validation", async (t) => {
+test("lightweight ordinary saves preserve material declarations and standard material validation", async (t) => {
   const { root, adapter } = await fixture(t);
   const material = path.join(root, "material.txt");
   await fs.writeFile(material, "v1");
@@ -209,15 +208,11 @@ test("lightweight ordinary saves retain material behind and standard material va
     body: "## Evidence\noriginal\n\n## Notes\nexisting\n",
     sources: [{ resource: pathToFileURL(material).href }],
   });
-  const before = await inspectNodeSync(adapter, id);
   await fs.writeFile(material, "v2");
   await appendNodeBody(adapter, id, { body: "## Notes\nextra" });
-  assert.equal((await inspectNodeSync(adapter, id)).state, "behind");
   await appendNodeBody(adapter, id, { heading: "Evidence", body: "updated" });
-  const after = await inspectNodeSync(adapter, id);
-  assert.equal(after.state, "behind");
-  assert.equal(after.materials[0]!.recordedVersion, before.materials[0]!.recordedVersion);
   const live = await readNodeForEdit(adapter, id);
+  assert.deepEqual(live.frontmatter.sources, [{ resource: pathToFileURL(material).href }]);
   await adapter.writeFile(
     "Material/Material.md",
     serializeFrontmatter({ ...live.frontmatter, sources: [{ resource: "" }] }, live.body),

@@ -56,7 +56,7 @@ test("version, top-level help and unknown commands do not initialize document or
 test("importing the Node command entry does not initialize mutations or filesystem adapters", async (t) => {
   const launch = await guardedEntry(
     t,
-    String.raw`/src/(?:core/write/|core/graph/(?:ops|node-sync|node-document-write)\.|fs/(?:node-fs|node-draft-consumption)\.)`,
+    String.raw`/src/(?:core/write/|core/graph/(?:ops|node-output|node-document-write)\.|fs/(?:node-fs|node-draft-consumption)\.)`,
   );
   const result = await launch([
     "--input-type=module",

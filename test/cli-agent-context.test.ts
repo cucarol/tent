@@ -780,7 +780,7 @@ test("API context source revision: edits beyond visible excerpts invalidate cont
     { kind: "node", nodeId: "node-root" },
     { repository },
   );
-  const next = first.sections.find((section) => section.kind === "open")!.next!;
+  const next = first.sections.find((section) => section.kind === "unknown")!.next!;
   assert.ok(next);
   await put("A".repeat(1600) + "different tail");
   await assert.rejects(
@@ -803,7 +803,7 @@ test("API context source revision: edits beyond visible excerpts invalidate cont
     { kind: "node", nodeId: "node-root" },
     { repository: sourceRepository },
   );
-  const page = observed.sections.find((section) => section.kind === "open")!.next!;
+  const page = observed.sections.find((section) => section.kind === "unknown")!.next!;
   sourceRepository.sources.files[0]!.content = "export const value=2;";
   await assert.rejects(
     assembleAgentContext(

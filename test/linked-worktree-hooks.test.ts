@@ -1,4 +1,4 @@
-import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,8 +13,6 @@ import { runToolHook } from "../src/cli/tool-hook.js";
 import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
 import { runHookCommand } from "../src/cli/hook.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
-import { NodeFs } from "../src/fs/node-fs.js";
-import { inspectNodeSync } from "../src/core/graph/node-sync.js";
 import { createTurnPathResolver } from "../src/core/workspace/git-checkout.js";
 
 async function fixture(t: TestContext) {
@@ -59,9 +57,8 @@ async function fixture(t: TestContext) {
   return { base, main, roots, node, systemRoot: path.join(main, ".tent") };
 }
 
-test("linked checkout CLI discovery, append and material state use the main Tent", async (t) => {
+test("linked checkout CLI discovery and append use the main Tent", async (t) => {
   const { main, roots, node, systemRoot } = await fixture(t);
-  const initial = await inspectNodeSync(openTestFs(systemRoot), node.nodeId);
   for (const [index, root] of roots.entries()) {
     const cwd = path.join(root, "src/core");
     assert.equal(await findTentSystemRoot(cwd), systemRoot);
@@ -75,7 +72,6 @@ test("linked checkout CLI discovery, append and material state use the main Tent
       await fs.writeFile(path.join(root, "src/core/new.ts"), "branch-only member\n");
     }
     const resolved = await resolveWorkspacePaths({ cwd });
-    assert.deepEqual(await inspectNodeSync(openTestFs(resolved.systemRoot), node.nodeId), initial);
     const brief = await runWorkspaceCommand("brief", [], { cwd, json: true });
     assert.equal(brief.exitCode, 0, brief.stderr);
     assert.doesNotMatch(brief.stdout, /branch-only|src\/core\/new\.ts/);
@@ -100,7 +96,6 @@ test("linked checkout CLI discovery, append and material state use the main Tent
   for (const root of roots.slice(1))
     assert.equal(await fs.stat(path.join(root, ".tent")).catch(() => undefined), undefined);
   await fs.writeFile(path.join(main, "src/core/code.ts"), "main changed\n");
-  assert.ok((await inspectNodeSync(openTestFs(systemRoot), node.nodeId)).behind);
 });
 
 for (const host of ["codex", "claude-code"] as const) {

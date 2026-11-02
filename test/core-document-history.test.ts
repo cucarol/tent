@@ -1,6 +1,5 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { testScratchRoot } from "./scratch.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
 import { readNode, readNodeForEdit, listNodes, searchNodes } from "../src/core/read/node-query.js";
 import {
@@ -10,13 +9,10 @@ import {
   readRolePage,
   listRoleContexts,
 } from "../src/core/read/role-context.js";
-import { inspectNodeSync, confirmNodeSync } from "../src/core/graph/node-sync.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { renameNode, deleteNode } from "../src/core/graph/ops.js";
 import { withTentMutation } from "../src/core/store/adapter.js";
@@ -374,67 +370,37 @@ test("batch writes share a commit, Role reads capture explicitly, and history fa
   assert.equal(await adapter.history!.read(retry.version), retry.raw);
 });
 
-test("material versions are automatic, body-preserving, local and captured with the Node", async (t) => {
-  const h = await fixture(t),
-    { adapter } = h;
-  const target = path.join(h.workspace, "checked.txt");
-  await fs.writeFile(target, "material one");
-  let node = await readNodeForEdit(adapter, "node-alpha");
-  const originalBody = parseFrontmatter(node.raw).body;
+test("material declarations and opaque metadata retain exact Node history without reading project bytes", async (t) => {
+  const { adapter } = await fixture(t);
+  const original = await readNodeForEdit(adapter, "node-alpha");
   const generated = { imported: ["opaque", false], by: "not an actor", at: "not a timestamp" };
-  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "unanchored");
+  const verified = { arbitrary: ["leave", 17, false] };
   const readFile = adapter.readFile.bind(adapter);
-  const bodyReads: string[] = [];
+  const reads: string[] = [];
   adapter.readFile = async (file) => {
-    if (file.endsWith(".md")) bodyReads.push(file);
+    reads.push(file);
     return readFile(file);
   };
-  await writeNodeDocument(adapter, node.nodeId, {
-    baseEtag: node.etag,
-    frontmatter: { resource: "../../checked.txt", generated },
+  const saved = await writeNodeDocument(adapter, original.nodeId, {
+    baseEtag: original.etag,
+    frontmatter: { resource: "../../not-present.txt", generated, verified },
   });
-  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
-  assert.equal(
-    bodyReads.includes("B/B.md"),
-    false,
-    "checking one Node must not read unrelated bodies",
-  );
-  node = await readNodeForEdit(adapter, node.nodeId);
-  assert.deepEqual(node.frontmatter.generated, generated);
-  const firstRecord = (await adapter.history.nodeRecords())[node.nodeId]!;
-  const firstHash = firstRecord.materials[0]!.version!;
-  assert.match(firstHash, /^[a-f0-9]{64}$/);
-  assert.equal(parseFrontmatter(node.raw).data.sync, undefined);
-  const firstConfirmed = await confirmNodeSync(adapter, node.nodeId, { baseEtag: node.etag });
-  assert.equal(parseFrontmatter(firstConfirmed.raw).body, originalBody);
-  assert.deepEqual(parseFrontmatter(firstConfirmed.raw).data.generated, node.frontmatter.generated);
-  assert.ok(parseFrontmatter(firstConfirmed.raw).data.verified);
-  assert.deepEqual((await adapter.history.nodeRecords())[node.nodeId], firstRecord);
-  await fs.writeFile(target, "material two");
-  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "behind");
-  const confirmed = await confirmNodeSync(adapter, node.nodeId, { baseEtag: firstConfirmed.etag });
-  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
-  assert.equal(parseFrontmatter(confirmed.raw).body, originalBody);
-  assert.deepEqual(parseFrontmatter(confirmed.raw).data.generated, generated);
+  assert.equal(parseFrontmatter(saved.raw).body, original.body);
+  assert.deepEqual(parseFrontmatter(saved.raw).data.generated, generated);
+  assert.deepEqual(parseFrontmatter(saved.raw).data.verified, verified);
+  assert.equal(reads.includes("B/B.md"), false);
+  assert.ok(saved.version);
+  assert.equal(await adapter.history.read(saved.version), saved.raw);
+  const changed = await writeNodeDocument(adapter, original.nodeId, {
+    baseEtag: saved.etag,
+    body: "Changed body",
+  });
+  assert.deepEqual(parseFrontmatter(changed.raw).data.verified, verified);
+  assert.equal(parseFrontmatter(changed.raw).data.resource, "../../not-present.txt");
   await assert.rejects(
-    confirmNodeSync(adapter, node.nodeId, { baseEtag: node.etag }),
+    writeNodeDocument(adapter, original.nodeId, { baseEtag: original.etag, body: "Stale" }),
     /etag conflict/i,
   );
-  await fs.rm(target);
-  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "behind");
-  await fs.writeFile(target, "material two");
-  await renameNode(h.mount.env, node.nodeId, "Moved");
-  assert.equal((await inspectNodeSync(adapter, node.nodeId)).state, "synced");
-  const retained = await adapter.history.read({
-    commit: (await adapter.history.currentCommit())!,
-    path: "Moved/Moved.md",
-  });
-  assert.equal(parseFrontmatter(retained).data.sync, undefined);
-  assert.notEqual(
-    (await adapter.history.nodeRecords())[node.nodeId]!.materials[0]!.version,
-    firstHash,
-  );
-  assert.equal(parseFrontmatter(retained).body, originalBody);
   adapter.readFile = readFile;
 });
 
@@ -547,7 +513,7 @@ for (const stage of [
   "move",
   "corrupt-order",
 ] as const) {
-  test(`material inspect preserves document and recovery files during pending ${stage}`, async (t) => {
+  test(`pure document reads preserve document and recovery files during pending ${stage}`, async (t) => {
     const h = await fixture(t),
       { adapter } = h;
     const write = adapter.writeFile.bind(adapter),
@@ -627,14 +593,14 @@ for (const stage of [
       return entries;
     };
     const before = await snapshot();
-    const inspect = () => inspectNodeSync(adapter, "node-alpha");
+    const inspect = () => readNodeForEdit(adapter, "node-alpha");
     if (stage === "corrupt-order") {
       await assert.rejects(inspect, /requires explicit repair/);
       assert.deepEqual(await snapshot(), before);
       return;
     }
     const result = await inspect();
-    assert.equal(result.state, "unanchored");
+    assert.equal(result.nodeId, "node-alpha");
     assert.deepEqual(await snapshot(), before);
     if (stage === "delete-conflict")
       await assert.rejects(

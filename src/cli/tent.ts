@@ -171,10 +171,9 @@ Start
 Read and record
   tent workspace brief               Where to start: what changed and which Cards wait.
   tent node get|list|search          Read Nodes.
-  tent node create|append|write|confirm
+  tent node create|append|write
                                      Record facts and keep them current.
   tent workspace check               Broken links and missing materials.
-  tent workspace drift               Every Node that is ahead or behind.
 
 Hand off work
   tent card create|take|return|watch Send work to a Role and collect the result.

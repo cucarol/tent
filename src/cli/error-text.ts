@@ -37,10 +37,7 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
           : "The Node changed after your read; its etag is stale.";
       showDetails = false;
     } else if (errorCode === "INCOMPLETE_READ") {
-      message =
-        command === "tent node confirm"
-          ? "Confirmation requires a complete live Node read."
-          : "A read: ETag comes from a partial read and allows metadata edits only.";
+      message = "A read: ETag comes from a partial read and allows metadata edits only.";
       showDetails = false;
     }
   }

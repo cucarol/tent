@@ -60,8 +60,7 @@ const headerSchema = z.strictObject({
   raw: z.string().optional(),
 });
 const cacheSchema = z.strictObject({
-  // Schema 12's derived membership treated draft Nodes as inactive.
-  schema: z.literal(13),
+  schema: z.literal(14),
   rootMarkerDigest: z.string().regex(/^[a-f0-9]{64}$/),
   rejectedRootMarkers: z.array(
     z.strictObject({ root: z.string(), digest: z.string().regex(/^[a-f0-9]{64}$/) }),

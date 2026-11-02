@@ -8,13 +8,12 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test, { type TestContext } from "node:test";
 import { testScratchRoot, initializeFixtureWorkspace } from "./scratch.js";
-import { nodeHelpText, runNodeCommand } from "../src/cli/node-commands.js";
+import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import { readNodeTimes } from "../src/core/read/node-times.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
@@ -22,11 +21,23 @@ async function fixture(t: TestContext) {
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "cli-material-"));
   t.after(() =>
-    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    removeTestFixture(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    }),
   );
   await scaffoldInWorkspace(openTestFs(root), {
     name: "CLI materials",
-    nodes: [{ id: "node-goal", name: "Goal", type: "goal", body: "Deliver evidence." }],
+    nodes: [
+      {
+        id: "node-goal",
+        name: "Goal",
+        type: "goal",
+        body: "Deliver evidence.",
+      },
+    ],
   });
   await initializeFixtureHistory(path.join(root, ".tent"));
   // Scaffolded Nodes start uncaptured; record them as Tent-created Nodes are.
@@ -56,7 +67,12 @@ async function fixture(t: TestContext) {
 test("CLI material paths stay Workspace-rooted from different process working directories", async (t) => {
   const parent = await fs.mkdtemp(path.join(testScratchRoot(), "material-cwd-"));
   t.after(() =>
-    removeTestFixture(parent, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    removeTestFixture(parent, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 200,
+    }),
   );
   const workspace = path.join(parent, "rich");
   const sibling = path.join(parent, "mapper-run");
@@ -131,7 +147,7 @@ test("CLI material paths stay Workspace-rooted from different process working di
   assert.deepEqual(saved.data.sources, [expected.sources[0]]);
 });
 
-test("cold-start material declarations share the Workspace root and detect subsequent drift", async (t) => {
+test("cold-start material declarations share the Workspace root", async (t) => {
   const { root, globals, parse, cli, get } = await fixture(t);
   const goal = (
     await cli("create", [
@@ -146,8 +162,6 @@ test("cold-start material declarations share the Workspace root and detect subse
   ).node;
   const cold = await get(goal.nodeId);
   assert.equal(cold.sources[0].resource, "../../../docs/req.md");
-  assert.equal("generated" in cold, false);
-  assert.equal("verified" in cold, false);
   const card = parse(
     await runCardCommand(
       "create",
@@ -193,15 +207,6 @@ test("cold-start material declarations share the Workspace root and detect subse
   const checked = parse(await runWorkspaceCommand("check", [], globals));
   assert.deepEqual(checked.issues, []);
   assert.deepEqual(checked.errors, []);
-  await fs.writeFile(path.join(root, "docs/req.md"), "# Requirements\nSecond.\n");
-  assert.equal((await cli("check", [goal.nodeId])).state, "behind");
-  const observed = await get(goal.nodeId);
-  await cli("confirm", [goal.nodeId, "--base-etag", observed.etag, "--by", "human:reviewer"]);
-  assert.equal(
-    (await cli("check", [goal.nodeId])).state,
-    "ahead",
-    "confirming changed goal material leaves its existing outputs awaiting review",
-  );
 });
 
 test("structured writes convert new material paths and preserve descriptors read from disk", async (t) => {
@@ -239,7 +244,10 @@ test("structured writes convert new material paths and preserve descriptors read
     "--input-json",
     JSON.stringify({
       baseEtag: updated.etag,
-      frontmatter: { sources: updated.sources, description: "Preserve read-back paths" },
+      frontmatter: {
+        sources: updated.sources,
+        description: "Preserve read-back paths",
+      },
     }),
   ]);
   const retained = await get(created.nodeId);
@@ -314,7 +322,11 @@ test("Card CLI file sources use the Workspace root while Node sources retain the
     "docs/req.md",
     "./docs/req.md",
     "/docs/req.md",
-    JSON.stringify({ resource: "/docs/req.md", title: "Requirements", custom: true }),
+    JSON.stringify({
+      resource: "/docs/req.md",
+      title: "Requirements",
+      custom: true,
+    }),
     "node-goal",
     ".tent/Goal/Goal.md",
   ];
@@ -362,64 +374,6 @@ test("Card CLI file sources use the Workspace root while Node sources retain the
   const checked = parse(await runWorkspaceCommand("check", [], { workspace: root, json: true }));
   assert.deepEqual(checked.issues, []);
   assert.deepEqual(checked.errors, []);
-});
-
-test("actor validation explains all formats without exposing a validation JSON dump", async (t) => {
-  const { root, cli, get } = await fixture(t);
-  const actors = ["human:reviewer", "process:import", "producer/1.0"];
-  for (const actor of actors) {
-    const goal = await get("node-goal");
-    await cli("confirm", ["node-goal", "--base-etag", goal.etag, "--by", actor]);
-  }
-  const goal = await get("node-goal");
-  assert.deepEqual(goal.verified.map((entry: { by: string }) => entry.by).sort(), actors);
-  const before = await fs.readFile(path.join(root, ".tent/Goal/Goal.md"), "utf8");
-  const result = await runNodeCommand(
-    "confirm",
-    ["node-goal", "--base-etag", goal.etag, "--by", "agent:judge"],
-    { workspace: root },
-  );
-  assert.equal(result.exitCode, 1);
-  assert.equal(
-    result.stderr.split("\n")[0],
-    "--by must use human:<id>, process:<id>, or <producer>/<version>.",
-  );
-  assert.match(result.stderr, /\nNext: tent node confirm --help[^\n]*\n$/);
-  for (const [sub, input] of [
-    ["write", { baseEtag: goal.etag, body: "Invalid", confirm: true, by: "agent:judge" }],
-    [
-      "write-many",
-      {
-        items: [
-          {
-            op: "update",
-            nodeId: "node-goal",
-            baseEtag: goal.etag,
-            body: "Invalid",
-            confirm: true,
-            by: "agent:judge",
-          },
-        ],
-      },
-    ],
-  ] as const) {
-    const rejected = await runNodeCommand(
-      sub,
-      [...(sub === "write" ? ["node-goal"] : []), "--input-json", JSON.stringify(input)],
-      { workspace: root },
-    );
-    assert.equal(rejected.exitCode, 1);
-    assert.equal(
-      rejected.stderr.split("\n")[0],
-      "by must use human:<id>, process:<id>, or <producer>/<version>.",
-    );
-    assert.match(rejected.stderr, new RegExp(`\\nNext: tent node ${sub} --help[^\\n]*\\n$`));
-  }
-  assert.equal(await fs.readFile(path.join(root, ".tent/Goal/Goal.md"), "utf8"), before);
-  for (const sub of ["write", "confirm"])
-    assert.match(nodeHelpText(sub), /human:<id>, process:<id> or <producer>\/<version>/);
-  for (const sub of ["create", "append", "link-output", "write-many"])
-    assert.doesNotMatch(nodeHelpText(sub), /--by\b|human:<id>/);
 });
 
 test("successful mutation output identifies the resolved Workspace in human and JSON output", async (t) => {
@@ -477,40 +431,4 @@ test("Card response source roots match stored documents while ordinary CLI paths
     await cli("create", ["Ordinary", "--type", "prompt", "--resource", `/cards/${card.cardId}.md`])
   ).node;
   assert.equal((await get(ordinary.nodeId)).resource, `../../cards/${card.cardId}.md`);
-});
-
-test("ordinary link-output confirmation preserves content time and records verification", async (t) => {
-  const { root, cli, get } = await fixture(t);
-  const linked = await cli("link-output", [
-    "node-goal",
-    "--resource",
-    "docs/proof.txt",
-    "--name",
-    "Linked proof",
-  ]);
-  const adapter = openTestFs(path.join(root, ".tent"));
-  const contentTime = async () =>
-    (await readNodeTimes(adapter, [linked.nodeId]))[0]!.contentChangedAt;
-  const at = await contentTime();
-  assert.ok(at);
-  const initial = parseFrontmatter(await fs.readFile(path.join(root, linked.path), "utf8"));
-  assert.equal("generated" in initial.data, false);
-  assert.equal("verified" in initial.data, false);
-  let previousVerifiedAt = Number.NEGATIVE_INFINITY;
-  for (let index = 0; index < 2; index++) {
-    const observed = await get(linked.nodeId);
-    await cli("confirm", [linked.nodeId, "--base-etag", observed.etag, "--by", "human:cuca"]);
-    assert.equal(await contentTime(), at);
-    const confirmed = parseFrontmatter(await fs.readFile(path.join(root, linked.path), "utf8"));
-    const { verified, ...retained } = confirmed.data;
-    assert.deepEqual(retained, initial.data);
-    assert.equal(confirmed.body, initial.body);
-    const entries = verified as { by: string; at: string }[];
-    assert.equal(entries.length, 1, "verification retains only the latest entry per actor");
-    assert.equal(entries[0]!.by, "human:cuca");
-    const verifiedAt = Date.parse(entries[0]!.at);
-    assert.ok(Number.isFinite(verifiedAt));
-    assert.ok(verifiedAt >= previousVerifiedAt);
-    previousVerifiedAt = verifiedAt;
-  }
 });

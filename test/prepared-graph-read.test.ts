@@ -95,7 +95,7 @@ test("preparer and both readers reject the two superseded schema 11 shapes", asy
   const f = await fixture(t);
   const expected = await f.prepare();
   const current = await fs.readFile(f.cacheFile, "utf8");
-  assert.equal(JSON.parse(current).schema, 13);
+  assert.equal(JSON.parse(current).schema, 14);
   assert.ok(await readCache(f.cacheFile, f.root));
   assert.ok(await findPreparedHookWorkspace(f.root));
   for (const shape of ["read", "hook"] as const) {
@@ -129,7 +129,7 @@ test("preparer and both readers reject the two superseded schema 11 shapes", asy
     assert.equal(await readCache(f.cacheFile, f.root), undefined, shape);
     assert.equal(await findPreparedHookWorkspace(f.root), undefined, shape);
     assert.deepEqual(await f.prepare(), expected, shape);
-    assert.equal(JSON.parse(await fs.readFile(f.cacheFile, "utf8")).schema, 13, shape);
+    assert.equal(JSON.parse(await fs.readFile(f.cacheFile, "utf8")).schema, 14, shape);
   }
 });
 
@@ -152,7 +152,7 @@ test("state semantics invalidate schema 12 even with unchanged headers and valid
   assert.equal(await readCache(f.cacheFile, f.root), undefined);
   assert.equal(await findPreparedHookWorkspace(f.root), undefined);
   assert.deepEqual(await f.prepare(), expected);
-  assert.equal(JSON.parse(await fs.readFile(f.cacheFile, "utf8")).schema, 13);
+  assert.equal(JSON.parse(await fs.readFile(f.cacheFile, "utf8")).schema, 14);
   assert.ok(await readCache(f.cacheFile, f.root));
   assert.ok(await findPreparedHookWorkspace(f.root));
 });

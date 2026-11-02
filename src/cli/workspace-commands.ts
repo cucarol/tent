@@ -4,24 +4,21 @@ import type { NodeFs } from "../fs/node-fs.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
 
-const WORKSPACE_COMMANDS = ["export", "check", "check-modules", "brief", "drift", "scan"];
+const WORKSPACE_COMMANDS = ["export", "check", "check-modules", "brief", "scan"];
 
 export const workspaceHelpText = `tent workspace — the whole Workspace at once
 
   tent workspace brief [--role <role-id>] [--json]
   tent workspace check [--json]
-  tent workspace drift [--limit <n>] [--cursor <cursor>] [--json]
   tent workspace scan [--draft <new-file>] [--json]
   tent workspace check-modules [--json]
   tent workspace export --output <new-directory>
 
-brief: where to start. Counts, invalid Nodes and waiting Cards; for ahead and behind Nodes only their counts, since drift lists them. Every other list shows up to 10 items, then its total and the command that lists the rest. --role keeps only that Role's Cards.
+brief: where to start. Invalid Nodes and waiting Cards. Every list shows up to 10 items, then its total and the command that lists the rest. --role keeps only that Role's Cards.
 check: broken links, invalid or missing materials, missing Markdown sections, and Node files whose disk and Tent history presence differ after valid native edits are collected. Exits 1 when it finds any; JSON still goes to stdout.
-drift: every ahead and behind Node, in pages.
 scan: drafts a module map from the code; --draft saves an editable write-many batch and a sibling .report.json evidence snapshot. Both text and JSON print a receipt of at most 4 KiB.
 check-modules: checks the module map for coverage, size, imports and files that change together. Prints nothing when the map is clean.
 export: copies the context graph and its SQLite history to a new directory.
-When a behind Node still holds, run tent node confirm after reviewing it; Tent records the versions itself.
 --workspace <path> picks the Workspace.`;
 
 export async function runWorkspaceCommand(
@@ -80,8 +77,6 @@ async function runWorkspaceCommandOpened(
       sub === "brief" &&
       [values.output, values.limit, values.cursor].some((value) => value !== undefined)
     )
-      throw new Error(workspaceHelpText);
-    if (sub === "drift" && [values.output].some((value) => value !== undefined))
       throw new Error(workspaceHelpText);
     if (
       ["check", "check-modules"].includes(sub) &&
@@ -238,49 +233,6 @@ async function runWorkspaceCommandOpened(
           (values.json || globals.json ? JSON.stringify(brief) : formatAgentBrief(brief)) + "\n",
         stderr: "",
       };
-    }
-    if (sub === "drift") {
-      const [
-        { inspectWorkspaceDrift },
-        { workspaceReadPaths },
-        { canonicalSha256 },
-        { pageItems },
-      ] = await Promise.all([
-        import("../core/read/context-brief.js"),
-        import("./read-paths.js"),
-        import("../core/base/canonical-digest.js"),
-        import("./reader-page.js"),
-      ]);
-      await captureNodes();
-      const inspected = await inspectWorkspaceDrift(fs);
-      const result = pageItems(
-        {
-          items: workspaceReadPaths(inspected.items, roots.workspaceRoot),
-          revision: canonicalSha256(inspected),
-          synchronizationUncertain: inspected.synchronizationUncertain,
-        },
-        "workspace.drift",
-        {
-          limit: values.limit === undefined ? undefined : Number(values.limit),
-          cursor: values.cursor,
-        },
-      );
-      const output =
-        values.json || globals.json
-          ? JSON.stringify(result)
-          : [
-              ...result.items.map(
-                (item) =>
-                  `${item.kind === "node-ahead" ? "ahead" : "behind"}  ${item.nodeId}  ${item.path}  ${item.reasons.join("; ")}${"inspectionRead" in item ? `\nFull current inspection: tent node check ${item.nodeId} --json` : ""}`,
-              ),
-              ...(result.page.hasMore ? [`Continue with --cursor ${result.page.nextCursor}`] : []),
-              ...(inspected.synchronizationUncertain
-                ? [
-                    "Some Nodes changed during inspection; synchronization findings are incomplete. Retry workspace drift.",
-                  ]
-                : []),
-            ].join("\n") || "No observed drift.";
-      return { exitCode: 0, stdout: output + "\n", stderr: "" };
     }
     if (sub === "check") {
       const [{ checkGraph }, { stat }] = await Promise.all([

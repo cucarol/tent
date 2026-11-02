@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import type { FsAdapter } from "../src/core/store/adapter.js";
 import {
   type DocumentHistory,
@@ -9,11 +8,10 @@ import {
   type DocumentChange,
   type HistoryCommit,
 } from "../src/core/store/history-port.js";
-import type { NodeBasisRecord } from "../src/core/base/node-basis-record.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { materialLocator } from "../src/core/base/material.js";
 
-/** Storage-only fixture: baselines are produced exclusively by the real Core. */
+/** Storage-only fixture: Core captures exact document versions through the history port. */
 export class PropagationMemoryFs implements FsAdapter {
   readonly files = new Map<string, string>();
   readonly directories = new Set(["", ".git"]);
@@ -22,7 +20,6 @@ export class PropagationMemoryFs implements FsAdapter {
   constructor() {
     const snapshots = new Map<string, Map<string, string>>();
     const events: HistoryCommit[] = [];
-    const records: Record<string, NodeBasisRecord> = {};
     const images = new Map<
       string,
       Array<{ path: string; before: string | null; after: string | null }>
@@ -51,7 +48,6 @@ export class PropagationMemoryFs implements FsAdapter {
         const previousRaw = tree().get(d.path);
         return previousRaw !== undefined && previousRaw !== d.raw ? [{ ...d, previousRaw }] : [];
       });
-    history.unportableNodeRecordIds = async () => [];
     history.completedCardPaths = async (completed) =>
       new Set([...tree()].filter(([p, r]) => completed(p, r)).map(([p]) => p));
     history.cardQueueTimes = async () => ({ published: new Map(), returned: new Map() });
@@ -61,17 +57,13 @@ export class PropagationMemoryFs implements FsAdapter {
     };
     history.available = async () => true;
     history.currentCommit = async () => head();
-    history.nodeRecords = async () => structuredClone(records);
     history.captureUnlocked = async (
       changes: readonly DocumentChange[],
       metadata?: CaptureMetadata,
     ) => {
       const previous = tree();
       const changed = changes.filter(({ path, raw }) => (previous.get(path) ?? null) !== raw);
-      const recordChanged = Object.entries(metadata?.nodeRecords ?? {}).some(
-        ([id, record]) => !isDeepStrictEqual(records[id], record),
-      );
-      if (changed.length || recordChanged) {
+      if (changed.length) {
         const commit = createHash("sha256")
           .update(String(events.length + 1))
           .digest("hex");
@@ -109,13 +101,10 @@ export class PropagationMemoryFs implements FsAdapter {
         ];
         events.push(event);
         snapshots.set(commit, snapshot);
-        if (metadata?.nodeRecords) {
-          Object.assign(records, structuredClone(metadata.nodeRecords));
-        }
       }
       return {
         commit: head(),
-        created: !!(changed.length || recordChanged),
+        created: !!changed.length,
         versions: changes
           .filter((x) => x.raw !== null)
           .map(({ path }) => ({ commit: head()!, path })),
@@ -156,7 +145,11 @@ export class PropagationMemoryFs implements FsAdapter {
       return { first: versions[0], latest: versions.at(-1) };
     };
     history.readDirectory = async (commit, directory) =>
-      new Map([...(snapshots.get(commit) ?? [])].filter(([p]) => p.startsWith(directory + "/")));
+      new Map(
+        [...(snapshots.get(commit) ?? [])].filter(
+          ([p]) => !directory || p.startsWith(directory + "/"),
+        ),
+      );
     history.changesInRange = async ({ from, to } = {}) =>
       structuredClone(
         events.slice(
@@ -261,9 +254,7 @@ export class PropagationMemoryFs implements FsAdapter {
   async observeMaterial(resource: string, documentPath: string) {
     const locator = materialLocator(resource, documentPath);
     if (locator.kind !== "path") throw new Error("Fixture only observes local materials");
-    const raw = await this.readFile(locator.target);
-    return {
-      observedVersion: createHash("sha256").update(raw.replace(/\r\n?/g, "\n")).digest("hex"),
-    };
+    await this.readFile(locator.target);
+    return {};
   }
 }

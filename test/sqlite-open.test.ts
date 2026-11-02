@@ -155,11 +155,11 @@ test("opening still rejects an unsupported format and releases its failed connec
   await f.adapter.close();
   const file = path.join(f.system, ".git/history.sqlite"),
     db = new DatabaseSync(file);
-  db.exec("PRAGMA user_version=2");
+  db.exec("PRAGMA user_version=9");
   db.close();
   const history = new SqliteDocumentHistory(f.system);
   try {
-    await assert.rejects(history.currentCommit(), /Unsupported Tent SQLite history format: 2/);
+    await assert.rejects(history.currentCommit(), /Unsupported Tent SQLite history format: 9/);
   } finally {
     await history.close();
   }

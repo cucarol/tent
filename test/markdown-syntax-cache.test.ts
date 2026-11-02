@@ -17,13 +17,11 @@ import {
   validMarkdownSyntaxCache,
   withMarkdownSyntaxCache,
 } from "../src/core/base/markdown-syntax.js";
-import { nodeSemanticFingerprint } from "../src/core/graph/node-sync-record.js";
+import { nodeBodyContent } from "../src/core/read/node-body-history.js";
 import { withPersistedMarkdownSyntax } from "../src/fs/markdown-syntax-cache.js";
 import { testScratchRoot } from "./scratch.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { git } from "./helpers.js";
 import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { findSection, selectSection } from "../src/core/base/markdown-section.js";
 
@@ -104,10 +102,10 @@ test("body edits replace only their syntax; current catalog and address context 
     assert.deepEqual(observe(changed), expectedChanged);
     observe(neighbor);
     const nodes = new Map([["node-abcdef", { nodeId: "node-abcdef", path: "A" }]]);
-    const fingerprint = nodeSemanticFingerprint({}, neighbor, "N/N.md", nodes);
+    const fingerprint = nodeBodyContent(neighbor, "N/N.md", nodes);
     nodes.set("node-abcdef", { nodeId: "node-abcdef", path: "Renamed" });
-    assert.notEqual(nodeSemanticFingerprint({}, neighbor, "N/N.md", nodes), fingerprint);
-    assert.notEqual(nodeSemanticFingerprint({}, neighbor, "N/Deep/N.md"), fingerprint);
+    assert.notEqual(nodeBodyContent(neighbor, "N/N.md", nodes), fingerprint);
+    assert.notEqual(nodeBodyContent(neighbor, "N/Deep/N.md", new Map()), fingerprint);
   });
   assert.equal(warm.used.get(neighborKey), cold.used.get(neighborKey));
   assert.equal(warm.used.has(createHash("sha256").update(body).digest("hex")), false);

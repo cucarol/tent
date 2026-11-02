@@ -312,35 +312,27 @@ test("Core create and ordinary writes leave unknown metadata untouched without a
   assert.deepEqual(parseFrontmatter(raw.raw).data.stale_after, metadata.stale_after);
 });
 
-test("write by requires confirmation and failed confirmed writes retain error identity and bytes", async (t) => {
+test("ordinary writes preserve opaque verified values and failed saves retain error identity and bytes", async (t) => {
   const { adapter, create } = await fixture(t);
   const id = await create("Verified", "original");
   const initial = await readNodeForEdit(adapter, id);
-  const plain = { baseEtag: initial.etag, body: "next", by: "human:cuca" };
-  assert.equal(nodeWriteInputSchema.safeParse(plain).success, false);
-  await assert.rejects(writeNodeDocument(adapter, id, plain), (error) => {
-    assert.ok(error instanceof NodeWriteError);
-    assert.equal(error.code, "INVALID_INPUT");
-    return true;
-  });
-  const failure = Object.assign(new Error("confirmed write storage failure"), { code: "EIO" });
+  const verified = { custom: [false, "not a provenance record"] };
+  const input = { baseEtag: initial.etag, body: "next", frontmatter: { verified } };
+  assert.equal(nodeWriteInputSchema.safeParse(input).success, true);
+  const failure = Object.assign(new Error("write storage failure"), { code: "EIO" });
   const write = adapter.writeFile.bind(adapter);
   adapter.writeFile = async (file, raw) => {
     if (file === "Verified/Verified.md") throw failure;
     await write(file, raw);
   };
-  await assert.rejects(
-    writeNodeDocument(adapter, id, { ...plain, confirm: true }),
-    (error) => error === failure,
-  );
+  await assert.rejects(writeNodeDocument(adapter, id, input), (error) => error === failure);
   assert.equal(await adapter.readFile("Verified/Verified.md"), initial.raw);
   adapter.writeFile = write;
-  const saved = await writeNodeDocument(adapter, id, { ...plain, confirm: true });
+  const saved = await writeNodeDocument(adapter, id, input);
   const data = parseFrontmatter(saved.raw).data;
   assert.equal("generated" in data, false);
-  assert.deepEqual(
-    (data.verified as { by: string }[]).map((entry) => entry.by),
-    ["human:cuca"],
-  );
+  assert.deepEqual(data.verified, verified);
   assert.equal(parseFrontmatter(saved.raw).body, "next");
+  const next = await writeNodeDocument(adapter, id, { baseEtag: saved.etag, body: "later" });
+  assert.deepEqual(parseFrontmatter(next.raw).data.verified, verified);
 });

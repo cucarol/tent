@@ -78,9 +78,7 @@ async function runNodeCommandOpened(
       target &&
       [
         "get",
-        "check",
         "link-output",
-        "confirm",
         "history",
         "relations",
         "append",
@@ -103,12 +101,6 @@ async function runNodeCommandOpened(
       return usage("--id is only valid for node create");
     if (flags.heading !== undefined && sub !== "append")
       return usage("--heading is only valid for node append");
-    if (
-      flags.by !== undefined &&
-      sub !== "confirm" &&
-      !(sub === "write" && flags.confirm === "true")
-    )
-      return usage("--by is only valid with node confirm or node write --confirm.");
     if (flags.start !== undefined && sub !== "read-many")
       return usage("--start is only valid for node read-many");
     if (flags["sources-json"] !== undefined && sub !== "create")
@@ -117,8 +109,6 @@ async function runNodeCommandOpened(
       );
     if (flags.resource !== undefined && !["create", "search", "link-output"].includes(sub))
       return usage("--resource is only valid for node create, search or link-output");
-    if (flags.confirm !== undefined && sub !== "write")
-      return usage("--confirm is only valid for node write");
     if (flags.card !== undefined && sub !== "link-output")
       return usage("--card is only valid for node link-output");
     if (flags.role !== undefined && sub !== "link-output")
@@ -138,12 +128,11 @@ async function runNodeCommandOpened(
       return usage("--read-back is only valid for node write");
     if (
       flags["input-json"] !== undefined &&
-      ["body", "base-etag", "read-back", "confirm", "by"].some((key) => flags[key] !== undefined)
+      ["body", "base-etag", "read-back"].some((key) => flags[key] !== undefined)
     ) {
       return usage("--input-json supplies the entire write; do not combine it with write fields");
     }
     const json = globals.json === true || flags.json === "true";
-    if (flags.by !== undefined) await validateActor(flags.by, "--by");
     const { resolveWorkspacePaths } = await import("./workspace-path.js");
     const { systemRoot, workspaceRoot } = await resolveWorkspacePaths({
       cwd: globals.cwd,
@@ -204,19 +193,8 @@ async function runNodeCommandOpened(
     };
 
     switch (sub) {
-      case "check": {
-        const { inspectNodeSync } = await import("../core/graph/node-sync.js");
-        const target = oneTarget(positionals, nodeHelpText("check"));
-        if (typeof target !== "string") return target;
-        if (Object.keys(flags).some((key) => !["json", "workspace"].includes(key)))
-          return usage(nodeHelpText("check"));
-        const result = await inspectNodeSync(fs, nodeRef(target));
-        return print(workspaceReadPaths(result, workspaceRoot), json, (value) =>
-          JSON.stringify(value, null, 2),
-        );
-      }
       case "link-output": {
-        const { linkNodeOutput } = await import("../core/graph/node-sync.js");
+        const { linkNodeOutput } = await import("../core/graph/node-output.js");
         const { linkOutputResource, workspaceMaterialFields } = await import("./material-input.js");
         const target = oneTarget(positionals, nodeHelpText(sub));
         if (typeof target !== "string") return target;
@@ -241,33 +219,6 @@ async function runNodeCommandOpened(
           json,
           (value) =>
             `Created ${value.nodeId}  ${value.path}  ${value.etag}${value.cardId ? `\nCard: ${value.cardId}` : ""}`,
-        );
-      }
-      case "confirm": {
-        const { confirmNodeSync } = await import("../core/graph/node-sync.js");
-        const target = oneTarget(positionals, nodeHelpText(sub));
-        if (typeof target !== "string") return target;
-        const allowed = ["json", "workspace", "base-etag", "by"];
-        if (Object.keys(flags).some((key) => !allowed.includes(key)))
-          return usage(nodeHelpText(sub));
-        if (!flags["base-etag"])
-          throw new Error("tent node confirm needs --base-etag from a complete read.");
-        const nodeId = nodeRef(target);
-        const saved = await confirmNodeSync(fs, nodeId, {
-          baseEtag: flags["base-etag"],
-          by: flags.by,
-        });
-        const result = {
-          nodeId,
-          path: saved.path,
-          etag: saved.etag,
-          changed: saved.changed,
-          ...(saved.version ? { version: saved.version } : {}),
-        };
-        return await mutationPrint(
-          result,
-          json,
-          (value) => `${value.nodeId}  ${value.path}  ${value.etag}`,
         );
       }
       case "write-many": {
@@ -302,9 +253,6 @@ async function runNodeCommandOpened(
                 ? (globals.stdin ?? (await readStdin()))
                 : flags["input-json"],
             );
-        if (Array.isArray(supplied?.items))
-          for (const item of supplied.items)
-            if (item?.by !== undefined) await validateActor(item.by, "by");
         const prepareInput = async (input: ReturnType<typeof nodeWriteBatchInputSchema.parse>) => {
           const paths = new Map<string, string>();
           const creates = new Map(
@@ -436,7 +384,7 @@ async function runNodeCommandOpened(
               (view !== undefined && view !== "body" && view !== "raw")
             )
               return usage("--full cannot be combined with reader filters or paging.");
-            const edit = await readNodeForEdit(fs, ref, { uncaptured: true, changes: true });
+            const edit = await readNodeForEdit(fs, ref, { uncaptured: true });
             return print(
               await withContext({
                 nodeId: edit.nodeId,
@@ -444,7 +392,6 @@ async function runNodeCommandOpened(
                 etag: edit.etag,
                 materials: nodeReadMaterials(edit.frontmatter, edit.path, workspaceRoot),
                 ...(edit.uncaptured ? { uncaptured: true } : {}),
-                ...(edit.changedSince ? { changedSince: edit.changedSince } : {}),
               }),
               json,
               formatNodeRead,
@@ -495,9 +442,6 @@ async function runNodeCommandOpened(
                           partial: true,
                           page: paged.page,
                         }
-                      : {}),
-                    ...(!paged.partial && "changedSince" in paged
-                      ? { changedSince: paged.changedSince }
                       : {}),
                   };
                 })();
@@ -748,8 +692,7 @@ async function runNodeCommandOpened(
         const supplied = flags["input-json"];
         if (
           supplied === undefined &&
-          ((body === undefined && flags.confirm === undefined) ||
-            !flagValue(flags, "base-etag")?.trim())
+          (body === undefined || !flagValue(flags, "base-etag")?.trim())
         ) {
           if (!flagValue(flags, "base-etag")?.trim())
             throw new Error("tent node write needs --base-etag from a complete read.");
@@ -764,11 +707,8 @@ async function runNodeCommandOpened(
             : {
                 body,
                 baseEtag: flagValue(flags, "base-etag"),
-                ...(flags.confirm === "true" ? { confirm: true } : {}),
-                ...(flags.by !== undefined ? { by: flags.by } : {}),
                 ...(flags["read-back"] === "true" ? { readBack: true } : {}),
               };
-        if (writeInput?.by !== undefined) await validateActor(writeInput.by, "by");
         const input = nodeWriteInputSchema.parse(writeInput);
         errorContext.baseEtag = input.baseEtag;
         const ref = nodeRef(target);
@@ -786,8 +726,6 @@ async function runNodeCommandOpened(
           body: input.body,
           frontmatter,
           baseEtag: input.baseEtag,
-          confirm: input.confirm,
-          by: input.by,
         });
         const readBackCore = new ContextReader(
           { kind: "live", workspaceId },
@@ -945,8 +883,6 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
   ],
   "read-many": ["tent node read-many <nodeId> [...] [--view body|raw] [--start <index>] [--json]"],
   history: ["tent node history <nodeId> [--limit <n>] [--cursor <cursor>] [--json]"],
-  check: ["tent node check <nodeId> [--json]"],
-  confirm: ["tent node confirm <nodeId> --base-etag <complete-live-etag> [--by <actor>] [--json]"],
   "link-output": [
     "tent node link-output <goalId> --resource <address> [--name <name>] [--tags a,b] [--role <roleId>] [--card <id>] [--json]",
   ],
@@ -958,8 +894,7 @@ const NODE_COMMAND_HELP: Record<string, string[]> = {
     "tent node create <name> --type goal|prompt|output [--id node-ID] [--parent <nodeId|root>] [--body <text>|-] [--resource <address>] [--sources-json <JSON>|-] [--tags a,b] [--json]",
   ],
   write: [
-    "tent node write <nodeId> [--body <text>|-] [--confirm] --base-etag <etag> [--read-back] [--json]",
-    "tent node write <nodeId> --confirm --base-etag <etag> [--by <actor>] [--body <text>|-] [--read-back] [--json]",
+    "tent node write <nodeId> [--body <text>|-] --base-etag <etag> [--read-back] [--json]",
     "tent node write <nodeId> --input-json <JSON>|- [--json]",
   ],
   append: ["tent node append <nodeId> --body <text|-> [--heading <title>] [--json]"],
@@ -978,14 +913,13 @@ export function nodeHelpText(sub?: string): string {
     return `tent node — read and record Nodes
 
 Read
-  tent node get <id> [--full]                   One Node: its text, materials and what changed.
+  tent node get <id> [--full]                   One Node: its text and materials.
   tent node list [--parent <id>] [--type <type>] [--tag <tag>]...
                                                 Children of a Node, or matching Nodes below it.
   tent node search --resource <path>            Nodes whose materials cover a file.
   tent node read-many <id>...                   Several Nodes in one page.
   tent node relations <id> --direction parent|children|outgoing|incoming
   tent node history <id>                        Saved versions.
-  tent node check <id>                          Why a Node is ahead or behind.
   tent node tags                                Tags in use, with counts.
 
 Record
@@ -993,7 +927,6 @@ Record
   tent node append <id> --body - [--heading <title>]
   tent node write <id> --base-etag <etag> --body -
   tent node write-many --input-json -
-  tent node confirm <id> --base-etag <etag>     A behind Node still holds.
   tent node link-output <goal-id> --resource <path>
 
 Organize
@@ -1002,28 +935,24 @@ Organize
 tent node <command> --help shows all of its options.`;
   const notes: Record<string, string> = {
     list: "Without filters, lists the children of --parent, or the root Nodes. --type and --tag search the whole subtree instead; repeated --tag must all match. --full lists the whole tree; --include-archived adds archived Nodes. Ordinary list entries carry no ETag; read a Node with get before editing them.",
-    get: 'Prints the Node\'s text, its declared material paths and any changed-since notice, and its ETag. The first page includes related Agent context; raw, --full and continuation reads do not. A long body comes in pages; continue with --cursor and --expected-etag from the last page. An ETag that starts with read: comes from a partial page and allows only metadata edits; read with --full before replacing or confirming content. --view body prints the body only, raw the whole file. --context adds a summary of the goals above it, up to 1 KiB. --range reads part of the body, as {"unit":"utf16","start":0,"end":10}. --version-json reads a saved version, even after the Node was edited or deleted.',
+    get: 'Prints the Node\'s text, its declared material paths and its ETag. The first page includes related Agent context; raw, --full and continuation reads do not. A long body comes in pages; continue with --cursor and --expected-etag from the last page. An ETag that starts with read: comes from a partial page and allows only metadata edits; read with --full before replacing content. --view body prints the body only, raw the whole file. --context adds a summary of the goals above it, up to 1 KiB. --range reads part of the body, as {"unit":"utf16","start":0,"end":10}. --version-json reads a saved version, even after the Node was edited or deleted.',
     "read-many":
       "Reads several Nodes into one 16 KiB page. Continue with --start <page.nextIndex> and the same ids. An item cut short continues with node get --expected-etag <item.etag> --cursor <item.page.nextCursor> and the same view.",
-    check:
-      "Shows why a Node is ahead or behind: which materials or goals changed since it was saved or confirmed. A directory material lists up to 20 changed files.",
-    confirm:
-      "After you have read the whole Node and checked it against its materials, records that it still holds; their current versions become its new baseline. Needs the ETag from a complete live read.",
     "link-output":
       "Records a file or directory as an output under <goal-id>. Paths start at the Workspace root; end a directory with /. The name defaults to the file or directory name. --card ties the output to the Card it answers; with only --role, Tent picks the Card when that Role has exactly one unfinished Card for this goal.",
     search:
       "Finds Nodes whose materials name or cover a file, most specific first. Search text with your own tools.",
     create:
-      "Creates a Node under --parent, or at the root. A goal is what should become true, a prompt holds rules and context to follow, an output records a result at one moment; an output never goes behind when its materials or goals change later. Tags name form and topic: reuse one from tent node tags or a preset (${presets}). --resource and --sources-json name materials: paths start at the Workspace root, a trailing / marks a directory, and ./ marks a path that does not exist yet; Node ids and URLs also work. --id fixes the new id, so a retry cannot create a duplicate. Names follow Windows file-name rules on every platform.".replace(
+      "Creates a Node under --parent, or at the root. A goal is what should become true, a prompt holds rules and context to follow, an output records a result at one moment. Tags name form and topic: reuse one from tent node tags or a preset (${presets}). --resource and --sources-json name materials: paths start at the Workspace root, a trailing / marks a directory, and ./ marks a path that does not exist yet; Node ids and URLs also work. --id fixes the new id, so a retry cannot create a duplicate. Names follow Windows file-name rules on every platform.".replace(
         "${presets}",
         NODE_TAG_PRESETS.join(", "),
       ),
     write:
-      'Replaces the body. --input-json can also change resource, sources and tags: {"baseEtag":"<etag>","body":"...","frontmatter":{"resource":"src/file.ts"},"confirm":true,"readBack":true}; omitted fields stay as they are. Replacing or confirming content needs the ETag from a complete live read; a read: ETag allows metadata-only edits. A save keeps the old baselines, so a behind Node stays behind; add --confirm when the new content has been checked against its materials. --read-back prints the saved bytes in a bounded page; continue partial results with node get using the returned cursor and ETag.',
+      'Replaces the body. --input-json can also change resource, sources and tags: {"baseEtag":"<etag>","body":"...","frontmatter":{"resource":"src/file.ts"},"readBack":true}; omitted fields stay as they are. Replacing content needs the ETag from a complete live read; a read: ETag allows metadata-only edits. --read-back prints the saved bytes in a bounded page; continue partial results with node get using the returned cursor and ETag.',
     append:
-      "Adds text without reading the Node first. --heading appends to the unique matching section, or creates a ## section if it is missing. Keeps the old baselines.",
+      "Adds text without reading the Node first. --heading appends to the unique matching section, or creates a ## section if it is missing.",
     "write-many":
-      'Saves a batch in one commit; if any item fails, nothing is saved. {"items":[{"op":"create","ref":"rules","name":"Rules","type":"prompt","body":"..."},{"op":"update","nodeId":"node-abc123","baseEtag":"<etag>","body":"...","confirm":true}]}. A create\'s parent is an existing id or @ref; @ref also works in links and material paths, even for items later in the batch. New resource and sources paths start at the Workspace root; raw updates use stored document-relative paths. Updates need ETags from complete reads. Results list nodeId, path and etag in input order.',
+      'Saves a batch in one commit; if any item fails, nothing is saved. {"items":[{"op":"create","ref":"rules","name":"Rules","type":"prompt","body":"..."},{"op":"update","nodeId":"node-abc123","baseEtag":"<etag>","body":"..."}]}. A create\'s parent is an existing id or @ref; @ref also works in links and material paths, even for items later in the batch. New resource and sources paths start at the Workspace root; raw updates use stored document-relative paths. Updates need ETags from complete reads. Results list nodeId, path and etag in input order.',
     tags: "Lists the tags in use with their counts and marks the presets. Tags only help find Nodes; they change no behavior.",
     archive: "Marks the Node and everything under it archived, in one commit.",
   };
@@ -1033,11 +962,6 @@ tent node <command> --help shows all of its options.`;
     "",
     "--workspace <path> picks the Workspace; --json prints JSON. Options also take --key=value, and -- ends them.",
     ...(["create", "write", "append"].includes(sub) ? ["--body - reads stdin."] : []),
-    ...(["write", "confirm"].includes(sub)
-      ? [
-          "--by records who confirmed it: human:<id>, process:<id> or <producer>/<version>; without it, Tent records tent/<version>.",
-        ]
-      : []),
     ...(["create", "link-output", "search", "write", "write-many"].includes(sub)
       ? [
           "In Git Bash, run commands whose arguments start with / (such as /docs/x.md) with MSYS_NO_PATHCONV=1.",
@@ -1049,12 +973,6 @@ tent node <command> --help shows all of its options.`;
 function nodeRef(value: string): string {
   if (!isNodeId(value)) throw new Error(`Expected canonical Node id (node-*): ${value}`);
   return value;
-}
-
-async function validateActor(value: unknown, field: string): Promise<void> {
-  const { nodeActorSchema } = await import("../core/base/node-provenance.js");
-  if (!nodeActorSchema.safeParse(value).success)
-    throw new Error(`${field} must use human:<id>, process:<id>, or <producer>/<version>.`);
 }
 
 async function selectedPath(fs: NodeFs, id: string) {
@@ -1095,7 +1013,7 @@ function parseFlags(args: string[]): {
       help: { type: "boolean", short: "h" },
       tag: { type: "string", multiple: true },
       ...Object.fromEntries(
-        ["json", "full", "context", "include-archived", "read-back", "confirm"].map((name) => [
+        ["json", "full", "context", "include-archived", "read-back"].map((name) => [
           name,
           { type: "boolean" as const },
         ]),
@@ -1116,7 +1034,6 @@ function parseFlags(args: string[]): {
           "name",
           "card",
           "role",
-          "by",
           "direction",
           "type",
           "body",

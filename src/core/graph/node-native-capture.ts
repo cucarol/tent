@@ -5,13 +5,11 @@ import { MUTATION_LOCK_PATH, nodeNotePath } from "../base/paths.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { contentEtag } from "../base/etag.js";
 import { prepareNodeDocumentWrite } from "./node-document-write.js";
-import { prepareNodeSyncSave } from "./node-sync-record.js";
-import type { NodeBasisRecord } from "../base/node-basis-record.js";
 import { ReaderError } from "./context-reader.js";
 
 export type InvalidNativeNode = { path: string; nodeId?: string; reason: string };
 
-/** Command/hook boundary. Ordinary native saves retain the same bases as CLI saves. */
+/** Command/hook boundary. Native saves retain document versions just like CLI saves. */
 export async function captureNativeNodeEdits(
   fs: FsAdapter,
 ): Promise<{ invalidNodes: InvalidNativeNode[]; catalog?: NodeCatalog }> {
@@ -60,12 +58,10 @@ export async function captureNativeNodeEdits(
       }));
     const pending = await fs.history!.changedRetainedDocuments(documents);
     // An unchanged workspace needs no write lock. A possible save is inspected
-    // again under the lock before validating metadata or deriving new bases.
+    // again under the lock before validating metadata or capturing versions.
     if (pending.length && !locked && fs.withLock)
       return fs.withLock(MUTATION_LOCK_PATH, () => capture(true));
     const changes: { path: string; raw: string }[] = [];
-    const nodeRecords: Record<string, NodeBasisRecord> = {};
-    let records: Awaited<ReturnType<NonNullable<FsAdapter["history"]>["nodeRecords"]>> | undefined;
     for (const document of pending) {
       const directory = document.path.slice(0, document.path.lastIndexOf("/"));
       const node = catalog.tree.byPath.get(directory)!;
@@ -86,18 +82,12 @@ export async function captureNativeNodeEdits(
         });
         continue;
       }
-      const { record } = await prepareNodeSyncSave(fs, document.path, document.raw, {
-        previousRaw: document.previousRaw,
-        nodes: catalog.byId,
-        records: (records ??= await fs.history!.nodeRecords()),
-      });
       if ((await fs.readFile(document.path)) !== document.raw)
         throw new Error(`Node changed during native capture; retry: ${document.path}`);
       changes.push({ path: document.path, raw: document.raw });
-      if (record) nodeRecords[id] = record;
     }
     if (changes.length)
-      await fs.history!.captureUnlocked(changes, { operation: "node.native-save", nodeRecords });
+      await fs.history!.captureUnlocked(changes, { operation: "node.native-save" });
     fs.invalidNodeEdits = new Map(invalid.map((node) => [node.path.slice(6), node.reason]));
     const current: NodeCatalog = invalid.length ? await loadNodeCatalog(fs) : catalog;
     if (!invalid.length)

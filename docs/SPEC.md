@@ -2,7 +2,7 @@
 
 This is Tent's public contract: what Tent does, as seen through its files, CLI and hooks. The rules live in `src/core/`; the CLI and the plugin packages stay thin. Retired commands and fields are removed, not aliased. How a rule is implemented, such as caches, indexes and the files inside `.tent/.git`, is documented in the code beside it.
 
-The sections after the first follow the question each group of mechanisms answers: how things are kept, what a Node covers, what changed, what the Agent is told, what a reader gets, how a project is mapped, how work is handed over, and the rest.
+The sections after the first follow the question each group of mechanisms answers: how things are kept, what a Node covers, how results are recorded, what the Agent is told, what a reader gets, how a project is mapped, how work is handed over, and the rest.
 
 ## 1. Purpose and workspace
 
@@ -26,23 +26,23 @@ Record what will help later work: confirmed goals and constraints, decisions wit
 
 ### Reading and writing
 
-CLI reads are bounded for Agents. A page fits 16 KiB of compact JSON; longer text continues by range, and cut values are marked. `node get <id>` returns body text, ordered materials and an ETag; `--full` returns the whole body and `--view raw` the whole document with frontmatter; `--context` adds a summary of related Nodes and Cards of at most 1 KiB. `node list` shows children; `--type` and repeated `--tag` select from a whole subtree. `node read-many` reads several Nodes in one page. `node search --resource <path>` returns the current Nodes whose materials name or cover a Workspace file, most specific first, from headers alone. `node relations` lists links, mentions and material references in either direction. Reads never record history, move a basis or collect native edits; `node relations` and `--context` read the last collected documents, so a native edit shows there only after it is collected. A Node whose file differs from its retained version is marked `uncaptured`. Text search belongs to the Agent's own tools.
+CLI reads are bounded for Agents. A page fits 16 KiB of compact JSON; longer text continues by range, and cut values are marked. `node get <id>` returns body text, ordered materials and an ETag; `--full` returns the whole body and `--view raw` the whole document with frontmatter; `--context` adds a summary of related Nodes and Cards of at most 1 KiB. `node list` shows children; `--type` and repeated `--tag` select from a whole subtree. `node read-many` reads several Nodes in one page. `node search --resource <path>` returns the current Nodes whose materials name or cover a Workspace file, most specific first, from headers alone. `node relations` lists links, mentions and material references in either direction. Reads never record history or collect native edits; `node relations` and `--context` read the last collected documents, so a native edit shows there only after it is collected. A Node whose file differs from its retained version is marked `uncaptured`. Text search belongs to the Agent's own tools.
 
 A write that replaces content presents the ETag of a complete read. The ETag of a partial read is marked `read:` and is rejected for replacement; a stale ETag is rejected, never refreshed. `node write` patches the body, the frontmatter or both, and omitted fields survive. `node append` adds to the end of the body, or of a named section, creating that section when absent, without a prior read; concurrent appends never overwrite each other. `node create` saves body, materials and tags together; `--id` fixes the new id, so a retry cannot create a duplicate. `node write-many --input-json` saves ordered creates and updates in one event, all or nothing; `@ref` names a Node created in the same batch in parents, links and material paths. Receipts carry each saved id, path and ETag, name the workspace root, and a failure ends with one copyable `Next: tent …` line.
 
 `node write-many --draft <file>` consumes a scan draft (§7). It saves only the entries whose body is written: it first fixes their ids in the draft, saves them, then removes them from the draft and points the remaining references at the new ids. An entry whose parent still has an empty body stops the batch and names that parent. Running the same command after an interruption creates the missing ids and skips those already saved, so it never duplicates a Node or loses a body. Saving the last entry deletes the draft and its report.
 
-Write receipts also give advice without changing anything stored. A goal or prompt that declares a local file Git does not track gets a hint to use an output, because Tent keeps no old bytes of that file to compare. A newly declared whole Markdown file with several sections gets a hint to cite the sections the Node depends on.
+Write receipts also give advice without changing anything stored. A newly declared whole Markdown file with several sections gets a hint to cite the sections the Node depends on.
 
-Node mutation receipts also list `problems` for the Node documents that command actually wrote, using the same address, document and material checks as `workspace check`. They do not inspect unrelated Node bodies or judge ahead and behind. The findings are advisory: the write stays saved, and a failure to inspect it is reported as a problem of that Node rather than a failed write. A receipt lists every problem in full; its read-back text is paged to keep the receipt within 16 KiB, but problems alone can take it past that.
+Node mutation receipts also list `problems` for the Node documents that command actually wrote, using the same address, document and material checks as `workspace check`. They do not inspect unrelated Node bodies. The findings are advisory: the write stays saved, and a failure to inspect it is reported as a problem of that Node rather than a failed write. A receipt lists every problem in full; its read-back text is paged to keep the receipt within 16 KiB, but problems alone can take it past that.
 
 ### Native edits
 
-Agents read Node files with their own reader and edit them with their own tools; creation, material declarations, confirmation and Card operations go through the CLI. Before any Node, Role or Card write, and in `workspace brief`, `check`, `drift`, `export` and SessionStart, Tent compares the Node files with their latest retained versions and records valid changes byte for byte. A new Node file written by hand is not recorded; `workspace check` lists it. Invalid frontmatter is left untouched, not recorded, and listed by `workspace check`. Each of these points keeps the bytes it sees, so intermediate edits between two points are not recoverable. Pure reads and the per-tool and per-turn hooks do not collect edits.
+Agents read Node files with their own reader and edit them with their own tools; creation, material declarations and Card operations go through the CLI. Before any Node, Role or Card write, and in `workspace brief`, `check`, `export` and SessionStart, Tent compares the Node files with their latest retained versions and records valid changes byte for byte. A new Node file written by hand is not recorded; `workspace check` lists it. Invalid frontmatter is left untouched, not recorded, and listed by `workspace check`. Each of these points keeps the bytes it sees, so intermediate edits between two points are not recoverable. Pure reads and the per-tool and per-turn hooks do not collect edits.
 
 ### History
 
-Each save records the exact bytes of the changed Node, Role and Card documents as one immutable event in `.tent/.git/history.sqlite`; the project's own Git is never written. An event has an opaque 64-hex id, a time, an operation name and the ids it touched. A version `{commit, path}` names one document in one event; `node get --version-json` reads it after later edits, moves or deletion, and `node history <id>` pages a Node's versions across moves. An edit and its revert are two events, so a change since a version stays a change after a revert. Diffs are line diffs with three lines of context. A save that changes nothing creates no event. A Node's `contentChangedAt` is the time of the last event that changed its body or material addresses; moves, confirmation, tags and status do not count. When history cannot show that, or the file has uncollected changes, it is null rather than guessed.
+Each save records the exact bytes of the changed Node, Role and Card documents as one immutable event in `.tent/.git/history.sqlite`; the project's own Git is never written. An event has an opaque 64-hex id, a time, an operation name and the ids it touched. A version `{commit, path}` names one document in one event; `node get --version-json` reads it after later edits, moves or deletion, and `node history <id>` pages a Node's versions across moves. An edit and its revert are two events, so a change since a version stays a change after a revert. Diffs are line diffs with three lines of context. A save that changes nothing creates no event. A Node's `contentChangedAt` is the time of the last event that changed its body or material addresses; moves, tags and status do not count. When history cannot show that, or the file has uncollected changes, it is null rather than guessed.
 
 ### Safe writes and recovery
 
@@ -50,7 +50,7 @@ Tent writers share one on-disk mutation lock. A CLI write waits briefly for a bu
 
 Damaged or unsupported history fails explicitly. Workspaces still on the old private-Git history are not read; `migrate-history.mjs` converts an offline copy once, as [MIGRATION.md](MIGRATION.md) describes.
 
-Caches under `.tent/.git/tent-material-cache/` only make reads faster: deleting them changes no result, and a missing or broken cache falls back to reading files. A cached file observation is reused only while the file's size, times and identity match and the file is older than one second, so an edit that keeps all of those can be missed; `node check` always reads content.
+Caches under `.tent/.git/tent-material-cache/` only make reads faster: deleting them changes no result, and a missing or broken cache falls back to reading files. A cached file observation is reused only while the file's size, times and identity match and the file is older than one second, so an edit that keeps all of those can be missed.
 
 ## 3. What a Node covers
 
@@ -58,58 +58,21 @@ Caches under `.tent/.git/tent-material-cache/` only make reads faster: deleting 
 
 In stored documents, `./` and `../` resolve from the declaring file, a leading `/` resolves from `.tent`, and `file:` URIs are absolute; separators are `/`. At the CLI, new material paths start at the Workspace root and are stored document-relative. A trailing `/` marks a directory, and `./` declares a path that does not exist yet. A stored bare source is a description, whether or not a file of that name exists; only at the CLI does a bare path to an existing file become a file address. Ordinary files inside `.tent/` cannot be materials. `path.md#Heading` selects one Markdown section by its heading text: its version covers that heading through the next heading of the same or higher level, so edits elsewhere in the file do not count. A missing or duplicate heading makes the material unavailable.
 
-A directory such as `src/api/`, or a file-name prefix such as `src/flask/views*`, declared with `track: structure` makes its Node a module that owns those files. Files Git ignores are left out. When several modules cover a file, the most specific one owns it; a parent module owns the files no child claims, new files included. A module's code dependencies are part of what it rests on (§4).
+A directory such as `src/api/`, or a file-name prefix such as `src/flask/views*`, declared with `track: structure` makes its Node a module that owns those files. Files Git ignores are left out. When several modules cover a file, the most specific one owns it; a parent module owns the files no child claims, new files included.
 
 Markdown links, standard fields and bare `node-xxxxxx` tokens in a body relate Nodes to each other. Saves turn Node ids in links and materials into relative paths, and moves and renames rewrite the affected live links and materials, never historical Card input. A local body link must point to an existing file, or to an existing directory when it ends in `/`. `workspace check` reports unresolved links and missing materials.
 
-## 4. What changed
-
-### Bases
-
-Saving a Node records a basis for each local material, kept outside the Markdown in the same history event as the document: a SHA-256 of the file or selected section, with text line endings normalized, and for a module's structure source the set of local dependencies its code imports. Only creation, a newly declared material, explicit confirmation and an output's first placement under a goal set a basis. Ordinary saves, metadata edits, native edits and reads keep the old one, and a material that could not be observed keeps an unknown basis rather than a guessed one. A basis record of an unsupported shape gives that Node no basis and leaves the others usable. Materials are read only at their declared live location, never from another checkout or from history.
-
-A directory or prefix material without `track: structure` gives coverage only: it has no basis, so its members changing never makes anything behind. A structure source's basis is the set of outgoing local dependencies of its production files; test imports are left out. Targets inside the same Node's structure sources are internal and not recorded. External targets are grouped by directory, except that a non-member file beside the importing file is listed by its path. Incoming imports, membership and content edits count only when they change that outgoing set. The import extractor's languages and limits apply (§7); a relevant resolution failure, or a Go package only partly inside the module, makes the observation unavailable rather than partial.
-
-Code edits under a module can make its prose wrong without changing its structure. The end-of-turn review (§5) asks about that; a rule that must follow particular content names that file or section as a material.
-
-### Behind
-
-A goal or prompt is behind when a material's current version differs from its basis, or a material it had is missing or unavailable. An output records one moment, so changes to its materials or its goals never make it behind.
-
-A Node material compares by meaning: its body with normalized line endings, its ordered material addresses and their `track` modes. Type, tags, status, authorship and confirmation do not count, so confirming an upstream Node without changing what it says makes no one behind. A matching version proves only that the recorded bytes still match, not that the text is right.
-
-### Ahead
-
-Every goal is a requirement, and a goal is ahead while nothing carries out its current text:
-
-- A goal that covers a directory or prefix, or has a current descendant goal that does, keeps its own intent basis, its body and declarations, from creation or confirmation. A single file, a Node or Role reference or a URL does not count as covering. While that basis matches, the goal is not ahead; changing the goal makes it ahead until it is confirmed or a current output matches it.
-- Any other goal is ahead when no current output in its subtree has bases matching the goal's current body and all its materials. One output must match the whole goal; an output under a nested goal also satisfies its ancestors.
-
-A goal can be ahead and behind at once; the two are reported separately.
-
-### Outputs and confirmation
-
-An output keeps comparison bases for its own materials and for every goal above it. A complete read of an output lists `changedSince`: its own materials whose version changed and, if it changed, the nearest goal above it. This is information only and never enters the behind list.
+## 4. Results
 
 `node link-output <goal-id> --resource <address>` creates an output under a goal for an existing local file or directory, a Node or a URI; `--name`, `--tags` and `--card` are optional. A path under `.worktrees/` gets a warning to merge into the main checkout first. The goal itself does not change.
-
-`node confirm <id> --base-etag <etag>`, after reading the complete Node and its materials, refreshes its bases, and a goal's intent basis, without changing the body, and records a verification. `node write --confirm`, or `confirm: true` in write JSON and batch updates, saves and confirms together. Both need the ETag of a complete read. Confirming a goal does not refresh the outputs under it; confirming an output clears its `changedSince`. An unavailable material stays unavailable after confirmation.
-
-`node check <id>` reports ahead and behind with their reasons: each material's recorded and current version and, for a structure source, up to 20 added or deleted dependencies. It reads content directly and changes nothing.
-
-### Verification
-
-`verified: [{by, at}]` (OKF v0.2 §5.2) keeps the latest confirmation of each actor and survives later content edits. A confirmation accepts `--by` as `human:<id>`, `process:<id>` or `<producer>/<version>`; without it Tent records its own `tent/<version>`, never a guessed person or model. Times are ISO 8601 with an explicit zone. Tent neither writes nor checks `generated` or `stale_after`; like any other field, they survive edits untouched.
 
 ## 5. What the Agent is told
 
 Tent speaks to the Agent at the start of a session, after a file write, after the user answers a question, and at the end of a turn. Each notice says what to do, and notices about changed files copy the Nodes that cover them; none proves that a Node is right, and the Agent maintains Nodes through the ordinary operations. When nothing needs recording, the Agent says nothing about it.
 
-### Brief and drift
+### Brief
 
-`workspace brief [--role <role>]` first collects native edits, then reports within 16 KiB: up to ten recently changed Nodes with their change times, up to ten of the Role's unfinished Cards in queue order (pending, returned results, work awaiting return), and up to ten workspace problems (invalid documents, ahead Nodes, changed Card sources, behind Nodes, uncertainty). Each row is one line of at most 120 code points; titles can be shortened, ids never are. Omitted rows are counted with the command that lists them. The Role filters Cards; Node and problem counts stay workspace-wide. Card delivery never proves a goal fulfilled, and a change time is a retained event, not proof of which session made it.
-
-`workspace drift` pages the ahead and behind Nodes; each behind Node lists its materials with recorded and current versions and changed dependencies, and points to `node check <id>` when the list is too long for the page. Both commands read current material versions with or without hooks.
+`workspace brief [--role <role>]` first collects native edits, then reports within 16 KiB: up to ten recently changed Nodes with their change times, up to ten of the Role's unfinished Cards in queue order (pending, returned results, work awaiting return), and up to ten workspace problems (invalid documents, changed Card sources, uncertainty). Each row is one line of at most 120 code points; titles can be shortened, ids never are. Omitted rows are counted with the command that lists them. The Role filters Cards; Node and problem counts stay workspace-wide. Card delivery never proves a goal fulfilled, and a change time is a retained event, not proof of which session made it.
 
 ### Hooks
 
@@ -139,7 +102,7 @@ Rules over it:
 If one now says something the change made wrong, edit that sentence in its file. If the change settled a rule or a rejected option that also binds code it did not touch, or hit a dead end, add one short section: tent node append <nodeId> --heading <title> --body -. A lesson about these lines belongs in a code comment or a test. Otherwise say nothing about Tent.
 ```
 
-A successful native write to a Node file inside `.tent/` checks that Node with the same rules as `workspace check`, without collecting edits, confirming it or checking unrelated Node bodies. If it has problems, it says:
+A successful native write to a Node file inside `.tent/` checks that Node with the same rules as `workspace check`, without collecting edits or checking unrelated Node bodies. If it has problems, it says:
 
 ```text
 Tent: <path> has problems:
@@ -181,14 +144,16 @@ Ordinary code work needs no Tent read first: the Hooks copy the covering Nodes a
 - `rules`: the goals whose materials cover those files, their direct prompts, and the goals above the Node or Card source being read, each with its first authored sentence;
 - `paths`: the files those Nodes cover;
 - `tests`: test files that statically import that code, each with the import that links it. A similar file name is no evidence, and an empty list means none were found, not that none exist;
-- `changes`: for a pinned source, bounded line diffs from its pinned version to its latest retained one; for an output, the recorded bases that no longer match;
+- `changes`: for a pinned source, bounded line diffs from its pinned version to its latest retained one;
 - `decisions`: Nodes and files the body links to or names, and Nodes that link to it;
-- `open`: unfinished Cards whose sources are these Nodes, and the read goal or its direct child goals with no output below them, which shows only that none was recorded;
+- `open`: unfinished Cards whose sources are these Nodes, and the read goal or its direct child goals without a result for their latest body change;
 - `unknown`: what could not be determined, and why.
+
+A goal has a result when it or a current descendant goal has a `track: structure` source, or when a currently non-deprecated output was placed in its subtree after its latest body change. When the required time cannot be determined, the finding goes in `unknown`. These goal findings appear only in `agentContext`, not in brief or workspace problems.
 
 For file-start reads, `paths` and `tests` come only from the most specific covering structure modules and exact-file material Nodes, deduplicated before pagination; higher goals contribute rules without expanding their files.
 
-Every assembled entry states the relationship that selected it. Text is copied, never summarized, and gathering it confirms, records and repairs nothing. The whole response fits 16 KiB, with the primary body taking at most half; when room runs out, later lists shrink to titles and then drop out, each marked, and ids and addresses are never shortened. The source commands it prints recover the bodies and a raw Card read every source address and version; no command lists every omitted entry. A Card source keeps its pinned version. `node-xxxxxx#Heading` or a link ending in `#Heading` selects one section of a source; a missing or duplicate heading becomes an unknown, and the source's pinned opening stands in for the section, never today's text. Tent keeps no old project-file bytes, so code changes since a basis show only as changed versions, and since it records no session boundary, what the last session did is unknown. Raw views, `--full`, continuation pages and `read-many` carry no `agentContext`.
+Every assembled entry states the relationship that selected it. Text is copied, never summarized, and gathering it records and repairs nothing. The whole response fits 16 KiB, with the primary body taking at most half; when room runs out, later lists shrink to titles and then drop out, each marked, and ids and addresses are never shortened. The source commands it prints recover the bodies and a raw Card read every source address and version; no command lists every omitted entry. A Card source keeps its pinned version. `node-xxxxxx#Heading` or a link ending in `#Heading` selects one section of a source; a missing or duplicate heading becomes an unknown, and the source's pinned opening stands in for the section, never today's text. Tent records no session boundary, so what the last session did is unknown. Raw views, `--full`, continuation pages and `read-many` carry no `agentContext`.
 
 ## 7. Mapping a project
 
@@ -209,7 +174,7 @@ A module keeps an intended exception with a line `allow:<rule>` in its body or i
 
 Imports are read from TypeScript, JavaScript, Python, Go, Rust, Java, C#, C, C++ and PHP source as written, without running code, compilers or build tools. Each import is classed as `module-load` (loads when the file loads), `deferred` (inside a function), `type-only` or `compile-time` (Rust, Java, C#, C/C++ and PHP name dependencies). A name the extractor cannot resolve to one local target is reported, never guessed; a PHP include that depends on the runtime include path links each existing candidate, marked uncertain. What each language's extractor follows, and where it stops, is documented with its code and tests.
 
-`workspace check` reports broken links, invalid or missing materials, missing sections, and Node files that disagree with retained history (`node-git-mismatch`), and lists documents it could not inspect. It exits 1 when there is anything to report. It checks that things exist, not whether they are still right; that is `node check`.
+`workspace check` reports broken links, invalid or missing materials, missing sections, and Node files that disagree with retained history (`node-git-mismatch`), and lists documents it could not inspect. It exits 1 when there is anything to report. It checks that things exist, not whether they are still right.
 
 ## 8. Handing work over
 
@@ -221,11 +186,11 @@ A Role is one document at `roles/<role-id>.md` with `type: role`, an id and an o
 
 A Card is one document at `cards/<card-id>.md` with an optional title, ordered `sources`, an optional `target` Role, an optional `returnTo` Role and a prompt as its body. Creation publishes it at once; there are no Card drafts. Each Node or Role source is pinned to the version current at creation, so the receiver reads exactly what the sender saw and can compare it with the current version. A source can select one section as `node-xxxxxx#Heading`; `card create` warns when that heading is missing. External addresses are neither fetched nor pinned. `card create` warns on stderr, without changing what it stores, when an explicit path source (starting `./`, `/` or `.tent/`) names nothing that exists. A Card records no sender. Body, title, sources and `returnTo` never change after publication; a hand edit is readable but blocks taking and returning with `INPUT_CHANGED`. Requirements that change belong in Nodes.
 
-A Card is `pending`, then `consumed` when it is taken: by its target Role, or, for a public Card with no `returnTo`, by any session without a Role. With `returnTo` it goes on to `returned` when the receiver returns a result, and to `closed` when the `returnTo` Role takes that result. Without `returnTo`, consumed means complete; with it, returned means complete and closed means the result was collected. `card take <id> --role <role>` receives a pending Card, or collects a returned one, under the mutation lock; repeating the same take is a replay that grants no second execution. `card return <id> --role <role> --result <text>` records a result of one line and at most 200 characters; details go in Nodes, whose ids may appear in it. Returning the same text again is a replay; different text is rejected. A Card shows delivery state only: no progress, goal counts or output lists are derived from it, and goal and output findings never retract a return.
+A Card is `pending`, then `consumed` when it is taken: by its target Role, or, for a public Card with no `returnTo`, by any session without a Role. With `returnTo` it goes on to `returned` when the receiver returns a result, and to `closed` when the `returnTo` Role takes that result. Without `returnTo`, consumed means complete; with it, returned means complete and closed means the result was collected. `card take <id> --role <role>` receives a pending Card, or collects a returned one, under the mutation lock; repeating the same take is a replay that grants no second execution. `card return <id> --role <role> --result <text>` records a result of one line and at most 200 characters; details go in Nodes, whose ids may appear in it. Returning the same text again is a replay; different text is rejected. A Card shows delivery state only: no progress, goal counts or output lists are derived from it.
 
 Each Role has an ordered queue of pending Cards, oldest first by default; the public area holds untargeted Cards and is shown only on request. `card move <id> [--to <role> | --public] [--before <id> | --after <id>] --base-etag <etag>` reorders a pending Card or sends it to another Role, writing only that Card. `card deprecate <id> --base-etag <etag>` cancels a Card, even after it was taken, keeping what was received; lists and brief leave deprecated Cards out unless asked, and an explicit `show` or `take` still works and warns. `card list` filters by Role and state. `card watch --role <role> [--include-open] [--timeout <seconds>]` waits until a pending Card for that Role, or a result returned to it, exists, then prints one line per Card: the command to take a pending Card, or the result of a returned Card; it exits 0 with input, 2 on timeout and 1 on error, and receives nothing itself. Taking a public Card claims it; of two concurrent claims one wins and the other is told who.
 
-While a Card is in progress, brief lists its pinned source goals that changed since pinning and are still ahead, so the receiver rereads them. `node link-output --card <id>` records an output as the response to a Card that is taken and not yet returned, whose pinned goal lies on the output's goal chain; with `--role` alone, Tent picks the one in-progress Card that fits, and asks for `--card` when several do.
+While a Card is in progress, brief lists its pinned source goals that changed since pinning, so the receiver rereads them. `node link-output --card <id>` records an output as the response to a Card that is taken and not yet returned, whose pinned goal lies on the output's goal chain; with `--role` alone, Tent picks the one in-progress Card that fits, and asks for `--card` when several do.
 
 ## 9. Everything else
 

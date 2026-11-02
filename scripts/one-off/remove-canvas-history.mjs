@@ -54,7 +54,8 @@ export async function removeCanvasHistory(workspaceRoot) {
   let rows;
   try {
     const version = inspect.prepare("PRAGMA user_version").get().user_version;
-    if (version !== 1) throw new Error(`Unsupported Tent SQLite history format: ${version}`);
+    if (version !== 1 && version !== 2)
+      throw new Error(`Unsupported Tent SQLite history format: ${version}`);
     rows = Number(
       inspect
         .prepare(

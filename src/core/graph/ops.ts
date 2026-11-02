@@ -20,7 +20,6 @@ import { ORDER_PATH } from "../base/paths.js";
 import { executeDeleteUnlocked, type DeleteWrite } from "../store/delete-recovery.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import type { CaptureMetadata } from "../store/history-port.js";
-import { prepareNodeSyncSave } from "./node-sync-record.js";
 import { captureDocumentUnlocked } from "../store/document-history.js";
 import { validateSystemMaterials } from "./material-target.js";
 
@@ -115,11 +114,7 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
     const siblings = order[parentKey] ?? [];
     order[parentKey] = siblings.includes(id) ? siblings : [...siblings, id];
     await saveOrder(env.fs, order);
-    const prepared = await prepareNodeSyncSave(env.fs, notePath, content, { created: true });
-    await captureDocumentUnlocked(env.fs, notePath, prepared.raw, {
-      operation: "node.create",
-      ...(prepared.record ? { nodeRecords: { [id]: prepared.record } } : {}),
-    });
+    await captureDocumentUnlocked(env.fs, notePath, content, { operation: "node.create" });
   } catch (error) {
     await env.fs.remove(path);
     if (beforeOrder === null) await env.fs.remove(ORDER_PATH);

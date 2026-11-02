@@ -15,8 +15,6 @@ import { ReaderError } from "./context-reader.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { validateSystemMaterials } from "./material-target.js";
 import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "../base/node-read-basis.js";
-import { assertNodeRecordFields, prepareNodeSyncSave } from "./node-sync-record.js";
-import { assertNodeProvenanceEdit } from "../base/node-provenance.js";
 import { nodeMaterialWarnings } from "./node-material-warnings.js";
 
 export class NodeWriteError extends Error {
@@ -36,15 +34,11 @@ export class NodeWriteError extends Error {
   }
 }
 
-export const NODE_WRITE_BY_REQUIRES_CONFIRM = "`by` is only valid with `confirm: true`.";
-
 export type NodeDocumentEdit = {
   baseEtag?: string;
   raw?: string;
   body?: string;
   frontmatter?: Record<string, unknown>;
-  confirm?: boolean;
-  by?: string;
 };
 
 /** Shared Core entry for direct CLI and other hosts. */
@@ -106,7 +100,6 @@ export async function savePreparedNodeDocumentUnlocked(
   operation: string,
 ) {
   const nodeId = node.id;
-  const now = new Date().toISOString();
   const parsed = parseFrontmatter(preparedRaw);
   try {
     await validateSystemMaterials(
@@ -120,12 +113,7 @@ export async function savePreparedNodeDocumentUnlocked(
       throw new NodeWriteError("INVALID_EDIT", error.message);
     throw error;
   }
-  const { raw, record } = await prepareNodeSyncSave(fs, nodeNotePath(node.path), preparedRaw, {
-    now,
-    previousRaw: diskRaw,
-    confirm: input.confirm,
-    by: input.by,
-  });
+  const raw = preparedRaw;
   const changed = raw !== diskRaw;
   const path = nodeNotePath(node.path);
   const warnings = await nodeMaterialWarnings(
@@ -152,7 +140,6 @@ export async function savePreparedNodeDocumentUnlocked(
   try {
     version = await captureDocumentUnlocked(fs, path, raw, {
       operation,
-      ...(record ? { nodeRecords: { [nodeId]: record } } : {}),
     });
   } catch (error) {
     try {
@@ -185,8 +172,6 @@ export function prepareNodeDocumentWrite(
   diskRaw: string,
   input: NodeDocumentEdit,
 ): string {
-  if (input.by !== undefined && input.confirm !== true)
-    throw new NodeWriteError("INVALID_INPUT", NODE_WRITE_BY_REQUIRES_CONFIRM);
   const { baseEtag, raw: rawInput, body, frontmatter } = input;
   const currentEtag = contentEtag(diskRaw);
   // Existing documents require the caller's observed revision.
@@ -198,13 +183,10 @@ export function prepareNodeDocumentWrite(
       nodeId: node.id,
     });
   }
-  if (
-    isIncompleteNodeReadEtag(baseEtag) &&
-    (rawInput !== undefined || body !== undefined || input.confirm === true)
-  ) {
+  if (isIncompleteNodeReadEtag(baseEtag) && (rawInput !== undefined || body !== undefined)) {
     throw new NodeWriteError(
       "INCOMPLETE_READ",
-      "Incomplete Node read cannot replace or confirm content; use tent node get <nodeId> --full before writing",
+      "Incomplete Node read cannot replace content; use tent node get <nodeId> --full before writing",
       { code: "incomplete_read", nodeId: node.id, path: node.path },
     );
   }
@@ -224,8 +206,7 @@ export function prepareNodeDocumentWrite(
     const nextParsed = parseFrontmatter(rawInput);
     // The Node id is the document identity and cannot be changed here.
     assertRawDocsWriteReserved(diskParsed.data, nextParsed.data);
-    validateSyncMetadata(nextParsed.data);
-    assertNodeProvenanceEdit(diskParsed.data, nextParsed.data);
+    validateNodeMetadata(nextParsed.data);
     assertStatusEdit(diskParsed.data, nextParsed.data);
     normalizeOptionalNodeType(nextParsed.data.type);
     if (nextParsed.data.tags !== undefined) normalizeTagList(nextParsed.data.tags);
@@ -241,11 +222,7 @@ export function prepareNodeDocumentWrite(
       assertReservedDocsWriteFields(frontmatter);
     }
 
-    if (
-      body === undefined &&
-      input.confirm !== true &&
-      (!frontmatter || Object.keys(frontmatter).length === 0)
-    ) {
+    if (body === undefined && (!frontmatter || Object.keys(frontmatter).length === 0)) {
       throw new NodeWriteError(
         "INVALID_INPUT",
         "node.write requires raw, body, and/or frontmatter",
@@ -253,8 +230,7 @@ export function prepareNodeDocumentWrite(
     }
     const current = parseFrontmatter(diskRaw);
     const merged = { ...current.data, ...frontmatter };
-    validateSyncMetadata(merged);
-    assertNodeProvenanceEdit(current.data, merged);
+    validateNodeMetadata(merged);
     assertStatusEdit(current.data, merged);
     if (frontmatter && "type" in frontmatter)
       merged.type = normalizeOptionalNodeType(frontmatter.type);
@@ -275,9 +251,9 @@ export function prepareNodeDocumentWrite(
   return nextRaw;
 }
 
-function validateSyncMetadata(next: Record<string, unknown>) {
+function validateNodeMetadata(next: Record<string, unknown>) {
   try {
-    assertNodeRecordFields(next);
+    assertNodeFields(next);
   } catch (error) {
     throw new NodeWriteError("INVALID_EDIT", String(error));
   }
@@ -314,4 +290,23 @@ function assertRawDocsWriteReserved(
   throw new NodeWriteError("INVALID_EDIT", "node.write cannot change the Node id.", {
     fields: ["id"],
   });
+}
+
+const retiredNodeFields = [
+  "sync",
+  "planned",
+  "outputs",
+  "sha256",
+  "resource_sha256",
+  "supersedes",
+] as const;
+
+export function assertNodeFields(data: Record<string, unknown>): void {
+  for (const field of retiredNodeFields)
+    if (data[field] !== undefined)
+      throw new Error(`Node field ${field} is retired; remove it from the document`);
+  if (Array.isArray(data.sources))
+    for (const source of data.sources)
+      if (source.sha256 !== undefined || source.resource_sha256 !== undefined)
+        throw new Error("Material hashes are retired Node source fields");
 }
