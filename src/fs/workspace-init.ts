@@ -4,7 +4,7 @@ import { scaffoldTent } from "../core/store/scaffold.js";
 import { TENT_SYSTEM_DIR } from "../core/base/paths.js";
 import { NodeFs } from "./node-fs.js";
 import { renameWithRetry } from "./rename-with-retry.js";
-import { SqliteDocumentHistory } from "../core/store/sqlite-history.js";
+import { SqliteDocumentHistory } from "./sqlite-history.js";
 
 /** Initialize an empty Tent and its independent SQLite history. */
 export async function initializeTentWorkspace(workspaceRoot: string): Promise<void> {

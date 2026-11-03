@@ -32,7 +32,7 @@ async function fixture(t: TestContext) {
     adapter = openTestFs(root),
     env = { fs: adapter, clock: { now: () => "2026-10-27T00:00:00.000Z" }, tentName: "Safety" };
   await (
-    adapter.history as import("../src/core/store/sqlite-history.js").SqliteDocumentHistory
+    adapter.history as import("../src/fs/sqlite-history.js").SqliteDocumentHistory
   ).initialize();
   const selected = await Promise.all(
     Array.from({ length: 112 }, async (_, i) => {

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { parseDocument, isScalar } from "yaml";
 import { DatabaseSync } from "./sqlite-runtime.js";
 import { durableMkdir, durableReplace } from "./durable-file.js";
-import { SqliteDocumentHistory, sqliteContentFingerprint } from "../core/store/sqlite-history.js";
+import { SqliteDocumentHistory, sqliteContentFingerprint } from "./sqlite-history.js";
 import { isHistoryDocument } from "../core/store/document-history.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { isNodeId, isRoleId, isCardId } from "../core/base/id.js";

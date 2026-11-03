@@ -1,9 +1,9 @@
-import { DatabaseSync } from "../../fs/sqlite-runtime.js";
+import { DatabaseSync } from "./sqlite-runtime.js";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { canonicalSha256 } from "../base/canonical-digest.js";
-import type { HistoryCommit, DocumentVersion } from "./history-port.js";
+import { canonicalSha256 } from "../core/base/canonical-digest.js";
+import type { HistoryCommit, DocumentVersion } from "../core/store/history-port.js";
 
 export class HistoryIndexDamage extends Error {}
 const checksum = (value: string) => createHash("sha256").update(value).digest("hex");

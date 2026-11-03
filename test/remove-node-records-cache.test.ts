@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { SqliteDocumentHistory } from "../src/core/store/sqlite-history.js";
+import { SqliteDocumentHistory } from "../src/fs/sqlite-history.js";
 import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { loadStopCoverage } from "../src/fs/stop-coverage.js";

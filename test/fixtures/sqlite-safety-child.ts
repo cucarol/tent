@@ -3,7 +3,7 @@ import path from "node:path";
 import { NodeFs } from "../../src/fs/node-fs.js";
 import { writeNodesBatch } from "../../src/core/write/node-write-batch.js";
 import { readNodeForEdit } from "../../src/core/read/node-query.js";
-import { SqliteDocumentHistory } from "../../src/core/store/sqlite-history.js";
+import { SqliteDocumentHistory } from "../../src/fs/sqlite-history.js";
 
 const [workspace, cut] = process.argv.slice(2) as [string, string];
 async function checkpoint(point: string) {

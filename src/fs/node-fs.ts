@@ -18,7 +18,7 @@ import {
 } from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CaptureMetadata } from "../core/store/history-port.js";
-import { SqliteDocumentHistory, sqliteContentFingerprint } from "../core/store/sqlite-history.js";
+import { SqliteDocumentHistory, sqliteContentFingerprint } from "./sqlite-history.js";
 import { isHistoryDocument } from "../core/store/document-history.js";
 import { durableMkdir, durableReplace, syncDirectory } from "./durable-file.js";
 import { observeMaterialResource, readStructureSource } from "./source-observation.js";

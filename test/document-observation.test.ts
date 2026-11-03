@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { initializeFixtureHistory, testScratchRoot } from "./scratch.js";
 import { documentHeader } from "../src/core/graph/node-catalog.js";
-import { sqliteContentFingerprint } from "../src/core/store/sqlite-history.js";
+import { sqliteContentFingerprint } from "../src/fs/sqlite-history.js";
 import { retainedDocumentFs } from "../src/core/graph/retained-read.js";
 import { listCardDocuments } from "../src/core/graph/card-document.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";

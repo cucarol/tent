@@ -14,7 +14,7 @@ import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { cardSourceIdentityError } from "../src/core/graph/card-context.js";
 import { createHash } from "node:crypto";
 import { readNodeTimes } from "../src/core/read/node-times.js";
-import { indexValue } from "../src/core/store/sqlite-history-index.js";
+import { indexValue } from "../src/fs/sqlite-history-index.js";
 
 async function fixture(t: TestContext) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "sqlite-migration-")),

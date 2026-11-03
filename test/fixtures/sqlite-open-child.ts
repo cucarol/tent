@@ -1,4 +1,4 @@
-import { SqliteDocumentHistory } from "../../src/core/store/sqlite-history.js";
+import { SqliteDocumentHistory } from "../../src/fs/sqlite-history.js";
 import { runRoleCommand } from "../../src/cli/role-commands.js";
 import { DatabaseSync } from "../../src/fs/sqlite-runtime.js";
 

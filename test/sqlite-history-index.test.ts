@@ -5,10 +5,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { DatabaseSync, type SQLInputValue } from "../src/fs/sqlite-runtime.js";
-import {
-  SqliteDocumentHistory,
-  sqliteContentFingerprint,
-} from "../src/core/store/sqlite-history.js";
+import { SqliteDocumentHistory, sqliteContentFingerprint } from "../src/fs/sqlite-history.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { withFileReadScope } from "../src/fs/file-state-cache.js";
 import { canonicalSha256 } from "../src/core/base/canonical-digest.js";
@@ -300,7 +297,7 @@ test("an existing unopened adapter sees another process initialize history at th
   });
   await withFileReadScope(async () => {
     assert.equal(await history.available(), false);
-    const source = new URL("../src/core/store/sqlite-history.ts", import.meta.url).href;
+    const source = new URL("../src/fs/sqlite-history.ts", import.meta.url).href;
     const code = `import { SqliteDocumentHistory } from ${JSON.stringify(source)}; const history = new SqliteDocumentHistory(process.argv[1]); try { await history.initialize(); } finally { await history.close(); }`;
     const child = await promisify(execFile)(
       process.execPath,

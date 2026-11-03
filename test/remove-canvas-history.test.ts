@@ -8,7 +8,7 @@ import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import { createNode } from "../src/core/graph/ops.js";
 import { readNodeTimes } from "../src/core/read/node-times.js";
-import { sqliteContentFingerprint } from "../src/core/store/sqlite-history.js";
+import { sqliteContentFingerprint } from "../src/fs/sqlite-history.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 
 const { removeNodeRecordsHistory } = await import(

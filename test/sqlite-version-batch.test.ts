@@ -2,10 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import {
-  SqliteDocumentHistory,
-  sqliteContentFingerprint,
-} from "../src/core/store/sqlite-history.js";
+import { SqliteDocumentHistory, sqliteContentFingerprint } from "../src/fs/sqlite-history.js";
 import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import { testScratchRoot } from "./scratch.js";
 

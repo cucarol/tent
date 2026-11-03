@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { NodeFs } from "../../src/fs/node-fs.js";
-import { SqliteDocumentHistory } from "../../src/core/store/sqlite-history.js";
+import { SqliteDocumentHistory } from "../../src/fs/sqlite-history.js";
 
 const [workspace, cut] = process.argv.slice(2) as [string, string];
 const filename = path.join(workspace, "draft.json");

@@ -5,7 +5,7 @@ import { isHistoryDocument } from "../src/core/store/document-history.js";
 import { execFileSync } from "node:child_process";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import { fileURLToPath } from "node:url";
-import { SqliteDocumentHistory } from "../src/core/store/sqlite-history.js";
+import { SqliteDocumentHistory } from "../src/fs/sqlite-history.js";
 import type { DocumentVersion } from "../src/core/store/history-port.js";
 
 export async function historyHead(root: string): Promise<string> {

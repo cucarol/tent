@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
-import { SqliteDocumentHistory } from "../src/core/store/sqlite-history.js";
+import { SqliteDocumentHistory } from "../src/fs/sqlite-history.js";
 import { importGitHistory } from "../src/fs/import-git-history.js";
 
 const { removeNodeRecordsHistory } = await import(

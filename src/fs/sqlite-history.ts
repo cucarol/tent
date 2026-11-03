@@ -1,22 +1,22 @@
-import { DatabaseSync, type SQLInputValue } from "../../fs/sqlite-runtime.js";
+import { DatabaseSync, type SQLInputValue } from "./sqlite-runtime.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import * as fs from "node:fs/promises";
-import { scopedRead, forgetScopedRead } from "../../fs/file-state-cache.js";
-import { durableMkdir, syncDirectory } from "../../fs/durable-file.js";
+import { scopedRead, forgetScopedRead } from "./file-state-cache.js";
+import { durableMkdir, syncDirectory } from "./durable-file.js";
 import {
   SqliteHistoryIndex,
   HistoryIndexDamage,
   indexValue,
   readIndexValue,
 } from "./sqlite-history-index.js";
-import { canonicalSha256 } from "../base/canonical-digest.js";
-import { unifiedLineDiff } from "./line-diff.js";
-import { parseFrontmatter } from "../base/frontmatter.js";
-import { isNodeId, isRoleId, isCardId } from "../base/id.js";
-import { isHistoryDocument } from "./document-history.js";
-import type { DocumentHistory } from "./history-port.js";
+import { canonicalSha256 } from "../core/base/canonical-digest.js";
+import { unifiedLineDiff } from "../core/store/line-diff.js";
+import { parseFrontmatter } from "../core/base/frontmatter.js";
+import { isNodeId, isRoleId, isCardId } from "../core/base/id.js";
+import { isHistoryDocument } from "../core/store/document-history.js";
+import type { DocumentHistory } from "../core/store/history-port.js";
 import type {
   CaptureMetadata,
   CaptureResult,
@@ -24,7 +24,7 @@ import type {
   DocumentVersion,
   HistoryCommit,
   HistoryChange,
-} from "./history-port.js";
+} from "../core/store/history-port.js";
 
 type Observer = { before(commit: string): Promise<void>; after(): Promise<void> };
 type Row = Record<string, string | number | null>;

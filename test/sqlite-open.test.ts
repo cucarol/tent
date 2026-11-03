@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test, { type TestContext } from "node:test";
 import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
-import { SqliteDocumentHistory } from "../src/core/store/sqlite-history.js";
+import { SqliteDocumentHistory } from "../src/fs/sqlite-history.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
 import { createCardDocument } from "../src/core/graph/card-document.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
