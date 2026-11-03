@@ -32,10 +32,6 @@ export function isNodeNotePath(file: string): boolean {
   return end > 0 && file === nodeNotePath(file.slice(0, end));
 }
 
-/** Metadata inputs whose successful writes can change prepared Hook coverage. */
-export const isHookGraphFile = (file: string): boolean =>
-  file === INDEX_PATH || isNodeNotePath(file);
-
 /** 不进入 Node 索引的顶层/路径前缀（相对 system root）。 */
 export const OPERATIONAL_TOP_LEVEL = new Set([
   ".git",

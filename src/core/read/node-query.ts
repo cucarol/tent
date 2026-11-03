@@ -1,4 +1,4 @@
-import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
+import type { FsAdapter } from "../store/adapter.js";
 import {
   ContextReader,
   ReaderError,
@@ -15,20 +15,14 @@ import {
   catalogMatches,
   readCatalogDocument,
 } from "../graph/node-catalog.js";
-import {
-  captureReadDocument,
-  captureReadDocuments,
-  isHistoryDocument,
-} from "../store/document-history.js";
+import { captureReadDocument, isHistoryDocument } from "../store/document-history.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { contentEtag } from "../base/etag.js";
 import { documentLifecycle } from "../base/document-status.js";
 import { nodeNotePath } from "../base/paths.js";
-import { loadTent } from "../store/tree.js";
-import { materialFields } from "../base/material.js";
 import { isNodeId } from "../base/id.js";
 import { NODE_TYPES, normalizeOptionalNodeType } from "../base/node-type.js";
-import { NODE_TAG_PRESETS, countNodeTags, normalizeTagName } from "../base/tags.js";
+import { normalizeTagName } from "../base/tags.js";
 import { uncapturedChecker } from "../graph/retained-read.js";
 
 /** Short-lived callers share these queries; no mount, registry, watcher or read-time repair. */
@@ -179,21 +173,6 @@ export async function listNodes(
   return { workspaceId, ...result, items };
 }
 
-/** Tags in use with their counts, plus the suggested presets; no registry is consulted. */
-export async function listNodeTags(
-  fs: FsAdapter,
-  workspaceId: string,
-  input: { includeArchived?: boolean } = {},
-) {
-  const catalog = await loadNodeCatalog(fs);
-  const nodes = [...catalog.tree.byPath.values()].filter((node) => !node.invalid);
-  return {
-    workspaceId,
-    tags: countNodeTags(nodes, input),
-    presets: [...NODE_TAG_PRESETS],
-  };
-}
-
 export {
   searchNodeResources as searchNodes,
   nodeResourceSearchSchema,
@@ -209,59 +188,4 @@ export async function relatedNodes(fs: FsAdapter, workspaceId: string, input: un
           request,
         )),
   };
-}
-
-/** Explicit whole-tree export; ordinary list/get never calls this unbounded operation. */
-export async function readFullNodeTree(
-  fs: FsAdapter,
-  options: { capture?: boolean; uncaptured?: boolean } = {},
-) {
-  const observed = new Map<string, string>();
-  const readonly = readOnlyFs(fs);
-  const source = new Proxy(readonly, {
-    get(target, key) {
-      if (key === "readFile")
-        return async (path: string) => {
-          const raw = await target.readFile(path);
-          if (isHistoryDocument(path)) observed.set(path, raw);
-          return raw;
-        };
-      const value: unknown = Reflect.get(target, key);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  const tree = await loadTent(source);
-  const documents = [...tree.byPath.values()]
-    .filter((node) => !node.invalid)
-    .map((node) => ({
-      path: nodeNotePath(node.path),
-      raw: observed.get(nodeNotePath(node.path))!,
-    }));
-  // The loader already read exact raw bytes. Capture those bytes together, without reading the tree again.
-  const versions = options.capture ? await captureReadDocuments(fs, documents) : [];
-  const byPath = new Map(versions.map((version) => [version.path, version]));
-  const changed = options.uncaptured && !options.capture ? await uncapturedChecker(fs) : undefined;
-  const project = (node: (typeof tree.roots)[number]): Record<string, unknown> => {
-    const data = node.fm;
-    const raw = observed.get(nodeNotePath(node.path));
-    const version = byPath.get(nodeNotePath(node.path));
-    return {
-      nodeId: node.id,
-      name: node.name,
-      path: node.path,
-      type: node.type,
-      tags: node.tags,
-      ...documentLifecycle(data),
-      invalid: node.invalid,
-      text: node.body,
-      etag: node.etag,
-      ...materialFields(data),
-      ...(raw !== undefined && changed?.(nodeNotePath(node.path), raw)
-        ? { uncaptured: true as const }
-        : {}),
-      ...(version ? { version } : {}),
-      children: node.children.map(project),
-    };
-  };
-  return tree.roots.map(project);
 }

@@ -11,7 +11,6 @@ import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontma
 import { createNode, renameNode, moveNode } from "../src/core/graph/ops.js";
 import { nodeNotePath } from "../src/core/store/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { nodeWriteInputSchema } from "../src/core/write/node-write.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import {
   writeNodeDocument,
@@ -318,7 +317,6 @@ test("ordinary writes preserve opaque provenance values and failed saves retain 
   const initial = await readNodeForEdit(adapter, id);
   const provenance = { custom: [false, "not a provenance record"] };
   const input = { baseEtag: initial.etag, body: "next", frontmatter: { provenance } };
-  assert.equal(nodeWriteInputSchema.safeParse(input).success, true);
   const failure = Object.assign(new Error("write storage failure"), { code: "EIO" });
   const write = adapter.writeFile.bind(adapter);
   adapter.writeFile = async (file, raw) => {

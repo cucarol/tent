@@ -106,9 +106,6 @@ function matches(material: ModuleMapMaterial, file: string): boolean {
 
 export const isModuleMapNode = (node: ModuleMapNode) => node.materials.length > 0;
 
-export const formatModuleImportIssues = (count: number) =>
-  `imports ${count} references Tent could not resolve; they describe the code, not the map (importIssues in --json)`;
-
 export const allowsModuleMapRule = (body: string, code: ModuleMapCode) =>
   new RegExp(`(?<![\\w:.-])allow:${code.replaceAll(".", "\\.")}(?![\\w.-])`).test(body);
 

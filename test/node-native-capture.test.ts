@@ -14,14 +14,15 @@ import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontma
 import { documentHeader } from "../src/core/graph/node-catalog.js";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
 import { ReaderError } from "../src/core/graph/context-reader.js";
-import { appendNodeBody } from "../src/core/write/node-lightwrite.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
 
-for (const writer of ["native save", "locked append"] as const) {
+for (const writer of ["native save", "locked save"] as const) {
   test(
     `native capture observes a concurrent ${writer} during collection before retaining bytes`,
     {
       // Windows disallows atomic replacement while the old handle is held open.
-      skip: writer === "locked append" && process.platform === "win32",
+      skip: writer === "locked save" && process.platform === "win32",
     },
     async (t) => {
       const { workspace, adapter, output } = await fixture(t);
@@ -50,9 +51,13 @@ for (const writer of ["native save", "locked append"] as const) {
                     "the opened handle supplied real bytes before the competing write",
                   );
                   competed = true;
-                  if (writer === "locked append")
-                    await appendNodeBody(adapter, output, { body: "competing save" });
-                  else await fs.writeFile(filename, original + "\ncompeting save\n");
+                  if (writer === "locked save") {
+                    const current = await readNodeForEdit(adapter, output);
+                    await writeNodeDocument(adapter, output, {
+                      baseEtag: current.etag,
+                      body: `${current.body}\ncompeting save`,
+                    });
+                  } else await fs.writeFile(filename, original + "\ncompeting save\n");
                 }
                 return result;
               };

@@ -95,7 +95,3 @@ export function sectionFingerprints(
   };
   return new Map(targets.map((target) => [target.heading, print(target)]));
 }
-
-export function sectionFingerprint(raw: string | undefined, target: SectionTarget): string {
-  return sectionFingerprints(raw, [target]).get(target.heading)!.fingerprint;
-}

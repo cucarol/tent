@@ -1,6 +1,6 @@
 import * as z from "zod/v4";
 import { canonicalSha256 } from "../core/base/canonical-digest.js";
-import { boundary, ReaderError } from "../core/graph/context-reader.js";
+import { ReaderError } from "../core/graph/context-reader.js";
 import { incompleteNodeReadEtag } from "../core/base/node-read-basis.js";
 
 const nodeReadContainers = new Set([
@@ -119,21 +119,6 @@ export function compactReadItem<T>(item: T): T {
 
 export const uncapturedNotice = "有未收录的改动，下一次写命令或 hook 时收录。";
 
-export function formatTextPage(value: unknown): string {
-  const result = value as {
-    text: string;
-    page?: { hasMore: boolean; next?: unknown; nextCursor?: string };
-    version?: unknown;
-    uncaptured?: boolean;
-  };
-  return (
-    (result.uncaptured ? `${uncapturedNotice}\n` : "") +
-    result.text +
-    (result.page?.hasMore
-      ? `\n\n[Partial text]\nNext: ${JSON.stringify(result.page.next)}${result.page.nextCursor ? `\nCursor: ${result.page.nextCursor}` : ""}${result.version ? `\nVersion: ${JSON.stringify(result.version)}` : ""}`
-      : "")
-  );
-}
 function encode(scope: string, revision: string, position: number) {
   return Buffer.from(JSON.stringify({ version: 1, scope, revision, position })).toString(
     "base64url",
@@ -229,96 +214,5 @@ export function pageItems<T extends { items: unknown[]; revision?: string }>(
   const page = make(end);
   if ((end === start && start < total) || !fits(page, options.maxBytes))
     throw new PageError("PAGE_TOO_LARGE", "Record exceeds CLI page budget");
-  return page;
-}
-export function pageText<
-  T extends {
-    text: string;
-    etag: string;
-    range: { unit: "utf16"; start: number; end: number };
-    view: string;
-    total?: number;
-    viewLength?: number;
-  },
->(
-  result: T,
-  operation: string,
-  options: {
-    cursor?: string;
-    start?: number;
-    end?: number;
-    pageEnd?: number;
-    maxBytes?: number;
-  } = {},
-) {
-  const lower = result.range.start;
-  const upper = result.range.end;
-  const address = result as Record<string, unknown>;
-  const scope = canonicalSha256({
-    operation,
-    view: result.view,
-    source: address.source,
-    from: address.from,
-    to: address.to,
-  });
-  const start = options.cursor
-    ? offset(options.cursor, scope, result.etag)
-    : (options.start ?? lower);
-  const requestedEnd = options.end ?? upper;
-  if (
-    !Number.isSafeInteger(start) ||
-    !Number.isSafeInteger(requestedEnd) ||
-    start < lower ||
-    requestedEnd > upper ||
-    start > requestedEnd ||
-    boundary(result.text, start - lower) !== start - lower ||
-    boundary(result.text, requestedEnd - lower) !== requestedEnd - lower ||
-    (options.pageEnd !== undefined &&
-      (!Number.isSafeInteger(options.pageEnd) ||
-        options.pageEnd < start ||
-        options.pageEnd > requestedEnd ||
-        boundary(result.text, options.pageEnd - lower) !== options.pageEnd - lower))
-  ) {
-    throw new ReaderError("INVALID_RANGE", "Invalid text page range");
-  }
-  const base = compactItem({ ...result, text: "" });
-  const makePage = (end: number) => ({
-    ...base,
-    text: result.text.slice(start - lower, end - lower),
-    range: { unit: "utf16" as const, start, end },
-    partial: start !== 0 || end !== (result.total ?? result.viewLength),
-    page: {
-      hasMore: end < requestedEnd,
-      ...(end < requestedEnd
-        ? {
-            nextCursor: encode(scope, result.etag, end),
-            next: {
-              view: result.view,
-              range: { unit: "utf16" as const, start: end, end: requestedEnd },
-              expectedEtag: result.etag,
-            },
-          }
-        : {}),
-    },
-  });
-  const make = (end: number) => {
-    const page = makePage(end);
-    return operation.startsWith("node.get:") && page.partial ? incompleteNodeRead(page) : page;
-  };
-  let end = Math.min(options.pageEnd ?? requestedEnd, requestedEnd);
-  if (!fits(make(end), options.maxBytes)) {
-    let low = start,
-      high = end;
-    while (low < high) {
-      const mid = Math.ceil((low + high) / 2);
-      const safeMid = boundary(result.text, mid - lower) + lower;
-      if (fits(make(safeMid), options.maxBytes)) low = mid;
-      else high = mid - 1;
-    }
-    end = boundary(result.text, low - lower) + lower;
-  }
-  const page = make(end);
-  if ((end === start && start < requestedEnd) || !fits(page, options.maxBytes))
-    throw new PageError("PAGE_TOO_LARGE", "Text exceeds CLI page budget");
   return page;
 }
