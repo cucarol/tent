@@ -51,11 +51,9 @@ test("CLI validation errors name the command, argument and field instead of issu
     [{ op: "create", name: "Missing ref", type: "prompt" }, "ref", "ref is required"],
     [{ op: "create", ref: "bad", type: "prompt" }, "name", "name is required"],
     [{ op: "create", ref: "bad", name: "Missing type" }, "type", "type is required"],
-    [{ op: "update", baseEtag: "known", body: "text" }, "nodeId", "nodeId is required"],
-    [{ op: "update", nodeId: "node-existing", body: "text" }, "baseEtag", "baseEtag is required"],
     [{ op: "create", ref: 12, name: "Wrong type", type: "prompt" }, "ref", "expected string"],
-    [{ op: "remove" }, "op", "op must be create or update"],
-    [{ name: "Missing op" }, "op", "op must be create or update"],
+    [{ op: "update" }, "op", "op must be create"],
+    [{ name: "Missing op" }, "op", "op must be create"],
   ] as const) {
     await writeFile(
       path.join(workspace, "invalid.json"),

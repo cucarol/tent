@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { testScratchRoot } from "./scratch.js";
@@ -45,19 +44,16 @@ async function fixture(t: TestContext) {
   });
   return { workspace, root, adapter, env };
 }
-async function batchInput(adapter: NodeFs) {
+function batchInput() {
   return {
-    items: await Promise.all(
-      Array.from({ length: 112 }, async (_, i) => {
-        const nodeId = `node-n${String(i).padStart(3, "0")}`;
-        return {
-          op: "update" as const,
-          nodeId,
-          baseEtag: (await readNodeFile(adapter, nodeId)).etag,
-          body: `new ${i}\n`,
-        };
-      }),
-    ),
+    items: Array.from({ length: 112 }, (_, i) => ({
+      op: "create" as const,
+      ref: `m${i}`,
+      id: `node-m${String(i).padStart(3, "0")}`,
+      name: `M${String(i).padStart(3, "0")}`,
+      type: "prompt",
+      body: `new ${i}\n`,
+    })),
   };
 }
 function child(args: string[], ipc = false) {
@@ -96,7 +92,7 @@ test("SQLite safety 1: native Markdown edits are retained exactly and unchanged 
 
 test("SQLite safety 2: real Core write-many retains all 112 saved documents in one event", async (t) => {
   const { adapter, env } = await fixture(t),
-    result = await saveNodesBatch(env, await batchInput(adapter));
+    result = await saveNodesBatch(env, batchInput());
   assert.equal(result.results.length, 112);
   const event = (await adapter.history.changesInRange({ to: result.commit })).at(-1)!;
   assert.equal(event.operation, "node.write-many");
@@ -154,6 +150,13 @@ test("SQLite safety 4: file and database publication cuts settle whole groups an
     "external-edit",
   ]) {
     const f = await fixture(t);
+    // An existing order file is the batch's one replaced file, so its recovery is covered too.
+    const priorOrder =
+      JSON.stringify({
+        __root__: Array.from({ length: 112 }, (_, i) => `node-n${String(i).padStart(3, "0")}`),
+      }) + "\n";
+    await f.adapter.writeFile("order.json", priorOrder);
+    const priorHead = await f.adapter.history.currentCommit();
     await f.adapter.close();
     const point = cut === "external-edit" ? "file-replaced" : cut,
       entry = fileURLToPath(new URL("./fixtures/sqlite-safety-child.ts", import.meta.url)),
@@ -174,8 +177,8 @@ test("SQLite safety 4: file and database publication cuts settle whole groups an
       });
       if (cut === "external-edit")
         await fs.writeFile(
-          path.join(f.root, "N000/N000.md"),
-          "---\nid: node-n000\ntype: goal\n---\nEXTERNAL\n",
+          path.join(f.root, "M000/M000.md"),
+          "---\nid: node-m000\ntype: goal\n---\nEXTERNAL\n",
         );
       worker.process.kill("SIGKILL");
       const outcome = await worker.done;
@@ -189,18 +192,32 @@ test("SQLite safety 4: file and database publication cuts settle whole groups an
     try {
       await reopened.ready();
       for (let i = 0; i < 112; i++) {
-        const body = (await readNodeFile(reopened, `node-n${String(i).padStart(3, "0")}`)).body;
+        const name = `M${String(i).padStart(3, "0")}`,
+          file = `${name}/${name}.md`;
+        if (cut === "after-commit")
+          assert.match(
+            (await readNodeFile(reopened, `node-m${name.slice(1)}`)).body,
+            new RegExp(`new ${i}`),
+          );
+        else if (cut === "external-edit" && i === 0)
+          assert.match(await reopened.readFile(file), /EXTERNAL/);
+        else assert.equal(await reopened.exists(name), false, name);
         assert.match(
-          body,
-          new RegExp(
-            cut === "external-edit" && i === 0
-              ? "EXTERNAL"
-              : `${cut === "after-commit" ? "new" : "old"} ${i}`,
-          ),
+          (await readNodeFile(reopened, `node-n${name.slice(1)}`)).body,
+          new RegExp(`old ${i}`),
         );
       }
+      const order = JSON.parse(await reopened.readFile("order.json"));
+      if (cut === "after-commit") {
+        assert.notEqual(await reopened.history.currentCommit(), priorHead);
+        assert.equal(order.__root__.filter((id: string) => id.startsWith("node-m")).length, 112);
+      } else {
+        assert.equal(await reopened.readFile("order.json"), priorOrder);
+        assert.equal(await reopened.history.currentCommit(), priorHead);
+      }
       assert.equal(await reopened.exists(TRANSACTION_PATH), false);
-      if (cut === "external-edit") assert.deepEqual(reopened.recoveryConflicts, ["N000/N000.md"]);
+      if (cut === "external-edit")
+        assert.deepEqual(reopened.recoveryConflicts, ["M000", "M000/M000.md"]);
     } finally {
       await reopened.close();
     }

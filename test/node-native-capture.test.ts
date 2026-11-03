@@ -13,7 +13,7 @@ import { runHookCommand } from "../src/cli/hook.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { documentHeader } from "../src/core/graph/node-catalog.js";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
-import { ReaderError } from "../src/core/graph/context-reader.js";
+import { ReaderError } from "../src/core/graph/reader-error.js";
 import { editNode, readNodeFile } from "./node-edit.js";
 
 for (const writer of ["native save", "locked save"] as const) {

@@ -9,11 +9,9 @@ import { loadTent, isContentMutable, isUsableNode } from "../src/core/store/tree
 import { archiveNode, NodeLifecycleError } from "../src/core/graph/node-lifecycle.js";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 import { documentLifecycle } from "../src/core/base/document-status.js";
-import { liveContextReader } from "../src/core/read/context-reader-factory.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { editNode } from "./node-edit.js";
 
-const source = { kind: "live" as const, workspaceId: "ws-status" };
 test("archive reports saved paths and reachable preimages when outer history finalization fails", async (t) => {
   const { root, adapter, env } = await fixture(t);
   const capture = adapter.history.captureUnlocked.bind(adapter.history);
@@ -90,9 +88,6 @@ test("local status never inherits or freezes edits; unknown status stays visible
   assert.equal(parseFrontmatter(edited.raw).data.status, "deprecated");
   const catalog = await loadNodeCatalog(adapter);
   assert.ok(catalog.rootNodeIds.includes(root.id));
-  const reader = await liveContextReader(adapter, source);
-  assert.ok(reader.list().items.some((n) => n.nodeId === root.id));
-  assert.equal(reader.read({ nodeId: root.id, view: "body" }).status, "deprecated");
   await adapter.writeFile(
     "A/A.md",
     edited.raw.replace("status: deprecated", "status: future-state"),

@@ -2,7 +2,7 @@ import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
 import { isHistoryDocument } from "../store/document-history.js";
 import { nodeNotePath } from "../base/paths.js";
 import { loadTent } from "../store/tree.js";
-import { ReaderError, type ReaderDocument } from "./context-reader.js";
+import { ReaderError } from "./reader-error.js";
 import { type DocumentStatus } from "../base/document-status.js";
 import { contentEtag } from "../base/etag.js";
 
@@ -29,10 +29,7 @@ export function documentHeader(raw: string): string {
   return raw.slice(0, closing.index + closing[0].length);
 }
 
-export async function readCatalogDocument(
-  fs: FsAdapter,
-  node: CatalogNode,
-): Promise<ReaderDocument> {
+export async function readCatalogDocument(fs: FsAdapter, node: CatalogNode) {
   const raw = await fs.readFile(nodeNotePath(node.path));
   let matchesHeader = false;
   try {

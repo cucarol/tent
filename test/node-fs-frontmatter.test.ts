@@ -7,7 +7,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
-import { ReaderError } from "../src/core/graph/context-reader.js";
+import { ReaderError } from "../src/core/graph/reader-error.js";
 import { fileState, type FileState } from "../src/fs/file-state-cache.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";

@@ -8,11 +8,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { deserialize, serialize } from "node:v8";
 import { test, type TestContext } from "node:test";
-import {
-  extractNodeMentions,
-  extractOutLinksDetailed,
-  rewriteMarkdownDestinations,
-} from "../src/core/base/links.js";
+import { extractOutLinksDetailed, rewriteMarkdownDestinations } from "../src/core/base/links.js";
 import {
   validMarkdownSyntaxCache,
   withMarkdownSyntaxCache,
@@ -43,7 +39,6 @@ function observe(text: string) {
   return {
     links: extractOutLinksDetailed(text),
     occurrences: extractOutLinksDetailed(text, true),
-    mentions: extractNodeMentions(text, new Set(["node-abcdef", "node-ghijkl"])),
     rewritten: rewriteMarkdownDestinations(text, (url) =>
       url.startsWith("../") ? url.replace("../", "../new space/") : undefined,
     ),
@@ -54,7 +49,7 @@ function observe(text: string) {
   };
 }
 
-test("one exact-body parse serves links, spans, mentions and rewrites without sharing output mutations", async () => {
+test("one exact-body parse serves links, spans and rewrites without sharing output mutations", async () => {
   const expected = observe(body);
   const cold = await withMarkdownSyntaxCache(new Map(), async () => observe(body));
   assert.deepEqual(cold.result, expected);
@@ -65,10 +60,7 @@ test("one exact-body parse serves links, spans, mentions and rewrites without sh
     assert.deepEqual(result, expected);
     result.links[0]!.raw = "mutated";
     result.occurrences[0]!.range!.start = -1;
-    result.mentions[0]!.range.end = -1;
     assert.deepEqual(observe(body), expected);
-    const suppressed = extractNodeMentions(body, new Set(["node-abcdef"]), "node-abcdef");
-    assert.deepEqual(suppressed, []);
     assert.equal(
       rewriteMarkdownDestinations(body, () => undefined),
       body,
@@ -78,10 +70,6 @@ test("one exact-body parse serves links, spans, mentions and rewrites without sh
   assert.deepEqual(
     expected.links.map((link) => link.raw),
     ["../A/A.md#part", "../B/B.md", "../B/B.md", "x.md"],
-  );
-  assert.deepEqual(
-    expected.mentions.map((mention) => mention.targetNodeId),
-    ["node-abcdef", "node-ghijkl"],
   );
   assert.ok(expected.rewritten.includes("[r]: ../new%20space/B/B.md"));
   assert.ok(expected.rewritten.includes("[r]: ../C/C.md"));

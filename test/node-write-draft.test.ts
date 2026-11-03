@@ -256,14 +256,14 @@ test("a written entry that links an empty or absent entry names it and saves not
   }
 });
 
-test("draft mode rejects updates before assigning IDs or mutating either artifact", async (t) => {
+test("draft mode rejects other entries before assigning IDs or mutating either artifact", async (t) => {
   const f = await fixture(t, [
     { op: "create", ref: "ready", name: "Ready", type: "goal", body: "Ready" },
-    { op: "update", nodeId: "node-later1", baseEtag: "etag", body: "Update" },
+    { op: "update", nodeId: "node-later1", body: "Update" } as never,
   ]);
   const before = await fs.readFile(f.filename, "utf8"),
     head = await f.adapter.history.currentCommit();
-  await assert.rejects(f.save(), /create entries only/);
+  await assert.rejects(f.save(), /op must be create/);
   assert.equal(await fs.readFile(f.filename, "utf8"), before);
   assert.equal(await f.adapter.history.currentCommit(), head);
   assert.equal(await f.adapter.exists("Ready"), false);

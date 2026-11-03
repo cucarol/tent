@@ -17,8 +17,6 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldTent } from "../src/core/store/scaffold.js";
 import { createNode, moveNode, renameNode } from "../src/core/graph/ops.js";
 import { loadTent } from "../src/core/store/tree.js";
-import { liveContextReader } from "../src/core/read/context-reader-factory.js";
-import { ContextReader } from "../src/core/graph/context-reader.js";
 import { contentEtag } from "../src/core/base/etag.js";
 
 test("standard sources preserve duplicates, spelling, order and unknown values", () => {
@@ -230,11 +228,6 @@ test("real Node move and rename preserve resource targets, ordered sources and h
     await adapter.mkdir("cards");
     const cardRaw = serializeFrontmatter({ type: "card", resource: "/A/A.md" }, "historical input");
     await adapter.writeFile("cards/card-history.md", cardRaw);
-    const before = await liveContextReader(adapter, { kind: "live", workspaceId: "ws-test" });
-    const first = before.read({ nodeId: sourceId, view: "body" });
-    assert.ok("text" in first);
-    assert.deepEqual(first.sources, sources);
-    assert.equal(first.resource, "./image.bin");
     await moveNode(env, sourceId, parentId, { mode: "inside" });
     await renameNode(env, sourceId, "New");
     const raw = await adapter.readFile("Group/New/New.md");
@@ -331,39 +324,6 @@ test("unresolved source preflight uses only possible path changes and leaves saf
     ),
     false,
   );
-});
-
-test("Core reads disclose complete standard metadata and exact raw bytes", () => {
-  for (const sources of [
-    [{ resource: "./a", extra: "x".repeat(40000) }],
-    [{ resource: "https://example.com/legacy", details: { count: 3 } }],
-  ]) {
-    const raw = serializeFrontmatter({ id: "node-fields", type: "prompt", sources }, "body");
-    const reader = new ContextReader(
-      { kind: "git", workspaceId: "ws-test", version: { commit: "a".repeat(40), path: "A/A.md" } },
-      [
-        {
-          nodeId: "node-fields",
-          path: "A",
-          name: "A",
-          type: "prompt",
-          raw,
-          etag: contentEtag(raw),
-          status: "stable",
-          invalid: false,
-          parentNodeId: null,
-          childNodeIds: [],
-        },
-      ],
-      ["node-fields"],
-    );
-    const body = reader.read({ nodeId: "node-fields", view: "body" });
-    assert.ok("text" in body);
-    assert.deepEqual(body.sources, sources);
-    const full = reader.read({ nodeId: "node-fields", view: "raw" });
-    assert.ok("text" in full);
-    assert.equal(full.text, raw);
-  }
 });
 
 test("source descriptions are not treated as URI references", () => {

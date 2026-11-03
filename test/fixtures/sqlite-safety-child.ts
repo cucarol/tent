@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { NodeFs } from "../../src/fs/node-fs.js";
 import { SqliteDocumentHistory } from "../../src/fs/sqlite-history.js";
-import { readNodeFile, saveNodesBatch } from "../node-edit.js";
+import { saveNodesBatch } from "../node-edit.js";
 
 const [workspace, cut] = process.argv.slice(2) as [string, string];
 async function checkpoint(point: string) {
@@ -17,20 +17,17 @@ if (cut === "file-replaced") {
   const write = adapter.writeFile.bind(adapter);
   adapter.writeFile = async (file, raw) => {
     await write(file, raw);
-    if (file === "N000/N000.md") await checkpoint(cut);
+    if (file === "M000/M000.md") await checkpoint(cut);
   };
 }
-const items = await Promise.all(
-  Array.from({ length: 112 }, async (_, i) => {
-    const nodeId = `node-n${String(i).padStart(3, "0")}`;
-    return {
-      op: "update" as const,
-      nodeId,
-      baseEtag: (await readNodeFile(adapter, nodeId)).etag,
-      body: `new ${i}\n`,
-    };
-  }),
-);
+const items = Array.from({ length: 112 }, (_, i) => ({
+  op: "create" as const,
+  ref: `m${i}`,
+  id: `node-m${String(i).padStart(3, "0")}`,
+  name: `M${String(i).padStart(3, "0")}`,
+  type: "prompt",
+  body: `new ${i}\n`,
+}));
 try {
   await saveNodesBatch(
     { fs: adapter, clock: { now: () => "2026-10-27T00:00:00.000Z" }, tentName: "Safety" },

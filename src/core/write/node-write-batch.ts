@@ -1,5 +1,4 @@
 import { hasDocumentHistory } from "../store/history-port.js";
-import { isDeepStrictEqual } from "node:util";
 import * as z from "zod/v4";
 import { readOnlyFs } from "../store/adapter.js";
 import { canonicalDocumentReferencesWithPaths } from "../graph/document-links.js";
@@ -18,9 +17,8 @@ import {
   sourcesSchema,
   validateMaterialAddresses,
 } from "../base/material.js";
-import { loadNodeCatalog, readCatalogDocument } from "../graph/node-catalog.js";
-import { NodeWriteError, prepareNodeDocumentWrite } from "../graph/node-document-write.js";
-import { isIncompleteNodeReadEtag } from "../base/node-read-basis.js";
+import { loadNodeCatalog } from "../graph/node-catalog.js";
+import { NodeWriteError } from "../graph/node-document-write.js";
 import { normalizeOptionalNodeType } from "../base/node-type.js";
 import type { OpsEnv } from "../graph/ops-context.js";
 import { loadOrder, ROOT_KEY } from "../store/order.js";
@@ -29,7 +27,6 @@ import { validateNodeName } from "../store/scaffold.js";
 import { normalizeTagList } from "../base/tags.js";
 import { nodeMaterialWarnings } from "../graph/node-material-warnings.js";
 import { rewriteMarkdownDestinations } from "../base/links.js";
-import { ReaderError } from "../graph/context-reader.js";
 import { recoverPendingNodeMoveUnlocked } from "../store/node-move-recovery.js";
 import { recoverPendingDeleteUnlocked } from "../store/delete-recovery.js";
 const requiredString = (field: string) =>
@@ -37,7 +34,7 @@ const requiredString = (field: string) =>
 const localRef = requiredString("ref").regex(/^[A-Za-z][A-Za-z0-9_-]*$/);
 const nodeId = requiredString("nodeId").refine(isNodeId, "Expected a canonical node-* id");
 const createItem = z.strictObject({
-  op: z.literal("create"),
+  op: z.literal("create", { error: "op must be create" }),
   ref: localRef,
   id: nodeId.optional(),
   parent: z
@@ -52,46 +49,14 @@ const createItem = z.strictObject({
   resource: resourceSchema.optional(),
   sources: sourcesSchema.optional(),
 });
-const updateItem = z
-  .strictObject({
-    op: z.literal("update"),
-    nodeId,
-    baseEtag: requiredString("baseEtag").min(1),
-    raw: z.string().optional(),
-    body: z.string().optional(),
-    frontmatter: z.record(z.string(), z.unknown()).optional(),
-  })
-  .refine(
-    (p) =>
-      p.raw !== undefined
-        ? p.body === undefined && p.frontmatter === undefined
-        : p.body !== undefined ||
-          (p.frontmatter !== undefined && Object.keys(p.frontmatter).length > 0),
-    "Supply raw alone, or body and/or frontmatter",
-  );
-
-export const nodeWriteBatchInputSchema = z.strictObject({
-  items: z
-    .array(
-      z.discriminatedUnion("op", [createItem, updateItem], {
-        error: "op must be create or update",
-      }),
-    )
-    .min(1),
-});
+export const nodeWriteBatchInputSchema = z.strictObject({ items: z.array(createItem).min(1) });
 export type NodeWriteBatchInput = z.infer<typeof nodeWriteBatchInputSchema>;
 export type NodeWriteBatchResult = {
   results: { nodeId: string; path: string; etag: string }[];
   commit?: string;
   warnings?: string[];
 };
-type PlannedNode = {
-  nodeId: string;
-  path: string;
-  before: string | null;
-  raw: string;
-  parentId?: string;
-};
+type PlannedNode = { nodeId: string; path: string; raw: string; parentId?: string };
 
 export class NodeBatchWriteError extends Error {
   constructor(
@@ -146,23 +111,12 @@ export async function writeNodesBatchUnlocked(
     string,
     { item: z.infer<typeof createItem>; nodeId: string; path?: string; parentId?: string }
   >();
-  const updates = new Set<string>();
   for (const item of items) {
-    if (item.op === "create") {
-      if (creates.has(item.ref)) throw new Error(`Duplicate batch ref: @${item.ref}`);
-      const id = item.id ?? makeUniqueNodeId(ids, env.rand);
-      if (ids.has(id)) throw new Error(`Node id already exists: ${id}.`);
-      ids.add(id);
-      creates.set(item.ref, { item, nodeId: id });
-    } else {
-      if (updates.has(item.nodeId)) throw new Error(`Duplicate batch update: ${item.nodeId}`);
-      updates.add(item.nodeId);
-      if (isIncompleteNodeReadEtag(item.baseEtag))
-        throw new NodeWriteError(
-          "INCOMPLETE_READ",
-          "Batch update requires a complete Node read ETag",
-        );
-    }
+    if (creates.has(item.ref)) throw new Error(`Duplicate batch ref: @${item.ref}`);
+    const id = item.id ?? makeUniqueNodeId(ids, env.rand);
+    if (ids.has(id)) throw new Error(`Node id already exists: ${id}.`);
+    ids.add(id);
+    creates.set(item.ref, { item, nodeId: id });
   }
   const visiting = new Set<string>();
   function locate(ref: string): string {
@@ -217,66 +171,26 @@ export async function writeNodesBatchUnlocked(
     });
     return canonicalDocumentReferencesWithPaths(nodeNotePath(path), data, body, paths);
   }
-  function normalizeRaw(path: string, raw: string): string {
-    const parsed = parseFrontmatter(raw),
-      before = structuredClone(parsed.data);
-    const body = references(path, parsed.data, parsed.body);
-    return body === parsed.body && isDeepStrictEqual(before, parsed.data)
-      ? raw
-      : serializeFrontmatter(parsed.data, body, parsed.keyOrder);
-  }
   const planned: PlannedNode[] = [];
   for (const item of items) {
-    if (item.op === "create") {
-      const entry = creates.get(item.ref)!,
-        path = entry.path!;
-      const tags = item.tags === undefined ? [] : normalizeTagList(item.tags);
-      const data = {
-        id: entry.nodeId,
-        type: normalizeOptionalNodeType(item.type),
-        ...(item.description === undefined ? {} : { description: item.description }),
-        ...(tags.length ? { tags } : {}),
-        ...materialFields(item),
-      };
-      const body = references(path, data, item.body ?? "");
-      validateMaterialAddresses(data, nodeNotePath(path));
-      planned.push({
-        nodeId: entry.nodeId,
-        path,
-        before: null,
-        raw: serializeFrontmatter(data, body, NODE_FRONTMATTER_KEY_ORDER),
-        parentId: entry.parentId,
-      });
-    } else {
-      const node = catalog.byId.get(item.nodeId);
-      if (!node) throw new NodeWriteError("NOT_FOUND", `Node not found: ${item.nodeId}`);
-      const document = await readCatalogDocument(fs, node).catch((error) => {
-        if (error instanceof ReaderError && error.code === "SOURCE_CHANGED")
-          throw new NodeWriteError("ETAG_CONFLICT", "Node changed during batch lookup", {
-            nodeId: item.nodeId,
-            path: node.path,
-          });
-        throw error;
-      });
-      // Resolve only declared reference positions before material validation.
-      const edit = { ...item };
-      if (edit.raw !== undefined) edit.raw = normalizeRaw(node.path, edit.raw);
-      else {
-        if (edit.frontmatter !== undefined) edit.frontmatter = structuredClone(edit.frontmatter);
-        const body = references(node.path, edit.frontmatter ?? {}, edit.body ?? "");
-        if (edit.body !== undefined) edit.body = body;
-      }
-      const raw = normalizeRaw(
-        node.path,
-        prepareNodeDocumentWrite({ id: node.nodeId, path: node.path }, document.raw, edit),
-      );
-      planned.push({
-        nodeId: node.nodeId,
-        path: node.path,
-        before: document.raw,
-        raw,
-      });
-    }
+    const entry = creates.get(item.ref)!,
+      path = entry.path!;
+    const tags = item.tags === undefined ? [] : normalizeTagList(item.tags);
+    const data = {
+      id: entry.nodeId,
+      type: normalizeOptionalNodeType(item.type),
+      ...(item.description === undefined ? {} : { description: item.description }),
+      ...(tags.length ? { tags } : {}),
+      ...materialFields(item),
+    };
+    const body = references(path, data, item.body ?? "");
+    validateMaterialAddresses(data, nodeNotePath(path));
+    planned.push({
+      nodeId: entry.nodeId,
+      path,
+      raw: serializeFrontmatter(data, body, NODE_FRONTMATTER_KEY_ORDER),
+      parentId: entry.parentId,
+    });
   }
   const nodePaths = new Set([
     ...[...catalog.byId.values()]
@@ -289,7 +203,7 @@ export async function writeNodesBatchUnlocked(
       fs,
       parseFrontmatter(node.raw).data,
       nodeNotePath(node.path),
-      node.before === null ? {} : parseFrontmatter(node.before).data,
+      {},
       nodePaths,
     );
   const finalDocuments = new Map(planned.map((node) => [nodeNotePath(node.path), node.raw]));
@@ -312,26 +226,23 @@ export async function writeNodesBatchUnlocked(
         warningFs,
         parseFrontmatter(node.raw).data,
         nodeNotePath(node.path),
-        node.before === null ? {} : parseFrontmatter(node.before).data,
+        {},
       )),
     );
   const order = await loadOrder(readOnlyFs(fs));
-  for (const node of planned.filter((n) => n.before === null)) {
+  for (const node of planned) {
     const key = node.parentId ?? ROOT_KEY;
     order[key] = [...(order[key] ?? []), node.nodeId];
   }
   const afterOrder = creates.size ? JSON.stringify(order, null, 2) + "\n" : beforeOrder;
-  async function check(node: PlannedNode, expected: string | null) {
-    const path = nodeNotePath(node.path);
-    if (expected === null ? await fs.exists(node.path) : (await fs.readFile(path)) !== expected)
-      throw new NodeWriteError("ETAG_CONFLICT", `Node changed during batch save: ${node.path}`);
-  }
-  for (const node of planned) await check(node, node.before);
+  for (const node of planned)
+    if (await fs.exists(node.path))
+      throw new Error(`Node path appeared during batch save: ${node.path}`);
   if (((await fs.exists(ORDER_PATH)) ? await fs.readFile(ORDER_PATH) : null) !== beforeOrder)
     throw new Error("Node order changed during batch preparation");
   await fs.prepareFileTransaction?.(
     [
-      ...planned.map((n) => ({ path: nodeNotePath(n.path), before: n.before, after: n.raw })),
+      ...planned.map((n) => ({ path: nodeNotePath(n.path), before: null, after: n.raw })),
       ...(afterOrder !== beforeOrder
         ? [{ path: ORDER_PATH, before: beforeOrder, after: afterOrder }]
         : []),
@@ -351,13 +262,8 @@ export async function writeNodesBatchUnlocked(
       await fs.mkdir(path);
     }
     for (const node of planned) {
-      if (node.before !== null) await check(node, node.before);
-      else if (await fs.exists(nodeNotePath(node.path)))
-        throw new NodeWriteError(
-          "ETAG_CONFLICT",
-          `Node document appeared during batch save: ${nodeNotePath(node.path)}`,
-        );
-      if (node.raw === node.before) continue;
+      if (await fs.exists(nodeNotePath(node.path)))
+        throw new Error(`Node document appeared during batch save: ${nodeNotePath(node.path)}`);
       attempted.push(node);
       await fs.writeFile(nodeNotePath(node.path), node.raw);
     }
@@ -367,7 +273,9 @@ export async function writeNodesBatchUnlocked(
       orderAttempted = true;
       await fs.writeFile(ORDER_PATH, afterOrder);
     }
-    for (const node of planned) await check(node, node.raw);
+    for (const node of planned)
+      if ((await fs.readFile(nodeNotePath(node.path))) !== node.raw)
+        throw new Error(`Node changed during batch save: ${node.path}`);
     const results = planned.map((n) => ({
       nodeId: n.nodeId,
       path: n.path,
@@ -412,7 +320,7 @@ export async function writeNodesBatchUnlocked(
     }
     for (const node of attempted.reverse()) {
       try {
-        await restore(nodeNotePath(node.path), node.before, node.raw);
+        await restore(nodeNotePath(node.path), null, node.raw);
       } catch (rollback) {
         failures.push(rollback);
       }
@@ -425,7 +333,7 @@ export async function writeNodesBatchUnlocked(
       }
     }
     for (const node of planned) {
-      if (node.before !== null || attempted.includes(node)) continue;
+      if (attempted.includes(node)) continue;
       try {
         if (await fs.exists(nodeNotePath(node.path))) conflicts.push(nodeNotePath(node.path));
       } catch (rollback) {

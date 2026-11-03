@@ -1,7 +1,6 @@
 import { assertNodeFields } from "../base/node-fields.js";
 export { assertNodeFields } from "../base/node-fields.js";
 import { isDeepStrictEqual } from "node:util";
-import { contentEtag } from "../base/etag.js";
 import { parseFrontmatter, serializeFrontmatter, syncNodeTitle } from "../base/frontmatter.js";
 import { MaterialAddressError, validateMaterialAddresses } from "../base/material.js";
 import { normalizeOptionalNodeType } from "../base/node-type.js";
@@ -9,17 +8,10 @@ import { normalizeTagList } from "../base/tags.js";
 import type { Node } from "../base/types.js";
 import { nodeNotePath } from "../base/paths.js";
 import { assertStatusEdit } from "../base/document-status.js";
-import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "../base/node-read-basis.js";
 
 export class NodeWriteError extends Error {
   constructor(
-    readonly code:
-      | "ETAG_REQUIRED"
-      | "ETAG_CONFLICT"
-      | "INCOMPLETE_READ"
-      | "INVALID_INPUT"
-      | "INVALID_EDIT"
-      | "NOT_FOUND",
+    readonly code: "INVALID_INPUT" | "INVALID_EDIT" | "NOT_FOUND",
     message: string,
     readonly details?: Record<string, unknown>,
   ) {
@@ -29,45 +21,18 @@ export class NodeWriteError extends Error {
 }
 
 export type NodeDocumentEdit = {
-  baseEtag?: string;
   raw?: string;
   body?: string;
   frontmatter?: Record<string, unknown>;
 };
 
-/** Prepare an edit against exact observed bytes; the caller holds the mutation lock through saving. */
+/** Prepare an edit of the observed bytes; the caller holds the mutation lock through saving. */
 export function prepareNodeDocumentWrite(
   node: Pick<Node, "id" | "path">,
   diskRaw: string,
   input: NodeDocumentEdit,
 ): string {
-  const { baseEtag, raw: rawInput, body, frontmatter } = input;
-  const currentEtag = contentEtag(diskRaw);
-  // Existing documents require the caller's observed revision.
-  if (!baseEtag) {
-    throw new NodeWriteError("ETAG_REQUIRED", "node.write requires baseEtag for existing nodes", {
-      code: "etag_required",
-      currentEtag,
-      path: node.path,
-      nodeId: node.id,
-    });
-  }
-  if (isIncompleteNodeReadEtag(baseEtag) && (rawInput !== undefined || body !== undefined)) {
-    throw new NodeWriteError("INCOMPLETE_READ", "Incomplete Node read cannot replace content", {
-      code: "incomplete_read",
-      nodeId: node.id,
-      path: node.path,
-    });
-  }
-  if (nodeReadRevisionEtag(baseEtag) !== currentEtag) {
-    throw new NodeWriteError("ETAG_CONFLICT", "etag conflict", {
-      code: "etag_conflict",
-      currentEtag,
-      baseEtag,
-      path: node.path,
-      nodeId: node.id,
-    });
-  }
+  const { raw: rawInput, body, frontmatter } = input;
 
   let nextRaw: string;
   if (rawInput !== undefined) {
@@ -145,7 +110,7 @@ function validateNodeMaterials(
 /** The Node id is fixed by the selected document. */
 function assertReservedDocsWriteFields(frontmatter: Record<string, unknown>): void {
   if (!("id" in frontmatter)) return;
-  throw new NodeWriteError("INVALID_EDIT", "node.write cannot set the Node id.", {
+  throw new NodeWriteError("INVALID_EDIT", "A Node's id cannot change.", {
     fields: ["id"],
   });
 }
@@ -156,7 +121,7 @@ function assertRawDocsWriteReserved(
   next: Record<string, unknown>,
 ): void {
   if (isDeepStrictEqual(next.id, disk.id)) return;
-  throw new NodeWriteError("INVALID_EDIT", "node.write cannot change the Node id.", {
+  throw new NodeWriteError("INVALID_EDIT", "A Node's id cannot change.", {
     fields: ["id"],
   });
 }

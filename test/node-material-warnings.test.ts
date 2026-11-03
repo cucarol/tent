@@ -9,7 +9,7 @@ import { nodeMaterialWarnings } from "../src/core/graph/node-material-warnings.j
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { git } from "./helpers.js";
-import { editNode, readNodeFile, saveNodesBatch } from "./node-edit.js";
+import { editNode, saveNodesBatch } from "./node-edit.js";
 
 test("whole Markdown advice uses real sibling sections and only newly added whole materials", async () => {
   const multi = "---\nlabel: ignored\n---\n# Guide\n## One\ntext\n## Two\ntext\n";
@@ -100,10 +100,8 @@ test("create problems and Core document/batch writes keep whole-document advice 
   const id = created.node.nodeId;
   await fs.appendFile(path.join(root, "tracked.md"), "Changed\n");
   await editNode(adapter, id, { body: "New wording" });
-  const latest = await readNodeFile(adapter, id);
   const batch = await saveNodesBatch(env, {
     items: [
-      { op: "update", nodeId: id, baseEtag: latest.etag, body: "Batch wording" },
       { op: "create", ref: "new", name: "New", type: "prompt", resource: "../../tracked.md" },
     ],
   });

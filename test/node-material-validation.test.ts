@@ -162,7 +162,7 @@ test("Core edits retain legacy addresses and workspace check reports their repai
   await editNode(adapter, id, { body: "Core update" });
   const live = await readNodeFile(adapter, id);
   assert.equal(live.body, "Core update");
-  const input = { baseEtag: live.etag, frontmatter: { sources: [{ resource: "/../new.md" }] } };
+  const input = { frontmatter: { sources: [{ resource: "/../new.md" }] } };
   await assert.rejects(
     editNode(adapter, id, input),
     (error) =>

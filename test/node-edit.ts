@@ -55,16 +55,9 @@ export async function readNodeFile(
 }
 
 /** Edits a Node as an Agent does: rewrite the file, then capture it as the next Tent command would. */
-export async function editNode(
-  fs: FsAdapter,
-  nodeId: string,
-  edit: Omit<NodeDocumentEdit, "baseEtag">,
-) {
+export async function editNode(fs: FsAdapter, nodeId: string, edit: NodeDocumentEdit) {
   const current = await readNodeFile(fs, nodeId);
-  const raw = prepareNodeDocumentWrite({ id: nodeId, path: current.directory }, current.raw, {
-    ...edit,
-    baseEtag: current.etag,
-  });
+  const raw = prepareNodeDocumentWrite({ id: nodeId, path: current.directory }, current.raw, edit);
   if (raw !== current.raw) await fs.writeFile(current.path, raw);
   const { invalidNodes } = await captureNativeNodeEdits(fs);
   if (invalidNodes.length) throw new Error(invalidNodes.map(({ reason }) => reason).join("; "));

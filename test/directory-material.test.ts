@@ -18,8 +18,6 @@ import {
   materialFields,
 } from "../src/core/base/material.js";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
-import { ContextReader } from "../src/core/graph/context-reader.js";
-import { contentEtag } from "../src/core/base/etag.js";
 import { serializeFrontmatter, parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { createCardDocument } from "../src/core/graph/card-document.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
@@ -200,31 +198,5 @@ test("directory markers cannot select Node files as Card sources or response evi
       sources: [{ resource: "/Main/Main.md/" }],
     }),
     /must point to Workspace files/,
-  );
-  const raw = serializeFrontmatter(
-    { id: "node-main", type: "prompt", resource: "/Main/Main.md/" },
-    "fact",
-  );
-  const reader = new ContextReader(
-    { kind: "live", workspaceId: "directory" },
-    [
-      {
-        nodeId: "node-main",
-        name: "Main",
-        path: "Main",
-        type: "prompt",
-        raw,
-        etag: contentEtag(raw),
-        parentNodeId: null,
-        childNodeIds: [],
-        status: "stable",
-        invalid: false,
-      },
-    ],
-    ["node-main"],
-  );
-  assert.equal(
-    reader.relations({ nodeId: "node-main", direction: "outgoing" }).items[0]!.target,
-    undefined,
   );
 });

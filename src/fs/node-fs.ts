@@ -28,7 +28,7 @@ import { loadNodeCatalog } from "../core/graph/node-catalog.js";
 import { materialLocator, localMaterialPath, type MaterialLocator } from "../core/base/material.js";
 import { assertSystemMaterial } from "../core/graph/material-target.js";
 import { documentHeader } from "../core/graph/node-catalog.js";
-import { ReaderError } from "../core/graph/context-reader.js";
+import { ReaderError } from "../core/graph/reader-error.js";
 import {
   FileTransaction,
   TRANSACTION_PATH,

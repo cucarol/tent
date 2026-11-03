@@ -2,7 +2,6 @@ import { validationIssueText } from "../core/base/validation-message.js";
 
 export type ErrorContext = {
   target?: { kind: "node" | "card" | "role"; id: string };
-  baseEtag?: string;
   json?: boolean;
   workspace?: string;
   workspaceRoot?: string;
@@ -24,27 +23,8 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
         ? error.message
         : String(error);
   const target = context.target;
-  let showDetails = Boolean(context.details);
-  const errorCode = (error as { code?: string } | undefined)?.code;
-  if (!context.json && command.startsWith("tent node ")) {
-    if (errorCode === "ETAG_CONFLICT") {
-      const details = context.details as { nodeId?: string; baseEtag?: string } | undefined;
-      const nodeId = details?.nodeId ?? (target?.kind === "node" ? target.id : undefined);
-      const given = details?.baseEtag ?? context.baseEtag;
-      message =
-        nodeId && given
-          ? `Node ${nodeId} changed after your read: etag ${given} is stale.`
-          : "The Node changed after your read; its etag is stale.";
-      showDetails = false;
-    } else if (errorCode === "INCOMPLETE_READ") {
-      message = "A read: ETag comes from a partial read and allows metadata edits only.";
-      showDetails = false;
-    }
-  }
-  const missingNode =
-    /^(?:(?:Parent )?Node not found: |Node is not readable in this source: )(node-[a-z0-9]+)\.?$/i.exec(
-      message,
-    )?.[1];
+  const showDetails = Boolean(context.details);
+  const missingNode = /^(?:Parent )?Node not found: (node-[a-z0-9]+)\.?$/i.exec(message)?.[1];
   const missingRole = /^Role not found: (role-[a-z0-9]+)\.?$/i.exec(message)?.[1];
   const unavailableRole = /^Role unavailable: (role-[a-z0-9]+): ([\s\S]*)$/i.exec(message);
   const fileError = error as NodeJS.ErrnoException | undefined;
@@ -81,7 +61,7 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
     next = ["tent", "card", "list"];
   } else if (
     // A batch ref is the caller's own word; it must not pick the next command.
-    /etag|changed|reread|read:|complete.*read|another Role|addressed to|lock.*busy|waiting.*seconds/i.test(
+    /changed|reread|another Role|addressed to|lock.*busy|waiting.*seconds/i.test(
       message.replace(/^Batch item @[A-Za-z][\w-]*: /, ""),
     )
   ) {

@@ -13,8 +13,8 @@ import {
   TEMP_DIR,
 } from "../core/base/paths.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
-import { liveContextReader } from "../core/read/context-reader-factory.js";
-import type { FsAdapter } from "../core/store/adapter.js";
+import { readOnlyFs, type FsAdapter } from "../core/store/adapter.js";
+import { loadTent } from "../core/store/tree.js";
 import { isHistoryDocument } from "../core/store/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 
@@ -60,10 +60,11 @@ async function inventory(root: string) {
   return files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
-async function validateMaterial(root: string, workspaceId: string, files: FileEntry[]) {
+async function validateMaterial(root: string, files: FileEntry[]) {
   const adapter = new NodeFs(root);
   try {
-    await liveContextReader(adapter, { kind: "live", workspaceId });
+    // The copy must load as a current Tent before its material is checked.
+    await loadTent(readOnlyFs(adapter));
     const owned = new Set<string>();
     const directories = new Set<string>();
     type Origin = { kind: "live" };
@@ -208,11 +209,7 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
     const copied = await inventory(path.join(candidate, ".tent"));
     if (JSON.stringify(copied) !== JSON.stringify(files))
       throw new Error("Export byte inventory mismatch");
-    const material = await validateMaterial(
-      path.join(candidate, ".tent"),
-      mount.workspaceId,
-      files,
-    );
+    const material = await validateMaterial(path.join(candidate, ".tent"), files);
     // Reading the copy may build disposable indexes in it.
     const copiedGit = path.join(candidate, ".tent", ".git");
     const gitEntries = await fs.readdir(copiedGit).catch((error: NodeJS.ErrnoException) => {

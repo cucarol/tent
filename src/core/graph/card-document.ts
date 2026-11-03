@@ -22,7 +22,7 @@ import {
 } from "../base/material.js";
 import { isHistoryDocument } from "../store/document-history.js";
 import { parseRoleDocument } from "../store/role-document.js";
-import { boundary, ReaderError, type ReaderRange } from "./context-reader.js";
+import { ReaderError } from "./reader-error.js";
 import { canonicalSha256 } from "../base/canonical-digest.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { assertSystemMaterial, systemMaterialPath } from "./material-target.js";
@@ -510,9 +510,21 @@ function deprecatedCardNotice(card: CardDocument) {
     : {};
 }
 
+/** A range end must not split a surrogate pair or a CRLF. */
+function boundary(text: string, end: number): number {
+  if (
+    end > 0 &&
+    end < text.length &&
+    ((/[\uD800-\uDBFF]/.test(text[end - 1]!) && /[\uDC00-\uDFFF]/.test(text[end]!)) ||
+      (text[end - 1] === "\r" && text[end] === "\n"))
+  )
+    return end - 1;
+  return end;
+}
+
 type PageOptions = {
   view?: "body" | "raw";
-  range?: ReaderRange;
+  range?: { unit: "utf16"; start: number; end: number };
   expectedEtag?: string;
   capture?: boolean;
   /** Pure CLI reads use retained documents for derived state, with live material observations. */

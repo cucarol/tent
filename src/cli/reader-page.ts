@@ -1,40 +1,6 @@
 import * as z from "zod/v4";
 import { canonicalSha256 } from "../core/base/canonical-digest.js";
-import { ReaderError } from "../core/graph/context-reader.js";
-import { incompleteNodeReadEtag } from "../core/base/node-read-basis.js";
-
-const nodeReadContainers = new Set([
-  "node",
-  "items",
-  "readBack",
-  "record",
-  "page",
-  "next",
-  "read",
-  "metadataRead",
-  "match",
-  "from",
-  "target",
-]);
-
-/** Restrict exposed read bases without rewriting user metadata such as custom source fields. */
-export function incompleteNodeRead<T>(value: T): T {
-  if (Array.isArray(value)) return value.map(incompleteNodeRead) as T;
-  if (!value || typeof value !== "object") return value;
-  const nonNode = !("nodeId" in value) && ("roleId" in value || "cardId" in value);
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [
-      key,
-      (key === "etag" || key === "expectedEtag" || key === "currentEtag") &&
-      typeof item === "string" &&
-      !nonNode
-        ? incompleteNodeReadEtag(item)
-        : nodeReadContainers.has(key)
-          ? incompleteNodeRead(item)
-          : item,
-    ]),
-  ) as T;
-}
+import { ReaderError } from "../core/graph/reader-error.js";
 
 const bytes = 16 * 1024 - 1; // The CLI appends one terminating newline.
 class PageError extends Error {
@@ -175,9 +141,7 @@ export function pageItems<T extends { items: unknown[]; revision?: string }>(
     source: "cli",
     input: "scope" in result ? result.scope : undefined,
   });
-  const compacted = result.items.map((item) =>
-    compactItem(operation.startsWith("node.") ? incompleteNodeRead(item) : item),
-  );
+  const compacted = result.items.map((item) => compactItem(item));
   const { scope: visibleScope, ...other } = result as T & { scope?: unknown };
   const base =
     visibleScope !== undefined && !fits(visibleScope, 1024)

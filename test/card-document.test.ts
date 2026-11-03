@@ -18,7 +18,7 @@ import {
 import { createRoleContext } from "../src/core/read/role-context.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { renameNode } from "../src/core/graph/rename-ops.js";
-import { ReaderError } from "../src/core/graph/context-reader.js";
+import { ReaderError } from "../src/core/graph/reader-error.js";
 import { cliErrorText } from "../src/cli/error-text.js";
 
 async function fixture(t: TestContext) {

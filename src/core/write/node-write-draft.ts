@@ -15,7 +15,7 @@ export interface NodeDraftStore {
   publish(remaining: NodeWriteBatchInput): Promise<void>;
   rollback(): Promise<void>;
 }
-type DraftCreate = Extract<NodeWriteBatchInput["items"][number], { op: "create" }>;
+type DraftCreate = NodeWriteBatchInput["items"][number];
 
 /** Rewrite recognized input addresses only; labels and arbitrary prose keep their bytes. */
 function replaceReferences(items: DraftCreate[], ids: ReadonlyMap<string, string>) {
@@ -58,9 +58,7 @@ export function writeNodesDraft(
 ): Promise<NodeWriteBatchResult> {
   return withNodeBatchMutation(env, async () => {
     const parsed = nodeWriteBatchInputSchema.parse(supplied);
-    if (parsed.items.some((item) => item.op !== "create"))
-      throw new Error("Draft mode accepts create entries only.");
-    const items = parsed.items as DraftCreate[];
+    const items = parsed.items;
     const catalog = await loadNodeCatalog(env.fs);
     const refs = new Map<string, DraftCreate>();
     const reserved = new Set([...catalog.byPath.values()].map((node) => node.nodeId));
