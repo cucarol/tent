@@ -1,8 +1,9 @@
 name: CI
 
+# Run by hand before main is pushed: gh workflow run ci.yml --ref <branch>
 on:
-  push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
