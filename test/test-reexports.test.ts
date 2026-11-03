@@ -154,12 +154,12 @@ test("module testedBy credits the unique definition and ancestors while retainin
         },
       ],
     });
-    assert.deepEqual(result.modules.find((m) => m.id === "root")!.testedBy, ["tests/x.test.ts"]);
+    assert.deepEqual(result.partFacts.find((m) => m.id === "root")!.testedBy, ["tests/x.test.ts"]);
     assert.deepEqual(
-      result.modules.find((m) => m.id === "a")!.testedBy,
+      result.partFacts.find((m) => m.id === "a")!.testedBy,
       typeOnly ? [] : ["tests/x.test.ts"],
     );
-    assert.deepEqual(result.modules.find((m) => m.id === "b")!.testedBy, []);
+    assert.deepEqual(result.partFacts.find((m) => m.id === "b")!.testedBy, []);
   }
 });
 

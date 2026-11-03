@@ -24,12 +24,13 @@ function denseSummary(): WorkspaceDraftSummary {
     name: `模块-${i}`,
     files: [`src/模块-${i}/main.ts`],
     productionFiles: 8,
+    textFiles: 8,
     ...(i ? { parent: "m0" } : {}),
     testedBy,
     coChanges: Array.from({ length: 80 }, (_, j) => ({
-      moduleId: `m${j}`,
+      partId: `m${j}`,
       sharedCommits: 50,
-      moduleCommits: 50,
+      partCommits: 50,
       ratio: 1,
     })),
   }));
@@ -39,7 +40,7 @@ function denseSummary(): WorkspaceDraftSummary {
     changedFiles: 1,
   }));
   return {
-    modules,
+    parts: modules,
     guidanceFiles: Array.from({ length: 30 }, (_, i) => `src/模块-${i}/AGENTS.md`),
     warnings: Array.from({ length: 25 }, (_, i) => `Boundary ${i} needs review`),
     issues: Array.from({ length: 90 }, (_, i) => ({
@@ -105,7 +106,7 @@ test("dense evidence receipts count every item and locate all omitted evidence w
     assert.match(stdout, /batch\.report\.json/);
   }
   const receipt = JSON.parse(formatWorkspaceDraft(summary, locations, true));
-  assert.equal(receipt.counts.modules, 120);
+  assert.equal(receipt.counts.parts, 120);
   assert.equal(receipt.counts.historyCommits, 200);
   assert.equal(receipt.counts.testedBy, 30000);
   assert.equal(receipt.counts.coChanges, 9600);
@@ -124,7 +125,7 @@ test("dense evidence receipts count every item and locate all omitted evidence w
     "unassignedImports",
     "warnings",
     "importIssues",
-    "modules",
+    "parts",
   ] as const) {
     assert.equal(
       receipt.omitted[key].count + (receipt.examples[key]?.length ?? 0),
@@ -134,13 +135,13 @@ test("dense evidence receipts count every item and locate all omitted evidence w
       receipt.omitted[key].at,
       key === "guidanceFiles" || key === "warnings"
         ? `snapshot header: ${key}`
-        : key === "modules"
-          ? 'ref lines (search "ref":"@<ref>"): module'
+        : key === "parts"
+          ? 'ref lines (search "ref":"@<ref>"): part'
           : `ref/finding lines: ${key}`,
     );
   }
-  assert.deepEqual(receipt.omitted.testedBy, { count: 30000, at: "ref lines: module.testedBy" });
-  assert.deepEqual(receipt.omitted.coChanges, { count: 9600, at: "ref lines: module.coChanges" });
+  assert.deepEqual(receipt.omitted.testedBy, { count: 30000, at: "ref lines: part.testedBy" });
+  assert.deepEqual(receipt.omitted.coChanges, { count: 9600, at: "ref lines: part.coChanges" });
   assert.deepEqual(receipt.omitted.history, { count: 200, at: "ref/history lines: history" });
   assert.equal(JSON.stringify(summary), before, "receipt cannot trim the authoritative evidence");
 });
@@ -211,8 +212,8 @@ test("publication preserves the exact editable batch and all dense report eviden
   assert.equal(draft, files.draft);
   assert.equal(report, files.report);
   assert.equal(snapshot, true);
-  assert.equal(counts.modules, summary.modules.length);
-  assert.equal(header.modules, undefined);
+  assert.equal(counts.parts, summary.parts.length);
+  assert.equal(header.parts, undefined);
   assert.equal(header.history, undefined);
   assert.deepEqual(header.imports, { scannedFiles: summary.imports.scannedFiles });
   assert.ok((await fs.stat(files.report)).size > 1000000);
@@ -220,7 +221,7 @@ test("publication preserves the exact editable batch and all dense report eviden
 
 test("one exact ref search yields its complete module evidence; all original arrays can be reconstructed", () => {
   const base = denseSummary();
-  const modules = base.modules.slice(0, 2).map((module, i) => ({
+  const modules = base.parts.slice(0, 2).map((module, i) => ({
     ...module,
     ref: i ? "other" : "core",
     path: `Renamed suggested Node ${i}`,
@@ -245,7 +246,7 @@ test("one exact ref search yields its complete module evidence; all original arr
   const packageEdge = { ...edge, to: "code/1", kind: "directory" as const };
   const summary: WorkspaceDraftSummary = {
     ...base,
-    modules,
+    parts: modules,
     history: [
       { ...base.history[0]!, files: modules.map((module) => module.files[0]!) },
       { ...base.history[0]!, files: ["deleted/old.ts"] },
@@ -287,9 +288,9 @@ test("one exact ref search yields its complete module evidence; all original arr
   assert.equal(matches.length, 1);
   assert.ok(matches[0]!.startsWith('{"ref":"@core",'));
   const row = JSON.parse(matches[0]!);
-  assert.deepEqual(row.module, modules[0]);
-  assert.deepEqual(row.module.testedBy, modules[0]!.testedBy);
-  assert.deepEqual(row.module.coChanges, modules[0]!.coChanges);
+  assert.deepEqual(row.part, modules[0]);
+  assert.deepEqual(row.part.testedBy, modules[0]!.testedBy);
+  assert.deepEqual(row.part.coChanges, modules[0]!.coChanges);
   assert.deepEqual(
     row.history.map((entry: { index: number }) => entry.index),
     [0, 2],

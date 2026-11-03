@@ -79,7 +79,7 @@ test("non-load imports cannot merge directories, attract flat members or attach 
   for (const execution of ["deferred", "type-only", "compile-time"] as const) {
     const cross = [edge("a/one.ts", "b/two.ts"), edge("b/two.ts", "a/one.ts")];
     const directories = ["a/one.ts", "b/two.ts"];
-    assert.equal(check(scan(directories, cross)).check.modules.length, 1);
+    assert.equal(check(scan(directories, cross)).check.partFacts.length, 1);
     const classified = cross.map((edge) => ({ ...edge, execution }));
     assert.deepEqual(
       draftWorkspaceModules(scan(directories, classified)).batch,
@@ -135,7 +135,7 @@ test("parsed Python guards and function imports do not form a draft or checked l
         .every((edge) => edge.execution === context),
     );
     const { check: drafted } = check(scan(files, facts.imports.edges));
-    assert.equal(drafted.modules.length, context === "module-load" ? 1 : 2);
+    assert.equal(drafted.partFacts.length, context === "module-load" ? 1 : 2);
     const report = checkModuleMap({
       trackedFiles: files,
       imports: facts.imports.edges,
@@ -169,18 +169,18 @@ test("draft separates tests and generated code, preserves root evidence and stab
   const input = scan(files, edges),
     { draft, check: report } = check(input);
   assert.equal(report.issues.length, 0);
-  assert.deepEqual(report.modules.find((module) => module.name === "Tests")?.files, [
+  assert.deepEqual(report.partFacts.find((module) => module.name === "Tests")?.files, [
     "tests/item.test.ts",
   ]);
   assert.ok(
-    report.modules.some((module) => module.generatedFiles === 1 && module.productionFiles === 0),
+    report.partFacts.some((module) => module.generatedFiles === 1 && module.productionFiles === 0),
   );
   assert.ok(
-    report.modules
+    report.partFacts
       .find((module) => module.files.includes("index.ts"))!
       .files.includes("src/domain/item.ts"),
   );
-  assert.deepEqual(report.modules.find((module) => module.files.includes("lonely.ts"))!.files, [
+  assert.deepEqual(report.partFacts.find((module) => module.files.includes("lonely.ts"))!.files, [
     "lonely.ts",
   ]);
   assert.match(draft.warnings.join("\n"), /no unique import owner.*lonely.ts/);
@@ -206,8 +206,8 @@ test("draft groups a flat directory by imports, keeps the actual cycle and creat
     edge("lib/c-0.ts", "lib/a-0.ts"),
   ];
   const { draft, check: report } = check(scan(files, edges));
-  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
-  const cycle = report.modules.find((module) => module.files.includes("lib/a-0.ts"))!;
+  assert.ok(report.partFacts.every((module) => module.productionFiles <= 10));
+  const cycle = report.partFacts.find((module) => module.files.includes("lib/a-0.ts"))!;
   assert.ok(cycle.files.includes("lib/b-0.ts"));
   assert.ok(cycle.files.includes("lib/c-0.ts"));
   assert.ok(draft.batch.items.some((item) => item.op === "create" && item.parent));
@@ -237,7 +237,7 @@ test("flat imports separate a shared shell and each entry before filename fallba
   files.push("pages/amber-private.js");
   edges.push(edge("pages/blue.js", "pages/amber-private.js"));
   const { draft, check: report } = check(scan(files, edges));
-  const owning = (file: string) => report.modules.find((module) => module.files.includes(file))!;
+  const owning = (file: string) => report.partFacts.find((module) => module.files.includes(file))!;
   assert.deepEqual(owning("pages/shared-core.js").files, [
     "pages/shared-adapter.js",
     "pages/shared-core.js",
@@ -261,10 +261,10 @@ test("a single importing entry keeps its ordinary dependency chain out of Shared
   const files = ["lib/entry.js", ...Array.from({ length: 14 }, (_, i) => `lib/helper${i}.js`)];
   const edges = files.slice(0, -1).map((file, i) => edge(file, files[i + 1]!));
   const { check: report } = check(scan(files, edges));
-  assert.ok(!report.modules.some((module) => module.name.startsWith("Shared dependencies")));
-  assert.equal(report.modules.filter((module) => module.productionFiles).length, 2);
-  assert.deepEqual(report.modules.flatMap((module) => module.files).sort(), files.sort());
-  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.ok(!report.partFacts.some((module) => module.name.startsWith("Shared dependencies")));
+  assert.equal(report.partFacts.filter((module) => module.productionFiles).length, 2);
+  assert.deepEqual(report.partFacts.flatMap((module) => module.files).sort(), files.sort());
+  assert.ok(report.partFacts.every((module) => module.productionFiles <= 10));
 });
 
 test("flat filename fallback joins a base stem with its prefixed helpers without size packing", () => {
@@ -275,16 +275,16 @@ test("flat filename fallback joins a base stem with its prefixed helpers without
     ...Array.from({ length: 11 }, (_, i) => `lib/independent${i}.js`),
   ];
   const { check: report } = check(scan(files));
-  const roulette = report.modules.find((module) => module.files.includes("lib/roulette.js"))!;
+  const roulette = report.partFacts.find((module) => module.files.includes("lib/roulette.js"))!;
   assert.equal(roulette.name, "roulette");
   assert.deepEqual(roulette.files, [
     "lib/roulette-hud.js",
     "lib/roulette.js",
     "lib/roulette_state.js",
   ]);
-  assert.equal(report.modules.filter((module) => module.productionFiles).length, 12);
+  assert.equal(report.partFacts.filter((module) => module.productionFiles).length, 12);
   assert.ok(
-    report.modules
+    report.partFacts
       .filter((module) => module !== roulette)
       .every((module) => module.productionFiles <= 1),
   );
@@ -310,10 +310,11 @@ test("half of the importing entries and repeated imports do not make a shared de
     edge("lib/two.js", "lib/pair.js"),
   );
   const { check: report } = check(scan(files, edges));
-  assert.deepEqual(report.modules.find((module) => module.name === "Shared dependencies")!.files, [
-    "lib/common.js",
-  ]);
-  const pair = report.modules.find((module) => module.files.includes("lib/pair.js"))!;
+  assert.deepEqual(
+    report.partFacts.find((module) => module.name === "Shared dependencies")!.files,
+    ["lib/common.js"],
+  );
+  const pair = report.partFacts.find((module) => module.files.includes("lib/pair.js"))!;
   assert.equal(pair.name, "one and two");
   assert.equal(pair.productionFiles, 7);
 });
@@ -325,9 +326,9 @@ test("entry names do not collide with a real sibling directory", () => {
     ...Array.from({ length: 11 }, (_, i) => `lib/other${i}.js`),
   ];
   const { check: report } = check(scan(files));
-  assert.deepEqual(report.modules.flatMap((module) => module.files).sort(), files.sort());
-  assert.ok(report.modules.find((module) => module.files.includes("lib/page.js")));
-  assert.ok(report.modules.find((module) => module.files.includes("lib/page/view.js")));
+  assert.deepEqual(report.partFacts.flatMap((module) => module.files).sort(), files.sort());
+  assert.ok(report.partFacts.find((module) => module.files.includes("lib/page.js")));
+  assert.ok(report.partFacts.find((module) => module.files.includes("lib/page/view.js")));
 });
 
 test("draft splits a large dense import cycle without losing files or suppressing cross-part facts", () => {
@@ -340,14 +341,14 @@ test("draft splits a large dense import cycle without losing files or suppressin
   const input = scan(files, edges);
   const { draft, check: report } = check(input);
   assert.equal(
-    report.modules.reduce((sum, module) => sum + module.productionFiles, 0),
+    report.partFacts.reduce((sum, module) => sum + module.productionFiles, 0),
     53,
   );
-  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
-  assert.equal(report.modules.filter((module) => module.productionFiles > 0).length, 6);
-  assert.deepEqual(report.modules.flatMap((module) => module.files).sort(), [...files].sort());
+  assert.ok(report.partFacts.every((module) => module.productionFiles <= 10));
+  assert.equal(report.partFacts.filter((module) => module.productionFiles > 0).length, 6);
+  assert.deepEqual(report.partFacts.flatMap((module) => module.files).sort(), [...files].sort());
   assert.ok(
-    report.modules.find((module) => module.files.includes(files[0]!))!.files.includes(files[53]!),
+    report.partFacts.find((module) => module.files.includes(files[0]!))!.files.includes(files[53]!),
   );
   assert.ok(report.issues.some((issue) => issue.code === "deps.cycle"));
   assert.ok(!report.issues.some((issue) => issue.code === "map.uncovered"));
@@ -367,10 +368,10 @@ test("cross-directory cycles cannot reassemble small leaves beyond the draft tar
   );
   const { draft, check: report } = check(scan(files, edges));
   assert.equal(
-    report.modules.reduce((sum, module) => sum + module.productionFiles, 0),
+    report.partFacts.reduce((sum, module) => sum + module.productionFiles, 0),
     24,
   );
-  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.ok(report.partFacts.every((module) => module.productionFiles <= 10));
   assert.equal(draft.nodes.filter((node) => node.parentId).length, 3);
   assert.ok(report.issues.some((issue) => issue.code === "deps.cycle"));
 });
@@ -410,8 +411,8 @@ test("draft keeps directory layers and nearby tests while bounding a flat Python
     scan(files, [edge("src/package/alpha.py", "src/package/uniform.py")]),
   );
   assert.deepEqual(report.issues, []);
-  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
-  const alpha = report.modules.find((module) => module.files.includes("src/package/alpha.py"))!;
+  assert.ok(report.partFacts.every((module) => module.productionFiles <= 10));
+  const alpha = report.partFacts.find((module) => module.files.includes("src/package/alpha.py"))!;
   assert.ok(
     alpha.files.includes("src/package/uniform.py"),
     "import affinity outranks alphabetical order",
@@ -432,10 +433,10 @@ test("draft splits a genuine large cycle to meet its size target", () => {
   const files = Array.from({ length: 15 }, (_, i) => `lib/file${i}.ts`);
   const edges = files.map((file, i) => edge(file, files[(i + 1) % files.length]!));
   const { draft, check: report } = check(scan(files, edges));
-  assert.equal(report.modules.length, 3);
-  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.equal(report.partFacts.length, 3);
+  assert.ok(report.partFacts.every((module) => module.productionFiles <= 10));
   assert.equal(
-    report.modules.reduce((sum, module) => sum + module.productionFiles, 0),
+    report.partFacts.reduce((sum, module) => sum + module.productionFiles, 0),
     15,
   );
   assert.deepEqual(draft.warnings, []);
@@ -450,7 +451,7 @@ test("many root entries cannot grow a unique imported leaf beyond the draft size
     ),
   );
   assert.deepEqual(report.issues, []);
-  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.ok(report.partFacts.every((module) => module.productionFiles <= 10));
   assert.match(draft.warnings.join("\n"), /import owner at draft size target/);
 });
 
@@ -464,7 +465,7 @@ test("draft groups cross-directory cycles at their common parent and keeps all o
     scan(files, [edge(files[0]!, files[1]!), edge(files[1]!, files[0]!)]),
   );
   assert.deepEqual(report.issues, []);
-  const cycle = report.modules.find((module) => module.files.includes(files[0]!))!;
+  const cycle = report.partFacts.find((module) => module.files.includes(files[0]!))!;
   assert.ok(cycle.files.includes(files[1]!));
   assert.ok(draft.nodes.find((node) => node.id === cycle.id)!.parentId);
 });
@@ -477,7 +478,7 @@ test("draft preserves generated siblings without attaching them to a different f
     ...Array.from({ length: 20 }, (_, i) => `lib/file${i}.ts`),
   ];
   const { check: report } = check(scan(files));
-  const api = report.modules.find((module) => module.files.includes("lib/api.ts"))!;
+  const api = report.partFacts.find((module) => module.files.includes("lib/api.ts"))!;
   assert.ok(api.files.includes("lib/api.pb.ts"));
   assert.ok(api.files.includes("lib/api_pb.ts"));
   assert.deepEqual(report.issues, []);
@@ -500,12 +501,12 @@ test("draft splits large Go packages by filename while imports keep the package 
   const { check: report } = check(input);
   assert.equal(report.unassignedImports.length, 0);
   assert.ok(
-    report.modules.some(
+    report.partFacts.some(
       (module) => module.files.includes("main.go") && module.files.includes("options.go"),
     ),
   );
-  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
-  assert.equal(report.modules.find((module) => module.name === "store")!.productionFiles, 0);
+  assert.ok(report.partFacts.every((module) => module.productionFiles <= 10));
+  assert.equal(report.partFacts.find((module) => module.name === "store")!.productionFiles, 0);
 });
 
 test("draft splits a large root Go package and Java package without manufacturing a package cycle", () => {
@@ -521,7 +522,7 @@ test("draft splits a large root Go package and Java package without manufacturin
   const { draft, check: report } = check(scan(files, [edge("cmd/main.go", ".", "directory")]));
   assert.deepEqual(report.unassignedImports, []);
   assert.deepEqual(report.issues, []);
-  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.ok(report.partFacts.every((module) => module.productionFiles <= 10));
   assert.ok(draft.nodes.some((node) => node.name === "Root Go package" && !node.parentId));
 });
 
@@ -531,9 +532,9 @@ test("draft uses valid top-level names and percent-encodes literal material path
   );
   assert.equal(report.issues.length, 0);
   const text = JSON.stringify(draft.batch);
-  assert.match(text, /Module con.ts/);
-  assert.match(text, /Module cards/);
-  assert.match(text, /Module roles/);
+  assert.match(text, /Part con.ts/);
+  assert.match(text, /Part cards/);
+  assert.match(text, /Part roles/);
   assert.match(text, /data%20space/);
   assert.ok(!text.includes('"resource":"src/'));
 });
@@ -662,18 +663,18 @@ test("scan --draft writes an exact editable batch and full report; create --draf
   assert.equal(tree.byPath.size, batch.items.length);
   assert.ok([...tree.byPath.keys()].every((nodePath) => !nodePath.includes("/")));
   assert.ok(tree.byPath.has("Renamed code"));
-  assert.ok(tree.byPath.has("Setup"));
+  assert.ok(tree.byPath.has("Root files"));
   assert.ok(tree.byPath.has("Tests"));
   const actual = await checkWorkspaceModules(adapter, root, await readModuleMapRepository(root));
   assert.deepEqual(actual.inspectionErrors, []);
   assert.deepEqual(actual.issues, summary.issues);
-  assert.equal(actual.modules.length, summary.modules.length);
+  assert.equal(actual.partFacts.length, summary.parts.length);
   const mapped = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
   assert.equal(mapped.exitCode, 0, mapped.stderr);
   const part = JSON.parse(mapped.stdout).parts.find(
-    (item: { name: string }) => item.name === "Setup",
+    (item: { name: string }) => item.name === "Root files",
   );
-  assert.equal(part.path, ".tent/Setup");
+  assert.equal(part.path, ".tent/Root files");
   assert.equal(part.files, 2);
 
   const again = await runWorkspaceCommand("scan", ["--draft", ".scratch/again.json"], {
@@ -712,17 +713,15 @@ test("history changes preflight findings, never the draft or native Node state",
   );
   assert.match(
     receipt.examples.issues[0].fix,
-    /Keep both modules when their responsibilities differ/,
+    /Keep both parts when their responsibilities differ/,
   );
   assert.equal(empty.summary.issues.length, 0);
-  const a = history.summary.modules.find((module) => module.name === "a")!;
-  const b = history.summary.modules.find((module) => module.name === "b")!;
+  const a = history.summary.parts.find((module) => module.name === "a")!;
+  const b = history.summary.parts.find((module) => module.name === "b")!;
   assert.deepEqual(a.testedBy, ["tests/one.test.ts"]);
-  assert.deepEqual(a.coChanges, [
-    { moduleId: b.ref, sharedCommits: 5, moduleCommits: 5, ratio: 1 },
-  ]);
+  assert.deepEqual(a.coChanges, [{ partId: b.ref, sharedCommits: 5, partCommits: 5, ratio: 1 }]);
   assert.equal(receipt.counts.testedBy, 1);
-  assert.equal(receipt.omitted.testedBy.at, "ref lines: module.testedBy");
+  assert.equal(receipt.omitted.testedBy.at, "ref lines: part.testedBy");
   assert.equal(receipt.counts.coChanges, 2);
   assert.deepEqual(history.summary.history, commits);
   assert.ok(history.batch.items.every((item) => item.op === "create" && item.body === ""));
@@ -747,7 +746,7 @@ test("hierarchical draft writes once after renaming a parent and preserves child
   const summary = readWorkspaceDraftReport(
     await fs.readFile(path.join(root, ".scratch/layers.report.json"), "utf8"),
   );
-  assert.ok(summary.modules.some((module: { parent?: string }) => module.parent));
+  assert.ok(summary.parts.some((module: { parent?: string }) => module.parent));
   const batch = nodeWriteBatchInputSchema.parse(
     JSON.parse(await fs.readFile(path.join(root, ".scratch/layers.json"), "utf8")),
   );
@@ -761,11 +760,11 @@ test("hierarchical draft writes once after renaming a parent and preserves child
   assert.deepEqual(actual.issues, []);
   assert.deepEqual(actual.inspectionErrors, []);
   assert.equal(
-    actual.modules.reduce((sum, module) => sum + module.productionFiles, 0),
+    actual.partFacts.reduce((sum, module) => sum + module.productionFiles, 0),
     49,
   );
-  assert.ok(actual.modules.every((module) => module.productionFiles <= 10));
-  assert.ok(actual.modules.some((module) => module.path.startsWith("Library product/library/")));
+  assert.ok(actual.partFacts.every((module) => module.productionFiles <= 10));
+  assert.ok(actual.partFacts.some((module) => module.path.startsWith("Library product/library/")));
 });
 
 test("a size-split cycle stays small when the declaring part records its linked exception", async (t) => {
@@ -794,7 +793,7 @@ test("a size-split cycle stays small when the declaring part records its linked 
   const cycle = summary.issues.find((issue: { code: string }) => issue.code === "deps.cycle");
   assert.ok(cycle);
   assert.ok(
-    summary.modules.every((module: { productionFiles: number }) => module.productionFiles <= 10),
+    summary.parts.every((module: { productionFiles: number }) => module.productionFiles <= 10),
   );
   const batch = nodeWriteBatchInputSchema.parse(
     JSON.parse(await fs.readFile(path.join(root, ".scratch/cycle.json"), "utf8")),
@@ -809,10 +808,10 @@ test("a size-split cycle stays small when the declaring part records its linked 
   const report = await checkWorkspaceModules(adapter, root, await readModuleMapRepository(root));
   assert.deepEqual(report.issues, []);
   assert.equal(
-    report.modules.reduce((sum, module) => sum + module.productionFiles, 0),
+    report.partFacts.reduce((sum, module) => sum + module.productionFiles, 0),
     12,
   );
-  assert.ok(report.modules.every((module) => module.productionFiles <= 10));
+  assert.ok(report.partFacts.every((module) => module.productionFiles <= 10));
 });
 
 test("draft and live scan derive current Python and script test imports", async (t) => {
@@ -831,11 +830,11 @@ test("draft and live scan derive current Python and script test imports", async 
     await fs.readFile(path.join(root, ".scratch/tests.report.json"), "utf8"),
   );
   assert.deepEqual(
-    summary.modules.find((module: { name: string }) => module.name === "pkg")!.testedBy,
+    summary.parts.find((module: { name: string }) => module.name === "pkg")!.testedBy,
     ["tests/test_alpha.py"],
   );
   assert.deepEqual(
-    summary.modules.find((module: { name: string }) => module.name === "lib")!.testedBy,
+    summary.parts.find((module: { name: string }) => module.name === "lib")!.testedBy,
     ["tests/helper.test.ts"],
   );
   const written = await saveDraft(root, ".scratch/tests.json");
@@ -848,17 +847,17 @@ test("draft and live scan derive current Python and script test imports", async 
   };
   const first = await query();
   assert.deepEqual(
-    first.modules.find((module: { name: string }) => module.name === "pkg").testedBy,
+    first.partFacts.find((module: { name: string }) => module.name === "pkg").testedBy,
     ["tests/test_alpha.py"],
   );
   await write("tests/test_alpha.py", "from other.beta import beta\n");
   const changed = await query();
   assert.deepEqual(
-    changed.modules.find((module: { name: string }) => module.name === "pkg").testedBy,
+    changed.partFacts.find((module: { name: string }) => module.name === "pkg").testedBy,
     [],
   );
   assert.deepEqual(
-    changed.modules.find((module: { name: string }) => module.name === "other").testedBy,
+    changed.partFacts.find((module: { name: string }) => module.name === "other").testedBy,
     ["tests/test_alpha.py"],
   );
   assert.deepEqual(await snapshot(path.join(root, ".tent")), before);

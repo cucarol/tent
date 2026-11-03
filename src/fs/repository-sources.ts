@@ -1,6 +1,7 @@
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, open, readFile } from "node:fs/promises";
 import path from "node:path";
 import { isProductManifest } from "../core/base/repository-products.js";
+import { isBinaryAsset } from "../core/base/source-kind.js";
 import {
   isImportConfig,
   isImportSource,
@@ -12,7 +13,11 @@ import {
 export async function readRepositorySources(
   root: string,
   trackedFiles: readonly string[],
-  options: { includeTests?: boolean; includeProductManifests?: boolean } = {},
+  options: {
+    includeTests?: boolean;
+    includeProductManifests?: boolean;
+    classifyText?: boolean;
+  } = {},
 ) {
   const files: RepositorySource[] = [...new Set(trackedFiles)].sort().map((path) => ({ path }));
   const errors: Array<{ file: string; reason: string } | undefined> = new Array(files.length);
@@ -36,20 +41,34 @@ export async function readRepositorySources(
       const source = files[index];
       if (!source) return;
       const file = source.path;
-      if (!(
+      const parse =
         isImportConfig(file) ||
         (options.includeProductManifests && isProductManifest(file)) ||
-        (isImportSource(file) && (options.includeTests || !isTestSource(file)))
-      ))
-        continue;
+        (isImportSource(file) && (options.includeTests || !isTestSource(file)));
+      if (options.classifyText && isBinaryAsset(file)) {
+        source.binary = true;
+        if (!parse) continue;
+      }
+      if (!parse && !options.classifyText) continue;
       try {
         if (!(await plainDirectories(path.posix.dirname(file))))
           throw new Error("Source parent is not a plain directory");
         const info = await lstat(path.join(root, file));
         if (!info.isFile()) throw new Error("Source is not a regular file");
-        source.content = await readFile(path.join(root, file), "utf8");
+        if (parse) source.content = await readFile(path.join(root, file), "utf8");
+        else {
+          const handle = await open(path.join(root, file), "r");
+          try {
+            const buffer = Buffer.alloc(8192);
+            const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+            if (buffer.subarray(0, bytesRead).includes(0)) source.binary = true;
+          } finally {
+            await handle.close();
+          }
+        }
       } catch (error) {
-        errors[index] = { file, reason: error instanceof Error ? error.message : String(error) };
+        if (parse)
+          errors[index] = { file, reason: error instanceof Error ? error.message : String(error) };
       }
     }
   };

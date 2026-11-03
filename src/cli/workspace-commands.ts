@@ -15,7 +15,7 @@ export const workspaceHelpText = `tent workspace — the whole Workspace at once
 
 brief: where to start. Invalid Nodes and waiting Cards. Every list shows up to 10 items, then its total and the command that lists the rest. --role keeps only that Role's Cards.
 check: broken links, invalid or missing materials, missing Markdown sections, and Node files whose disk and Tent history presence differ after valid native edits are collected. Exits 1 when it finds any; JSON still goes to stdout.
-scan: drafts a module map when the Workspace has no Nodes; --draft saves it for node create --draft. Existing maps are checked for coverage and boundaries.
+scan: drafts a map of the project's parts when the Workspace has no Nodes; --draft saves it for node create --draft. With Nodes, it checks the map's coverage and boundaries.
 export: copies the context graph and its SQLite history to a new directory.
 --workspace <path> picks the Workspace.`;
 
@@ -111,7 +111,7 @@ async function runWorkspaceCommandOpened(
           roots.workspaceRoot,
           await readModuleMapRepository(roots.workspaceRoot),
         );
-        const modules = result.modules.map((node) => ({
+        const modules = result.partFacts.map((node) => ({
           nodeId: node.id,
           name: node.name,
           path: `.tent/${node.path}`,

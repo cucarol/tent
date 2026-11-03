@@ -6,11 +6,11 @@ export function workspaceDraftCounts(summary: WorkspaceDraftSummary) {
   for (const issue of summary.issues)
     issuesByCode[issue.code] = (issuesByCode[issue.code] ?? 0) + 1;
   return {
-    modules: summary.modules.length,
+    parts: summary.parts.length,
     trackedFiles: summary.trackedFiles,
     historyCommits: summary.historyCommits,
-    testedBy: summary.modules.reduce((n, module) => n + module.testedBy.length, 0),
-    coChanges: summary.modules.reduce((n, module) => n + module.coChanges.length, 0),
+    testedBy: summary.parts.reduce((n, part) => n + part.testedBy.length, 0),
+    coChanges: summary.parts.reduce((n, part) => n + part.coChanges.length, 0),
     guidanceFiles: summary.guidanceFiles.length,
     warnings: summary.warnings.length,
     issues: summary.issues.length,
@@ -29,13 +29,13 @@ type ImportEvidence = {
   issues: Indexed<WorkspaceDraftSummary["imports"]["issues"][number]>[];
 };
 
-/** Indexes retain original order and distinguish repeated facts from cross-module copies. */
+/** Indexes retain original order and distinguish repeated facts from cross-part copies. */
 export function serializeWorkspaceDraftReport(
   summary: WorkspaceDraftSummary,
   locations: { draft: string; report: string },
 ): string {
   const {
-    modules,
+    parts,
     history,
     imports,
     testImports,
@@ -47,10 +47,10 @@ export function serializeWorkspaceDraftReport(
   } = summary;
   const { edges: importEdges, issues: sourceImportIssues, ...importMetadata } = imports;
   const { edges: testEdges, issues: testImportIssues, ...testImportMetadata } = testImports;
-  const rows = modules.map((module, index) => ({
-    ref: `@${module.ref}`,
+  const rows = parts.map((part, index) => ({
+    ref: `@${part.ref}`,
     index,
-    module,
+    part,
     history: [] as Indexed<WorkspaceDraftSummary["history"][number]>[],
     imports: { edges: [], issues: [] } as ImportEvidence,
     testImports: { edges: [], issues: [] } as ImportEvidence,
@@ -68,13 +68,13 @@ export function serializeWorkspaceDraftReport(
     owners.add(index);
     map.set(comparable(key), owners);
   };
-  for (const [index, module] of modules.entries()) {
-    for (const file of module.files) {
+  for (const [index, part] of parts.entries()) {
+    for (const file of part.files) {
       add(files, file, index);
       add(directories, path.posix.dirname(file), index);
     }
   }
-  const byRef = new Map(modules.map((module, index) => [module.ref, index]));
+  const byRef = new Map(parts.map((part, index) => [part.ref, index]));
   const fileOwners = (file: string, directory = false) => [
     ...((directory ? directories : files).get(comparable(file)) ?? []),
   ];
@@ -124,7 +124,7 @@ export function serializeWorkspaceDraftReport(
     issues,
     (issue) => [
       ...refOwners(issue.object),
-      ...modules.flatMap((module, index) => (module.path === issue.object ? [index] : [])),
+      ...parts.flatMap((part, index) => (part.path === issue.object ? [index] : [])),
       ...(Array.isArray(issue.facts.nodeIds) ? issue.facts.nodeIds.flatMap(refOwners) : []),
       ...(Array.isArray(issue.facts.files)
         ? issue.facts.files.flatMap((file) => (typeof file === "string" ? fileOwners(file) : []))

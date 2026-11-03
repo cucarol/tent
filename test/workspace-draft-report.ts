@@ -23,7 +23,7 @@ export function readWorkspaceDraftReport(raw: string): WorkspaceDraftSummary {
     .map((line) => JSON.parse(line));
   const [header] = rows;
   assert.equal(Object.keys(header!)[0], "snapshot");
-  const modules = rows.filter((row) => Object.keys(row)[0] === "ref");
+  const parts = rows.filter((row) => Object.keys(row)[0] === "ref");
   const collect = <T>(key: string, group?: "imports" | "testImports"): T[] => {
     const entries: Entry[] = [];
     for (const row of rows.slice(1)) {
@@ -58,9 +58,9 @@ export function readWorkspaceDraftReport(raw: string): WorkspaceDraftSummary {
   assert.ok(counts);
   return {
     ...global,
-    modules: modules
+    parts: parts
       .sort((a, b) => (a.index as number) - (b.index as number))
-      .map((row) => row.module as WorkspaceDraftSummary["modules"][number]),
+      .map((row) => row.part as WorkspaceDraftSummary["parts"][number]),
     history: collect("history"),
     imports: {
       ...imports,

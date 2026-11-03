@@ -40,7 +40,7 @@ const history = (shared = 5, unrelated = 5) => [
   ...Array.from({ length: unrelated }, (_, i) => commit(`other-${i}`, ["other/file.ts"])),
 ];
 const facts = (result: ReturnType<typeof checkModuleMap>, id: string) =>
-  result.modules.find((module) => module.id === id)!;
+  result.partFacts.find((module) => module.id === id)!;
 
 test("module facts expose empty live evidence without copying Node bodies", () => {
   const result = checkModuleMap(input({ nodes: [node("a", { body: "a rule with provenance" })] }));
@@ -50,6 +50,7 @@ test("module facts expose empty live evidence without copying Node bodies", () =
     name: "a",
     files: ["a/file.ts"],
     productionFiles: 1,
+    textFiles: 1,
     generatedFiles: 0,
     testedBy: [],
     coChanges: [],
@@ -231,10 +232,10 @@ test("coChanges retains eligible facts through issue exceptions and reports each
   assert.equal(result.historyCommits, 13);
   assert.deepEqual(result.issues, []);
   assert.deepEqual(facts(result, "a").coChanges, [
-    { moduleId: "b", sharedCommits: 5, moduleCommits: 6, ratio: 5 / 6 },
+    { partId: "b", sharedCommits: 5, partCommits: 6, ratio: 5 / 6 },
   ]);
   assert.deepEqual(facts(result, "b").coChanges, [
-    { moduleId: "a", sharedCommits: 5, moduleCommits: 5, ratio: 1 },
+    { partId: "a", sharedCommits: 5, partCommits: 5, ratio: 1 },
   ]);
 });
 
@@ -267,7 +268,7 @@ test("generated pair facts remain available when their generated-apart issue is 
   );
   assert.deepEqual(result.issues, []);
   assert.deepEqual(facts(result, "a").coChanges, [
-    { moduleId: "b", sharedCommits: 5, moduleCommits: 5, ratio: 1 },
+    { partId: "b", sharedCommits: 5, partCommits: 5, ratio: 1 },
   ]);
 });
 
@@ -292,7 +293,7 @@ test("ancestor and descendant history is internal, and repeated files cannot for
     }),
   );
   assert.deepEqual(result.issues, []);
-  for (const module of result.modules) assert.deepEqual(module.coChanges, []);
+  for (const module of result.partFacts) assert.deepEqual(module.coChanges, []);
 });
 
 test("test and cochange facts stay deterministic under reordered and repeated inputs", () => {
@@ -307,7 +308,7 @@ test("test and cochange facts stay deterministic under reordered and repeated in
   });
   const result = checkModuleMap(source);
   assert.deepEqual(
-    facts(result, "a").coChanges.map(({ moduleId }) => moduleId),
+    facts(result, "a").coChanges.map(({ partId }) => partId),
     ["c", "b"],
   );
   assert.deepEqual(

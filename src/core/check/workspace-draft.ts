@@ -13,6 +13,7 @@ import { loadTent } from "../store/tree.js";
 import { validateNodeName } from "../store/scaffold.js";
 import type { NodeWriteBatchInput } from "../write/node-write-batch.js";
 import type { WorkspaceScanResult } from "./workspace-scan.js";
+import { draftTextDirectories, draftTextFileGroups } from "./workspace-draft-text.js";
 import { dependencyCycles } from "../base/dependency-cycles.js";
 import {
   draftDirectoryUnits,
@@ -53,7 +54,7 @@ function condense(units: Unit[], files: string[], imports: readonly RepositoryIm
     nodes: projection(units),
   });
   const owner = new Map(
-    facts.modules.flatMap((unit) => unit.files.map((file) => [file, unit.id] as const)),
+    facts.partFacts.flatMap((unit) => unit.files.map((file) => [file, unit.id] as const)),
   );
   const packages = new Map<string, Set<string>>();
   for (const [file, id] of owner)
@@ -72,10 +73,7 @@ function condense(units: Unit[], files: string[], imports: readonly RepositoryIm
     if (from) for (const to of targets) if (to && to !== from) edges.get(from)!.add(to);
   }
   const counts = new Map(
-    facts.modules.map((unit) => [
-      unit.id,
-      unit.files.filter((file) => isCodeSource(file) && !isTestSource(file)).length,
-    ]),
+    facts.partFacts.map((unit) => [unit.id, unit.files.filter(isModuleProductionSource).length]),
   );
   const cycles = dependencyCycles(edges).filter(
     (cycle) => cycle.reduce((count, key) => count + (counts.get(key) ?? 0), 0) <= DRAFT_CODE_FILES,
@@ -121,11 +119,14 @@ function condense(units: Unit[], files: string[], imports: readonly RepositoryIm
     .sort((a, b) => comparePaths(a.key, b.key));
 }
 
-/** Suggestions depend only on scan facts. History participates only in the later preflight. */
-export function draftWorkspaceModules(scan: WorkspaceScanResult) {
+/** Directory and filename evidence comes first; text groups can also follow shared history. */
+export function draftWorkspaceModules(
+  scan: WorkspaceScanResult,
+  commits: readonly ModuleMapCommit[] = [],
+) {
   if (scan.coverage.coveredFiles)
     throw new Error(
-      "Existing coverage: maintain the current module map instead of bootstrapping another one",
+      "Existing coverage: maintain the current part map instead of bootstrapping another one",
     );
   const files = ordered(scan.coverage.uncoveredFiles);
   const imports = scan.imports.edges.filter((edge) => edge.execution === "module-load");
@@ -152,43 +153,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
     }
     const code = members.filter(isCodeSource);
     if (!code.length) {
-      const directories = products.filter(
-        (item) =>
-          item.kind === "directory" && (item.path === top || item.path.startsWith(top + "/")),
-      );
-      // Start once at each outer boundary; recursion retains every explicit descendant.
-      for (const item of directories.filter(
-        (item) => !directories.some((parent) => item.path.startsWith(parent.path + "/")),
-      ))
-        units.push(
-          ...draftDirectoryUnits(
-            item.path,
-            members.filter((file) => file.startsWith(item.path + "/")),
-            imports,
-            undefined,
-            productDirectories,
-          ),
-        );
-      // Keep ordinary siblings in Setup without overlapping a selected product directory.
-      const collect = (dir: string, below: string[]) => {
-        if (directories.some((item) => item.path === dir)) return;
-        if (!directories.some((item) => item.path.startsWith(dir + "/"))) {
-          ordinary.push(material(dir + "/"));
-          return;
-        }
-        for (const file of below.filter((file) => directory(file) === dir))
-          ordinary.push({ path: file, kind: "file" });
-        for (const child of ordered(
-          below
-            .filter((file) => directory(file) !== dir)
-            .map((file) => dir + "/" + file.slice(dir.length + 1).split("/")[0]),
-        ))
-          collect(
-            child,
-            below.filter((file) => file.startsWith(child + "/")),
-          );
-      };
-      collect(top, members);
+      if (members.every(isTestSource)) tests.push(material(top + "/"));
       continue;
     }
     if (
@@ -240,7 +205,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
       nodes: projection(units),
     });
     const owner = new Map(
-      facts.modules.flatMap((unit) => unit.files.map((f) => [f, unit.id] as const)),
+      facts.partFacts.flatMap((unit) => unit.files.map((f) => [f, unit.id] as const)),
     );
     const scores = new Map<string, number>();
     for (const edge of imports) {
@@ -256,9 +221,9 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
     const ranked = [...scores].sort((a, b) => b[1] - a[1] || comparePaths(a[0], b[0]));
     const unique = ranked.length && ranked[0][1] > (ranked[1]?.[1] ?? 0);
     const ownerFiles = unique
-      ? facts.modules
+      ? facts.partFacts
           .find((unit) => unit.id === ranked[0][0])!
-          .files.filter((file) => isCodeSource(file) && !isTestSource(file)).length
+          .files.filter((file) => scan.textFiles.includes(file)).length
       : 0;
     if (unique && ownerFiles < DRAFT_CODE_FILES) {
       units.find((unit) => unit.key === ranked[0][0])!.materials.push({ path: file, kind: "file" });
@@ -274,23 +239,30 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
       units.push({ key: file, materials: [{ path: file, kind: "file" }] });
     else (isTestSource(file) ? tests : ordinary).push({ path: file, kind: "file" });
   }
+  const rootText = ordinary
+    .filter((item) => scan.textFiles.includes(item.path))
+    .map((item) => item.path);
+  if (rootText.length > DRAFT_CODE_FILES)
+    for (const group of draftTextFileGroups(rootText, commits)) {
+      units.push({
+        key: group.files[0]!,
+        name: group.name,
+        materials: group.files.map((file) => ({ path: file, kind: "file" })),
+      });
+      for (const file of group.files)
+        ordinary.splice(
+          ordinary.findIndex((item) => item.path === file),
+          1,
+        );
+    }
 
-  units = [...condense(units, files, imports), ...documentation];
-  const sizes = checkModuleMap({
-    trackedFiles: files,
-    imports: [],
-    commits: [],
-    nodes: projection(units),
-  });
-  for (const unit of sizes.modules) {
-    const count = unit.files.filter((file) => isCodeSource(file) && !isTestSource(file)).length;
-    if (count > DRAFT_CODE_FILES)
-      warnings.push(
-        `Boundary exceeds ${DRAFT_CODE_FILES}-file draft target; review its generated-source family: ${unit.path} (${count} code files)`,
-      );
-  }
-
-  const names = new Set<string>(["setup", "tests"]);
+  units = draftTextDirectories(
+    [...condense(units, files, imports), ...documentation],
+    files,
+    scan.textFiles,
+    commits,
+  );
+  const names = new Set<string>(["root files", "tests"]);
   const nameOf = (key: string) => {
     let base =
       key
@@ -300,7 +272,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
     try {
       validateNodeName(base.toLowerCase());
     } catch {
-      base = `Module ${base}`;
+      base = `Part ${base}`;
     }
     let name = base,
       n = 2;
@@ -311,7 +283,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
       } catch {
         /* Use a safe suffix for reserved names. */
       }
-      name = `${base} module ${n++}`;
+      name = `${base} part ${n++}`;
     }
     names.add(name.toLowerCase());
     return name;
@@ -342,15 +314,27 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
   }
   if (ordinary.length)
     nodes.push({
-      id: "setup",
-      path: "Setup",
-      name: "Setup",
+      id: "root-files",
+      path: "Root files",
+      name: "Root files",
       body: "",
       materials: ordinary,
     });
   if (tests.length)
     nodes.push({ id: "tests", path: "Tests", name: "Tests", body: "", materials: tests });
   if (!nodes.length) throw new Error("No tracked Workspace materials to draft");
+  const sizes = checkModuleMap({
+    trackedFiles: files,
+    imports: [],
+    commits: [],
+    nodes,
+    textFiles: scan.textFiles,
+  });
+  for (const part of sizes.partFacts)
+    if (part.textFiles > DRAFT_CODE_FILES)
+      warnings.push(
+        `Large part with no split Tent can see: ${part.path} (${part.textFiles} files). Split it into the units this project uses, such as chapters or episodes, or keep it whole.`,
+      );
   const batch: NodeWriteBatchInput = {
     items: nodes.map((node) => ({
       op: "create",
@@ -388,21 +372,22 @@ export async function prepareWorkspaceDraft(
 ) {
   if ((await loadTent(readOnlyFs(fs))).byPath.size)
     throw new Error(
-      "Existing Nodes: maintain the current module map instead of bootstrapping another one",
+      "Existing Nodes: maintain the current part map instead of bootstrapping another one",
     );
-  const draft = draftWorkspaceModules(scan);
+  const draft = draftWorkspaceModules(scan, commits);
   const testImports = extractRepositoryTestImports(sources);
   const check = checkModuleMap({
     trackedFiles: scan.coverage.uncoveredFiles,
     imports: [...scan.imports.edges, ...testImports.edges],
     commits,
     nodes: draft.nodes,
+    textFiles: scan.textFiles,
   });
   return {
     batch: draft.batch,
     summary: {
-      modules: check.modules.map(
-        ({ id, path, name, files, productionFiles, testedBy, coChanges }) => ({
+      parts: check.partFacts.map(
+        ({ id, path, name, files, productionFiles, textFiles, testedBy, coChanges }) => ({
           ref: id,
           path,
           name,
@@ -411,6 +396,7 @@ export async function prepareWorkspaceDraft(
             ? { parent: draft.nodes.find((node) => node.id === id)!.parentId }
             : {}),
           productionFiles,
+          textFiles,
           testedBy,
           coChanges,
         }),

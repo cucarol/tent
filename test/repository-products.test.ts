@@ -41,12 +41,8 @@ function draft(sources: RepositorySource[]) {
     nodes: result.nodes,
   });
   const owner = (file: string) =>
-    result.nodes.find((node) =>
-      node.materials.some((item) =>
-        item.kind === "file"
-          ? item.path === file
-          : file.startsWith(item.path + (item.kind === "directory" ? "/" : "")),
-      ),
+    result.nodes.find(
+      (node) => node.id === check.partFacts.find((part) => part.files.includes(file))?.id,
     )!;
   return { ...result, facts, check, owner };
 }
@@ -88,16 +84,18 @@ test("package bin/main/conditional exports select existing literal local directo
     { path: "launch", kind: "directory" },
     { path: "packages/tool/commands", kind: "directory" },
   ]);
-  assert.notEqual(result.owner("launch/run").name, "Setup");
+  assert.notEqual(result.owner("launch/run").name, "Root files");
   assert.equal(result.owner("launch/icon.png").id, result.owner("launch/run").id);
-  assert.equal(result.owner("packages/tool/settings/local.json").name, "Setup");
-  assert.equal(result.owner("wild/literal.json").name, "Setup");
+  assert.equal(result.owner("packages/tool/settings/local.json").path, "packages/tool/settings");
+  assert.equal(result.owner("wild/literal.json").path, "wild");
   assert.ok(
-    result.nodes.filter((node) => node.name !== "Setup").every((node) => node.materials.length > 0),
+    result.nodes
+      .filter((node) => node.name !== "Root files")
+      .every((node) => node.materials.length > 0),
   );
   assert.equal(result.facts.imports.scannedFiles, 0);
   assert.deepEqual(result.facts.imports.edges, []);
-  assert.ok(result.check.modules.every((item) => item.productionFiles === 0));
+  assert.ok(result.check.partFacts.every((item) => item.productionFiles === 0));
   assert.ok(!result.nodes.some((node) => node.name === "Tests"));
 });
 
@@ -111,7 +109,7 @@ test("root package entries remain explicit file materials without inventing code
   assert.deepEqual(result.nodes.find((node) => node.name === "run")?.materials, [
     { path: "run", kind: "file" },
   ]);
-  assert.equal(result.owner("notes.md").name, "Setup");
+  assert.equal(result.owner("notes.md").name, "Root files");
 });
 
 test("Claude manifest recognizes documented components and literal custom component paths", () => {
@@ -162,24 +160,29 @@ test("Claude manifest recognizes documented components and literal custom compon
     "config/hooks.json",
     "custom/about.md",
   ])
-    assert.notEqual(result.owner(file).name, "Setup", file);
-  for (const file of [
-    "extra/local.txt",
-    "unrelated/run",
-    "not-a-path/file",
-    ".claude/settings.json",
-    ".codex/config.toml",
-    ".github/workflows/ci.yml",
-    "notes.md",
+    assert.notEqual(result.owner(file).name, "Root files", file);
+  for (const [file, directory] of [
+    ["extra/local.txt", "extra"],
+    ["unrelated/run", "unrelated"],
+    ["not-a-path/file", "not-a-path"],
+    [".claude/settings.json", ".claude"],
+    [".codex/config.toml", ".codex"],
+    [".github/workflows/ci.yml", ".github/workflows"],
   ])
-    assert.equal(result.owner(file).name, "Setup", file);
+    assert.ok(
+      result
+        .owner(file!)
+        ?.materials.some((item) => item.kind === "directory" && item.path === directory),
+      file,
+    );
+  assert.equal(result.owner("notes.md").name, "Root files");
   assert.equal(result.owner("skills/run/icon.png").id, result.owner("skills/run/SKILL.md").id);
   for (const file of ["bin/run", "monitors/monitors.json", "skills/run/SKILL.md"])
     assert.equal(isCodeSource(file), false);
   assert.deepEqual(result.facts.imports.edges, []);
 });
 
-test("Codex components require its root marker; normal host/config/Markdown paths remain Setup", () => {
+test("Codex components require its root marker; ordinary directories still become parts", () => {
   const files = [
     "skills/run/SKILL.md",
     "hooks/hooks.json",
@@ -199,7 +202,22 @@ test("Codex components require its root marker; normal host/config/Markdown path
   assert.deepEqual(absent.facts.productMaterials, []);
   assert.deepEqual(
     absent.nodes.map((node) => node.name),
-    ["Setup"],
+    [
+      "claude",
+      "codex",
+      "github",
+      "workflows",
+      "assets",
+      "bin",
+      "extra",
+      "skill",
+      "hooks",
+      "mapped",
+      "monitors",
+      "skills",
+      "run",
+      "Root files",
+    ],
   );
   const nested = draft([
     source("nested/.codex-plugin/plugin.json"),
@@ -215,9 +233,19 @@ test("Codex components require its root marker; normal host/config/Markdown path
     }),
     ...files.map((file) => source(file)),
   ]);
-  for (const file of files.slice(0, 7)) assert.notEqual(present.owner(file).name, "Setup", file);
-  for (const file of files.slice(7)) assert.equal(present.owner(file).name, "Setup", file);
-  assert.ok(present.check.modules.every((item) => item.productionFiles === 0));
+  for (const file of files.slice(0, 7))
+    assert.notEqual(present.owner(file).name, "Root files", file);
+  for (const file of files.slice(7).filter((file) => file.includes("/")))
+    assert.ok(
+      present
+        .owner(file)
+        .materials.some(
+          (item) => item.kind === "directory" && item.path === path.posix.dirname(file),
+        ),
+      file,
+    );
+  assert.equal(present.owner("notes.md").name, "Root files");
+  assert.ok(present.check.partFacts.every((item) => item.productionFiles === 0));
 });
 
 test("Docs owns tracked guidance and screenshots together; fixed names remain guidance elsewhere", () => {
@@ -245,13 +273,13 @@ test("Docs owns tracked guidance and screenshots together; fixed names remain gu
     "nested/DESIGN.rst",
   ]);
   const docs = result.owner("docs/roulette.md");
-  assert.equal(docs.name, "Docs module 2");
-  assert.equal(result.owner("docs/shots/one.png").id, docs.id);
+  assert.equal(docs.name, "Docs part 2");
+  assert.equal(result.owner("docs/shots/one.png").parentId, docs.id);
   assert.deepEqual(result.nodes.find((node) => node.id === docs.id)?.materials, [
     { path: "docs", kind: "directory" },
   ]);
   assert.ok(!result.nodes.some((node) => node.name === "Assets" || node.name === "Tests"));
-  assert.equal(result.owner("nested/docs/other.md").name, "Setup");
+  assert.equal(result.owner("nested/docs/other.md").path, "nested part 2/docs part 3");
 });
 
 test("documented product directories survive wrappers and Docs stays one subtree despite sample imports", () => {
@@ -265,7 +293,10 @@ test("documented product directories survive wrappers and Docs stays one subtree
   assert.equal(result.owner("bin/nested/task.test.ts").name, "bin");
   assert.ok(!result.nodes.some((node) => node.name === "Tests"));
   assert.equal(result.owner("docs/samples/main.js").name, "Docs");
-  assert.equal(result.owner("docs/shots/one.png").name, "Docs");
+  assert.equal(
+    result.owner("docs/shots/one.png").parentId,
+    result.owner("docs/samples/main.js").id,
+  );
   assert.notEqual(result.owner("app/main.js").id, result.owner("docs/samples/main.js").id);
   assert.equal(result.facts.imports.edges.length, 2);
 });
@@ -296,12 +327,12 @@ for (const count of [1, 11])
       parent = node.parentId;
     }
     assert.deepEqual(ancestors, ["plugin", "plugin/skills"]);
-    assert.deepEqual(result.check.modules.find((node) => node.id === product.id)?.files, [
+    assert.deepEqual(result.check.partFacts.find((node) => node.id === product.id)?.files, [
       "plugin/skills/a/SKILL.md",
     ]);
     const codeOnly = draft(sources.filter((item) => item.path !== "plugin/skills/a/SKILL.md"));
     const codeGroups = (value: ReturnType<typeof draft>) =>
-      value.check.modules
+      value.check.partFacts
         .map((node) => node.files.filter(isCodeSource))
         .filter((files) => files.length)
         .sort((a, b) => a[0]!.localeCompare(b[0]!));
@@ -311,10 +342,10 @@ for (const count of [1, 11])
       "sibling code grouping remains intact",
     );
     assert.equal(
-      result.check.modules.reduce((n, node) => n + node.productionFiles, 0),
+      result.check.partFacts.reduce((n, node) => n + node.productionFiles, 0),
       count,
     );
-    assert.ok(result.check.modules.every((node) => node.productionFiles <= 10));
+    assert.ok(result.check.partFacts.every((node) => node.productionFiles <= 10));
     assert.deepEqual(result.check.issues, []);
     assert.deepEqual(draft([...sources].reverse()).batch, result.batch);
   });
@@ -342,8 +373,8 @@ for (const entry of ["plugin/main.ts", "plugin/run", "plugin/run.sh"])
     assert.ok(parent && intermediate && child);
     assert.equal(intermediate.parentId, parent.id);
     assert.equal(child.parentId, intermediate.id);
-    assert.deepEqual(result.check.modules.find((node) => node.id === parent.id)?.files, [entry]);
-    assert.deepEqual(result.check.modules.find((node) => node.id === child.id)?.files, [
+    assert.deepEqual(result.check.partFacts.find((node) => node.id === parent.id)?.files, [entry]);
+    assert.deepEqual(result.check.partFacts.find((node) => node.id === child.id)?.files, [
       "plugin/skills/a/SKILL.md",
     ]);
     assert.deepEqual(result.check.issues, []);
@@ -364,25 +395,21 @@ for (const entry of ["plugin/main.ts", "plugin/run", "plugin/run.sh"])
       "only identical boundaries deduplicate",
     );
     const owner = (file: string) =>
-      extended.check.modules.find((node) => node.files.includes(file))!;
+      extended.check.partFacts.find((node) => node.files.includes(file))!;
     assert.equal(owner(entry).id, directoryNode(extended, "plugin").id);
     assert.equal(owner("plugin/settings.json").id, owner(entry).id);
     assert.equal(
       owner("plugin/skills/a/icon.png").id,
       directoryNode(extended, "plugin/skills/a").id,
     );
-    assert.ok(
-      extended.nodes
-        .find((node) => node.name === "Setup")
-        ?.materials.some((item) => item.path === "outside" && item.kind === "directory"),
-    );
+    assert.equal(owner("outside/config.json").id, directoryNode(extended, "outside").id);
     assert.ok(
       extended.nodes
         .find((node) => node.name === "Tests")
         ?.materials.some((item) => item.path === "test" && item.kind === "directory"),
     );
     assert.equal(
-      extended.check.modules.reduce((n, node) => n + node.productionFiles, 0),
+      extended.check.partFacts.reduce((n, node) => n + node.productionFiles, 0),
       Number(isCodeSource(entry)),
     );
     assert.deepEqual(extended.check.issues, []);
@@ -482,13 +509,18 @@ test("scan and CLI draft read only opted-in manifest bytes; guidance stays path-
   assert.ok(batch.items.some((item: { name: string }) => item.name === "Tests"));
   for (const dir of ["launch", "main-data", "public-data", "bin", "skills", "monitors"])
     assert.ok(
-      report.modules.some(
-        (item) => item.name !== "Setup" && item.files.some((file) => file.startsWith(dir + "/")),
+      report.parts.some(
+        (item) =>
+          item.name !== "Root files" && item.files.some((file) => file.startsWith(dir + "/")),
       ),
       dir,
     );
-  const docs = report.modules.find((item) => item.name === "Docs")!;
-  assert.equal(docs.files.length, 61);
+  const docs = report.parts.find((item) => item.name === "Docs")!;
+  assert.equal(docs.files.length, 60);
+  const shots = report.parts.find((item) => item.files.includes("docs/shots/one.png"))!;
+  assert.equal(shots.parent, docs.ref);
+  assert.equal(shots.textFiles, 0);
+  assert.equal(docs.textFiles, 60);
   assert.equal(docs.productionFiles, 0);
-  assert.ok(report.modules.every((item) => item.productionFiles === 0));
+  assert.ok(report.parts.every((item) => item.productionFiles === 0));
 });

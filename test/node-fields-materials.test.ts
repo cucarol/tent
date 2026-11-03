@@ -123,7 +123,7 @@ test("module report uses ordinary materials across all Node types and does not i
     );
   await adapter.writeFile(
     "A/Rules/Rules.md",
-    serializeFrontmatter({ id: "node-rules", type: "prompt" }, "allow:module.oversized"),
+    serializeFrontmatter({ id: "node-rules", type: "prompt" }, "allow:part.oversized"),
   );
   const result = await checkWorkspaceModules(adapter, workspace, {
     head: null,
@@ -132,7 +132,7 @@ test("module report uses ordinary materials across all Node types and does not i
     sources: { files: [], errors: [] },
   });
   assert.deepEqual(
-    result.modules.map(({ name }) => name),
+    result.partFacts.map(({ name }) => name),
     ["A", "B", "C"],
   );
   assert.equal(
@@ -140,7 +140,7 @@ test("module report uses ordinary materials across all Node types and does not i
     false,
   );
   assert.equal(
-    result.issues.some(({ code }) => code === "module.oversized"),
+    result.issues.some(({ code }) => code === "part.oversized"),
     true,
   );
   const draft = draftWorkspaceModules({

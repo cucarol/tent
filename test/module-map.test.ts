@@ -72,7 +72,7 @@ test("cycle counts use only module-load occurrences while non-load test evidence
     assert.deepEqual(codes(mixed), ["deps.cycle"]);
     assert.equal(mixed.issues[0]!.facts.forwardImports, 3);
     assert.equal(mixed.issues[0]!.facts.reverseImports, 3);
-    assert.deepEqual(mixed.modules.find((module) => module.id === "a")!.testedBy, [
+    assert.deepEqual(mixed.partFacts.find((module) => module.id === "a")!.testedBy, [
       "tests/a.test.ts",
     ]);
   }
@@ -102,7 +102,7 @@ test("coverage includes file-only Nodes, while module membership uses the most s
     ]),
   );
   assert.deepEqual(
-    result.modules.map(({ id, files }) => ({ id, files })),
+    result.partFacts.map(({ id, files }) => ({ id, files })),
     [
       { id: "cards", files: ["src/card-nested/a.ts", "src/card-one.ts", "src/special.ts"] },
       { id: "root", files: ["src/cardinality.ts", "src/main.ts"] },
@@ -128,8 +128,8 @@ test("equal materials choose deterministically and a clean map has no findings",
   ];
   const result = checkModuleMap(input(tracked, nodes));
   assert.deepEqual(result.issues, []);
-  assert.deepEqual(result.modules.find(({ id }) => id === "a")!.files, ["a/file.ts"]);
-  assert.deepEqual(result.modules.find(({ id }) => id === "z")!.files, []);
+  assert.deepEqual(result.partFacts.find(({ id }) => id === "a")!.files, ["a/file.ts"]);
+  assert.deepEqual(result.partFacts.find(({ id }) => id === "z")!.files, []);
   assert.deepEqual(checkModuleMap(input([...tracked].reverse(), [...nodes].reverse())), result);
 });
 
@@ -174,7 +174,7 @@ test("ordinary directory, prefix and file materials all define coverage owners",
   );
   assert.deepEqual(result.issues, []);
   assert.deepEqual(
-    result.modules.map(({ id }) => id),
+    result.partFacts.map(({ id }) => id),
     ["dir", "prefix", "single"],
   );
 });
@@ -196,7 +196,7 @@ test("directory and prefix membership use the shared coverage authority", () => 
     };
     const result = checkModuleMap(input(candidates, [{ ...node("src"), materials: [material] }]));
     assert.deepEqual(
-      result.modules[0]!.files,
+      result.partFacts[0]!.files,
       candidates.filter((file) => materialCoverageContains({ kind, prefix: "src/" }, file)).sort(),
     );
   }
@@ -234,7 +234,7 @@ test("shared platform comparison matches file, prefix and package-directory mate
   }
   assert.deepEqual(codes(result), ["deps.cycle"]);
   assert.deepEqual(result.unassignedImports, []);
-  assert.deepEqual(result.modules.find(({ id }) => id === "cards")!.files, [
+  assert.deepEqual(result.partFacts.find(({ id }) => id === "cards")!.files, [
     "src/card-0.ts",
     "src/card-1.ts",
     "src/card-2.ts",
@@ -270,8 +270,8 @@ test("size excludes generated, tests and vendor code and requires two groups of 
     ...files("large/third_party", 20),
   ];
   const result = checkModuleMap(input([...handwritten, ...excluded], [node("large")]));
-  assert.deepEqual(codes(result), ["module.oversized"]);
-  assert.equal(result.modules[0]!.productionFiles, 20);
+  assert.deepEqual(codes(result), ["part.oversized"]);
+  assert.equal(result.partFacts[0]!.productionFiles, 20);
   assert.deepEqual(result.issues[0]!.facts.groups, [
     { path: "large/alpha-", files: 10 },
     { path: "large/beta-", files: 10 },
@@ -293,7 +293,7 @@ test("size uses strict share and mathematical sibling median, with oversized tak
   ];
   assert.deepEqual(codes(checkModuleMap(input([...big, ...others], nodes))), []);
   const skewed = checkModuleMap(input([...big, "a/beta-extra.ts", ...others], nodes));
-  assert.deepEqual(codes(skewed), ["module.skewed"]);
+  assert.deepEqual(codes(skewed), ["part.skewed"]);
   assert.equal(skewed.issues[0]!.facts.siblingMedian, 7);
   const total100 = [
     ...files("a", 10, "alpha-"),
@@ -303,9 +303,9 @@ test("size uses strict share and mathematical sibling median, with oversized tak
   const shareNodes = [node("a"), coverageOnly(files("filler", 80))];
   assert.deepEqual(codes(checkModuleMap(input(total100, shareNodes))), []);
   assert.deepEqual(codes(checkModuleMap(input([...total100, "a/beta-extra.ts"], shareNodes))), [
-    "module.oversized",
+    "part.oversized",
   ]);
-  assert.deepEqual(codes(checkModuleMap(input(big, [node("a"), node("b")]))), ["module.oversized"]);
+  assert.deepEqual(codes(checkModuleMap(input(big, [node("a"), node("b")]))), ["part.oversized"]);
 });
 
 test("only leaf modules receive size issues, and one size rule in their body suppresses it", () => {
@@ -324,24 +324,24 @@ test("only leaf modules receive size issues, and one size rule in their body sup
   assert.deepEqual(
     codes(
       checkModuleMap(
-        input(tracked, [node("a", { body: "An intentional allow:module.oversized core." })]),
+        input(tracked, [node("a", { body: "An intentional allow:part.oversized core." })]),
       ),
     ),
     [],
   );
   assert.deepEqual(
-    codes(checkModuleMap(input(tracked, [node("a", { body: "module.oversizedness" })]))),
-    ["module.oversized"],
+    codes(checkModuleMap(input(tracked, [node("a", { body: "part.oversizedness" })]))),
+    ["part.oversized"],
   );
   for (const body of [
-    "必须修复 module.oversized",
-    "module.oversized",
-    "allow: module.oversized",
-    "disallow:module.oversized",
-    "allow:module.oversizedness",
+    "必须修复 part.oversized",
+    "part.oversized",
+    "allow: part.oversized",
+    "disallow:part.oversized",
+    "allow:part.oversizedness",
   ]) {
     assert.deepEqual(codes(checkModuleMap(input(tracked, [node("a", { body })]))), [
-      "module.oversized",
+      "part.oversized",
     ]);
   }
 });
@@ -441,7 +441,10 @@ test("package directory targets retain their directory and diagnose ambiguous me
   const unassigned = checkModuleMap(input(tracked, prefixes, { imports: edges }));
   assert.deepEqual(unassigned.issues, []);
   assert.equal(unassigned.unassignedImports.length, 6);
-  assert.match(unassigned.unassignedImports[0]!.reason, /no directory material owner/);
+  assert.match(
+    unassigned.unassignedImports[0]!.reason,
+    /No single part covers all production Go files of this imported package\./,
+  );
   const filesOnlyTarget = checkModuleMap(
     input(tracked, [nodes[0]!, coverageOnly(files("pkg/b", 3))], { imports: edges }),
   );
@@ -526,7 +529,7 @@ test("history thresholds use eligible first-parent commits and one touch per mod
   assert.deepEqual(codes(result), ["history.always-together"]);
   assert.equal(result.historyCommits, 10);
   assert.equal(result.issues[0]!.facts.lift, 2);
-  assert.deepEqual(result.issues[0]!.facts.moduleCommits, [5, 5]);
+  assert.deepEqual(result.issues[0]!.facts.partCommits, [5, 5]);
   assert.deepEqual(codes(checkModuleMap(input(tracked, nodes, { commits: history(4, 6) }))), []);
   assert.deepEqual(codes(checkModuleMap(input(tracked, nodes, { commits: history(5, 4) }))), []);
   const notTogether = [

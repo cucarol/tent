@@ -19,7 +19,7 @@ type SampleKey =
   | "unassignedImports"
   | "warnings"
   | "importIssues"
-  | "modules";
+  | "parts";
 
 export function workspaceDraftExitCode(summary: WorkspaceDraftSummary): 0 | 1 {
   return summary.issues.length ||
@@ -61,7 +61,7 @@ export function formatWorkspaceDraft(
     report: shorten(reportPath),
     pathBase: "Relative paths start at Workspace",
     reportLocation:
-      'Next to the --draft file: replace its .json suffix with .report.json, or append .report.json. JSON Lines: paths in snapshot header; search "ref":"@<ref>" for one module.',
+      'Next to the --draft file: replace its .json suffix with .report.json, or append .report.json. JSON Lines: paths in snapshot header; search "ref":"@<ref>" for one part.',
     counts,
     examples: {} as Partial<Record<SampleKey, unknown[]>>,
     omitted: {} as Record<string, { count: number; at: string }>,
@@ -73,8 +73,8 @@ export function formatWorkspaceDraft(
   const sampleLocation = (key: SampleKey) =>
     key === "guidanceFiles" || key === "warnings"
       ? `snapshot header: ${key}`
-      : key === "modules"
-        ? 'ref lines (search "ref":"@<ref>"): module'
+      : key === "parts"
+        ? 'ref lines (search "ref":"@<ref>"): part'
         : `ref/finding lines: ${key}`;
   const samples: Record<SampleKey, readonly unknown[]> = {
     guidanceFiles: summary.guidanceFiles,
@@ -83,24 +83,24 @@ export function formatWorkspaceDraft(
     unassignedImports: summary.unassignedImports,
     warnings: summary.warnings,
     importIssues: summary.importIssues,
-    modules: summary.modules.map(({ ref, path, parent, productionFiles }) => ({
+    parts: summary.parts.map(({ ref, path, parent, textFiles }) => ({
       ref,
       path,
       ...(parent ? { parent } : {}),
-      productionFiles,
+      textFiles,
     })),
   };
   for (const [key, items] of Object.entries(samples)) {
     if (items.length)
       receipt.omitted[key] = { count: items.length, at: sampleLocation(key as SampleKey) };
   }
-  // Raw history, imports and per-module evidence stay in the snapshot report.
+  // Raw history, imports and per-part evidence stay in the snapshot report.
   for (const [key, count, at] of [
     ["history", summary.history.length, "ref/history lines: history"],
     ["imports", summary.imports.edges.length, "ref/imports lines: imports.edges"],
     ["testImports", summary.testImports.edges.length, "ref/testImports lines: testImports.edges"],
-    ["testedBy", counts.testedBy, "ref lines: module.testedBy"],
-    ["coChanges", counts.coChanges, "ref lines: module.coChanges"],
+    ["testedBy", counts.testedBy, "ref lines: part.testedBy"],
+    ["coChanges", counts.coChanges, "ref lines: part.coChanges"],
     ["issueFacts", counts.issues, "ref/finding lines: issues.value.facts"],
   ] as const) {
     if (count) receipt.omitted[key] = { count, at };
@@ -109,7 +109,7 @@ export function formatWorkspaceDraft(
     json
       ? JSON.stringify(receipt) + "\n"
       : [
-          `draft ${counts.modules} modules; ${counts.trackedFiles} tracked files; ${counts.historyCommits} history commits`,
+          `draft ${counts.parts} parts; ${counts.trackedFiles} tracked files; ${counts.historyCommits} history commits`,
           `draft-file ${JSON.stringify(receipt.draft)}; report-file ${JSON.stringify(receipt.report)} (relative paths start at Workspace)`,
           receipt.reportLocation,
           `counts ${JSON.stringify(counts)}`,

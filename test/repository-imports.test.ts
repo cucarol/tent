@@ -256,7 +256,7 @@ test("directory graph preserves SCC cycles and excludes test-only reverse edges"
   assert.ok(!Object.prototype.hasOwnProperty.call(graph, "layers"));
 });
 
-test("repository facts identify guidance, generated trees, flat code and test directories", () => {
+test("repository facts identify guidance, generated trees and flat directories without counting tests", () => {
   const facts = repositoryFacts([
     source("AGENTS.md"),
     source("nested/CONTRIBUTING.rst"),
@@ -279,7 +279,7 @@ test("repository facts identify guidance, generated trees, flat code and test di
   );
   assert.deepEqual(
     facts.flatDirectories.map((item) => item.directory),
-    ["src/core", "test"],
+    ["src/core"],
   );
   assert.deepEqual(facts.flatDirectories[0]!.groups, [{ prefix: "src/core/card-", count: 21 }]);
   assert.equal(facts.imports.scannedFiles, 24);

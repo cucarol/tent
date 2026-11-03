@@ -192,7 +192,7 @@ export function formatWorkspaceScan(result: WorkspaceScanResult): string {
     }; keep with its source`,
     ...result.flatDirectories.slice(0, 3).map(
       (item) =>
-        `flat ${shown(item.directory)}/ ${item.codeFiles} code files; ${
+        `flat ${shown(item.directory)}/ ${item.files} files; ${
           sample(
             item.groups.map((group) => `${shown(group.prefix)}* (${group.count})`),
             4,

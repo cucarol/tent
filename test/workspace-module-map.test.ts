@@ -71,8 +71,8 @@ test("module facts are deterministic and byte-for-byte read-only before native c
   const result = await checkWorkspaceModules(adapter, root, repository);
   assert.deepEqual(await checkWorkspaceModules(adapter, root, repository), result);
   assert.deepEqual(result.issues, []);
-  assert.equal(result.modules.length, 2);
-  assert.deepEqual(result.modules.find(({ name }) => name === "alpha1")?.files, [
+  assert.equal(result.partFacts.length, 2);
+  assert.deepEqual(result.partFacts.find(({ name }) => name === "alpha1")?.files, [
     "src/alpha-one.ts",
     "src/alpha-two.ts",
   ]);
@@ -89,7 +89,7 @@ test("coverage excludes deprecated and invalid Nodes, keeps file-only Nodes, and
   await node("prefix", { resource: "../../d**" });
   const before = await snapshot(root);
   const parsed = await checkWorkspaceModules(adapter, root, await readModuleMapRepository(root));
-  assert.equal(parsed.modules.length, 1);
+  assert.equal(parsed.partFacts.length, 1);
   assert.equal(parsed.inspectionErrors.length, 2);
   const uncovered = parsed.issues.filter(
     (issue: { code: string }) => issue.code === "map.uncovered",
@@ -160,7 +160,7 @@ test("ordinary directories, prefixes and files establish module coverage across 
   const before = await snapshot(root);
   const result = await checkWorkspaceModules(adapter, root, repository);
   assert.deepEqual(
-    result.modules.map(({ name }) => name),
+    result.partFacts.map(({ name }) => name),
     ["legacy", "module", "normal", "single"],
   );
   assert.deepEqual(result.inspectionErrors, []);
@@ -203,15 +203,15 @@ test("module exceptions remain in the declaring Node regardless of child type", 
   };
   const codes = async () =>
     (await checkWorkspaceModules(adapter, root, repository)).issues.map((issue) => issue.code);
-  assert.ok((await codes()).includes("module.oversized"));
+  assert.ok((await codes()).includes("part.oversized"));
   assert.ok((await codes()).includes("deps.cycle"));
-  const rules = "allow:module.oversized\nallow:deps.cycle [B](../../bbbbbb/bbbbbb.md)";
+  const rules = "allow:part.oversized\nallow:deps.cycle [B](../../bbbbbb/bbbbbb.md)";
   await writeRule("aaaaaa", "output", rules);
-  assert.ok((await codes()).includes("module.oversized"));
+  assert.ok((await codes()).includes("part.oversized"));
   assert.ok((await codes()).includes("deps.cycle"));
   await writeRule("aaaaaa", "prompt", rules);
   const before = await snapshot(root);
-  assert.ok((await codes()).includes("module.oversized"));
+  assert.ok((await codes()).includes("part.oversized"));
   assert.ok((await codes()).includes("deps.cycle"));
   assert.deepEqual(await snapshot(root), before);
   await adapter.writeFile(
@@ -258,7 +258,7 @@ test("draft rules, pair exceptions and directory declarations have the same modu
     "aaaaaa/Rules/Rules.md",
     serializeFrontmatter(
       { id: "node-rule01", type: "prompt", status: "draft" },
-      "allow:module.oversized\nallow:deps.cycle [B](../../bbbbbb/bbbbbb.md)",
+      "allow:part.oversized\nallow:deps.cycle [B](../../bbbbbb/bbbbbb.md)",
     ),
   );
   const draftRules = await inspect();
@@ -275,7 +275,7 @@ test("draft rules, pair exceptions and directory declarations have the same modu
     "allow:map.empty",
   );
   const draftModule = await inspect();
-  assert.ok(draftModule.modules.some((module) => module.id === "node-drafts"));
+  assert.ok(draftModule.partFacts.some((module) => module.id === "node-drafts"));
   const moduleRaw = await adapter.readFile("drafts/drafts.md");
   await adapter.writeFile("drafts/drafts.md", moduleRaw.replace("status: draft", "status: stable"));
   assert.deepEqual(await inspect(), draftModule);
@@ -290,7 +290,7 @@ test("draft rules, pair exceptions and directory declarations have the same modu
       "",
     ),
   );
-  assert.ok((await inspect()).modules.some((module) => module.id === "node-decided"));
+  assert.ok((await inspect()).partFacts.some((module) => module.id === "node-decided"));
 });
 
 test("file materials assign root build code without a separate ownership declaration", async (t) => {
@@ -306,7 +306,7 @@ test("file materials assign root build code without a separate ownership declara
   });
   assert.deepEqual(result.issues, []);
   assert.deepEqual(
-    result.modules.map(({ name, files }) => ({ name, files })),
+    result.partFacts.map(({ name, files }) => ({ name, files })),
     [
       { name: "setup1", files: ["build.rs"] },
       { name: "source", files: ["src/lib.rs"] },

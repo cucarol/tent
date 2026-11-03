@@ -14,7 +14,7 @@ import { traceTestReexports } from "./test-reexports.js";
 import { cachedSemanticContent } from "./semantic-content-cache.js";
 
 /** Workspace-relative POSIX paths. Omit content for files that need no parsing. */
-export type RepositorySource = { path: string; content?: string };
+export type RepositorySource = { path: string; content?: string; binary?: boolean };
 /** Go imports target packages; other supported imports target actual files. */
 export type RepositoryImport = {
   from: string;

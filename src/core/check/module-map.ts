@@ -7,7 +7,7 @@ import {
   type RepositoryImport,
 } from "../base/repository-imports.js";
 import { isTentWorkspacePath, materialCoverageContains } from "../base/material-coverage.js";
-import { isModuleProductionSource, isVendorSource } from "../base/source-kind.js";
+import { isModuleProductionSource, isPartTextSource, isVendorSource } from "../base/source-kind.js";
 
 export const MODULE_MAP_THRESHOLDS = {
   historyCommitLimit: 300,
@@ -27,8 +27,8 @@ export const MODULE_MAP_THRESHOLDS = {
 
 export type ModuleMapCode =
   | "map.uncovered"
-  | "module.oversized"
-  | "module.skewed"
+  | "part.oversized"
+  | "part.skewed"
   | "deps.cycle"
   | "history.always-together"
   | "history.generated-apart";
@@ -59,13 +59,14 @@ export type ModuleMapModuleFacts = {
   name: string;
   files: string[];
   productionFiles: number;
+  textFiles: number;
   generatedFiles: number;
   testedBy: string[];
   coChanges: {
-    moduleId: string;
+    partId: string;
     sharedCommits: number;
-    /** Eligible commits touching this module, and the share also touching moduleId. */
-    moduleCommits: number;
+    /** Eligible commits touching this module, and the share also touching partId. */
+    partCommits: number;
     ratio: number;
   }[];
 };
@@ -76,6 +77,8 @@ export type ModuleMapInput = {
   /** First-parent history, as collected by the caller. */
   commits: readonly ModuleMapCommit[];
   nodes: readonly ModuleMapNode[];
+  /** Observed text paths; path classes suffice for callers that supply no filesystem facts. */
+  textFiles?: readonly string[];
 };
 
 const ordered = (items: Iterable<string>) => [...new Set(items)].sort(comparePaths);
@@ -133,6 +136,8 @@ function median(numbers: number[]): number {
 export function checkModuleMap(input: ModuleMapInput) {
   const thresholds = MODULE_MAP_THRESHOLDS;
   const trackedFiles = ordered(input.trackedFiles.filter((file) => !isTentWorkspacePath(file)));
+  const textFiles = new Set(input.textFiles ?? trackedFiles.filter(isPartTextSource));
+  const readable = (file: string) => textFiles.has(file);
   const nodes = [...input.nodes].sort(
     (a, b) => comparePaths(a.path, b.path) || comparePaths(a.id, b.id),
   );
@@ -183,6 +188,7 @@ export function checkModuleMap(input: ModuleMapInput) {
       name: node.name,
       files,
       productionFiles: files.filter(production).length,
+      textFiles: files.filter(readable).length,
       generatedFiles: files.filter(isGeneratedSource).length,
       testedBy: [],
       coChanges: [],
@@ -212,25 +218,24 @@ export function checkModuleMap(input: ModuleMapInput) {
       fix: "Assign the listed files to a Node's file, directory or prefix materials.",
     });
 
-  const totalProduction = trackedFiles.filter(production).length;
+  const totalTextFiles = trackedFiles.filter(readable).length;
   for (const node of modules) {
     if (modules.some((other) => other.parentId === node.id)) continue;
     const facts = factsById.get(node.id)!;
-    if (facts.productionFiles < thresholds.minimumProductionFiles) continue;
+    if (facts.textFiles < thresholds.minimumProductionFiles) continue;
     const siblingMedian = median(
       modules
         .filter((other) => other.id !== node.id && other.parentId === node.parentId)
-        .map((other) => factsById.get(other.id)!.productionFiles)
+        .map((other) => factsById.get(other.id)!.textFiles)
         .filter((count) => count > 0),
     );
-    const share = facts.productionFiles / totalProduction;
+    const share = facts.textFiles / totalTextFiles;
     const oversized = share > thresholds.oversizedShare;
     const skewed =
-      siblingMedian > 0 &&
-      facts.productionFiles > thresholds.siblingMedianMultiplier * siblingMedian;
+      siblingMedian > 0 && facts.textFiles > thresholds.siblingMedianMultiplier * siblingMedian;
     if (!oversized && !skewed) continue;
     const groups = new Map<string, number>();
-    for (const file of facts.files.filter(production)) {
+    for (const file of facts.files.filter(readable)) {
       const material = owner(file)!.material;
       const base =
         material.kind === "directory"
@@ -256,20 +261,20 @@ export function checkModuleMap(input: ModuleMapInput) {
       .map(([path, files]) => ({ path, files }))
       .sort((a, b) => b.files - a.files || comparePaths(a.path, b.path));
     if (candidates.length < thresholds.minimumGroups) continue;
-    const code = oversized ? "module.oversized" : "module.skewed";
+    const code = oversized ? "part.oversized" : "part.skewed";
     if (allowsModuleMapRule(node.body, code)) continue;
     issues.push({
       code,
       object: node.path,
       facts: {
         nodeIds: [node.id],
-        productionFiles: facts.productionFiles,
-        totalProductionFiles: totalProduction,
+        textFiles: facts.textFiles,
+        totalTextFiles,
         share,
         siblingMedian,
         groups: candidates,
       },
-      fix: "Split this module into child modules along the listed directory or filename groups.",
+      fix: "Split this part into child parts along the listed directory or filename groups.",
     });
   }
 
@@ -305,8 +310,7 @@ export function checkModuleMap(input: ModuleMapInput) {
       unassignedImports.push({
         from: edge.from,
         to: edge.to,
-        reason:
-          "Package import has no directory material owner or unique module owning all its production Go files.",
+        reason: "No single part covers all production Go files of this imported package.",
       });
     if (!from || !to || from.id === to.id) continue;
     if (edge.execution !== "module-load") continue;
@@ -337,7 +341,7 @@ export function checkModuleMap(input: ModuleMapInput) {
         code: "deps.cycle",
         object: `${a.path} <-> ${b.path}`,
         facts: { nodeIds: [a.id, b.id], forwardImports: forward, reverseImports: reverse },
-        fix: "Keep both modules when their responsibilities differ: declare allow:deps.cycle with the other module's link and why they import each other on one body line. Merge them only when they are one responsibility.",
+        fix: "Keep both parts when their responsibilities differ: declare allow:deps.cycle with the other part's link and why they import each other on one body line. Merge them only when they are one responsibility.",
       });
     }
   }
@@ -386,9 +390,9 @@ export function checkModuleMap(input: ModuleMapInput) {
       [b, a, countB],
     ] as const)
       factsById.get(node.id)!.coChanges.push({
-        moduleId: other.id,
+        partId: other.id,
         sharedCommits: shared,
-        moduleCommits: count,
+        partCommits: count,
         ratio: shared / count,
       });
     const generatedShares = [a, b].map((node) => {
@@ -404,29 +408,29 @@ export function checkModuleMap(input: ModuleMapInput) {
       facts: {
         nodeIds: [a.id, b.id],
         sharedCommits: shared,
-        moduleCommits: [countA, countB],
+        partCommits: [countA, countB],
         eligibleCommits: eligible.length,
         ratio,
         lift,
         generatedShares,
       },
       fix: generated
-        ? "Keep the generated output and its source in the same module."
-        : "Keep both modules when their responsibilities differ: declare allow:history.always-together with the other module's link and their shared change workflow on one body line. Merge them only when they are one responsibility.",
+        ? "Keep the generated output and its source in the same part."
+        : "Keep both parts when their responsibilities differ: declare allow:history.always-together with the other part's link and their shared change workflow on one body line. Merge them only when they are one responsibility.",
     });
   }
   for (const facts of moduleFacts) {
     facts.testedBy = ordered(facts.testedBy);
     facts.coChanges.sort((a, b) => {
-      const nodeA = byId.get(a.moduleId)!;
-      const nodeB = byId.get(b.moduleId)!;
+      const nodeA = byId.get(a.partId)!;
+      const nodeB = byId.get(b.partId)!;
       return comparePaths(nodeA.path, nodeB.path) || comparePaths(nodeA.id, nodeB.id);
     });
   }
   const codes: ModuleMapCode[] = [
     "map.uncovered",
-    "module.oversized",
-    "module.skewed",
+    "part.oversized",
+    "part.skewed",
     "deps.cycle",
     "history.generated-apart",
     "history.always-together",
@@ -439,7 +443,7 @@ export function checkModuleMap(input: ModuleMapInput) {
   );
   return {
     issues,
-    modules: moduleFacts,
+    partFacts: moduleFacts,
     trackedFiles: trackedFiles.length,
     historyCommits: eligible.length,
     unassignedImports,

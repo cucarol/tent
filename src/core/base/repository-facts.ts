@@ -1,10 +1,10 @@
 import { dependencyCycles } from "./dependency-cycles.js";
 import path from "node:path";
 import { repositoryProductMaterials } from "./repository-products.js";
+import { isPartTextSource } from "./source-kind.js";
 import {
   comparePaths,
   extractRepositoryImports,
-  isCodeSource,
   isGeneratedSource,
   isImportSource,
   isTestSource,
@@ -82,6 +82,11 @@ export function filePrefixGroups(files: readonly string[]) {
 export function repositoryFacts(sources: readonly RepositorySource[]) {
   const files = [...new Set(sources.map((source) => source.path))].sort(comparePaths);
   const imports = extractRepositoryImports(sources);
+  const binaryFiles = new Set(
+    sources.filter((source) => source.binary).map((source) => source.path),
+  );
+  const textFiles = files.filter((file) => isPartTextSource(file) && !binaryFiles.has(file));
+  const textPaths = new Set(textFiles);
   const generated = new Map<string, string[]>();
   const flat = new Map<string, string[]>();
   for (const file of files) {
@@ -92,7 +97,7 @@ export function repositoryFacts(sources: readonly RepositorySource[]) {
       group.push(file);
       generated.set(dir, group);
     }
-    if (isCodeSource(file) && !isGeneratedSource(file)) {
+    if (textPaths.has(file)) {
       const dir = path.posix.dirname(file),
         group = flat.get(dir) ?? [];
       group.push(file);
@@ -100,6 +105,7 @@ export function repositoryFacts(sources: readonly RepositorySource[]) {
     }
   }
   return {
+    textFiles,
     productMaterials: repositoryProductMaterials(sources),
     imports,
     dependencies: [1, 2].map((depth) => repositoryDirectoryGraph(imports.edges, files, depth)),
@@ -120,9 +126,9 @@ export function repositoryFacts(sources: readonly RepositorySource[]) {
       .filter(([, files]) => files.length > 20)
       .map(([directory, files]) => ({
         directory,
-        codeFiles: files.length,
+        files: files.length,
         groups: filePrefixGroups(files),
       }))
-      .sort((a, b) => b.codeFiles - a.codeFiles || comparePaths(a.directory, b.directory)),
+      .sort((a, b) => b.files - a.files || comparePaths(a.directory, b.directory)),
   };
 }

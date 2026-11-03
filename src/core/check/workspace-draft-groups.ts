@@ -1,8 +1,9 @@
 import path from "node:path";
 import { dependencyCycles } from "../base/dependency-cycles.js";
-import { comparePaths, isCodeSource, isTestSource } from "../base/repository-imports.js";
+import { comparePaths, isTestSource } from "../base/repository-imports.js";
 import type { RepositoryImport } from "../base/repository-imports.js";
 import type { ModuleMapMaterial } from "./module-map.js";
+import { isModuleProductionSource, isGeneratedSource } from "../base/source-kind.js";
 
 export const DRAFT_CODE_FILES = 10;
 export type DraftUnit = {
@@ -12,7 +13,7 @@ export type DraftUnit = {
   parentKey?: string;
 };
 const ordered = (values: Iterable<string>) => [...new Set(values)].sort(comparePaths);
-const code = (file: string) => isCodeSource(file) && !isTestSource(file);
+const code = isModuleProductionSource;
 export const draftMaterial = (value: string): ModuleMapMaterial => ({
   path: value.endsWith("/") ? value.slice(0, -1) : value,
   kind: value.endsWith("/") ? "directory" : "prefix",
@@ -181,6 +182,11 @@ function draftFlatUnits(groups: FlatGroup[], files: string[], parentKey: string)
   return groups.map(({ files: members, name }): DraftUnit => {
     const prefixes = ordered(members.map(draftPrefix));
     const materials: ModuleMapMaterial[] = prefixes.map((prefix) => draftMaterial(prefix));
+    for (const file of files.filter(isGeneratedSource)) {
+      const family = draftPrefix(file).replace(/_pb\.$/, ".");
+      if (prefixes.includes(family) && !prefixes.some((prefix) => file.startsWith(prefix)))
+        materials.push({ path: file, kind: "file" });
+    }
     // Nearby Python/Go/JS tests stay with their source even when their names use an underscore.
     const stems = new Set(
       members.map((file) => path.posix.basename(file, path.posix.extname(file))),
@@ -207,10 +213,11 @@ export function draftRootPackageUnits(
     (file) => !file.includes("/") && file.endsWith(".go") && !isTestSource(file),
   );
   const key = "Root Go package";
-  if (sources.length <= DRAFT_CODE_FILES)
+  const production = sources.filter(code);
+  if (production.length <= DRAFT_CODE_FILES)
     return [{ key, materials: sources.map((file) => draftMaterial(draftPrefix(file))) }];
   return [
     { key, materials: [{ path: ".", kind: "directory" }] },
-    ...draftFlatUnits(flatGroups(sources, imports), files, key),
+    ...draftFlatUnits(flatGroups(production, imports), files, key),
   ];
 }

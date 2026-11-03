@@ -25,6 +25,7 @@ import {
   comparePaths,
 } from "../base/repository-imports.js";
 import type { WorkspaceScanRepository } from "./workspace-scan.js";
+import { isPartTextSource } from "../base/source-kind.js";
 
 export type WorkspaceModuleMapRepository = WorkspaceScanRepository & { commits: ModuleMapCommit[] };
 
@@ -129,6 +130,9 @@ export async function checkWorkspaceModules(
   }
   const imports = extractRepositoryImports(repository.sources.files);
   const testImports = extractRepositoryTestImports(repository.sources.files);
+  const binaryFiles = new Set(
+    repository.sources.files.filter((file) => file.binary).map((file) => file.path),
+  );
   return {
     head: repository.head,
     commitLimit: MODULE_MAP_THRESHOLDS.historyCommitLimit,
@@ -137,6 +141,9 @@ export async function checkWorkspaceModules(
       imports: [...imports.edges, ...testImports.edges],
       commits: repository.commits,
       nodes,
+      textFiles: repository.trackedFiles.filter(
+        (file) => isPartTextSource(file) && !binaryFiles.has(file),
+      ),
     }),
     importIssues: [
       ...new Map(

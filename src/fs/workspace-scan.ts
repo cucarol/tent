@@ -133,6 +133,7 @@ export async function readWorkspaceScanRepository(
     trackedFiles,
     sources: await readRepositorySources(workspaceRoot, trackedFiles, {
       includeProductManifests: true,
+      classifyText: true,
     }),
   };
 }
@@ -144,7 +145,11 @@ export async function readModuleMapRepository(
 ): Promise<WorkspaceModuleMapRepository> {
   const { root, head, trackedFiles, workspaceFile } = await readRepositoryFiles(workspaceRoot);
   const [sources, log] = await Promise.all([
-    readRepositorySources(workspaceRoot, trackedFiles, { includeTests: true, ...options }),
+    readRepositorySources(workspaceRoot, trackedFiles, {
+      includeTests: true,
+      classifyText: true,
+      ...options,
+    }),
     head
       ? git(root, [
           "log",
