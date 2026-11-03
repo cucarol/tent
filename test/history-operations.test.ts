@@ -4,13 +4,11 @@ import test from "node:test";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { initializeFixtureWorkspace } from "./scratch.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { createNode, deleteNode, renameNode } from "../src/core/graph/ops.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
-import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { testScratchRoot } from "./scratch.js";
+import { editNode, readNodeFile } from "./node-edit.js";
 
-test("public saves and observed edits retain distinct history operations across locations", async (t) => {
+test("observed edits, renames and deletes retain their history operations across locations", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "history-operations-"));
   t.after(() =>
     removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
@@ -38,16 +36,16 @@ test("public saves and observed edits retain distinct history operations across 
     path.join(workspace, ".tent/Alpha/Alpha.md"),
     original.replace("Initial", "Editor input"),
   );
-  await readNodeForEdit(adapter, id);
+  await readNodeFile(adapter, id);
   assert.equal((await adapter.history.nodeVersions(id)).length, 1);
-  const basis = await readNodeForEdit(adapter, id, { capture: true });
-  await writeNodeDocument(adapter, id, { baseEtag: basis.etag, body: "Saved fact" });
+  await readNodeFile(adapter, id, { capture: true });
+  await editNode(adapter, id, { body: "Saved fact" });
   await renameNode(env, id, "Beta");
   await deleteNode(env, id);
   const rows = await adapter.history.nodeVersions(id);
   assert.deepEqual(
     rows.map((row) => row.operation),
-    ["node.create", "document.external-capture", "node.write", "node.rename", "node.delete"],
+    ["node.create", "node.native-save", "node.native-save", "node.rename", "node.delete"],
   );
   assert.ok(rows.every((row) => row.entry === "cli" && row.objectIds.includes(id)));
   assert.equal(rows.at(-1)!.changes[0]!.before!.path, "Beta/Beta.md");
@@ -56,6 +54,6 @@ test("public saves and observed edits retain distinct history operations across 
   const changes = await adapter.history.changesInRange({ from: first.commit });
   assert.deepEqual(
     changes.map((change) => change.operation),
-    ["document.external-capture", "node.write", "node.rename", "node.delete"],
+    ["node.native-save", "node.native-save", "node.rename", "node.delete"],
   );
 });

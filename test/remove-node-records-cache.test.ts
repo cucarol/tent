@@ -7,7 +7,7 @@ import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { loadStopCoverage } from "../src/fs/stop-coverage.js";
 import { sectionFingerprints, sectionKey } from "../src/core/return/section-fingerprint.js";
-import { changedSections, replaceRecord } from "../src/fs/section-fingerprints.js";
+import { changedSections, settleSections } from "../src/fs/section-fingerprints.js";
 
 import { initializeFixtureRepository, testScratchRoot } from "./scratch.js";
 
@@ -48,9 +48,15 @@ async function fixture(t: TestContext) {
   await fs.writeFile(path.join(root, "index.md"), '---\nokf_version: "0.2"\n---\n');
   const guide = "# Rules\nOriginal section\n";
   await fs.writeFile(path.join(workspace, "guide.md"), guide);
-  await replaceRecord(root, path.join(workspace, "guide.md"), [
-    { heading: "Rules", ...sectionFingerprints(guide, [{ heading: "Rules" }]).get("Rules")! },
-  ]);
+  const rules = {
+    path: "guide.md",
+    heading: "Rules",
+    ...sectionFingerprints(guide, [{ heading: "Rules" }]).get("Rules")!,
+  };
+  await settleSections(root, workspace, {
+    changed: new Map(),
+    observed: new Map([["guide.md#Rules", rules]]),
+  });
   const turn = {
     turnId: "turn-before",
     checkout: workspace,

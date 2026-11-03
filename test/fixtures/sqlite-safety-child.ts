@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { NodeFs } from "../../src/fs/node-fs.js";
-import { writeNodesBatch } from "../../src/core/write/node-write-batch.js";
-import { readNodeForEdit } from "../../src/core/read/node-query.js";
 import { SqliteDocumentHistory } from "../../src/fs/sqlite-history.js";
+import { readNodeFile, saveNodesBatch } from "../node-edit.js";
 
 const [workspace, cut] = process.argv.slice(2) as [string, string];
 async function checkpoint(point: string) {
@@ -27,13 +26,13 @@ const items = await Promise.all(
     return {
       op: "update" as const,
       nodeId,
-      baseEtag: (await readNodeForEdit(adapter, nodeId)).etag,
+      baseEtag: (await readNodeFile(adapter, nodeId)).etag,
       body: `new ${i}\n`,
     };
   }),
 );
 try {
-  await writeNodesBatch(
+  await saveNodesBatch(
     { fs: adapter, clock: { now: () => "2026-10-27T00:00:00.000Z" }, tentName: "Safety" },
     { items },
   );

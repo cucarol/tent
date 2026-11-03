@@ -7,16 +7,15 @@ import { test, type TestContext } from "node:test";
 import { contentEtag } from "../src/core/base/etag.js";
 import { readOnlyFs } from "../src/core/store/adapter.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { incompleteNodeReadEtag } from "../src/core/base/node-read-basis.js";
 import {
   NodeBatchWriteError,
-  writeNodesBatch,
   type NodeWriteBatchInput,
 } from "../src/core/write/node-write-batch.js";
 import { createNode } from "../src/core/graph/ops.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { initializeFixtureHistory, testScratchRoot } from "./scratch.js";
+import { readNodeFile, saveNodesBatch } from "./node-edit.js";
 
 async function fixture(t: TestContext) {
   const workspace = await mkdtemp(path.join(testScratchRoot(), "node-write-batch-"));
@@ -41,7 +40,7 @@ async function fixture(t: TestContext) {
     type: "output",
     body: "old body\n",
   });
-  const existing = await readNodeForEdit(fs, id);
+  const existing = await readNodeFile(fs, id);
   return { env, fs, root, existing };
 }
 
@@ -60,7 +59,7 @@ test("batch creates forward parents and mutual links, updates, and captures once
     captures++;
     return capture(changes, metadata);
   };
-  const result = await writeNodesBatch(env, {
+  const result = await saveNodesBatch(env, {
     items: [
       {
         op: "create",
@@ -126,10 +125,10 @@ test("batch rejects an external document edit after transaction preparation", as
   fs.prepareFileTransaction = async (...args) => {
     await prepare(...args);
     edited = true;
-    await writeFile(path.join(root, existing.path, "Existing.md"), external);
+    await writeFile(path.join(root, existing.path), external);
   };
   await assert.rejects(
-    writeNodesBatch(env, {
+    saveNodesBatch(env, {
       items: [{ op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "ours" }],
     }),
     (error) => {
@@ -154,7 +153,7 @@ test("raw update rewrites only parsed reference positions and preserves arbitrar
     },
     "Prose @missing\n[created](@new?query#part)\n`[ignored](@missing)`",
   );
-  await writeNodesBatch(env, {
+  await saveNodesBatch(env, {
     items: [
       { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, raw },
       { op: "create", ref: "new", parent: existing.nodeId, name: "New", type: "output" },
@@ -234,7 +233,7 @@ for (const failure of [
       writes++;
       return mkdir(...args);
     };
-    await assert.rejects(writeNodesBatch(env, { items }));
+    await assert.rejects(saveNodesBatch(env, { items }));
     assert.equal(writes, 0);
     assert.equal(await fs.exists("New"), false);
     assert.equal(await fs.readFile("Existing/Existing.md"), existing.raw);
@@ -272,7 +271,7 @@ for (const failure of ["document", "order", "capture", "sqlite-busy"] as const) 
     }
     try {
       await assert.rejects(
-        writeNodesBatch(env, {
+        saveNodesBatch(env, {
           items: [
             {
               op: "update",
@@ -303,7 +302,7 @@ test("batch rollback restores absent order sidecar and no-op update retains exac
   const { env, fs, existing } = await fixture(t);
   await fs.remove("order.json");
   const before = await fs.history.currentCommit();
-  const noop = await writeNodesBatch(env, {
+  const noop = await saveNodesBatch(env, {
     items: [
       { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: existing.body },
     ],
@@ -315,7 +314,7 @@ test("batch rollback restores absent order sidecar and no-op update retains exac
     throw new Error("capture failure");
   };
   await assert.rejects(
-    writeNodesBatch(env, {
+    saveNodesBatch(env, {
       items: [{ op: "create", ref: "new", parent: null, name: "New", type: "output" }],
     }),
     /capture failure/,
@@ -336,7 +335,7 @@ test("batch rollback preserves external edits and reports exact conflicting path
     throw new Error("capture failed");
   };
   await assert.rejects(
-    writeNodesBatch(env, {
+    saveNodesBatch(env, {
       items: [
         { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "next" },
         { op: "create", ref: "new", name: "New", type: "goal" },
@@ -378,7 +377,7 @@ test("batch detects a new document appearing after directory creation and preser
       await writeFile(path.join(root, "New/New.md"), external);
   };
   await assert.rejects(
-    writeNodesBatch(env, {
+    saveNodesBatch(env, {
       items: [
         { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "next" },
         { op: "create", ref: "new", name: "New", type: "output" },
@@ -407,7 +406,7 @@ for (const body of [
     const before = await fs.history.currentCommit(),
       beforeOrder = await fs.readFile("order.json");
     await assert.rejects(
-      writeNodesBatch(env, {
+      saveNodesBatch(env, {
         items: [
           { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "next" },
           { op: "create", ref: "new", name: "New", type: "output", body },
@@ -426,7 +425,7 @@ test("batch follows shared canonical rules for images and unused definitions", a
   const { env, fs, existing } = await fixture(t);
   const body =
     "![image](@missing)\n![image][image-ref]\n\n[image-ref]: @missing\n[unused]: @missing";
-  await writeNodesBatch(env, {
+  await saveNodesBatch(env, {
     items: [{ op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body }],
   });
   assert.equal(parseFrontmatter(await fs.readFile("Existing/Existing.md")).body, body);
@@ -443,7 +442,7 @@ test("batch rollback removes only known documents and preserves hidden external 
     throw new Error("capture failed");
   };
   await assert.rejects(
-    writeNodesBatch(env, {
+    saveNodesBatch(env, {
       items: [
         { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "next" },
         { op: "create", ref: "new", name: "New", type: "goal" },
@@ -477,7 +476,7 @@ test("batch reports Windows EEXIST empty-directory cleanup as a conflict and ret
     throw Object.assign(new Error("directory contains external entries"), { code: "EEXIST" });
   };
   await assert.rejects(
-    writeNodesBatch(env, {
+    saveNodesBatch(env, {
       items: [
         { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "next" },
         { op: "create", ref: "new", name: "New", type: "output" },
@@ -511,7 +510,7 @@ test("batch retains the original capture error when recovery also fails, then or
     return writeBinary(file, bytes);
   };
   await assert.rejects(
-    writeNodesBatch(env, {
+    saveNodesBatch(env, {
       items: [
         { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "next" },
         { op: "create", ref: "new", name: "New", type: "output" },
@@ -527,15 +526,15 @@ test("batch retains the original capture error when recovery also fails, then or
   assert.ok(await readFile(path.join(root, ".git/tent-transaction.json"), "utf8"));
   fs.history.captureUnlocked = capture;
   fs.writeBinary = writeBinary;
-  assert.equal((await readNodeForEdit(fs, existing.nodeId)).raw, existing.raw);
+  assert.equal((await readNodeFile(fs, existing.nodeId)).raw, existing.raw);
   assert.equal(await fs.exists("New"), false);
   assert.equal(await fs.readFile("order.json"), beforeOrder);
   assert.equal(await fs.history.currentCommit(), before);
   assert.equal(await fs.exists(".git/tent-transaction.json"), false);
-  await writeNodesBatch(env, {
+  await saveNodesBatch(env, {
     items: [{ op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, body: "retry" }],
   });
-  assert.equal((await readNodeForEdit(fs, existing.nodeId)).body, "retry");
+  assert.equal((await readNodeFile(fs, existing.nodeId)).body, "retry");
 });
 
 test("batch updates preserve opaque metadata and retain failed-save error identity", async (t) => {
@@ -545,16 +544,16 @@ test("batch updates preserve opaque metadata and retain failed-save error identi
     stale_after: "custom timestamp",
     provenance: [false, { custom: "opaque metadata" }],
   };
-  await writeNodesBatch(env, {
+  await saveNodesBatch(env, {
     items: [
       { op: "update", nodeId: existing.nodeId, baseEtag: existing.etag, frontmatter: metadata },
     ],
   });
-  let current = await readNodeForEdit(fs, existing.nodeId);
-  await writeNodesBatch(env, {
+  let current = await readNodeFile(fs, existing.nodeId);
+  await saveNodesBatch(env, {
     items: [{ op: "update", nodeId: existing.nodeId, baseEtag: current.etag, body: "changed" }],
   });
-  current = await readNodeForEdit(fs, existing.nodeId);
+  current = await readNodeFile(fs, existing.nodeId);
   for (const [key, value] of Object.entries(metadata))
     assert.deepEqual(current.frontmatter[key], value);
   const failure = new Error("batch write failure");
@@ -564,7 +563,7 @@ test("batch updates preserve opaque metadata and retain failed-save error identi
     await write(file, raw);
   };
   await assert.rejects(
-    writeNodesBatch(env, {
+    saveNodesBatch(env, {
       items: [{ op: "update", nodeId: existing.nodeId, baseEtag: current.etag, body: "failed" }],
     }),
     (error) => error === failure,

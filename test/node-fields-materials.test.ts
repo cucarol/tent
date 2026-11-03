@@ -7,7 +7,7 @@ import { materialOccurrences, validateMaterialAddresses } from "../src/core/base
 import { assertNodeFields } from "../src/core/graph/node-document-write.js";
 import { canonicalIdentityError, loadTent } from "../src/core/store/tree.js";
 import { createNode } from "../src/core/graph/ops.js";
-import { nodeWriteBatchInputSchema, writeNodesBatch } from "../src/core/write/node-write-batch.js";
+import { nodeWriteBatchInputSchema } from "../src/core/write/node-write-batch.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { checkWorkspaceModules } from "../src/core/check/workspace-module-map.js";
 import { draftWorkspaceModules } from "../src/core/check/workspace-draft.js";
@@ -15,6 +15,7 @@ import { repositoryFacts } from "../src/core/base/repository-facts.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { testScratchRoot } from "./scratch.js";
+import { saveNodesBatch } from "./node-edit.js";
 
 const root = path.resolve(".scratch/material-coverage-domain");
 const owner = "Node/Node.md";
@@ -80,7 +81,7 @@ test("Node description is optional text and creation accepts it in single and ba
     type: "prompt",
     description: "One sentence.",
   });
-  await writeNodesBatch(env, {
+  await saveNodesBatch(env, {
     items: [
       { op: "create", ref: "b", name: "Two", type: "output", description: "A second sentence." },
     ],

@@ -31,8 +31,7 @@ async function recordMaterial(
   return { nodeId, warnings: [] as string[] };
 }
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
-import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { editNode, readNodeFile } from "./node-edit.js";
 
 async function fixture(t: TestContext, nestedWorktree = false) {
   const base = await fs.mkdtemp(path.join(testScratchRoot(), "repository-material-"));
@@ -80,9 +79,9 @@ test("missing declared worktree remains unavailable even after merging its mater
       (issue: { kind: string }) => issue.kind === "missing-material-file",
     ),
   );
-  const node = await readNodeForEdit(adapter, output.nodeId);
-  await writeNodeDocument(adapter, output.nodeId, { baseEtag: node.etag, body: "More context" });
-  assert.equal((await readNodeForEdit(adapter, output.nodeId)).frontmatter.resource, resource);
+  const node = await readNodeFile(adapter, output.nodeId);
+  await editNode(adapter, output.nodeId, { body: "More context" });
+  assert.equal((await readNodeFile(adapter, output.nodeId)).frontmatter.resource, resource);
 });
 
 test("file observation checks declared sections without repository discovery", async (t) => {

@@ -108,8 +108,6 @@ test("Node guidance keeps the required type names and ordinary metadata without 
   assert.match(skill, /`goal`, `prompt` or `output`, as above/);
   for (const field of ["id", "type", "description", "tags", "resource", "sources", "status"])
     assert.ok(skill.includes(`| \`${field}\` |`), field);
-  const { NODE_TAG_PRESETS } = await import("../src/core/base/tags.js");
-  for (const tag of NODE_TAG_PRESETS) assert.ok(spec.includes(`\`${tag}\``), tag);
   for (const file of await agentFacingFiles()) {
     const text = await read(file);
     assert.doesNotMatch(text, /\b(?:goal|prompt|output)-(?!id\b)[a-z]+/, file);

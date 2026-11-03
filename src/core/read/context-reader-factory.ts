@@ -9,24 +9,7 @@ import { loadTent, type LoadedTent } from "../store/tree.js";
 import { contentEtag } from "../base/etag.js";
 import { nodeNotePath } from "../base/paths.js";
 import { canonicalSha256 } from "../base/canonical-digest.js";
-import { loadNodeCatalog, readCatalogDocument } from "../graph/node-catalog.js";
 import { listWorkspaceRelations } from "../graph/workspace-relations.js";
-
-/** Selected reads observe only headers elsewhere in the graph, never unrelated bodies. */
-export async function selectedContextReader(
-  fs: FsAdapter,
-  source: Extract<ReaderSource, { kind: "live" }>,
-  nodeIds: readonly string[],
-) {
-  const catalog = await loadNodeCatalog(fs);
-  const documents: ReaderDocument[] = [];
-  for (const nodeId of new Set(nodeIds)) {
-    const node = catalog.byId.get(nodeId);
-    if (!node) throw new ReaderError("NOT_FOUND", `Node is not readable in this source: ${nodeId}`);
-    documents.push(await readCatalogDocument(fs, node));
-  }
-  return new ContextReader(source, documents, catalog.rootNodeIds);
-}
 
 function treeRevision(tent: LoadedTent) {
   return canonicalSha256({

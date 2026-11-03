@@ -14,8 +14,7 @@ import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontma
 import { documentHeader } from "../src/core/graph/node-catalog.js";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
 import { ReaderError } from "../src/core/graph/context-reader.js";
-import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { editNode, readNodeFile } from "./node-edit.js";
 
 for (const writer of ["native save", "locked save"] as const) {
   test(
@@ -52,9 +51,8 @@ for (const writer of ["native save", "locked save"] as const) {
                   );
                   competed = true;
                   if (writer === "locked save") {
-                    const current = await readNodeForEdit(adapter, output);
-                    await writeNodeDocument(adapter, output, {
-                      baseEtag: current.etag,
+                    const current = await readNodeFile(adapter, output);
+                    await editNode(adapter, output, {
                       body: `${current.body}\ncompeting save`,
                     });
                   } else await fs.writeFile(filename, original + "\ncompeting save\n");

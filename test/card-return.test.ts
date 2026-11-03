@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
@@ -14,7 +13,6 @@ import {
   takeCardDocument,
   returnCardDocument,
   watchCardDocuments,
-  readCardDocument,
   listCardDocuments,
 } from "../src/core/graph/card-document.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
@@ -99,10 +97,7 @@ test("Card returns once, repeatedly wakes its return recipient, then closes with
   for (const roleId of ["role-owner", "role-worker"])
     assert.equal((await listCardDocuments(adapter, { roleId })).items[0]!.state, "closed");
   for (const key of ["progress", "goalCount", "totalGoalCount", "outputNodeIds"])
-    assert.equal(
-      Object.prototype.hasOwnProperty.call(await readCardDocument(adapter, card.cardId), key),
-      false,
-    );
+    assert.equal(Object.prototype.hasOwnProperty.call(saved.data, key), false);
 });
 
 test("Return addressing is published input; every Card names the Role that takes it", async (t) => {
@@ -185,12 +180,10 @@ test("unpublished return and close roll back; legacy bytes recover exactly and s
     adapter.history.captureUnlocked = capture;
     assert.equal(await adapter.readFile(card.path), before);
     assert.equal(await adapter.history.currentCommit(), beforeHead);
-    assert.equal((await readCardDocument(adapter, card.cardId)).diagnostic, undefined);
     assert.ok(attemptedRaw);
     // Explicit legacy partial delivery: no durable file transaction accompanies these bytes.
     await adapter.writeFile(card.path, attemptedRaw);
     const raw = await adapter.readFile(card.path);
-    assert.equal((await readCardDocument(adapter, card.cardId)).diagnostic && true, true);
     const parsed = parseFrontmatter(raw);
     await adapter.writeFile(
       card.path,
@@ -265,5 +258,8 @@ test("waiting watch wakes on a published return and concurrent returns cannot re
     (c) => c.operation === "card.return",
   );
   assert.equal(operations.length, 1);
-  assert.equal((await readCardDocument(adapter, card.cardId)).result, receipt.result);
+  assert.equal(
+    (await listCardDocuments(adapter)).items.find((item) => item.cardId === card.cardId)!.result,
+    receipt.result,
+  );
 });

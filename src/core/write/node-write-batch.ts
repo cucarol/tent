@@ -6,7 +6,6 @@ import { canonicalDocumentReferencesWithPaths } from "../graph/document-links.js
 import { validateSystemMaterials, systemMaterialPath } from "../graph/material-target.js";
 import { materialLocator } from "../base/material.js";
 import { contentEtag } from "../base/etag.js";
-import { documentLifecycle } from "../base/document-status.js";
 import {
   NODE_FRONTMATTER_KEY_ORDER,
   parseFrontmatter,
@@ -113,14 +112,6 @@ export function validateBatchItemName(ref: string, name: string, parentPath: str
   } catch (error) {
     throw new Error(`Batch item @${ref}: ${(error as Error).message}`);
   }
-}
-
-/** One lock, all-item preflight, one selected-document capture. No intermediate batch state is retained. */
-export function writeNodesBatch(
-  env: OpsEnv,
-  input: NodeWriteBatchInput,
-): Promise<NodeWriteBatchResult> {
-  return withNodeBatchMutation(env, () => writeNodesBatchUnlocked(env, input));
 }
 
 /** Shared batch mutation boundary; recovery precedes draft identity replay decisions. */

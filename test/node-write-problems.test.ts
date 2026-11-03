@@ -6,7 +6,6 @@ import { checkGraph, checkSelectedNodes } from "../src/core/check/graph-check.js
 import { formatNodeWriteProblems } from "../src/core/check/node-write-problems.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { checkNodeWriteProblems } from "../src/fs/node-write-problems.js";
-import { writeNodeDocument, NodeWriteError } from "../src/core/graph/node-document-write.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
@@ -76,16 +75,6 @@ test("advisory inspection failures preserve successful writes and skip zero-writ
     );
     const noop = await cli("rename", ["node-other", "Other"]);
     assert.deepEqual(noop.problems, []);
-    assert.equal(inspections, 1);
-    await assert.rejects(
-      writeNodeDocument(adapter, "node-selected", { baseEtag: "bad-etag", body: "Not saved." }),
-      (error) => error instanceof NodeWriteError && error.code === "ETAG_CONFLICT",
-    );
-    assert.equal(
-      parseFrontmatter(await fs.readFile(path.join(systemRoot, "Selected/Selected.md"), "utf8"))
-        .body,
-      "Clean.",
-    );
     assert.equal(inspections, 1);
   } finally {
     NodeFs.prototype.retainedDocumentPaths = original;

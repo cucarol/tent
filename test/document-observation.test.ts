@@ -7,10 +7,7 @@ import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { initializeFixtureHistory, testScratchRoot } from "./scratch.js";
 import { documentHeader } from "../src/core/graph/node-catalog.js";
 import { sqliteContentFingerprint } from "../src/fs/sqlite-history.js";
-import { retainedDocumentFs } from "../src/core/graph/retained-read.js";
 import { listCardDocuments } from "../src/core/graph/card-document.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
-import { contentEtag } from "../src/core/base/etag.js";
 import { withFileReadScope } from "../src/fs/file-state-cache.js";
 
 const card = (id: string, body = "private body") =>
@@ -213,54 +210,10 @@ test("Card lists preserve live validation, full-body uncaptured, revision and fa
     f.filename,
     retained.replace("state: pending", "state: consumed\nreceivedBy: role-a"),
   );
-  const historical = await retainedDocumentFs(f.adapter);
-  assert.equal(historical.readFrontmatterWithFingerprint, undefined);
-  assert.equal(
-    (await listCardDocuments(historical, { state: "pending" })).items.some(
-      (i) => i.cardId === "card-a",
-    ),
-    true,
-  );
   assert.equal(
     (await listCardDocuments(f.adapter, { state: "pending", retainedState: true })).items.some(
       (i) => i.cardId === "card-a",
     ),
     false,
   );
-});
-
-test("edit reads share an observation scope while later native edits supply fresh full ETags", async (t) => {
-  const f = await fixture(t);
-  const relative = "A/A.md",
-    filename = path.join(f.root, relative);
-  await fs.mkdir(path.dirname(filename));
-  const raw = (body: string) => `---\nid: node-alpha\ntype: prompt\n---\n${body}`;
-  await fs.writeFile(filename, raw("before"));
-  const scope = f.adapter.observationScope.bind(f.adapter);
-  let depth = 0,
-    fullReadDepth = 0;
-  f.adapter.observationScope = async (action) =>
-    scope(async () => {
-      depth++;
-      try {
-        return await action();
-      } finally {
-        depth--;
-      }
-    });
-  const read = f.adapter.readFile.bind(f.adapter);
-  f.adapter.readFile = async (file) => {
-    if (file === relative) fullReadDepth = depth;
-    return read(file);
-  };
-  const first = await readNodeForEdit(f.adapter, "node-alpha");
-  assert.ok(fullReadDepth > 0, "catalog, full document and optional checks share the query scope");
-  await fs.writeFile(filename, raw("AFTER!"));
-  const next = await readNodeForEdit(f.adapter, "node-alpha");
-  assert.equal(next.raw, raw("AFTER!"));
-  assert.equal(next.etag, contentEtag(next.raw));
-  assert.notEqual(next.etag, first.etag);
-  f.adapter.readFile = async (file) =>
-    file === relative ? raw("body").replace("node-alpha", "node-other") : read(file);
-  await assert.rejects(readNodeForEdit(f.adapter, "node-alpha"), { code: "SOURCE_CHANGED" });
 });

@@ -116,13 +116,8 @@ async function runNodeCommandOpened(
         if (typeof target !== "string") return target;
         const nodeId = nodeRef(target);
         if (flags.version !== undefined) {
-          const { readNode } = await import("../core/read/node-query.js");
-          const { node } = await readNode(fs, workspaceId, {
-            nodeId,
-            version: JSON.parse(flags.version),
-            view: "raw",
-          });
-          if (!("text" in node)) throw new Error("Historical Node text was not returned");
+          const { readNodeVersion } = await import("../core/read/node-version.js");
+          const node = await readNodeVersion(fs, nodeId, JSON.parse(flags.version));
           return {
             exitCode: 0,
             stdout: json ? JSON.stringify(node) + "\n" : node.text,

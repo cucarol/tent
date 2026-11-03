@@ -6,12 +6,10 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test from "node:test";
 import { createNode, renameNode } from "../src/core/graph/ops.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
-import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { loadTent } from "../src/core/store/tree.js";
 import { scaffoldTent } from "../src/core/store/scaffold.js";
-import { NodeFs } from "../src/fs/node-fs.js";
+import { editNode, readNodeFile } from "./node-edit.js";
 
 test("Node names follow filenames; writes synchronize existing titles and retain metadata", async (t) => {
   const scratch = path.resolve(testScratchRoot());
@@ -36,8 +34,8 @@ test("Node names follow filenames; writes synchronize existing titles and retain
   assert.equal(tent.byId.get(id)?.name, "Scoped");
   assert.equal((await loadTent(adapter)).byPath.get("Scoped")!.name, "Scoped");
   assert.equal(await adapter.readFile("Scoped/Scoped.md"), original);
-  let edit = await readNodeForEdit(adapter, id);
-  await writeNodeDocument(adapter, id, { baseEtag: edit.etag, body: "fact" });
+  let edit = await readNodeFile(adapter, id);
+  await editNode(adapter, id, { body: "fact" });
   const current = parseFrontmatter(await adapter.readFile("Scoped/Scoped.md"));
   assert.equal(current.data.title, "Scoped");
   assert.deepEqual(current.data.custom, { nested: [1, "keep"] });
@@ -47,8 +45,8 @@ test("Node names follow filenames; writes synchronize existing titles and retain
     writes++;
     await write(file, raw);
   };
-  edit = await readNodeForEdit(adapter, id);
-  await writeNodeDocument(adapter, id, { baseEtag: edit.etag, body: "fact" });
+  edit = await readNodeFile(adapter, id);
+  await editNode(adapter, id, { body: "fact" });
   assert.equal(writes, 0);
   adapter.writeFile = write;
   const child = await createNode(env, { name: "Child", parentPath: "Scoped", type: "prompt" });

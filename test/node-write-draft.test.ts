@@ -6,18 +6,17 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 import { renameNode } from "../src/core/graph/ops.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
-import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { test, type TestContext } from "node:test";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { checkWorkspaceModules } from "../src/core/check/workspace-module-map.js";
-import { writeNodesBatch, type NodeWriteBatchInput } from "../src/core/write/node-write-batch.js";
+import { type NodeWriteBatchInput } from "../src/core/write/node-write-batch.js";
 import { writeNodesDraft } from "../src/core/write/node-write-draft.js";
 import { openNodeDraft } from "../src/fs/node-draft-consumption.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { initializeFixtureHistory, testScratchRoot } from "./scratch.js";
+import { editNode, readNodeFile, saveNodesBatch } from "./node-edit.js";
 
 async function fixture(t: TestContext, items: NodeWriteBatchInput["items"]) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "node-write-draft-"));
@@ -201,7 +200,7 @@ test("one staged save uses one mutation lock and capture for forward parents and
   assert.equal(locks, 1);
   assert.equal(captures, 1);
   for (const item of result.results) {
-    const saved = await readNodeForEdit(f.adapter, item.nodeId);
+    const saved = await readNodeFile(f.adapter, item.nodeId);
     assert.equal("generated" in saved.frontmatter, false);
   }
   assert.match(
@@ -383,9 +382,9 @@ test("an exception after committed capture retains full ID input and replay pres
   const id = retry.items[0].id;
   f.adapter.history.captureUnlocked = capture;
   await renameNode(f.env, id, "Renamed");
-  const live = await readNodeForEdit(f.adapter, id);
-  await writeNodeDocument(f.adapter, id, { baseEtag: live.etag, body: "External current body" });
-  const changed = await readNodeForEdit(f.adapter, id);
+  const live = await readNodeFile(f.adapter, id);
+  await editNode(f.adapter, id, { body: "External current body" });
+  const changed = await readNodeFile(f.adapter, id);
   const head = await f.adapter.history.currentCommit();
   // Saved identity also wins over a later blank draft body and obsolete old path.
   retry.items[0].body = "";
@@ -402,7 +401,7 @@ test("an exception after committed capture retains full ID input and replay pres
   const result = await f.save();
   assert.equal(result.results[0].path, "Renamed");
   assert.equal(result.results[0].etag, changed.etag);
-  assert.equal((await readNodeForEdit(f.adapter, id)).raw, changed.raw);
+  assert.equal((await readNodeFile(f.adapter, id)).raw, changed.raw);
   assert.equal(await f.adapter.exists("Ready"), false);
   assert.equal(await f.adapter.exists("Renamed/Child/Child.md"), true);
   assert.notEqual(
@@ -453,14 +452,14 @@ for (const mode of [
     const items = structuredClone(original.items);
     if (mode.endsWith("invalid")) items[0].id = "invalid";
     if (mode === "draft-duplicate") items.push({ ...items[0], ref: "two", name: "Two" });
-    if (mode === "batch-collision") await writeNodesBatch(f.env, { items });
+    if (mode === "batch-collision") await saveNodesBatch(f.env, { items });
     const head = await f.adapter.history.currentCommit();
     if (mode.startsWith("draft")) {
       await fs.writeFile(f.filename, JSON.stringify({ items }));
       const before = await fs.readFile(f.filename, "utf8");
       await assert.rejects(f.save());
       assert.equal(await fs.readFile(f.filename, "utf8"), before);
-    } else await assert.rejects(writeNodesBatch(f.env, { items }));
+    } else await assert.rejects(saveNodesBatch(f.env, { items }));
     assert.equal(await f.adapter.history.currentCommit(), head);
     assert.equal(await f.adapter.exists("Two"), false);
     assert.equal(await f.adapter.exists("One"), mode === "batch-collision");
@@ -594,8 +593,8 @@ for (const cut of ["ids-checkpointed", "node-written", "captured"] as const) {
     const catalog = await loadNodeCatalog(reopened);
     assert.equal(catalog.byPath.size, 2);
     assert.deepEqual([...catalog.byId.keys()].sort(), [...ids].sort());
-    const parent = await readNodeForEdit(reopened, ids[0]!);
-    const child = await readNodeForEdit(reopened, ids[1]!);
+    const parent = await readNodeFile(reopened, ids[0]!);
+    const child = await readNodeFile(reopened, ids[1]!);
     assert.match(parent.body, /^Parent body \[child\]\(\.\/Child\/Child.md\)/);
     assert.match(child.body, /^Child body \[parent\]\(\.\.\/Parent.md\)/);
     assert.equal((child.frontmatter.sources as { resource: string }[])[0].resource, "../Parent.md");

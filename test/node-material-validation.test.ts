@@ -17,13 +17,12 @@ import {
   validateMaterialAddresses,
   type MaterialSource,
 } from "../src/core/base/material.js";
-import { NodeWriteError, writeNodeDocument } from "../src/core/graph/node-document-write.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { NodeWriteError } from "../src/core/graph/node-document-write.js";
 import { testScratchRoot } from "./scratch.js";
-import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
 import { createCardDocument } from "../src/core/graph/card-document.js";
 import { renameNode } from "../src/core/graph/rename-ops.js";
+import { editNode, readNodeFile, saveNodesBatch } from "./node-edit.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-material-"));
@@ -76,7 +75,7 @@ test("Node create validates every material address before publishing, with its d
 
 test("Node frontmatter and raw writes reject new invalid resource and source addresses atomically", async (t) => {
   const { adapter, id, note } = await fixture(t);
-  const live = await readNodeForEdit(adapter, id);
+  const live = await readNodeFile(adapter, id);
   for (const field of ["resource", "sources"] as const) {
     for (const invalid of ["/../spec/x.md", "./bad%zz", "./bad\\name", "https://["]) {
       const fields =
@@ -85,20 +84,17 @@ test("Node frontmatter and raw writes reject new invalid resource and source add
         { frontmatter: fields },
         { raw: serializeFrontmatter({ ...live.frontmatter, ...fields }, "replacement") },
       ]) {
-        await assert.rejects(
-          writeNodeDocument(adapter, id, { baseEtag: live.etag, ...input }),
-          (error: NodeWriteError) => {
-            assert.ok(error instanceof NodeWriteError);
-            assert.equal(error.code, "INVALID_EDIT");
-            assert.match(
-              error.message,
-              field === "resource" ? /Invalid resource:/ : /Invalid sources\[0\]\.resource:/,
-            );
-            if (invalid.startsWith("/../"))
-              assert.match(error.message, /\.\.\/\.\.\/\.\.\/spec\/x.md/);
-            return true;
-          },
-        );
+        await assert.rejects(editNode(adapter, id, { ...input }), (error: NodeWriteError) => {
+          assert.ok(error instanceof NodeWriteError);
+          assert.equal(error.code, "INVALID_EDIT");
+          assert.match(
+            error.message,
+            field === "resource" ? /Invalid resource:/ : /Invalid sources\[0\]\.resource:/,
+          );
+          if (invalid.startsWith("/../"))
+            assert.match(error.message, /\.\.\/\.\.\/\.\.\/spec\/x.md/);
+          return true;
+        });
         assert.equal(await adapter.readFile(note), live.raw);
       }
     }
@@ -110,7 +106,7 @@ test("Node frontmatter and raw writes reject new invalid resource and source add
       { resource: "../../../missing%23name.md#part" },
     ],
   };
-  await writeNodeDocument(adapter, id, { baseEtag: live.etag, frontmatter: fields });
+  await editNode(adapter, id, { frontmatter: fields });
   assert.deepEqual(parseFrontmatter(await adapter.readFile(note)).data.sources, fields.sources);
 });
 
@@ -128,13 +124,10 @@ test("legacy addresses survive body/raw/metadata edits, source reorder and remov
     ],
   };
   await adapter.writeFile(note, serializeFrontmatter(legacy, "legacy"));
-  const edit = async (input: Parameters<typeof writeNodeDocument>[2]) => {
-    const live = await readNodeForEdit(adapter, id);
-    return writeNodeDocument(adapter, id, { baseEtag: live.etag, ...input });
-  };
+  const edit = (input: Parameters<typeof editNode>[2]) => editNode(adapter, id, input);
   await edit({ body: "body update" });
   await edit({ frontmatter: { description: "metadata update" } });
-  const current = await readNodeForEdit(adapter, id);
+  const current = await readNodeFile(adapter, id);
   await edit({ raw: serializeFrontmatter(current.frontmatter, "raw body update") });
   const reordered = [
     legacy.sources[2]!,
@@ -165,13 +158,13 @@ test("Core edits retain legacy addresses and workspace check reports their repai
   );
   const cli = (sub: string, args: string[]) =>
     runNodeCommand(sub, args, { workspace: root, json: true });
-  const read = await readNodeForEdit(adapter, id);
-  await writeNodeDocument(adapter, id, { baseEtag: read.etag, body: "Core update" });
-  const live = await readNodeForEdit(adapter, id);
+  const read = await readNodeFile(adapter, id);
+  await editNode(adapter, id, { body: "Core update" });
+  const live = await readNodeFile(adapter, id);
   assert.equal(live.body, "Core update");
   const input = { baseEtag: live.etag, frontmatter: { sources: [{ resource: "/../new.md" }] } };
   await assert.rejects(
-    writeNodeDocument(adapter, id, input),
+    editNode(adapter, id, input),
     (error) =>
       error instanceof NodeWriteError &&
       error.code === "INVALID_EDIT" &&
@@ -268,7 +261,7 @@ test("ordinary .tent files are rejected consistently by new declarations and liv
   await initializeFixtureHistory(path.join(root, ".tent"));
   await adapter.writeFile("attachments/ordinary.md", "ordinary bytes");
   await createRoleContext(adapter, { roleId: "role-review", title: "Review", body: "direction" });
-  const live = await readNodeForEdit(adapter, id);
+  const live = await readNodeFile(adapter, id);
   for (const resource of [
     "/attachments/ordinary.md",
     pathToFileURL(path.join(root, ".tent/attachments/ordinary.md")).href,
@@ -283,16 +276,8 @@ test("ordinary .tent files are rejected consistently by new declarations and liv
       createNode(env, { parentPath: "", name: "Rejected", type: "output", resource }),
       /Materials must point/,
     );
-    for (const input of [
-      { frontmatter: { sources: [{ resource }] } },
-      { raw: serializeFrontmatter({ ...live.frontmatter, resource }, live.body) },
-    ])
-      await assert.rejects(
-        writeNodeDocument(adapter, id, { baseEtag: live.etag, ...input }),
-        /Materials must point/,
-      );
     await assert.rejects(
-      writeNodesBatch(env, {
+      saveNodesBatch(env, {
         items: [
           { op: "create", ref: "first", parent: null, name: "First", type: "prompt" },
           { op: "create", ref: "second", parent: null, name: "Second", type: "output", resource },
@@ -324,8 +309,8 @@ test("ordinary .tent files are rejected consistently by new declarations and liv
     "legacy",
   );
   await adapter.writeFile(note, legacy);
-  const retained = await readNodeForEdit(adapter, id);
-  await writeNodeDocument(adapter, id, { baseEtag: retained.etag, body: "editable legacy" });
+  const retained = await readNodeFile(adapter, id);
+  await editNode(adapter, id, { body: "editable legacy" });
 });
 
 test("file URI Node, Role and Card addresses keep native document and response semantics", async (t) => {

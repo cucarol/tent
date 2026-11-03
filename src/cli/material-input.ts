@@ -123,12 +123,3 @@ export async function missingExplicitSources(
   }
   return warnings;
 }
-
-export async function isFile(filename: string): Promise<boolean> {
-  try {
-    return (await stat(filename)).isFile();
-  } catch (error) {
-    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
-    throw error;
-  }
-}

@@ -5,19 +5,13 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { loadTent, isContentMutable, isUsableNode } from "../src/core/store/tree.js";
 import { archiveNode, NodeLifecycleError } from "../src/core/graph/node-lifecycle.js";
-import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
-import {
-  loadNodeCatalog,
-  catalogRelations,
-  catalogSummary,
-} from "../src/core/graph/node-catalog.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import { documentLifecycle } from "../src/core/base/document-status.js";
 import { liveContextReader } from "../src/core/read/context-reader-factory.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
-import { contentEtag } from "../src/core/base/etag.js";
-import { git } from "./helpers.js";
+import { editNode } from "./node-edit.js";
 
 const source = { kind: "live" as const, workspaceId: "ws-status" };
 test("archive reports saved paths and reachable preimages when outer history finalization fails", async (t) => {
@@ -79,8 +73,7 @@ async function fixture(t: TestContext) {
 test("local status never inherits or freezes edits; unknown status stays visible as a diagnostic", async (t) => {
   const { adapter } = await fixture(t);
   const initial = await adapter.readFile("A/A.md");
-  const saved = await writeNodeDocument(adapter, "node-root", {
-    baseEtag: contentEtag(initial),
+  const saved = await editNode(adapter, "node-root", {
     frontmatter: { status: "deprecated" },
   });
   const tree = await loadTent(adapter),
@@ -91,17 +84,12 @@ test("local status never inherits or freezes edits; unknown status stays visible
   assert.equal(tree.byId.get("node-draft")!.status, "draft");
   assert.equal(isContentMutable(root), true);
   assert.equal(isUsableNode(root), false);
-  const edited = await writeNodeDocument(adapter, root.id, {
-    baseEtag: saved.etag,
+  const edited = await editNode(adapter, root.id, {
     body: "corrected old explanation",
   });
   assert.equal(parseFrontmatter(edited.raw).data.status, "deprecated");
   const catalog = await loadNodeCatalog(adapter);
-  assert.ok(
-    catalogRelations(catalog, source, { nodeId: null, direction: "children" }).items.some(
-      (n) => n.nodeId === root.id,
-    ),
-  );
+  assert.ok(catalog.rootNodeIds.includes(root.id));
   const reader = await liveContextReader(adapter, source);
   assert.ok(reader.list().items.some((n) => n.nodeId === root.id));
   assert.equal(reader.read({ nodeId: root.id, view: "body" }).status, "deprecated");
@@ -112,11 +100,14 @@ test("local status never inherits or freezes edits; unknown status stays visible
   const unknown = (await loadTent(adapter)).byId.get(root.id)!;
   assert.equal(unknown.status, null);
   assert.equal(unknown.invalid, false);
-  const summary = catalogSummary(await loadNodeCatalog(adapter), source, root.id);
-  assert.match(summary.statusDiagnostic!, /Unsupported/);
+  assert.match(
+    documentLifecycle(parseFrontmatter(await adapter.readFile("A/A.md")).data).statusDiagnostic!,
+    /Unsupported/,
+  );
+  // An unknown value already retained, as an imported workspace may hold one.
   const current = await adapter.readFile("A/A.md");
-  await writeNodeDocument(adapter, root.id, {
-    baseEtag: contentEtag(current),
+  await adapter.history.captureUnlocked([{ path: "A/A.md", raw: current }]);
+  await editNode(adapter, root.id, {
     body: "preserve unknown lifecycle",
   });
   assert.equal(parseFrontmatter(await adapter.readFile("A/A.md")).data.status, "future-state");
@@ -148,8 +139,7 @@ test("archive captures selected documents in ordinary history and status edits r
   assert.equal(noOp.changed, false);
   assert.equal(await adapter.history.currentCommit(), archived.commit);
   const before = await adapter.readFile("A/A.md");
-  const reactivated = await writeNodeDocument(adapter, "node-root", {
-    baseEtag: contentEtag(before),
+  const reactivated = await editNode(adapter, "node-root", {
     frontmatter: { status: "stable" },
   });
   assert.equal(parseFrontmatter(reactivated.raw).data.status, "stable");

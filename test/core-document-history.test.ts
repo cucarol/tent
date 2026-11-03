@@ -1,7 +1,6 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { testScratchRoot } from "./scratch.js";
 import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
-import { readNode, readNodeForEdit, listNodes, searchNodes } from "../src/core/read/node-query.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
@@ -10,13 +9,11 @@ import { initializeFixtureWorkspace } from "./scratch.js";
 import { renameNode, deleteNode } from "../src/core/graph/ops.js";
 import { withTentMutation } from "../src/core/store/adapter.js";
 import { DELETE_PENDING_PATH } from "../src/core/store/delete-recovery.js";
-import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { NODE_MOVE_PENDING_PATH } from "../src/core/store/node-move-recovery.js";
-import { contentEtag } from "../src/core/base/etag.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
-import { NodeWriteError, writeNodeDocument } from "../src/core/graph/node-document-write.js";
-import { extendTestLockWait } from "./helpers.js";
+import { editNode, readNodeFile } from "./node-edit.js";
+import { readNodeVersion } from "../src/core/read/node-version.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(testScratchRoot());
@@ -47,90 +44,6 @@ async function fixture(t: TestContext) {
   return { root, workspace, workspaceId, mount, adapter };
 }
 
-test("Node normalization rejects intervening editor bytes before capture or save", async (t) => {
-  const { adapter, mount } = await fixture(t);
-  const selected = { id: "node-alpha", path: "A/A.md" };
-  const original = await adapter.readFile(selected.path);
-  await adapter.history.captureUnlocked([{ path: selected.path, raw: original }]);
-  const head = await adapter.history.currentCommit();
-  const external = original + "\nUSER EXTERNAL EDIT";
-  const header = adapter.readFrontmatter.bind(adapter);
-  let peerReads = 0;
-  adapter.readFrontmatter = async (file) => {
-    const result = await header(file);
-    // Node lookup scans once before CAS; canonicalization performs the next scan.
-    if (file === "B/B.md" && ++peerReads === 2)
-      await fs.writeFile(path.join(mount.systemRoot, selected.path), external);
-    return result;
-  };
-  const send = (baseEtag: string) =>
-    writeNodeDocument(adapter, selected.id, { baseEtag, body: "new [peer](node-bravo)" });
-  try {
-    await assert.rejects(send(contentEtag(original)), (error) => {
-      assert.ok(error instanceof NodeWriteError);
-      assert.equal(error.code, "ETAG_CONFLICT");
-      return true;
-    });
-  } finally {
-    adapter.readFrontmatter = header;
-  }
-  assert.equal(await adapter.readFile(selected.path), external);
-  assert.equal(await adapter.history.currentCommit(), head);
-  const saved = await send(contentEtag(external));
-  assert.ok(saved.version);
-  const finalRaw = await adapter.readFile(selected.path);
-  assert.equal(parseFrontmatter(finalRaw).body, "new [peer](../B/B.md)");
-  assert.equal(await adapter.history.read(saved.version), finalRaw);
-});
-
-test("independent Core writers share CAS, selected reads and exact history", async (t) => {
-  const { adapter, mount } = await fixture(t);
-  const peer = openTestFs(mount.systemRoot);
-  extendTestLockWait(t, adapter, mount.systemRoot);
-  extendTestLockWait(t, peer, mount.systemRoot);
-  const raw = await adapter.readFile("A/A.md"),
-    baseEtag = contentEtag(raw);
-  const read = adapter.readFile.bind(adapter);
-  let unrelatedReads = 0;
-  adapter.readFile = async (file) => {
-    if (file === "B/B.md") unrelatedReads++;
-    return read(file);
-  };
-  const results = await Promise.allSettled([
-    writeNodeDocument(adapter, "node-alpha", { baseEtag, body: "Core fact" }),
-    writeNodeDocument(peer, "node-alpha", { baseEtag, body: "other fact" }),
-  ]);
-  assert.equal(
-    results.filter((result) => result.status === "fulfilled").length,
-    1,
-    results
-      .map((result) => (result.status === "rejected" ? String(result.reason) : "saved"))
-      .join("; "),
-  );
-  const rejected = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
-  assert.ok(rejected.reason instanceof NodeWriteError);
-  assert.equal(rejected.reason.code, "ETAG_CONFLICT");
-  assert.equal(unrelatedReads, 0);
-  await assert.rejects(
-    writeNodeDocument(adapter, "node-alpha", { baseEtag, body: "Stale Core fact" }),
-    /etag conflict/,
-  );
-  await assert.rejects(
-    writeNodeDocument(adapter, "node-alpha", { baseEtag, body: "Stale other fact" }),
-    /etag conflict/,
-  );
-  const current = await adapter.readFile("A/A.md");
-  const saved = await writeNodeDocument(adapter, "node-alpha", {
-    baseEtag: contentEtag(current),
-    raw: current,
-  });
-  assert.equal(saved.changed, false);
-  assert.ok(saved.version);
-  assert.equal(await adapter.history!.read(saved.version), current);
-  assert.equal(await adapter.history!.read({ ...saved.version, path: "A/A.md" }), saved.raw);
-  assert.equal(unrelatedReads, 0);
-});
-
 test("public archive retains its event and deprecated document bytes", async (t) => {
   const h = await fixture(t),
     { adapter, workspace } = h;
@@ -138,7 +51,7 @@ test("public archive retains its event and deprecated document bytes", async (t)
   assert.equal(archived.exitCode, 0, archived.stderr);
   const result = JSON.parse(archived.stdout);
   assert.match(result.commit, /^[a-f0-9]{40,64}$/);
-  const edit = await readNodeForEdit(adapter, "node-alpha");
+  const edit = await readNodeFile(adapter, "node-alpha");
   assert.equal(edit.status, "deprecated");
   assert.equal(edit.body, "Original A\n");
   assert.equal(await adapter.history!.read({ commit: result.commit, path: "A/A.md" }), edit.raw);
@@ -147,26 +60,16 @@ test("public archive retains its event and deprecated document bytes", async (t)
 test("Core material edits retain exact history and reject invalid source shapes before saving", async (t) => {
   const h = await fixture(t),
     { workspaceId, adapter } = h;
-  const original = await readNodeForEdit(adapter, "node-alpha");
+  const original = await readNodeFile(adapter, "node-alpha");
   const sources = [
     { resource: "../B/B.md", title: "first", custom: [2, 1] },
     { resource: "user interviews" },
     { resource: "../B/B.md", title: "second" },
   ];
-  const saved = await writeNodeDocument(adapter, "node-alpha", {
-    baseEtag: original.etag,
-    frontmatter: {
-      resource: "../../src/main.ts",
-      sources: sources.map((source) =>
-        source.resource === "../B/B.md" ? { ...source, resource: "node-bravo" } : source,
-      ),
-    },
+  const saved = await editNode(adapter, "node-alpha", {
+    frontmatter: { resource: "../../src/main.ts", sources },
   });
   assert.deepEqual(parseFrontmatter(saved.raw).data.sources, sources);
-  const search = await searchNodes(adapter, workspaceId, h.workspace, {
-    resource: "../src/main.ts",
-  });
-  assert.equal(search.items[0].nodeId, "node-alpha");
   assert.equal(parseFrontmatter(saved.raw).data.resource, "../../src/main.ts");
   const raw = await adapter.readFile("A/A.md");
   assert.ok(saved.version);
@@ -177,14 +80,11 @@ test("Core material edits retain exact history and reject invalid source shapes 
     { sources: [{ title: "missing" }] },
     { sources: "wrong" },
   ]) {
-    await assert.rejects(
-      writeNodeDocument(adapter, "node-alpha", { baseEtag: saved.etag, frontmatter }),
-    );
+    await assert.rejects(editNode(adapter, "node-alpha", { frontmatter }));
     assert.equal(await adapter.readFile("A/A.md"), raw);
     assert.equal(await adapter.history.currentCommit(), head);
   }
-  await writeNodeDocument(adapter, "node-alpha", {
-    baseEtag: saved.etag,
+  await editNode(adapter, "node-alpha", {
     frontmatter: { sources },
   });
   assert.equal(await adapter.history.currentCommit(), head);
@@ -196,77 +96,7 @@ test("Core material edits retain exact history and reject invalid source shapes 
       source.resource === "../B/B.md" ? { ...source, resource: "../New/New.md" } : source,
     ),
   );
-  const historical = await readNode(adapter, workspaceId, {
-    nodeId: "node-alpha",
-    ...{ view: "raw", version: saved.version },
-  });
-  assert.ok("text" in historical.node);
-  assert.equal(historical.node.text, raw);
-});
-
-test("explicit read capture and Core saves retain only selected documents; historical descriptors survive rename and deletion", async (t) => {
-  const h = await fixture(t),
-    { workspaceId, adapter } = h;
-  await listNodes(adapter, workspaceId, {});
-  await readNode(adapter, workspaceId, { nodeId: "node-alpha", ...{ view: "summary" } });
-  await searchNodes(adapter, workspaceId, h.workspace, { resource: "../source.txt" });
-  assert.equal(await adapter.history.currentCommit(), null);
-  const uncaptured = await readNodeForEdit(adapter, "node-alpha");
-  assert.equal(uncaptured.version, undefined);
-  assert.equal(await adapter.history.currentCommit(), null);
-  const original = await readNodeForEdit(adapter, "node-alpha", { capture: true });
-  assert.ok(original.version);
-  assert.equal((await adapter.retainedDocumentPaths())!.join("\n"), "A/A.md");
-  assert.equal(await adapter.readFile("A/A.md"), original.raw);
-  const unselected = await adapter.readFile("B/B.md");
-  const saved = (await writeNodeDocument(adapter, original.nodeId, {
-    baseEtag: original.etag,
-    body: "Saved A",
-  })) as { etag: string; version: DocumentVersion };
-  assert.equal(await adapter.history!.read(saved.version), await adapter.readFile("A/A.md"));
-  assert.equal((await adapter.retainedDocumentPaths())!.join("\n"), "A/A.md");
-  assert.equal(await adapter.readFile("B/B.md"), unselected);
-  assert.equal((await adapter.retainedDocumentPaths())!.includes("B/B.md"), false);
-  const head = await adapter.history.currentCommit();
-  await writeNodeDocument(adapter, original.nodeId, { baseEtag: saved.etag, body: "Saved A" });
-  await readNode(adapter, workspaceId, { nodeId: original.nodeId, ...{} });
-  assert.equal(await adapter.history.currentCommit(), head);
-  await adapter.writeFile("A/A.md", original.raw.replace("Original A", "Editor A"));
-  await readNode(adapter, workspaceId, { nodeId: original.nodeId, ...{ view: "summary" } });
-  assert.equal(await adapter.history.currentCommit(), head);
-  const read = await readNode(adapter, workspaceId, {
-    nodeId: original.nodeId,
-    ...{ view: "raw", capture: true },
-  });
-  assert.ok("text" in read.node && read.node.version);
-  assert.match(await adapter.history!.read(read.node.version), /Editor A/);
-  const edited = await readNodeForEdit(adapter, original.nodeId);
-  await writeNodeDocument(adapter, original.nodeId, { baseEtag: edited.etag, body: "Core save" });
-  assert.match(
-    await adapter.history.read({
-      commit: (await adapter.history.currentCommit())!,
-      path: "A/A.md",
-    }),
-    /Core save/,
-  );
-  await renameNode(h.mount.env, original.nodeId, "Renamed");
-  const renamed = await readNodeForEdit(adapter, original.nodeId, { capture: true });
-  assert.ok(renamed.version);
-  assert.equal((await adapter.retainedDocumentPaths())!.join("\n"), "Renamed/Renamed.md");
-  assert.notEqual(original.version.path, renamed.version.path);
-  assert.match(await adapter.history.diff(original.version, renamed.version), /Core save/);
-  await deleteNode(h.mount.env, original.nodeId);
-  const history = await runNodeCommand(
-    "history",
-    [original.nodeId, "--version", JSON.stringify(original.version)],
-    { workspace: h.workspace, json: true },
-  );
-  assert.equal(history.exitCode, 0, history.stderr);
-  assert.equal(JSON.parse(history.stdout).text, original.raw);
-  await assert.rejects(
-    readNode(adapter, workspaceId, { nodeId: "node-bravo", ...{ version: original.version } }),
-    /another Node/,
-  );
+  assert.equal((await readNodeVersion(adapter, "node-alpha", saved.version)).text, raw);
 });
 
 test("batch writes share a commit and history failures never report a successful save", async (t) => {
@@ -279,7 +109,7 @@ test("batch writes share a commit and history failures never report a successful
   });
   assert.equal(String((await adapter.history.changesInRange()).length), "1");
   assert.equal((await adapter.retainedDocumentPaths())!.join("\n"), "C/C.md\nD/D.md");
-  const original = await readNodeForEdit(adapter, "node-alpha");
+  const original = await readNodeFile(adapter, "node-alpha");
   const capture = adapter.history!.captureUnlocked.bind(adapter.history);
   adapter.history!.captureUnlocked = async (changes, metadata) => {
     if (changes.some((c) => c.raw?.includes("Capture failure")))
@@ -287,16 +117,16 @@ test("batch writes share a commit and history failures never report a successful
     return capture(changes, metadata);
   };
   await assert.rejects(
-    writeNodeDocument(adapter, original.nodeId, {
-      baseEtag: original.etag,
+    editNode(adapter, original.nodeId, {
       body: "Capture failure",
     }),
     /injected history failure/,
   );
   adapter.history!.captureUnlocked = capture;
-  assert.equal(await adapter.readFile("A/A.md"), original.raw);
-  const retry = await readNodeForEdit(adapter, original.nodeId, { capture: true });
+  assert.match(await adapter.readFile("A/A.md"), /Capture failure/);
+  const retry = await readNodeFile(adapter, original.nodeId, { capture: true });
   assert.ok(retry.version);
+  assert.match(retry.raw, /Capture failure/);
   assert.equal(await adapter.history!.read(retry.version), retry.raw);
   // An unpublished deletion now shares the durable transaction rollback.
   const write = adapter.writeFile.bind(adapter);
@@ -317,7 +147,7 @@ test("batch writes share a commit and history failures never report a successful
 
 test("material declarations and opaque metadata retain exact Node history without reading project bytes", async (t) => {
   const { adapter } = await fixture(t);
-  const original = await readNodeForEdit(adapter, "node-alpha");
+  const original = await readNodeFile(adapter, "node-alpha");
   const generated = { imported: ["opaque", false], by: "not an actor", at: "not a timestamp" };
   const provenance = { arbitrary: ["leave", 17, false] };
   const readFile = adapter.readFile.bind(adapter);
@@ -326,42 +156,38 @@ test("material declarations and opaque metadata retain exact Node history withou
     reads.push(file);
     return readFile(file);
   };
-  const saved = await writeNodeDocument(adapter, original.nodeId, {
-    baseEtag: original.etag,
+  const saved = await editNode(adapter, original.nodeId, {
     frontmatter: { resource: "../../not-present.txt", generated, provenance },
   });
   assert.equal(parseFrontmatter(saved.raw).body, original.body);
   assert.deepEqual(parseFrontmatter(saved.raw).data.generated, generated);
   assert.deepEqual(parseFrontmatter(saved.raw).data.provenance, provenance);
-  assert.equal(reads.includes("B/B.md"), false);
+  assert.equal(
+    reads.some((file) => file.includes("not-present")),
+    false,
+  );
   assert.ok(saved.version);
   assert.equal(await adapter.history.read(saved.version), saved.raw);
-  const changed = await writeNodeDocument(adapter, original.nodeId, {
-    baseEtag: saved.etag,
+  const changed = await editNode(adapter, original.nodeId, {
     body: "Changed body",
   });
   assert.deepEqual(parseFrontmatter(changed.raw).data.provenance, provenance);
   assert.equal(parseFrontmatter(changed.raw).data.resource, "../../not-present.txt");
   const head = await adapter.history.currentCommit();
   await assert.rejects(
-    writeNodeDocument(adapter, original.nodeId, {
-      baseEtag: changed.etag,
+    editNode(adapter, original.nodeId, {
       frontmatter: { verified: provenance },
     }),
     /Node field verified is retired; remove it from the document/,
   );
   assert.equal(await adapter.readFile("A/A.md"), changed.raw);
   assert.equal(await adapter.history.currentCommit(), head);
-  await assert.rejects(
-    writeNodeDocument(adapter, original.nodeId, { baseEtag: original.etag, body: "Stale" }),
-    /etag conflict/i,
-  );
   adapter.readFile = readFile;
 });
 
 test("public rename rejects YAML aliases before changing unknown metadata or moving files", async (t) => {
   const h = await fixture(t);
-  await readNodeForEdit(h.adapter, "node-alpha", { capture: true });
+  await readNodeFile(h.adapter, "node-alpha", { capture: true });
   for (const custom of ["custom: *items", "custom:\n  nested: *items"]) {
     const raw = `---\nid: node-bravo\ntype: prompt\nsources: &items\n  - resource: /A/A.md\n    title: evidence\n${custom}\n---\nOriginal body\n`;
     await h.adapter.writeFile("B/B.md", raw);
@@ -375,19 +201,14 @@ test("public rename rejects YAML aliases before changing unknown metadata or mov
   }
 });
 
-test("preimage history capture rejects external edits before write, binary write, move or remove", async (t) => {
+test("preimage history capture rejects external edits before binary write, move or remove", async (t) => {
   const h = await fixture(t),
     { adapter, workspaceId } = h;
   const capture = adapter.history!.captureUnlocked.bind(adapter.history);
-  for (const operation of ["write", "binary", "move", "remove"] as const) {
+  for (const operation of ["binary", "move", "remove"] as const) {
     const raw = `---\nid: node-alpha\ntype: prompt\n---\nBefore ${operation}\n`;
     const edited = raw.replace(`Before ${operation}`, `OTHER_EDITOR ${operation}`);
     await adapter.writeFile("A/A.md", raw);
-    const summary = await readNode(adapter, workspaceId, {
-      nodeId: "node-alpha",
-      ...{ view: "summary" },
-    });
-    assert.equal("etag" in summary.node, false);
     let injected = false;
     adapter.history!.captureUnlocked = async (changes) => {
       const result = await capture(changes);
@@ -398,17 +219,12 @@ test("preimage history capture rejects external edits before write, binary write
       return result;
     };
     const act = () =>
-      operation === "write"
-        ? writeNodeDocument(adapter, "node-alpha", {
-            baseEtag: contentEtag(raw),
-            body: "MODEL_EDIT",
-          })
-        : withTentMutation(adapter, async () => {
-            if (operation === "binary")
-              await adapter.writeBinary("A/A.md", Buffer.from(raw + "MODEL_EDIT"));
-            if (operation === "move") await adapter.move("A", "Moved");
-            if (operation === "remove") await adapter.remove("A");
-          });
+      withTentMutation(adapter, async () => {
+        if (operation === "binary")
+          await adapter.writeBinary("A/A.md", Buffer.from(raw + "MODEL_EDIT"));
+        if (operation === "move") await adapter.move("A", "Moved");
+        if (operation === "remove") await adapter.remove("A");
+      });
     await assert.rejects(act, /Document changed during history capture/, operation);
     adapter.history!.captureUnlocked = capture;
     assert.equal(injected, true, operation);
@@ -434,15 +250,7 @@ test("same-value metadata saves capture exact editor bytes with no document writ
   for (const save of saves) {
     const raw = `\uFEFF---\r\nid: node-alpha\r\ntype: prompt # keep comment\r\ntags: [keep]\r\nstatus: stable\r\n---\r\nEditor ${save.method}\r\n`;
     await fs.writeFile(path.join(h.mount.systemRoot, "A/A.md"), raw);
-    const summary = await readNode(adapter, workspaceId, {
-      nodeId: "node-alpha",
-      ...{ view: "summary" },
-    });
-    assert.equal("etag" in summary.node, false);
-    // The external editor already observed these bytes; discovery must not capture them first.
-    const send = (baseEtag = contentEtag(raw)) =>
-      writeNodeDocument(adapter, "node-alpha", { baseEtag, frontmatter: save.frontmatter });
-    await assert.rejects(send("stale"), /etag conflict/);
+    const send = () => editNode(adapter, "node-alpha", { frontmatter: save.frontmatter });
     const saved = await send();
     assert.ok(saved.version);
     assert.equal(await adapter.history!.read(saved.version), raw, save.method);
@@ -452,9 +260,8 @@ test("same-value metadata saves capture exact editor bytes with no document writ
     assert.equal(await adapter.readFile("A/A.md"), raw, save.method);
   }
   assert.equal(documentWrites, 0);
-  const editable = await readNodeForEdit(adapter, "node-alpha");
-  const changed = await writeNodeDocument(adapter, "node-alpha", {
-    baseEtag: editable.etag,
+  const editable = await readNodeFile(adapter, "node-alpha");
+  const changed = await editNode(adapter, "node-alpha", {
     frontmatter: { type: "output" },
   });
   assert.ok(changed.version);
@@ -548,7 +355,7 @@ for (const stage of [
       return entries;
     };
     const before = await snapshot();
-    const inspect = () => readNodeForEdit(adapter, "node-alpha");
+    const inspect = () => readNodeFile(adapter, "node-alpha");
     if (stage === "corrupt-order") {
       await assert.rejects(inspect, /requires explicit repair/);
       assert.deepEqual(await snapshot(), before);

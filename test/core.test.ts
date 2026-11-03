@@ -3,12 +3,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readdir } from "node:fs/promises";
 import { createNode } from "../src/core/graph/ops.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
-import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { loadTent, nodeNotePath } from "../src/core/store/tree.js";
-import { NodeFs, SystemClock } from "../src/fs/node-fs.js";
+import { SystemClock } from "../src/fs/node-fs.js";
 import { makeTent } from "./helpers.js";
+import { editNode, readNodeFile } from "./node-edit.js";
 
 test("Node creation rejects unindexable names before writing and allows nested system basenames", async (t) => {
   const root = await makeTent(t);
@@ -82,8 +81,8 @@ test("Core loads and extends the typed Node document forest", async (t) => {
   const created = (await loadTent(fs)).byId.get(id)!;
   assert.equal(created.parent?.id, "node-promptzone");
   assert.equal(created.body, "");
-  const edit = await readNodeForEdit(fs, id);
-  await writeNodeDocument(fs, id, { baseEtag: edit.etag, body: " \n\t" });
+  const edit = await readNodeFile(fs, id);
+  await editNode(fs, id, { body: " \n\t" });
   assert.equal((await loadTent(fs)).byId.get(id)?.body, " \n\t");
 });
 

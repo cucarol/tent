@@ -6,11 +6,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import test, { type TestContext } from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
-import { initializeFixtureWorkspace } from "./scratch.js";
 import {
   createCardDocument,
-  readCardDocument,
   takeCardDocument,
   returnCardDocument,
   watchCardDocuments,
@@ -21,7 +18,6 @@ import {
 import { createRoleContext } from "../src/core/read/role-context.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { renameNode } from "../src/core/graph/rename-ops.js";
-import { git } from "./helpers.js";
 import { ReaderError } from "../src/core/graph/context-reader.js";
 import { cliErrorText } from "../src/cli/error-text.js";
 
@@ -193,7 +189,7 @@ test("Card commands retain Role read errors and the CLI keeps their cause", asyn
   );
 });
 
-test("a draft Card is diagnosed, raw-readable and cannot be taken", async (t) => {
+test("a draft Card is diagnosed and cannot be taken", async (t) => {
   const { adapter } = await fixture(t);
   const card = await createCardDocument(adapter, { prompt: "Decided task", target: "role-a" });
   const raw = (await adapter.readFile(card.path)).replace(
@@ -201,9 +197,6 @@ test("a draft Card is diagnosed, raw-readable and cannot be taken", async (t) =>
     "state: pending\nstatus: draft",
   );
   await adapter.writeFile(card.path, raw);
-  const shown = await readCardDocument(adapter, card.cardId, { view: "raw" });
-  assert.equal(shown.text, raw);
-  assert.match(JSON.stringify(shown.diagnostic), /INVALID_DOCUMENT.*draft/);
   const listed = await listCardDocuments(adapter);
   assert.match(
     String(listed.items.find((item) => item.cardId === card.cardId)?.diagnostic),
@@ -263,10 +256,6 @@ test("draft Role Card filters, actions and watch stay available", async (t) => {
     ),
     [pending.cardId],
   );
-  assert.equal(
-    (await readCardDocument(adapter, pending.cardId, { view: "raw" })).text,
-    await adapter.readFile(pending.path),
-  );
   assert.equal(await adapter.readFile("roles/role-a.md"), roleRaw);
   adapter.withLock = withLock;
   const next = await createCardDocument(adapter, { prompt: "New", target: "role-a" });
@@ -296,69 +285,6 @@ test("Card Role filters retain unavailable handling for deprecated and unknown R
   }
 });
 
-test("ordinary Card reads ignore unrelated documents and never acquire the write lock", async (t) => {
-  const { adapter } = await fixture(t);
-  const card = await createCardDocument(adapter, { prompt: "Selected task", target: "role-a" });
-  adapter.history.readDirectory = async () => {
-    throw new Error("Unrelated directory read");
-  };
-  adapter.withLock = async () => {
-    throw new Error("Write lock held elsewhere");
-  };
-  const shown = await readCardDocument(adapter, card.cardId, { retainedState: true });
-  assert.equal(shown.text, "Selected task");
-  assert.equal(shown.state, "pending");
-  assert.deepEqual(shown.version, card.version);
-});
-
-test("Card reads reject a selected document edit during retained metadata lookup", async (t) => {
-  const { adapter } = await fixture(t);
-  const card = await createCardDocument(adapter, { prompt: "Selected task", target: "role-a" });
-  const blobs = adapter.history.documentBlobs.bind(adapter.history);
-  adapter.history.documentBlobs = async () => {
-    const result = await blobs();
-    await adapter.writeFile(card.path, (await adapter.readFile(card.path)) + "changed");
-    return result;
-  };
-  await assert.rejects(
-    readCardDocument(adapter, card.cardId, { retainedState: true }),
-    code("SOURCE_CHANGED"),
-  );
-});
-
-for (const diagnostic of ["INPUT_CHANGED", "INVALID_DOCUMENT"]) {
-  test(`Card diagnostic ${diagnostic} rejects edits during retained metadata lookup`, async (t) => {
-    const { adapter } = await fixture(t);
-    const card = await createCardDocument(adapter, { prompt: "Selected task", target: "role-a" });
-    const original = await adapter.readFile(card.path);
-    const invalid =
-      diagnostic === "INPUT_CHANGED"
-        ? original.replace("Selected task", "Manual task")
-        : original.replace("state: pending", "state: invalid-value");
-    assert.notEqual(invalid, original);
-    await adapter.writeFile(card.path, invalid);
-    const shown = await readCardDocument(adapter, card.cardId, {
-      view: "raw",
-      retainedState: true,
-    });
-    assert.equal((shown as any).diagnostic.code, diagnostic);
-    assert.equal(shown.text, invalid);
-    const blobs = adapter.history.documentBlobs.bind(adapter.history);
-    let changed = false;
-    adapter.history.documentBlobs = async () => {
-      const result = await blobs();
-      await adapter.writeFile(card.path, original);
-      changed = true;
-      return result;
-    };
-    await assert.rejects(
-      readCardDocument(adapter, card.cardId, { view: "raw", retainedState: true }),
-      code("SOURCE_CHANGED"),
-    );
-    assert.equal(changed, true);
-  });
-}
-
 test("take rolls back an unpublished transaction and still recovers legacy consumed bytes exactly once", async (t) => {
   const { adapter, root } = await fixture(t);
   for (const roleId of ["role-a"]) {
@@ -385,17 +311,12 @@ test("take rolls back an unpublished transaction and still recovers legacy consu
     adapter.history.captureUnlocked = capture;
     assert.equal(await adapter.readFile(card.path), before);
     assert.equal(await adapter.history.currentCommit(), beforeHead);
-    assert.equal((await readCardDocument(adapter, card.cardId)).state, "pending");
     assert.ok(attemptedRaw);
     // A pre-transaction workspace may contain consumed bytes without a published reception.
     await fs.writeFile(path.join(root, card.path), attemptedRaw);
     const savedBytes = await adapter.readFile(card.path);
     assert.equal(parseFrontmatter(savedBytes).data.state, "consumed");
     assert.equal(parseFrontmatter(await adapter.history.read(card.version)).data.state, "pending");
-    assert.equal(
-      ((await readCardDocument(adapter, card.cardId)) as any).diagnostic.code,
-      "STATE_CHANGED",
-    );
     assert.equal((await watchCardDocuments(adapter, roleId, 0))[0]!.cardId, card.cardId);
     const taken = (await takeCardDocument(adapter, card.cardId, roleId)) as Record<string, any>;
     assert.equal(taken.replayed, false);
@@ -501,7 +422,7 @@ test("Card deprecation rejects manual input and management edits without changin
   }
 });
 
-test("a deprecated Card still reads and takes with a cancellation notice", async (t) => {
+test("a deprecated Card still takes with a cancellation notice", async (t) => {
   const { adapter } = await fixture(t);
   const card = await createCardDocument(adapter, {
     cardId: "card-cancelled",
@@ -509,9 +430,6 @@ test("a deprecated Card still reads and takes with a cancellation notice", async
     target: "role-a",
   });
   await deprecateCardDocument(adapter, card.cardId);
-  const shown = (await readCardDocument(adapter, card.cardId)) as Record<string, unknown>;
-  assert.equal(shown.text, "original input");
-  assert.match(String(shown.notice), /deprecated/);
   await assert.rejects(
     () => takeCardDocument(adapter, card.cardId, "role-b"),
     code("RECEPTION_CONFLICT"),
@@ -628,9 +546,7 @@ test("Card publication checks only Node/Role sources and stores addresses; movin
     "Renamed",
   );
   assert.equal(await adapter.readFile(saved.path), raw);
-  const page = await readCardDocument(adapter, saved.cardId);
-  assert.equal(page.text, "Implement this.");
-  assert.deepEqual((page as Record<string, unknown>).sources, input);
+  assert.deepEqual(parseFrontmatter(raw).data.sources, input);
 });
 
 test("one Card has one receiving Role and retries replay reception", async (t) => {
@@ -684,12 +600,6 @@ test("manual input or management edits stay raw-readable without being retained 
     [initial.replace("state: pending", "state: interrupted"), "INVALID_DOCUMENT"],
   ]) {
     await adapter.writeFile(path, changed!);
-    const result = (await readCardDocument(adapter, published.cardId, { view: "raw" })) as Record<
-      string,
-      any
-    >;
-    assert.equal(result.text, changed);
-    assert.equal(result.diagnostic.code, expected);
     assert.equal(
       (await adapter.history.pathVersions(path)).latest!.commit,
       published.version.commit,
@@ -701,10 +611,6 @@ test("manual input or management edits stay raw-readable without being retained 
   }
   const malformed = initial.replace("sources:", "sources: [broken");
   await adapter.writeFile(path, malformed);
-  assert.equal(
-    (await readCardDocument(adapter, published.cardId, { view: "raw" })).text,
-    malformed,
-  );
   await adapter.remove(path);
   await assert.rejects(
     () =>
@@ -725,12 +631,9 @@ test("large Card inputs and source metadata are complete in Core", async (t) => 
       description: "detail".repeat(100),
     })),
   });
-  const page = (await readCardDocument(adapter, card.cardId)) as Record<string, any>;
-  assert.equal(page.text, prompt);
-  assert.equal(page.sources.length, 100);
-  assert.equal(page.page, undefined);
-  const taken = await takeCardDocument(adapter, card.cardId, "role-a");
+  const taken = (await takeCardDocument(adapter, card.cardId, "role-a")) as Record<string, any>;
   assert.equal(taken.text, prompt);
+  assert.equal(taken.sources.length, 100);
 });
 
 test("Card title remains fixed after publication and list includes first publication time", async (t) => {

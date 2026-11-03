@@ -8,7 +8,6 @@ import {
   CARDS_DIR,
   cardRecordPath,
   roleDocumentPath,
-  MUTATION_LOCK_PATH,
   ROLES_DIR,
   nodeNotePath,
 } from "../base/paths.js";
@@ -560,58 +559,6 @@ function cardPage<T extends Record<string, unknown>>(
     range,
     total: text.length,
   };
-}
-
-/** Invalid manual edits remain raw-readable but never become fresh acceptance evidence. */
-export async function readCardDocument(fs: FsAdapter, id: string, options: PageOptions = {}) {
-  const read = async () => {
-    const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-      await fs.readBinary(cardPath(id)),
-    );
-    const checkedPage = async (metadata: Record<string, unknown>) => {
-      if ((await fs.readFile(cardPath(id))) !== raw)
-        throw new ReaderError("SOURCE_CHANGED", "Card changed during lookup");
-      return cardPage(id, raw, options, metadata);
-    };
-    let checked: Awaited<ReturnType<typeof checkedCard>>;
-    try {
-      checked = await checkedCard(fs, id);
-    } catch (error) {
-      if (!(error instanceof CardDocumentError)) throw error;
-      const metadata: Record<string, unknown> = {
-        diagnostic: { code: error.code, message: error.message.slice(0, 512) },
-        ...(options.retainedState && (await uncapturedChecker(fs))(cardPath(id), raw)
-          ? { uncaptured: true }
-          : {}),
-      };
-      return checkedPage(metadata);
-    }
-    if (checked.current.raw !== raw)
-      throw new ReaderError("SOURCE_CHANGED", "Card changed during lookup");
-    const { current, history, publishedVersion } = checked;
-    const metadata = {
-      publishedVersion,
-      sources: current.data.sources,
-      title: current.data.title,
-      target: current.data.target,
-      state: current.data.state,
-      receivedBy: current.data.receivedBy,
-      returnTo: current.data.returnTo,
-      result: current.data.result,
-      ...documentLifecycle(current.data),
-      ...deprecatedCardNotice(current),
-      ...(options.retainedState && (await uncapturedChecker(fs))(current.path, raw)
-        ? { uncaptured: true as const }
-        : {}),
-    };
-    const page = await checkedPage(metadata);
-    if (!options.capture) return { ...page, version: checked.version };
-    const captured = await history.captureUnlocked([{ path: current.path, raw }], {
-      operation: "document.external-capture",
-    });
-    return { ...page, version: captured.versions[0] };
-  };
-  return options.capture && fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, read) : read();
 }
 
 export function takeCardDocument(

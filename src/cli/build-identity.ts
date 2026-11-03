@@ -51,25 +51,3 @@ export function formatBuildIdentity(identity: BuildIdentity): string {
     identity.builtAt ? `built ${formatCliTime(identity.builtAt)}` : "source"
   }${identity.dirty === true ? "; dirty" : identity.dirty === null ? "; dirty unknown" : ""})`;
 }
-
-/** Only compare a positively identified source root, never an arbitrary Workspace Git. */
-export async function sourceBuildMismatch(
-  workspaceRoot: string,
-  identity: BuildIdentity,
-): Promise<string | undefined> {
-  if (!identity.commit) return;
-  try {
-    const pkg = JSON.parse(await fs.readFile(path.join(workspaceRoot, "package.json"), "utf8"));
-    if (pkg.name !== "vibe-tent") return;
-    await Promise.all([
-      fs.access(path.join(workspaceRoot, "src/cli/tent.ts")),
-      fs.access(path.join(workspaceRoot, "esbuild.config.mjs")),
-      fs.access(path.join(workspaceRoot, ".git")),
-    ]);
-    const commit = await git(workspaceRoot, ["rev-parse", "HEAD"]);
-    if (!commit || commit === identity.commit) return;
-    return `Tent runtime build differs from Workspace source: runtime ${identity.commit.slice(0, 12)}, source ${commit.slice(0, 12)}.`;
-  } catch {
-    return;
-  }
-}

@@ -17,7 +17,6 @@ import {
   validMarkdownSyntaxCache,
   withMarkdownSyntaxCache,
 } from "../src/core/base/markdown-syntax.js";
-import { nodeBodyContent } from "../src/core/read/node-body-history.js";
 import { withPersistedMarkdownSyntax } from "../src/fs/markdown-syntax-cache.js";
 import { testScratchRoot } from "./scratch.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
@@ -101,11 +100,6 @@ test("body edits replace only their syntax; current catalog and address context 
   const warm = await withMarkdownSyntaxCache(cold.used, async () => {
     assert.deepEqual(observe(changed), expectedChanged);
     observe(neighbor);
-    const nodes = new Map([["node-abcdef", { nodeId: "node-abcdef", path: "A" }]]);
-    const fingerprint = nodeBodyContent(neighbor, "N/N.md", nodes);
-    nodes.set("node-abcdef", { nodeId: "node-abcdef", path: "Renamed" });
-    assert.notEqual(nodeBodyContent(neighbor, "N/N.md", nodes), fingerprint);
-    assert.notEqual(nodeBodyContent(neighbor, "N/Deep/N.md", new Map()), fingerprint);
   });
   assert.equal(warm.used.get(neighborKey), cold.used.get(neighborKey));
   assert.equal(warm.used.has(createHash("sha256").update(body).digest("hex")), false);

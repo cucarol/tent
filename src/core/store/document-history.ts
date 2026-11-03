@@ -1,7 +1,7 @@
 import { hasDocumentHistory } from "./history-port.js";
 import type { FsAdapter } from "./adapter.js";
 import type { CaptureMetadata, DocumentVersion } from "./history-port.js";
-import { isNodeNotePath, MUTATION_LOCK_PATH } from "../base/paths.js";
+import { isNodeNotePath } from "../base/paths.js";
 
 /** Identity documents participate; operational caches do not. */
 export function isHistoryDocument(file: string): boolean {
@@ -22,35 +22,4 @@ export async function captureDocumentUnlocked(
   if (invalid) throw new Error(`Invalid Node ${path}: ${invalid}`);
   if (!fs.history || !(await hasDocumentHistory(fs))) return undefined;
   return (await fs.history.captureUnlocked([{ path, raw }], metadata)).versions[0];
-}
-
-/** Read capture may write history only; it does not resume document mutations. */
-export function captureReadDocument(
-  fs: FsAdapter,
-  path: string,
-  raw: string,
-  entry?: CaptureMetadata["entry"],
-): Promise<DocumentVersion | undefined> {
-  const capture = () =>
-    captureDocumentUnlocked(fs, path, raw, { operation: "document.external-capture", entry });
-  return fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, capture) : capture();
-}
-
-/** One read response captures only the full documents actually represented in that response. */
-export function captureReadDocuments(
-  fs: FsAdapter,
-  documents: readonly { path: string; raw: string }[],
-  entry?: CaptureMetadata["entry"],
-): Promise<DocumentVersion[]> {
-  const capture = async () => {
-    for (const { path } of documents)
-      if (!isHistoryDocument(path)) throw new Error(`Not a Tent identity document: ${path}`);
-      else if (fs.invalidNodeEdits?.has(path))
-        throw new Error(`Invalid Node ${path}: ${fs.invalidNodeEdits.get(path)}`);
-    if (!documents.length || !fs.history || !(await hasDocumentHistory(fs))) return [];
-    return (
-      await fs.history.captureUnlocked(documents, { operation: "document.external-capture", entry })
-    ).versions;
-  };
-  return fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, capture) : capture();
 }

@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import * as esbuild from "esbuild";
-import { readBuildIdentity, sourceBuildMismatch } from "../src/cli/build-identity.js";
+import { readBuildIdentity } from "../src/cli/build-identity.js";
 import { testScratchRoot } from "./scratch.js";
 
 const run = promisify(execFile);
@@ -65,7 +65,7 @@ test("self-contained plugin runtime has embedded identity without source or pack
   assert.equal(identity.runtimePath, path.join(root, "cli.mjs"));
 });
 
-test("source identity has no build time; mismatch is limited to Tent source checkouts", async (t) => {
+test("source identity has no build time and ignores an inherited Git directory", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "source-build-identity-"));
   t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, "src/cli"), { recursive: true });
@@ -97,18 +97,16 @@ test("source identity has no build time; mismatch is limited to Tent source chec
   const identity = await readBuildIdentity(root);
   assert.equal(identity.builtAt, null);
   assert.equal(identity.dirty, false);
-  assert.equal(await sourceBuildMismatch(root, identity), undefined);
   const inheritedGitDir = (
     await run("git", ["-C", repoRoot, "rev-parse", "--absolute-git-dir"], { windowsHide: true })
   ).stdout.trim();
   const probe = `
-    import { readBuildIdentity, sourceBuildMismatch } from ${JSON.stringify(new URL("../src/cli/build-identity.ts", import.meta.url).href)};
+    import { readBuildIdentity } from ${JSON.stringify(new URL("../src/cli/build-identity.ts", import.meta.url).href)};
     import { buildIdentity } from ${JSON.stringify(new URL("../scripts/build-identity.mjs", import.meta.url).href)};
     const root = ${JSON.stringify(root)};
     console.log(JSON.stringify({
       source: await readBuildIdentity(root),
       built: buildIdentity(root),
-      mismatch: await sourceBuildMismatch(root, ${JSON.stringify(identity)}) ?? null,
     }));
   `;
   const polluted = JSON.parse(
@@ -122,23 +120,8 @@ test("source identity has no build time; mismatch is limited to Tent source chec
   );
   assert.deepEqual(polluted.source, identity);
   assert.deepEqual({ ...polluted.built, builtAt: null }, identity);
-  assert.equal(polluted.mismatch, null);
   await fs.writeFile(path.join(root, "src/cli/tent.ts"), "updated source");
   assert.equal((await readBuildIdentity(root)).dirty, true);
-  await git(["add", "."]);
-  await git([
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.invalid",
-    "commit",
-    "-m",
-    "next fixture",
-  ]);
-  assert.match(
-    (await sourceBuildMismatch(root, identity))!,
-    /runtime build differs.*runtime [a-f0-9]{12}, source [a-f0-9]{12}/,
-  );
   const version = async (args: string[]) =>
     JSON.parse(
       (
@@ -155,9 +138,4 @@ test("source identity has no build time; mismatch is limited to Tent source chec
     runtimePath: path.join(repoRoot, "src/cli/tent.ts"),
   });
   assert.deepEqual(await version(["--workspace", root]), localVersion);
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "unrelated-project", version: "2.0.0" }),
-  );
-  assert.equal(await sourceBuildMismatch(root, identity), undefined);
 });

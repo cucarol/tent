@@ -3,18 +3,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { createHash } from "node:crypto";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import {
   completedCardPaths,
   listCardDocuments,
-  readCardDocument,
   takeCardDocument,
 } from "../src/core/graph/card-document.js";
 import { checkGraph } from "../src/core/check/graph-check.js";
-import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "card-completion-"));
@@ -158,8 +154,6 @@ test("explicit Card reads and workspace check still inspect completed native edi
     "cards/card-plain.md",
     serializeFrontmatter(original.data, "Changed input"),
   );
-  const shown = await readCardDocument(adapter, "card-plain");
-  assert.match(shown.text, /Changed input/);
   await assert.rejects(takeCardDocument(adapter, "card-plain", "role-worker"), {
     code: "INPUT_CHANGED",
   });

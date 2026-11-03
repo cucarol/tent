@@ -5,27 +5,18 @@ import * as fs from "node:fs/promises";
 import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { test } from "node:test";
-import {
-  NODE_TYPES,
-  isNodeType,
-  nodeTypeOf,
-  normalizeOptionalNodeType,
-} from "../src/core/base/node-type.js";
-import { NODE_TAG_PRESETS, countNodeTags, isNodeTagPreset } from "../src/core/base/tags.js";
+import { NODE_TYPES, isNodeType, normalizeOptionalNodeType } from "../src/core/base/node-type.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
-import { readNode } from "../src/core/read/node-query.js";
+import { readNodeVersion } from "../src/core/read/node-version.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { scaffoldTent } from "../src/core/store/scaffold.js";
 import { canonicalIdentityError, loadTent } from "../src/core/store/tree.js";
-import { NodeFs } from "../src/fs/node-fs.js";
-import { git } from "./helpers.js";
 
 test("Node type accepts exactly goal, prompt and output", () => {
   assert.deepEqual(NODE_TYPES, ["goal", "prompt", "output"]);
   for (const type of NODE_TYPES) {
     assert.equal(normalizeOptionalNodeType(type), type);
     assert.equal(isNodeType(type), true);
-    assert.equal(nodeTypeOf(type), type);
   }
   for (const value of [
     "output-evidence",
@@ -43,44 +34,11 @@ test("Node type accepts exactly goal, prompt and output", () => {
     ["goal"],
   ]) {
     assert.equal(isNodeType(value), false, String(value));
-    assert.equal(nodeTypeOf(value), null, String(value));
     assert.throws(
       () => normalizeOptionalNodeType(value),
       /^Error: Node type must be goal, prompt or output\.$/,
     );
   }
-});
-
-test("tag presets are suggestions counted only where documents use them", () => {
-  assert.deepEqual(NODE_TAG_PRESETS, [
-    "direction",
-    "requirement",
-    "decision",
-    "spec",
-    "reference",
-    "procedure",
-    "asset",
-    "evidence",
-    "analysis",
-    "issue",
-  ]);
-  assert.equal(isNodeTagPreset("evidence"), true);
-  assert.equal(isNodeTagPreset("ui"), false);
-  assert.deepEqual(
-    countNodeTags([
-      { tags: ["ui", "evidence"], status: "stable" },
-      { tags: ["evidence"], status: "stable" },
-      { tags: ["old"], status: "deprecated" },
-    ]),
-    [
-      { tag: "evidence", count: 2, preset: true },
-      { tag: "ui", count: 1, preset: false },
-    ],
-  );
-  assert.deepEqual(
-    countNodeTags([{ tags: ["old"], status: "deprecated" }], { includeArchived: true }),
-    [{ tag: "old", count: 1, preset: false }],
-  );
 });
 
 test("Node loading rejects missing type and accepts exact type without registry authority", async (t) => {
@@ -196,8 +154,8 @@ test("a historical version with a former suffixed type is rejected like any inva
     await adapter.writeFile(file, `---\nid: ${id}\ntype: goal\ntags: [requirement]\n---\nWant\n`);
     assert.equal((await loadTent(adapter)).byId.get(id)?.type, "goal");
     assert.equal(canonicalIdentityError(parseFrontmatter(raw).data), message, name);
-    // node get --version-json
-    const read = await readNode(adapter, "ws-test", { nodeId: id, view: "raw", version }).then(
+    // node history --version
+    const read = await readNodeVersion(adapter, id, version).then(
       () => "accepted",
       (error: Error) => error.message,
     );

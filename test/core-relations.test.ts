@@ -9,11 +9,10 @@ import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { test, type TestContext } from "node:test";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
-import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { loadTent, nodeNotePath } from "../src/core/store/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
+import { editNode, readNodeFile } from "./node-edit.js";
 
 async function makeSystemRoot(t: TestContext): Promise<{ systemFs: NodeFs }> {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "tent-core-rel-ws-"));
@@ -90,11 +89,10 @@ test("ordinary body and property writes preserve legacy relations bytes", async 
   const alpha = [...tent.byId.values()].find((node) => node.name === "Alpha")!;
   const expected = await plantLegacyRelations(systemFs, alpha.path);
 
-  let edit = await readNodeForEdit(systemFs, alpha.id);
-  await writeNodeDocument(systemFs, alpha.id, { baseEtag: edit.etag, body: "# Updated body\n" });
-  edit = await readNodeForEdit(systemFs, alpha.id);
-  await writeNodeDocument(systemFs, alpha.id, {
-    baseEtag: edit.etag,
+  let edit = await readNodeFile(systemFs, alpha.id);
+  await editNode(systemFs, alpha.id, { body: "# Updated body\n" });
+  edit = await readNodeFile(systemFs, alpha.id);
+  await editNode(systemFs, alpha.id, {
     frontmatter: { custom: "value" },
   });
 

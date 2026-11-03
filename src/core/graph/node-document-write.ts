@@ -7,17 +7,9 @@ import { MaterialAddressError, validateMaterialAddresses } from "../base/materia
 import { normalizeOptionalNodeType } from "../base/node-type.js";
 import { normalizeTagList } from "../base/tags.js";
 import type { Node } from "../base/types.js";
-import { withTentMutation, type FsAdapter } from "../store/adapter.js";
-import { loadNodeCatalog, readCatalogDocument } from "./node-catalog.js";
-import { captureDocumentUnlocked } from "../store/document-history.js";
 import { nodeNotePath } from "../base/paths.js";
-import { isNodeId } from "../base/id.js";
 import { assertStatusEdit } from "../base/document-status.js";
-import { ReaderError } from "./context-reader.js";
-import { canonicalDocumentReferences } from "./document-links.js";
-import { validateSystemMaterials } from "./material-target.js";
 import { isIncompleteNodeReadEtag, nodeReadRevisionEtag } from "../base/node-read-basis.js";
-import { nodeMaterialWarnings } from "./node-material-warnings.js";
 
 export class NodeWriteError extends Error {
   constructor(
@@ -42,131 +34,6 @@ export type NodeDocumentEdit = {
   body?: string;
   frontmatter?: Record<string, unknown>;
 };
-
-/** Shared Core entry for direct CLI and other hosts. */
-export function writeNodeDocument(fs: FsAdapter, nodeId: string, input: NodeDocumentEdit) {
-  return withTentMutation(fs, () => writeNodeDocumentUnlocked(fs, nodeId, input), {
-    operation: "node.write",
-  });
-}
-
-/** Caller holds the mutation lock through any additional work using the returned bytes. */
-export async function writeNodeDocumentUnlocked(
-  fs: FsAdapter,
-  nodeId: string,
-  input: NodeDocumentEdit,
-) {
-  if (!isNodeId(nodeId))
-    throw new NodeWriteError(
-      "INVALID_INPUT",
-      `nodeId must be a canonical node-* Node id: ${nodeId}`,
-    );
-  const node = (await loadNodeCatalog(fs)).byId.get(nodeId);
-  if (!node) throw new NodeWriteError("NOT_FOUND", `Node not found: ${nodeId}`);
-  const document = await readCatalogDocument(fs, node).catch((error) => {
-    if (error instanceof ReaderError && error.code === "SOURCE_CHANGED") {
-      throw new NodeWriteError("ETAG_CONFLICT", "etag conflict: Node changed during lookup", {
-        code: "etag_conflict",
-        path: node.path,
-        nodeId,
-        baseEtag: input.baseEtag,
-      });
-    }
-    throw error;
-  });
-  const raw = prepareNodeDocumentWrite({ id: nodeId, path: node.path }, document.raw, input);
-  const parsed = parseFrontmatter(raw);
-  const canonicalBody = await canonicalDocumentReferences(
-    fs,
-    nodeNotePath(node.path),
-    parsed.data,
-    parsed.body,
-  );
-  return savePreparedNodeDocumentUnlocked(
-    fs,
-    { id: nodeId, name: node.name, path: node.path },
-    document.raw,
-    serializeFrontmatter(parsed.data, canonicalBody, parsed.keyOrder),
-    input,
-    "node.write",
-  );
-}
-
-/** Persist validated, reference-resolved bytes under the caller's mutation lock. */
-export async function savePreparedNodeDocumentUnlocked(
-  fs: FsAdapter,
-  node: Pick<Node, "id" | "name" | "path">,
-  diskRaw: string,
-  preparedRaw: string,
-  input: NodeDocumentEdit,
-  operation: string,
-) {
-  const nodeId = node.id;
-  const parsed = parseFrontmatter(preparedRaw);
-  try {
-    await validateSystemMaterials(
-      fs,
-      parsed.data,
-      nodeNotePath(node.path),
-      parseFrontmatter(diskRaw).data,
-    );
-  } catch (error) {
-    if (error instanceof MaterialAddressError)
-      throw new NodeWriteError("INVALID_EDIT", error.message);
-    throw error;
-  }
-  const raw = preparedRaw;
-  const changed = raw !== diskRaw;
-  const path = nodeNotePath(node.path);
-  const warnings = await nodeMaterialWarnings(
-    fs,
-    parseFrontmatter(raw).data,
-    path,
-    parseFrontmatter(diskRaw).data,
-  );
-  const currentRaw = await fs.readFile(path);
-  if (currentRaw !== diskRaw)
-    throw new NodeWriteError(
-      "ETAG_CONFLICT",
-      "etag conflict: Node changed while resolving references",
-      {
-        code: "etag_conflict",
-        path: node.path,
-        nodeId,
-        baseEtag: input.baseEtag,
-        currentEtag: contentEtag(currentRaw),
-      },
-    );
-  if (changed) await fs.writeFile(path, raw);
-  let version;
-  try {
-    version = await captureDocumentUnlocked(fs, path, raw, {
-      operation,
-    });
-  } catch (error) {
-    try {
-      const settled = await fs.recoverFileTransaction?.();
-      if (settled === undefined && changed && (await fs.readFile(path)) === raw)
-        await fs.writeFile(path, diskRaw);
-    } catch (recovery) {
-      throw new AggregateError(
-        [error, recovery],
-        `${String(error)}; recovery also failed: ${String(recovery)}`,
-      );
-    }
-    throw error;
-  }
-  return {
-    nodeId,
-    name: node.name,
-    path: node.path,
-    raw,
-    etag: contentEtag(raw),
-    changed,
-    version,
-    ...(warnings.length ? { warnings } : {}),
-  };
-}
 
 /** Prepare an edit against exact observed bytes; the caller holds the mutation lock through saving. */
 export function prepareNodeDocumentWrite(

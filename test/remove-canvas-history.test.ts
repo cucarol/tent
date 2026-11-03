@@ -7,7 +7,6 @@ import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import { createNode } from "../src/core/graph/ops.js";
-import { readNodeTimes } from "../src/core/read/node-times.js";
 import { sqliteContentFingerprint } from "../src/fs/sqlite-history.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 
@@ -47,8 +46,14 @@ test("one-off removal preserves Node times, shared blobs and event identities, t
       { fs: setup, tentName: "Canvas conversion", clock: { now: () => new Date().toISOString() } },
       { id: `node-${name.toLowerCase()}`, name, type: "prompt", parentPath: "", body: name },
     );
-  const expectedTimes = await readNodeTimes(setup, ["node-alpha", "node-beta"]);
-  assert.ok(expectedTimes.every((row) => row.contentChangedAt));
+  const nodeHistory = (fs: typeof setup) =>
+    Promise.all(
+      ["node-alpha", "node-beta"].map(async (id) =>
+        (await fs.history.nodeVersions(id)).map(({ commit, time }) => ({ commit, time })),
+      ),
+    );
+  const expectedHistory = await nodeHistory(setup);
+  assert.ok(expectedHistory.every((versions) => versions.length > 0));
   const alpha = await setup.readFile("Alpha/Alpha.md");
   await setup.close();
   const filename = path.join(system, ".git/history.sqlite"),
@@ -150,7 +155,7 @@ test("one-off removal preserves Node times, shared blobs and event identities, t
   assert.deepEqual(await files(system), unchanged);
   await removeNodeRecordsHistory(root);
   const after = openTestFs(system);
-  assert.deepEqual(await readNodeTimes(after, ["node-alpha", "node-beta"]), expectedTimes);
+  assert.deepEqual(await nodeHistory(after), expectedHistory);
   const events = await after.history.changesInRange();
   assert.equal(events.length, originalEvents.length);
   assert.deepEqual(events.at(-1)!.changes, []);

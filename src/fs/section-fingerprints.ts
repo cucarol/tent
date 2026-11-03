@@ -5,7 +5,6 @@ import {
   sectionFingerprints,
   sectionKey,
   type SectionPrint,
-  type SectionTarget,
 } from "../core/return/section-fingerprint.js";
 type StopMaterialFile = { path: string; heading?: string };
 import { readStructureSource } from "./source-observation.js";
@@ -105,23 +104,6 @@ async function withDirectory(target: string, write: () => Promise<void>): Promis
     await fs.mkdir(path.dirname(target), { recursive: true });
     await write();
   });
-}
-
-/** Replace a record whole, so a concurrent reader sees the old or the new one. */
-export async function replaceRecord(
-  systemRoot: string,
-  workspacePath: string,
-  entries: readonly SectionEntry[],
-): Promise<void> {
-  const target = recordPath(systemRoot, workspacePath);
-  const temp = `${target}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`;
-  try {
-    await withDirectory(target, () => fs.writeFile(temp, rows(entries)));
-    await fs.rename(temp, target);
-  } catch (error) {
-    await fs.rm(temp, { force: true }).catch(() => undefined);
-    throw error;
-  }
 }
 
 async function appendRecord(

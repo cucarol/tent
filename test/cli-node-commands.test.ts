@@ -234,7 +234,6 @@ test("history --version prints exact complete bytes after moves and deletion and
   assert.equal(result.stdout, raw);
   const json = await cli("history", [created.nodeId, "--version", selector]);
   assert.equal(json.text, raw);
-  assert.equal(json.partial, false);
   await cli("delete", [created.nodeId]);
   const deleted = (await cli("history", [created.nodeId])).items.find(
     (item: { operation: string }) => item.operation === "node.delete",

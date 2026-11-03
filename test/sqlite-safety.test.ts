@@ -10,12 +10,11 @@ import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { testScratchRoot } from "./scratch.js";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
-import { readNode, readNodeForEdit } from "../src/core/read/node-query.js";
-import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
-import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import { moveNode, renameNode, deleteNode } from "../src/core/graph/ops.js";
 import { archiveNode } from "../src/core/graph/node-lifecycle.js";
 import { TRANSACTION_PATH } from "../src/core/store/file-transaction.js";
+import { editNode, readNodeFile, saveNodesBatch } from "./node-edit.js";
+import { readNodeVersion } from "../src/core/read/node-version.js";
 
 async function fixture(t: TestContext) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "sqlite-safety-"));
@@ -54,7 +53,7 @@ async function batchInput(adapter: NodeFs) {
         return {
           op: "update" as const,
           nodeId,
-          baseEtag: (await readNodeForEdit(adapter, nodeId)).etag,
+          baseEtag: (await readNodeFile(adapter, nodeId)).etag,
           body: `new ${i}\n`,
         };
       }),
@@ -81,14 +80,14 @@ function child(args: string[], ipc = false) {
   return { process, done };
 }
 
-test("SQLite safety 1: native Markdown edits are retained exactly and selected reads do not capture peers", async (t) => {
+test("SQLite safety 1: native Markdown edits are retained exactly and unchanged peers keep their versions", async (t) => {
   const { adapter, root } = await fixture(t),
     before = (await adapter.history.pathVersions("N000/N000.md")).latest!,
     peer = await adapter.history.pathVersions("N001/N001.md");
   const raw = (await adapter.readFile("N000/N000.md")) + "NATIVE\n";
   await fs.writeFile(path.join(root, "N000/N000.md"), raw);
   assert.deepEqual((await captureNativeNodeEdits(adapter)).invalidNodes, []);
-  const selected = await readNodeForEdit(adapter, "node-n000", { capture: true });
+  const selected = await readNodeFile(adapter, "node-n000", { capture: true });
   assert.equal(selected.raw, raw);
   assert.equal(await adapter.history.read(selected.version!), raw);
   assert.match(await adapter.history.read(before), /old 0/);
@@ -97,7 +96,7 @@ test("SQLite safety 1: native Markdown edits are retained exactly and selected r
 
 test("SQLite safety 2: real Core write-many retains all 112 saved documents in one event", async (t) => {
   const { adapter, env } = await fixture(t),
-    result = await writeNodesBatch(env, await batchInput(adapter));
+    result = await saveNodesBatch(env, await batchInput(adapter));
   assert.equal(result.results.length, 112);
   const event = (await adapter.history.changesInRange({ to: result.commit })).at(-1)!;
   assert.equal(event.operation, "node.write-many");
@@ -114,30 +113,20 @@ test("SQLite safety 2: real Core write-many retains all 112 saved documents in o
   }
 });
 
-test("SQLite safety 3: retained versions read historical bytes, ABA stays changed and status edits enforce ETags", async (t) => {
+test("SQLite safety 3: retained versions read historical bytes and ABA stays changed", async (t) => {
   const { adapter, root, env } = await fixture(t);
   const source = { version: (await adapter.history.pathVersions("N000/N000.md")).latest! },
     old = { raw: await adapter.history.read(source.version) };
-  await writeNodeDocument(adapter, "node-n000", {
-    baseEtag: (await readNodeForEdit(adapter, "node-n000")).etag,
-    body: "CURRENT\n",
-  });
-  assert.match((await readNodeForEdit(adapter, "node-n000")).body, /CURRENT/);
+  await editNode(adapter, "node-n000", { body: "CURRENT\n" });
+  assert.match((await readNodeFile(adapter, "node-n000")).body, /CURRENT/);
   assert.equal(await adapter.history.read(source.version), old.raw);
-  const historical = await readNode(adapter, "ws-safety", {
-    nodeId: "node-n000",
-    version: source.version,
-    view: "raw",
-  });
-  assert.ok("text" in historical.node);
-  assert.equal(historical.node.text, old.raw);
+  assert.equal((await readNodeVersion(adapter, "node-n000", source.version)).text, old.raw);
   await fs.writeFile(path.join(root, "N000/N000.md"), old.raw);
   assert.deepEqual((await captureNativeNodeEdits(adapter)).invalidNodes, []);
   assert.equal(await adapter.history.changedSince(source.version), true);
   const archived = await archiveNode(env, "node-n002"),
-    archivedRaw = await readNodeForEdit(adapter, "node-n002");
-  await writeNodeDocument(adapter, "node-n002", {
-    baseEtag: archivedRaw.etag,
+    archivedRaw = await readNodeFile(adapter, "node-n002");
+  await editNode(adapter, "node-n002", {
     body: "intervening",
   });
   await fs.writeFile(path.join(root, "N002/N002.md"), archivedRaw.raw);
@@ -150,56 +139,13 @@ test("SQLite safety 3: retained versions read historical bytes, ABA stays change
     await adapter.history.read({ commit: archived.commit!, path: "N002/N002.md" }),
     archivedRaw.raw,
   );
-  const current = await readNodeForEdit(adapter, "node-n002");
-  const reactivated = await writeNodeDocument(adapter, "node-n002", {
-    baseEtag: current.etag,
+  const reactivated = await editNode(adapter, "node-n002", {
     frontmatter: { status: "stable" },
   });
-  await assert.rejects(
-    writeNodeDocument(adapter, "node-n002", {
-      baseEtag: current.etag,
-      frontmatter: { status: "draft" },
-    }),
-    /changed|ETag|reread/i,
-  );
   assert.match(reactivated.raw, /status: stable/);
 });
 
-test("SQLite safety 4: two independent Core writers share the same ETag conflict boundary", async (t) => {
-  const { adapter, root } = await fixture(t);
-  const base = await readNodeForEdit(adapter, "node-n000");
-  const workers = ["one", "two"].map((name) => {
-    const program = `
-      import { NodeFs } from ${JSON.stringify(new URL("../src/fs/node-fs.ts", import.meta.url).href)};
-      import { writeNodeDocument } from ${JSON.stringify(new URL("../src/core/graph/node-document-write.ts", import.meta.url).href)};
-      const adapter = new NodeFs(${JSON.stringify(root)}, "cli");
-      try {
-        const saved = await writeNodeDocument(adapter, "node-n000", ${JSON.stringify({ baseEtag: base.etag, body: `writer ${name}` })});
-        console.log(JSON.stringify(saved));
-      } catch (error) {
-        console.error(error);
-        process.exitCode = 1;
-      } finally {
-        await adapter.close();
-      }
-    `;
-    return child(["--import", "tsx", "--input-type=module", "--eval", program]);
-  });
-  const results = await Promise.all(workers.map((w) => w.done));
-  assert.equal(results.filter((r) => r.code === 0).length, 1, JSON.stringify(results));
-  assert.equal(results.filter((r) => r.code === 1).length, 1, JSON.stringify(results));
-  assert.match(results.find((r) => r.code === 1)!.stderr, /etag conflict/i);
-  for (const result of results)
-    assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
-  const saved = JSON.parse(results.find((r) => r.code === 0)!.stdout);
-  const latest = await readNodeForEdit(adapter, "node-n000", { capture: true });
-  assert.match(latest.body, /writer (one|two)/);
-  assert.equal(saved.raw, latest.raw);
-  assert.equal(await adapter.history.read(saved.version), latest.raw);
-  assert.equal(await adapter.history.read(latest.version!), latest.raw);
-});
-
-test("SQLite safety 5: file and database publication cuts settle whole groups and preserve external edits", async (t) => {
+test("SQLite safety 4: file and database publication cuts settle whole groups and preserve external edits", async (t) => {
   for (const cut of [
     "file-replaced",
     "before-publication",
@@ -243,7 +189,7 @@ test("SQLite safety 5: file and database publication cuts settle whole groups an
     try {
       await reopened.ready();
       for (let i = 0; i < 112; i++) {
-        const body = (await readNodeForEdit(reopened, `node-n${String(i).padStart(3, "0")}`)).body;
+        const body = (await readNodeFile(reopened, `node-n${String(i).padStart(3, "0")}`)).body;
         assert.match(
           body,
           new RegExp(
@@ -273,16 +219,16 @@ test("SQLite safety 5: file and database publication cuts settle whole groups an
   }
 });
 
-test("SQLite safety 6: move, rename and deletion keep retained versions readable without showing history as current", async (t) => {
+test("SQLite safety 5: move, rename and deletion keep retained versions readable without showing history as current", async (t) => {
   const { adapter, env } = await fixture(t);
   const version = (await adapter.history.pathVersions("N000/N000.md")).latest!,
     fixed = { raw: await adapter.history.read(version) };
   await moveNode(env, "node-n000", "node-n001", { mode: "inside" });
   await renameNode(env, "node-n000", "Moved");
-  assert.equal((await readNodeForEdit(adapter, "node-n000")).path, "N001/Moved");
+  assert.equal((await readNodeFile(adapter, "node-n000")).directory, "N001/Moved");
   assert.equal(await adapter.history.read(version), fixed.raw);
   await deleteNode(env, "node-n000");
-  await assert.rejects(readNodeForEdit(adapter, "node-n000"), /Node not found/);
+  await assert.rejects(readNodeFile(adapter, "node-n000"), /Node not found/);
   assert.equal(await adapter.history.read(version), fixed.raw);
   assert.equal(
     (await adapter.retainedDocumentPaths())!.some((p) => p.includes("Moved/")),

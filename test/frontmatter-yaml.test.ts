@@ -1,8 +1,6 @@
 import { removeTestFixture } from "./node-fs.js";
 import { openTestFs } from "./node-fs.js";
 import { testScratchRoot } from "./scratch.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
-import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -12,7 +10,7 @@ import { createNode, moveNode, renameNode } from "../src/core/graph/ops.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { scaffoldTent } from "../src/core/store/scaffold.js";
 import { nodeNotePath } from "../src/core/store/tree.js";
-import { NodeFs } from "../src/fs/node-fs.js";
+import { editNode, readNodeFile } from "./node-edit.js";
 
 const metadata = [
   "# preserved document comment",
@@ -179,8 +177,8 @@ test("Core and Docs edits retain unknown YAML and refuse invalid writes without 
   const notePath = nodeNotePath(created.path);
   await systemFs.writeFile(notePath, raw);
   const expected = parseFrontmatter(raw).data;
-  let snapshot = await readNodeForEdit(systemFs, created.nodeId);
-  await writeNodeDocument(systemFs, created.nodeId, { baseEtag: snapshot.etag, body: "body\r\n" });
+  let snapshot = await readNodeFile(systemFs, created.nodeId);
+  await editNode(systemFs, created.nodeId, { body: "body\r\n" });
   const savedRaw = await systemFs.readFile(notePath);
   const saved = parseFrontmatter(savedRaw);
   assert.equal(saved.body, "body\r\n");
@@ -188,20 +186,18 @@ test("Core and Docs edits retain unknown YAML and refuse invalid writes without 
   assert.deepEqual(saved.data, expected);
   assert.equal(saved.data.sync, undefined);
   assert.match(await systemFs.readFile(notePath), /# preserved document comment/);
-  snapshot = await readNodeForEdit(systemFs, created.nodeId);
-  await writeNodeDocument(systemFs, created.nodeId, {
-    baseEtag: snapshot.etag,
+  snapshot = await readNodeFile(systemFs, created.nodeId);
+  await editNode(systemFs, created.nodeId, {
     frontmatter: { extra: { array: [{ value: true }] } },
   });
-  snapshot = await readNodeForEdit(systemFs, created.nodeId);
+  snapshot = await readNodeFile(systemFs, created.nodeId);
   assert.deepEqual(snapshot.frontmatter, { ...expected, extra: { array: [{ value: true }] } });
-  await writeNodeDocument(systemFs, created.nodeId, { baseEtag: snapshot.etag, body: "Docs\r\n" });
-  snapshot = await readNodeForEdit(systemFs, created.nodeId);
-  await writeNodeDocument(systemFs, created.nodeId, {
-    baseEtag: snapshot.etag,
+  await editNode(systemFs, created.nodeId, { body: "Docs\r\n" });
+  snapshot = await readNodeFile(systemFs, created.nodeId);
+  await editNode(systemFs, created.nodeId, {
     frontmatter: { other: false },
   });
-  snapshot = await readNodeForEdit(systemFs, created.nodeId);
+  snapshot = await readNodeFile(systemFs, created.nodeId);
   assert.deepEqual(snapshot.frontmatter, {
     ...expected,
     extra: { array: [{ value: true }] },
@@ -210,16 +206,14 @@ test("Core and Docs edits retain unknown YAML and refuse invalid writes without 
   assert.equal(snapshot.body, "Docs\r\n");
   assert.match(snapshot.raw, /by: agent # author comment/);
   await assert.rejects(
-    writeNodeDocument(systemFs, created.nodeId, {
-      baseEtag: snapshot.etag,
+    editNode(systemFs, created.nodeId, {
       raw: "---\nx: [broken\n---\n",
     }),
     /Invalid frontmatter YAML/,
   );
   assert.equal(await systemFs.readFile(notePath), snapshot.raw);
-  await writeNodeDocument(systemFs, created.nodeId, {
-    baseEtag: snapshot.etag,
+  await editNode(systemFs, created.nodeId, {
     frontmatter: { owner: "someone" },
   });
-  assert.equal((await readNodeForEdit(systemFs, created.nodeId)).frontmatter.owner, "someone");
+  assert.equal((await readNodeFile(systemFs, created.nodeId)).frontmatter.owner, "someone");
 });
