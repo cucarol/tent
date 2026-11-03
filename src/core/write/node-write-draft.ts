@@ -36,6 +36,18 @@ function replaceReferences(items: DraftCreate[], ids: ReadonlyMap<string, string
   }
 }
 
+/** Batch refs an entry's materials and body links name, without the leading @. */
+function draftRefs(item: DraftCreate): string[] {
+  const found: string[] = [];
+  const visit = (value: string) => {
+    if (value.startsWith("@")) found.push(value.slice(1).split(/[?#]/, 1)[0]!);
+    return undefined;
+  };
+  for (const occurrence of materialOccurrences(item)) visit(occurrence.resource);
+  if (item.body !== undefined) rewriteMarkdownDestinations(item.body, visit);
+  return found;
+}
+
 /** Stable create IDs make every interrupted step resumable through the same ordinary draft. */
 export function writeNodesDraft(
   env: OpsEnv,
@@ -81,6 +93,20 @@ export function writeNodesDraft(
         throw new Error(
           `Draft parent ${item.parent} has an empty body; fill its body, then run the same tent node create --draft command again.`,
         );
+    }
+    for (const item of selected) {
+      if (saved.has(item)) continue;
+      for (const ref of draftRefs(item)) {
+        const target = refs.get(ref);
+        if (!target)
+          throw new Error(
+            `Draft entry @${item.ref} links @${ref}, which this draft does not hold; link a saved Node by its id, then run the same tent node create --draft command again.`,
+          );
+        if (!selectedSet.has(target))
+          throw new Error(
+            `Draft entry @${item.ref} links @${ref}, which has an empty body; fill its body, then run the same tent node create --draft command again.`,
+          );
+      }
     }
     let allocated = false;
     for (const item of selected) {

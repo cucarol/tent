@@ -126,17 +126,11 @@ test("CLI saves two independent draft batches, carries real identities and mater
     workspace: f.workspace,
   });
   assert.equal(failed.exitCode, 1);
-  assert.match(failed.stderr, /Unknown batch ref/);
+  assert.match(failed.stderr, /links @missing, which this draft does not hold/);
   assert.equal(await f.adapter.exists("Project/Alpha/Alpha.md"), true);
   assert.equal(await f.adapter.exists("Project/Beta"), false);
   assert.equal(await f.adapter.history.currentCommit(), firstHead);
-  const failedDraft = JSON.parse(await fs.readFile(f.filename, "utf8"));
-  assert.deepEqual(
-    failedDraft.items.map(({ id, ...item }: { id?: string }) => item),
-    JSON.parse(failedInput).items,
-  );
-  assert.ok(failedDraft.items.every((item: { id: string }) => /^node-/.test(item.id)));
-  remaining.items = failedDraft.items;
+  assert.equal(await fs.readFile(f.filename, "utf8"), failedInput);
   remaining.items[1].sources.pop();
   await fs.writeFile(f.filename, JSON.stringify(remaining));
   const second = await runNodeCommand("create", ["--draft", "draft.json", "--json"], {
@@ -233,6 +227,34 @@ test("written child with blank parent names the prerequisite and saves nothing",
   assert.equal(await f.adapter.exists("Parent"), false);
   assert.equal(await fs.readFile(f.filename, "utf8"), before);
   assert.equal(await f.adapter.history.currentCommit(), head);
+});
+
+test("a written entry that links an empty or absent entry names it and saves nothing", async (t) => {
+  for (const [target, expected] of [
+    [
+      "blank",
+      /@linker links @blank, which has an empty body; fill its body.*same tent node create --draft/,
+    ],
+    [
+      "absent",
+      /@linker links @absent, which this draft does not hold; link a saved Node by its id.*same tent node create --draft/,
+    ],
+  ] as const) {
+    const f = await fixture(t, [
+      { op: "create", ref: "blank", name: "Blank", type: "goal", body: "" },
+      { op: "create", ref: "linker", name: "Linker", type: "goal", body: `See [it](@${target}).` },
+    ]);
+    const before = await fs.readFile(f.filename, "utf8"),
+      head = await f.adapter.history.currentCommit();
+    const result = await runNodeCommand("create", ["--draft", "draft.json"], {
+      workspace: f.workspace,
+    });
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, expected);
+    assert.equal(await f.adapter.exists("Linker"), false);
+    assert.equal(await fs.readFile(f.filename, "utf8"), before);
+    assert.equal(await f.adapter.history.currentCommit(), head);
+  }
 });
 
 test("draft mode rejects updates before assigning IDs or mutating either artifact", async (t) => {
