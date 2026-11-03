@@ -2,11 +2,46 @@
 
 ## Unreleased
 
-- Node state is simpler: `draft` counts as stable, an output never goes behind, and confirmations keep `verified`. Tent no longer writes `generated`, and expiry, trust tiers and `node restore` are gone.
+Tent now works at the two ends of an agent's turn. Before a change, `tent load` lists the Nodes for the files it will touch; at the end of the turn, Stop lists the Nodes covering what changed and asks the agent to correct each one against its own source. Agents read and edit Node, Role and Card files with their own tools, and any project can be mapped, not only code.
 
-- The bundled Web UI and `tent ui` command are removed. The init Skill shows the part tree from `tent workspace check-modules --json`. Workspaces from 0.2.0 run a one-shot script that removes the map layout from history; see [Migration](MIGRATION.md#map-layout-from-020).
+### Nodes
+
+- A Node's `type` says what it is corrected against: a `goal` against what the user wants now, a `prompt` against the decisions and requirements given, an `output` against what the workspace holds.
+- Agents edit Node Markdown with their own file tools; the next Tent command or Stop records the edit. The commands that read or wrote Node text for them are removed: `node get`, `list`, `read-many`, `search`, `relations`, `tags`, `append`, `write`, `write-many` and `link-output`. No command takes an ETag.
+- Ahead and behind are removed, with confirmation, `verified`, `stale_after`, `tent node check` and `tent workspace drift`.
+- `tent node create` makes a Node; `rename`, `move`, `archive` and `delete` change the tree; `tent node history <id>` lists saved versions and `--version` prints one.
+- A Node covers files through its `resource` and `sources`: a file, a directory, a file-name prefix such as `src/api/*`, or a Markdown section. For each changed file the most specific declaration wins. `track` is removed.
 - Body links ending in `/` accept existing local directories.
-- Interrupted saves recover as a complete old or new transaction on the next Tent open; `tent workspace repair` restores damaged Tent history while preserving other edits.
+
+### Before and after a change
+
+- `tent load <path>...` lists the Nodes covering those paths, then the prompts under them and under every goal above them, nearest first.
+- Stop lists the Nodes covering the files changed this turn, each with its type and file path. Files that no Node covers get one reminder, changed goals are named so the user hears about them, and Node format problems and broken references are reported once until they are fixed. Node text is never copied into the reminder.
+- Stop is the only hook. SessionStart and `tent workspace brief` are removed.
+
+### Mapping a project
+
+- `tent workspace scan --draft <file>` writes a map draft and a JSON Lines report beside it. Parts follow directories, then imports, file-name stems, shared prefixes and history. Prose, data and asset projects map as well as code, and `package.json` entry points and plugin manifests mark product boundaries.
+- `tent node create --draft <file>` saves the entries whose bodies are written and leaves the rest in the draft, so a map is built and saved part by part.
+- With Nodes in place, `tent workspace scan` checks the map: uncovered files, oversized parts, import cycles and parts that always change together. Parts are the goals that cover files. A body line `allow:<rule>` keeps an intended exception. `tent workspace check-modules` is folded into it.
+- `tent new` runs `git init` when the folder is not in a repository; Tent needs Git.
+
+### Cards and Roles
+
+- A Card's sources are live addresses. `tent card take` prints the task and where each source is now, following a Node that was renamed or moved and marking one that was deleted. Versions are no longer pinned.
+- Every Card names its target Role, and pending Cards queue by publication time. `card show`, `card move`, untargeted Cards and `card watch --include-open` are removed.
+- Roles are plain Markdown files, read and edited with the host's tools. `role create` and `role delete` remain; `role show`, `role write` and `role list` are removed.
+- In Codex, `wake.mjs` binds a chat to a Role so that new Cards and returned results reach it. In Claude Code, an idle Role waits with `tent card watch` in the background.
+
+### Storage
+
+- History moves from a private Git repository to `.tent/.git/history.sqlite`. An interrupted save recovers as the complete old or new state on the next Tent command.
+- A workspace from 0.2.0 is converted once before 0.2.1 opens it; see [Migration](MIGRATION.md).
+
+### Plugin
+
+- Four Skills, one for each moment: `tent-init`, `tent-load`, `tent-save` and `tent-role`.
+- The bundled Web UI and `tent ui` are removed.
 
 ## 0.2.0
 
