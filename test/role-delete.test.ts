@@ -6,24 +6,18 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { createRoleContext, editRoleContext } from "../src/core/read/role-context.js";
+import { createRoleContext } from "../src/core/read/role-context.js";
 import { deleteRole } from "../src/core/write/role-delete.js";
 import {
   createCardDocument,
   deprecateCardDocument,
-  moveCardDocument,
   takeCardDocument,
-  parseCardDocument,
   returnCardDocument,
-  verifyCardSourceVersion,
 } from "../src/core/graph/card-document.js";
 import { checkGraph } from "../src/core/check/graph-check.js";
-import { contentEtag } from "../src/core/base/etag.js";
 import { DELETE_PENDING_PATH, executeDeleteUnlocked } from "../src/core/store/delete-recovery.js";
 import { runRoleCommand, roleHelpText } from "../src/cli/role-commands.js";
-import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(testScratchRoot());
@@ -59,13 +53,11 @@ test("Role deletion retains exact current history, leaves links and reception fa
   const nodePath = "reference/reference.md";
   const nodeRaw = "---\nid: node-reference\ntype: prompt\n---\n[Review](/roles/role-review.md)\n";
   await adapter.writeFile(nodePath, nodeRaw);
-  const result = await deleteRole(adapter, role.roleId, { baseEtag: contentEtag(raw) });
+  const result = await deleteRole(adapter, role.roleId);
   assert.deepEqual(result, { roleId: role.roleId, path: role.path });
   assert.equal(await adapter.exists(role.path), false);
   assert.equal(await adapter.readFile(card.path), cardRaw);
   assert.equal(await adapter.readFile(nodePath), nodeRaw);
-  const source = parseCardDocument(card.cardId, cardRaw).data.sources[0]!;
-  assert.equal((await verifyCardSourceVersion(adapter, card.path, source)).raw, raw);
   const deletion = (await adapter.history.changesInRange())
     .reverse()
     .find((entry) => entry.operation === "role.delete")!;
@@ -81,29 +73,15 @@ test("Role deletion retains exact current history, leaves links and reception fa
   assert.ok(
     checked.issues.some((issue) => issue.kind === "unresolved-link" && issue.path === nodePath),
   );
-  assert.ok(!checked.errors.some((error) => /source.*version/i.test(error.reason)));
+  assert.ok(!checked.errors.some((error) => error.path === card.path));
   await assert.rejects(
     createRoleContext(adapter, { roleId: role.roleId, title: "New" }),
     /already exists in history/,
   );
-  await assert.rejects(deleteRole(adapter, role.roleId, { baseEtag: role.etag }), /Role not found/);
+  await assert.rejects(deleteRole(adapter, role.roleId), /Role not found/);
 });
 
-test("Role deletion rejects missing and stale ETags without writes", async (t) => {
-  const { adapter, role } = await fixture(t);
-  const head = await adapter.history.currentCommit();
-  const before = await adapter.readFile(role.path);
-  for (const baseEtag of ["", "stale"])
-    await assert.rejects(
-      deleteRole(adapter, role.roleId, { baseEtag }),
-      /changed or baseEtag missing/,
-    );
-  assert.equal(await adapter.readFile(role.path), before);
-  assert.equal(await adapter.history.currentCommit(), head);
-  assert.equal(await adapter.exists(DELETE_PENDING_PATH), false);
-});
-
-test("pending targeted Cards list every blocker; moving and cancelling them permit deletion", async (t) => {
+test("pending Cards list every blocker; cancelling them permits deletion", async (t) => {
   const { adapter, role } = await fixture(t);
   const first = await createCardDocument(adapter, {
     cardId: "card-first",
@@ -115,13 +93,12 @@ test("pending targeted Cards list every blocker; moving and cancelling them perm
     prompt: "Second",
     target: role.roleId,
   });
-  await createCardDocument(adapter, { cardId: "card-public", prompt: "Public" });
   await adapter.writeFile(
     "cards/card-invalid.md",
     "---\ntype: card\nid: card-invalid\nschemaVersion: 3\ntarget: role-review\nstate: pending\n---\nMalformed sources",
   );
   const head = await adapter.history.currentCommit();
-  await assert.rejects(deleteRole(adapter, role.roleId, { baseEtag: role.etag }), (error) => {
+  await assert.rejects(deleteRole(adapter, role.roleId), (error) => {
     assert.ok(error instanceof RoleCardsError);
     assert.equal(error.code, "PENDING_CARDS");
     assert.deepEqual(error.details.cardIds, [first.cardId, second.cardId]);
@@ -130,10 +107,10 @@ test("pending targeted Cards list every blocker; moving and cancelling them perm
   });
   assert.equal(await adapter.history.currentCommit(), head);
   assert.equal(await adapter.exists(DELETE_PENDING_PATH), false);
-  await moveCardDocument(adapter, first.cardId, { target: null, expectedEtag: first.etag });
-  await deprecateCardDocument(adapter, second.cardId, second.etag);
+  await deprecateCardDocument(adapter, first.cardId);
+  await deprecateCardDocument(adapter, second.cardId);
   const cancelled = await adapter.readFile(second.path);
-  await deleteRole(adapter, role.roleId, { baseEtag: role.etag });
+  await deleteRole(adapter, role.roleId);
   assert.equal(await adapter.readFile(second.path), cancelled);
 });
 
@@ -159,35 +136,30 @@ test("unfinished returns protect both Roles and release each at its delivery bou
     [role, ["card-consumed", "card-pending", "card-returned"]],
     [worker, ["card-consumed", "card-pending"]],
   ] as const) {
-    await assert.rejects(
-      deleteRole(adapter, subject.roleId, { baseEtag: subject.etag }),
-      (error) => {
-        assert.ok(error instanceof RoleCardsError);
-        assert.deepEqual(error.details.cardIds, blockers);
-        assert.equal(
-          error.message,
-          `Role has unfinished Cards: ${blockers.join(", ")}. Collect returned Cards, finish outstanding returns, move pending targets, or deprecate the Cards before retiring the Role.`,
-        );
-        return true;
-      },
-    );
+    await assert.rejects(deleteRole(adapter, subject.roleId), (error) => {
+      assert.ok(error instanceof RoleCardsError);
+      assert.deepEqual(error.details.cardIds, blockers);
+      assert.equal(
+        error.message,
+        `Role has unfinished Cards: ${blockers.join(", ")}. Take or return each one, or cancel it with tent card deprecate <card-id>, then retry.`,
+      );
+      return true;
+    });
   }
   assert.equal(await adapter.history.currentCommit(), head);
   assert.equal(await adapter.exists(DELETE_PENDING_PATH), false);
-  await moveCardDocument(adapter, cards[0]!.cardId, { target: null, expectedEtag: cards[0]!.etag });
+  await deprecateCardDocument(adapter, cards[0]!.cardId);
   await returnCardDocument(adapter, cards[1]!.cardId, { roleId: worker.roleId, result: "done" });
-  await deleteRole(adapter, worker.roleId, { baseEtag: worker.etag });
-  // The return address remains protected even after its original target is moved.
-  await assert.rejects(deleteRole(adapter, role.roleId, { baseEtag: role.etag }), (error) => {
+  await deleteRole(adapter, worker.roleId);
+  // Results owed to the return address keep it protected after the worker is gone.
+  await assert.rejects(deleteRole(adapter, role.roleId), (error) => {
     assert.ok(error instanceof RoleCardsError);
-    assert.deepEqual(error.details.cardIds, ["card-consumed", "card-pending", "card-returned"]);
+    assert.deepEqual(error.details.cardIds, ["card-consumed", "card-returned"]);
     return true;
   });
-  const pending = await adapter.readFile(cards[0]!.path);
-  await deprecateCardDocument(adapter, cards[0]!.cardId, contentEtag(pending));
   for (const card of cards.slice(1, 3)) await takeCardDocument(adapter, card.cardId, role.roleId);
   const before = await Promise.all(cards.map((card) => adapter.readFile(card.path)));
-  await deleteRole(adapter, role.roleId, { baseEtag: role.etag });
+  await deleteRole(adapter, role.roleId);
   assert.deepEqual(await Promise.all(cards.map((card) => adapter.readFile(card.path))), before);
 });
 
@@ -204,40 +176,32 @@ test("deprecated return Cards never block either Role in any delivery state", as
     if (state === "returned" || state === "closed")
       await returnCardDocument(adapter, card.cardId, { roleId: worker.roleId, result: "done" });
     if (state === "closed") await takeCardDocument(adapter, card.cardId, role.roleId);
-    await deprecateCardDocument(
-      adapter,
-      card.cardId,
-      contentEtag(await adapter.readFile(card.path)),
-    );
+    await deprecateCardDocument(adapter, card.cardId);
   }
-  await deleteRole(adapter, worker.roleId, { baseEtag: worker.etag });
-  await deleteRole(adapter, role.roleId, { baseEtag: role.etag });
+  await deleteRole(adapter, worker.roleId);
+  await deleteRole(adapter, role.roleId);
 });
 
-test("CLI Role delete requires its id and ETag and reports a JSON deletion receipt", async (t) => {
+test("CLI Role delete requires its id, names blocking Cards and reports a JSON deletion receipt", async (t) => {
   const { root, adapter, role } = await fixture(t);
-  const missing = await runRoleCommand("delete", [role.roleId], { workspace: root });
+  const missing = await runRoleCommand("delete", [], { workspace: root });
   assert.equal(missing.exitCode, 1);
-  assert.match(missing.stderr, /tent role delete needs --base-etag from show\./);
-  const wrong = await runRoleCommand("delete", [role.roleId, "--base-etag", "stale"], {
-    workspace: root,
+  const card = await createCardDocument(adapter, {
+    cardId: "card-waiting",
+    prompt: "Work",
+    target: role.roleId,
   });
-  assert.equal(wrong.exitCode, 1);
-  assert.match(wrong.stderr, /Next: tent role show role-review/);
-  const deleted = await runRoleCommand(
-    "delete",
-    [role.roleId, "--base-etag", role.etag, "--json"],
-    { workspace: root },
-  );
+  const blocked = await runRoleCommand("delete", [role.roleId], { workspace: root });
+  assert.equal(blocked.exitCode, 1);
+  assert.match(blocked.stderr, /card-waiting/);
+  assert.match(blocked.stderr, /tent card deprecate/);
+  await deprecateCardDocument(adapter, card.cardId);
+  const deleted = await runRoleCommand("delete", [role.roleId, "--json"], { workspace: root });
   assert.equal(deleted.exitCode, 0, deleted.stderr);
   assert.equal(JSON.parse(deleted.stdout).roleId, role.roleId);
   assert.equal(JSON.parse(deleted.stdout).workspaceRoot, root);
   assert.equal(await adapter.exists(role.path), false);
-  assert.ok(
-    roleHelpText().includes(
-      "Retire a Role with write --status deprecated. First collect returned Cards, finish outstanding returns, move pending targets or deprecate unfinished Cards; the same goes for delete, which removes the document for good. Tent's Git keeps the history, and the id is never reused.",
-    ),
-  );
+  assert.match(roleHelpText(), /status: deprecated/);
 });
 
 for (const point of [
@@ -278,7 +242,7 @@ for (const point of [
         throw new Error("injected");
       await remove(file);
     };
-    await assert.rejects(deleteRole(adapter, role.roleId, { baseEtag: role.etag }), /injected/);
+    await assert.rejects(deleteRole(adapter, role.roleId), /injected/);
     const published = point === "cleanup" || point === "journal";
     assert.equal(await adapter.exists(DELETE_PENDING_PATH), published);
     if (published) {
@@ -290,7 +254,7 @@ for (const point of [
       assert.equal(await adapter.exists("temp/delete-pending"), false);
     }
     const restarted = openTestFs(systemRoot);
-    await deleteRole(restarted, role.roleId, { baseEtag: role.etag });
+    await deleteRole(restarted, role.roleId);
     assert.equal(await restarted.exists(role.path), false);
     assert.equal(await restarted.exists(DELETE_PENDING_PATH), false);
     assert.equal(await restarted.exists("temp/delete-pending"), false);
@@ -317,7 +281,7 @@ test("legacy Role recovery rejects changed isolated bytes and a recreated live i
     await move(from, to);
     throw new Error("interrupted");
   };
-  await assert.rejects(deleteRole(adapter, role.roleId, { baseEtag: role.etag }), /interrupted/);
+  await assert.rejects(deleteRole(adapter, role.roleId), /interrupted/);
   assert.ok(legacyPlan);
   // The new transaction restored the live Role. Reconstruct a legacy interrupted isolation.
   await fs.writeFile(path.join(systemRoot, DELETE_PENDING_PATH), legacyPlan);
@@ -325,17 +289,11 @@ test("legacy Role recovery rejects changed isolated bytes and a recreated live i
   await fs.rename(path.join(systemRoot, role.path), path.join(systemRoot, "temp/delete-pending"));
   const restarted = openTestFs(systemRoot);
   await restarted.writeFile("temp/delete-pending", raw + "changed");
-  await assert.rejects(
-    deleteRole(restarted, role.roleId, { baseEtag: role.etag }),
-    /Pending deletion conflict/,
-  );
+  await assert.rejects(deleteRole(restarted, role.roleId), /Pending deletion conflict/);
   assert.equal(await restarted.readFile("temp/delete-pending"), raw + "changed");
   await restarted.writeFile("temp/delete-pending", raw);
   await restarted.writeFile(role.path, raw + "replacement");
-  await assert.rejects(
-    deleteRole(restarted, role.roleId, { baseEtag: role.etag }),
-    /Pending deletion conflict/,
-  );
+  await assert.rejects(deleteRole(restarted, role.roleId), /Pending deletion conflict/);
   assert.equal(await restarted.readFile(role.path), raw + "replacement");
   assert.equal(await restarted.exists(DELETE_PENDING_PATH), true);
 });
@@ -357,7 +315,7 @@ test("Role delete plans cannot remove another path or introduce associated write
   assert.equal(await adapter.exists(DELETE_PENDING_PATH), false);
 });
 
-test("Role deprecation protects delivery addresses and preserves failed writes", async (t) => {
+test("check reports each Card left waiting on a Role retired by a native edit", async (t) => {
   const { adapter, role, root } = await fixture(t);
   const worker = await createRoleContext(adapter, { roleId: "role-worker", title: "Worker" });
   const card = await createCardDocument(adapter, {
@@ -366,71 +324,45 @@ test("Role deprecation protects delivery addresses and preserves failed writes",
     target: worker.roleId,
     returnTo: role.roleId,
   });
-  async function blocked(subject: typeof role, raw = false) {
-    const before = await adapter.readFile(subject.path);
-    const head = await adapter.history.currentCommit();
-    await assert.rejects(
-      editRoleContext(adapter, subject.roleId, {
-        baseEtag: subject.etag,
-        ...(raw
-          ? { raw: before.replace("type: role", "type: role\nstatus: deprecated") }
-          : { frontmatter: { status: "deprecated" } }),
-      }),
-      (error) => {
-        assert.ok(error instanceof RoleCardsError);
-        assert.equal(error.code, "PENDING_CARDS");
-        assert.deepEqual(error.details.cardIds, [card.cardId]);
-        return true;
-      },
-    );
-    assert.equal(await adapter.readFile(subject.path), before);
-    assert.equal(await adapter.history.currentCommit(), head);
-  }
-  await blocked(worker);
-  await blocked(role, true);
-  const cli = await runRoleCommand(
-    "write",
-    [worker.roleId, "--base-etag", worker.etag, "--status", "deprecated"],
-    { workspace: root },
-  );
-  assert.equal(cli.exitCode, 1);
-  assert.match(cli.stderr, /card-return/);
-  await takeCardDocument(adapter, card.cardId, worker.roleId);
-  await blocked(worker, true);
-  await blocked(role);
-  await returnCardDocument(adapter, card.cardId, { roleId: worker.roleId, result: "done" });
-  await editRoleContext(adapter, worker.roleId, {
-    baseEtag: worker.etag,
-    frontmatter: { status: "deprecated" },
-  });
-  await blocked(role);
-  await takeCardDocument(adapter, card.cardId, role.roleId);
-  await editRoleContext(adapter, role.roleId, {
-    baseEtag: role.etag,
-    frontmatter: { status: "deprecated" },
-  });
-});
-
-test("Role deprecation ignores completed and cancelled Cards and still checks CAS", async (t) => {
-  const { adapter, role } = await fixture(t);
   const done = await createCardDocument(adapter, { prompt: "One-way", target: role.roleId });
   await takeCardDocument(adapter, done.cardId, role.roleId);
   const cancelled = await createCardDocument(adapter, { prompt: "Cancelled", target: role.roleId });
-  await deprecateCardDocument(adapter, cancelled.cardId, cancelled.etag);
-  const before = await adapter.readFile(role.path);
-  for (const baseEtag of ["", "stale"])
-    await assert.rejects(
-      editRoleContext(adapter, role.roleId, { baseEtag, frontmatter: { status: "deprecated" } }),
-      /baseEtag/,
+  await deprecateCardDocument(adapter, cancelled.cardId);
+  const retire = async (subject: typeof role, status: string) => {
+    const raw = await adapter.readFile(subject.path);
+    await adapter.writeFile(
+      subject.path,
+      raw.replace(/^status: \w+\n/m, "").replace("type: role", `type: role\nstatus: ${status}`),
     );
-  assert.equal(await adapter.readFile(role.path), before);
-  const retired = await editRoleContext(adapter, role.roleId, {
-    baseEtag: role.etag,
-    frontmatter: { status: "deprecated" },
-  });
-  const restored = await editRoleContext(adapter, role.roleId, {
-    baseEtag: retired.etag,
-    frontmatter: { status: "stable" },
-  });
-  assert.ok(restored.changed);
+  };
+  const waiting = async () =>
+    (
+      await checkGraph(adapter, root, async (file) =>
+        fs.access(file).then(
+          () => true,
+          () => false,
+        ),
+      )
+    ).errors
+      .filter((error) => /^Card waits on/.test(error.reason))
+      .map((error) => [error.path, error.reason]);
+  const message = (roleId: string) =>
+    `Card waits on ${roleId}, which is not a current Role; cancel it with tent card deprecate ${card.cardId}`;
+  assert.deepEqual(await waiting(), []);
+  await retire(worker, "deprecated");
+  await retire(role, "deprecated");
+  assert.deepEqual(await waiting(), [
+    [card.path, message(role.roleId)],
+    [card.path, message(worker.roleId)],
+  ]);
+  // A retired Role takes nothing; restore it to finish its part, then retire it again.
+  await retire(worker, "stable");
+  await takeCardDocument(adapter, card.cardId, worker.roleId);
+  await returnCardDocument(adapter, card.cardId, { roleId: worker.roleId, result: "done" });
+  await retire(worker, "deprecated");
+  assert.deepEqual(await waiting(), [[card.path, message(role.roleId)]]);
+  await retire(role, "stable");
+  await takeCardDocument(adapter, card.cardId, role.roleId);
+  await retire(role, "deprecated");
+  assert.deepEqual(await waiting(), []);
 });

@@ -145,6 +145,7 @@ test("body directory links check the explicit path type without reading director
     type: "card",
     schemaVersion: 3,
     state: "pending",
+    target: "role-a",
     sources: [],
   });
   const targets = [
@@ -252,6 +253,7 @@ test("whole graph inspection reports the three categories across Nodes, Roles an
       type: "card",
       schemaVersion: 3,
       state: "pending",
+      target: "role-a",
       sources: [
         { resource: "../../missing-card.txt" },
         { resource: "https://example.invalid/material" },
@@ -299,8 +301,6 @@ test("whole graph inspection reports the three categories across Nodes, Roles an
     "invalid-material-address",
     "invalid-material-address",
     "invalid-material-address",
-    "invalid-material-address",
-    "missing-material-file",
     "missing-material-file",
     "missing-material-file",
     "unresolved-link",
@@ -319,7 +319,7 @@ test("whole graph inspection reports the three categories across Nodes, Roles an
     false,
   );
   assert.equal(result.issues.filter((issue) => issue.path === "roles/role-a.md").length, 1);
-  assert.equal(result.issues.filter((issue) => issue.path === "cards/card-a.md").length, 2);
+  assert.equal(result.issues.filter((issue) => issue.path === "cards/card-a.md").length, 0);
   assert.ok(
     !result.issues.some(
       (issue) =>
@@ -333,14 +333,7 @@ test("whole graph inspection reports the three categories across Nodes, Roles an
     [
       ["Author/Author.md", "../../missing.txt", "Local material does not exist as a file"],
       ["Author/Author.md", "../../empty-directory", "Local material does not exist as a file"],
-      ["cards/card-a.md", "../../missing-card.txt", "Local material does not exist as a file"],
     ],
-  );
-  assert.ok(
-    result.issues.some(
-      (issue) =>
-        "resource" in issue && issue.resource === "file:///bad%ZZ" && /URI/.test(issue.reason),
-    ),
   );
   assert.deepEqual(await bytes(root), before);
   assert.deepEqual(await checkGraph(adapter, workspace, fileExists), result);
@@ -400,7 +393,14 @@ test("legacy internal ordinary materials are invalid while native materials and 
   await write("roles/role-a.md", { id: "role-a", type: "role" }, "native Role");
   await write(
     "cards/card-a.md",
-    { id: "card-a", type: "card", schemaVersion: 3, state: "pending", sources: [] },
+    {
+      id: "card-a",
+      type: "card",
+      schemaVersion: 3,
+      state: "pending",
+      target: "role-a",
+      sources: [],
+    },
     "native Card",
   );
   const legacyUri = pathToFileURL(path.join(systemRoot, "attachments/legacy.txt")).href;
@@ -520,37 +520,39 @@ test("section observation failures are errors, not false missing-heading finding
   assert.match(result.errors[0]!.reason, /EACCES/);
 });
 
-test("Card fragment sources still pin complete Node bytes and survive a missing live section", async (t) => {
+test("Card source sections are resolved at take, not reported by check", async (t) => {
   const { workspace, systemRoot, adapter, write, fileExists } = await fixture(t);
   await initializeFixtureHistory(systemRoot);
-  await write(
-    "Design/Design.md",
-    { id: "node-design" },
-    "## State\nselected\n\n## Other\nretained too\n",
-  );
-  const original = await adapter.readFile("Design/Design.md");
+  await write("roles/role-a.md", { id: "role-a", type: "role" });
+  await write("Design/Design.md", { id: "node-design" }, "## State\nselected\n");
   const card = await createCardDocument(adapter, {
-    cardId: "card-sectionpin",
-    prompt: "Use the retained design",
+    cardId: "card-section",
+    prompt: "Use the design",
+    target: "role-a",
     sources: [{ resource: "../Design/Design.md#State" }],
   });
-  const source = (
-    parseFrontmatter(await adapter.readFile(card.path)).data.sources as Array<{ version: unknown }>
-  )[0]!;
-  const version = source.version as { commit: string; path: string };
-  assert.equal(await adapter.history.read(version), original);
+  assert.deepEqual(parseFrontmatter(await adapter.readFile(card.path)).data.sources, [
+    { resource: "../Design/Design.md#State" },
+  ]);
   await write("Design/Design.md", { id: "node-design" }, "## Other\ncurrent only\n");
-  assert.deepEqual((await checkGraph(adapter, workspace, fileExists)).issues, []);
+  const result = await checkGraph(adapter, workspace, fileExists);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(
+    result.issues.filter((issue) => issue.path === card.path),
+    [],
+  );
 });
 
 test("failed publication section keeps its known Node identity after alias reuse by an ordinary file", async (t) => {
   const { workspace, systemRoot, adapter, write, fileExists } = await fixture(t);
   await initializeFixtureHistory(systemRoot);
   await write("Old/Old.md", { id: "node-old" }, "## Existing\nOriginal Node.");
+  await write("roles/role-a.md", { id: "role-a", type: "role" });
   await captureFixtureDocuments(systemRoot);
   const card = await createCardDocument(adapter, {
     cardId: "card-aliasmissing",
     prompt: "Read [rule](../Old#Missing).",
+    target: "role-a",
     sources: [],
   });
   const published = await adapter.readFile(card.path);
@@ -589,14 +591,16 @@ test("failed publication section keeps its known Node identity after alias reuse
   assert.equal(await adapter.readFile("Old"), "An ordinary regular file, not a Node document.");
 });
 
-test("retained Card source versions survive live moves and deletion without document or history writes", async (t) => {
+test("Card sources to moved and deleted documents are left to take without writes", async (t) => {
   const { root, workspace, systemRoot, adapter, write, fileExists } = await fixture(t);
   await initializeFixtureHistory(systemRoot);
-  await write("Original/Original.md", { id: "node-original" }, "retained source");
-  await write("roles/role-a.md", { id: "role-a", type: "role" }, "retained role");
+  await write("Original/Original.md", { id: "node-original" }, "live source");
+  await write("roles/role-a.md", { id: "role-a", type: "role" }, "live role");
+  await write("roles/role-b.md", { id: "role-b", type: "role" }, "worker");
   const card = await createCardDocument(adapter, {
-    cardId: "card-pinned",
-    prompt: "Use selected versions",
+    cardId: "card-live",
+    prompt: "Use the current documents",
+    target: "role-b",
     sources: [{ resource: "../Original/Original.md" }, { resource: "../roles/role-a.md" }],
   });
   await renameNode(
@@ -605,7 +609,6 @@ test("retained Card source versions survive live moves and deletion without docu
     "Moved",
   );
   await withTentMutation(adapter, async () => {
-    await adapter.remove("Moved");
     await adapter.remove("roles/role-a.md");
   });
   await adapter.writeFile("node-move.pending.json", "pending repair must stay unchanged");
@@ -624,18 +627,19 @@ test("retained Card source versions survive live moves and deletion without docu
       throw new Error(`Unexpected write: ${method}`);
     });
   assert.deepEqual(await checkGraph(adapter, workspace, fileExists), {
-    documents: 1,
+    documents: 3,
     issues: [],
     notices: [],
     errors: [],
   });
+  assert.equal(card.cardId, "card-live");
   assert.equal(await historyHead(systemRoot), head);
   assert.deepEqual(await bytes(root), before);
-  assert.equal(card.cardId, "card-pinned");
 });
 
-test("invalid retained versions report their occurrence instead of checking a live file", async (t) => {
+test("live Cards with a retired source version are invalid documents", async (t) => {
   const { workspace, adapter, write, fileExists } = await fixture(t);
+  await write("roles/role-a.md", { id: "role-a", type: "role" });
   await write(
     "cards/card-a.md",
     {
@@ -643,6 +647,7 @@ test("invalid retained versions report their occurrence instead of checking a li
       type: "card",
       schemaVersion: 3,
       state: "pending",
+      target: "role-a",
       sources: [
         {
           resource: "../Missing/Missing.md",
@@ -653,9 +658,12 @@ test("invalid retained versions report their occurrence instead of checking a li
     "prompt",
   );
   const result = await checkGraph(adapter, workspace, fileExists);
-  assert.equal(result.issues.length, 1);
-  assert.equal(result.issues[0]!.kind, "invalid-material-address");
-  assert.match(result.issues[0]!.reason, /selected Tent Node or Role/);
+  assert.deepEqual(result.errors, [
+    {
+      path: "cards/card-a.md",
+      reason: "Card source versions are retired; remove version from each source",
+    },
+  ]);
 });
 
 test("file inspection failures are diagnostics, not missing file findings", async (t) => {
@@ -784,6 +792,7 @@ test("mixed Node failures finish before Role and Card discovery", async (t) => {
     type: "card",
     schemaVersion: 3,
     state: "pending",
+    target: "role-a",
     sources: [],
   });
   const readBinary = adapter.readBinary.bind(adapter);

@@ -74,15 +74,15 @@ test("Node guidance distinguishes stored document paths from CLI Workspace paths
   assert.match(maintenance, /docs\/login\.md#Codes/);
   const access = flat(await read("skill-resources/references/access.md"));
   assert.doesNotMatch(access, /relative to the Node's own file|Workspace-root path/);
-  const cards = flat(await read("skill-resources/references/cards.md"));
+  const roles = flat(await read("skills/tent-role/SKILL.md"));
   assert.match(
-    cards,
-    /`--source` takes a Node id or a Workspace-root path such as `docs\/req\.md`/,
+    roles,
+    /Point `--source` at the Nodes and files it needs, as a Node id, a Node section such as `node-abc123#Heading`, or a Workspace-root path/,
   );
-  assert.doesNotMatch(cards, /`\.\/docs\/req\.md`|`\/docs\/req\.md`/);
+  assert.doesNotMatch(roles, /`\.\/docs\/req\.md`|`\/docs\/req\.md`/);
 });
 
-test("PLUGIN.md points to SPEC for results and brief rules", async () => {
+test("PLUGIN.md points to SPEC for results and what the Agent is told", async () => {
   const spec = flat(await read("docs/SPEC.md"));
   const plugin = await read("docs/PLUGIN.md");
   assert.match(spec, /## 4\. Results/);
@@ -91,16 +91,6 @@ test("PLUGIN.md points to SPEC for results and brief rules", async () => {
     spec,
     /comparison bases|intent basis|changedSince|node confirm|node check|workspace drift|--confirm/,
   );
-  assert.match(
-    spec,
-    /`workspace brief \[--role <role>\]` first collects native edits, then reports within 16 KiB/,
-  );
-  assert.match(
-    spec,
-    /up to ten recently changed Nodes.*up to ten of the Role's unfinished Cards.*up to ten workspace problems/,
-  );
-  assert.match(spec, /titles can be shortened, ids never are/);
-  assert.match(plugin, /SPEC\.md#brief/);
   assert.match(plugin, /SPEC\.md#5-what-the-agent-is-told/);
   assert.doesNotMatch(plugin, /最近的 goal 祖先提供隐式来源/);
   assert.doesNotMatch(plugin, /四种同步状态计数/);
@@ -192,5 +182,5 @@ test("SPEC records the Node name, rename rollback, check and Card warning contra
   assert.match(plugin, /`COM1`–`COM9`、`LPT1`–`LPT9`、`COM¹`–`COM³`、`LPT¹`–`LPT³`/);
   assert.match(spec, /settles an interrupted write to all old or all new before it reads anything/);
   assert.match(spec, /Node files that disagree with retained history \(`node-git-mismatch`\)/);
-  assert.match(spec, /`card create` warns on stderr, without changing what it stores/);
+  assert.match(spec, /`card create` warns, without changing what it stores/);
 });

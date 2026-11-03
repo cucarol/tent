@@ -246,7 +246,7 @@ test("parallel syntax scopes are isolated and absent Tent Git stays read-only", 
   assert.deepEqual(await fs.readdir(root), []);
 });
 
-test("CLI brief installs syntax reuse around the outer document read scope", async (t) => {
+test("CLI check installs syntax reuse around the outer document read scope", async (t) => {
   const { root } = await fixture(t);
   await scaffoldInWorkspace(openTestFs(root), {
     name: "Syntax",
@@ -266,21 +266,21 @@ test("CLI brief installs syntax reuse around the outer document read scope", asy
   await initializeFixtureHistory(system);
   await captureFixtureDocuments(system);
   const file = path.join(system, ".git", "tent-material-cache", "markdown-syntax.bin");
-  const brief = async () => {
-    const result = await runWorkspaceCommand("brief", ["--json"], { workspace: root });
+  const check = async () => {
+    const result = await runWorkspaceCommand("check", ["--json"], { workspace: root });
     assert.equal(result.exitCode, 0, result.stderr);
     return result.stdout;
   };
-  const first = await brief();
+  const first = await check();
   const bytes = await fs.readFile(file);
   assert.ok(deserialize(bytes.subarray(32)).entries.size > 0);
   const head = await historyHead(system);
   const stat = await fs.stat(file);
-  assert.equal(await brief(), first);
+  assert.equal(await check(), first);
   assert.deepEqual(await fs.readFile(file), bytes);
   assert.equal((await fs.stat(file)).mtimeMs, stat.mtimeMs);
   assert.equal(await historyHead(system), head);
   await fs.rm(file);
-  assert.equal(await brief(), first);
+  assert.equal(await check(), first);
   assert.equal(await historyHead(system), head);
 });

@@ -8,13 +8,22 @@ export class RoleCardsError extends Error {
   readonly code = "PENDING_CARDS";
   constructor(readonly details: { cardIds: string[] }) {
     super(
-      `Role has unfinished Cards: ${details.cardIds.join(", ")}. Collect returned Cards, finish outstanding returns, move pending targets, or deprecate the Cards before retiring the Role.`,
+      `Role has unfinished Cards: ${details.cardIds.join(", ")}. Take or return each one, or cancel it with tent card deprecate <card-id>, then retry.`,
     );
     this.name = "RoleCardsError";
   }
 }
 
-/** Called under the mutation lock before deleting or deprecating a Role. */
+/** Roles a live Card still waits on: to take it, return it, or read its result. */
+export function rolesHoldingCard(data: Record<string, unknown>): string[] {
+  if (documentLifecycle(data).status === "deprecated" || data.state === "closed") return [];
+  const roles = [data.returnTo];
+  if (data.state === "pending") roles.push(data.target);
+  if (data.state === "consumed" && data.returnTo !== undefined) roles.push(data.receivedBy);
+  return roles.filter((role): role is string => typeof role === "string");
+}
+
+/** Called under the mutation lock before deleting a Role. */
 export async function assertRoleHasNoUnfinishedCards(fs: FsAdapter, roleId: string) {
   const cardIds: string[] = [];
   for (const entry of (await fs.exists(CARDS_DIR)) ? await fs.listDir(CARDS_DIR) : []) {
@@ -27,15 +36,7 @@ export async function assertRoleHasNoUnfinishedCards(fs: FsAdapter, roleId: stri
     } catch {
       continue;
     }
-    if (
-      documentLifecycle(card.data).status !== "deprecated" &&
-      ((card.data.state === "pending" && card.data.target === roleId) ||
-        (card.data.state !== "closed" && card.data.returnTo === roleId) ||
-        (card.data.state === "consumed" &&
-          card.data.returnTo !== undefined &&
-          card.data.receivedBy === roleId))
-    )
-      cardIds.push(id);
+    if (rolesHoldingCard(card.data).includes(roleId)) cardIds.push(id);
   }
   if (cardIds.length) throw new RoleCardsError({ cardIds: cardIds.sort() });
 }

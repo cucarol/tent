@@ -21,7 +21,8 @@ import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 import { ContextReader } from "../src/core/graph/context-reader.js";
 import { contentEtag } from "../src/core/base/etag.js";
 import { serializeFrontmatter, parseFrontmatter } from "../src/core/base/frontmatter.js";
-import { createCardDocument, verifyCardSourceVersion } from "../src/core/graph/card-document.js";
+import { createCardDocument } from "../src/core/graph/card-document.js";
+import { createRoleContext } from "../src/core/read/role-context.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 
@@ -172,7 +173,7 @@ test("directory declarations preserve slash, reject fragments and enforce safe s
   );
 });
 
-test("directory markers cannot select pinned Card files or response evidence", async (t) => {
+test("directory markers cannot select Node files as Card sources or response evidence", async (t) => {
   const workspace = await fixture(t);
   await scaffoldInWorkspace(openTestFs(workspace), {
     name: "Directory boundaries",
@@ -182,24 +183,23 @@ test("directory markers cannot select pinned Card files or response evidence", a
   await initializeFixtureHistory(path.join(workspace, ".tent"));
   const catalog = await loadNodeCatalog(adapter);
   assert.equal(isCardResponseSource("/cards/card-response.md/", "index.md"), false);
+  await createRoleContext(adapter, { roleId: "role-reader", title: "Reader" });
   const card = await createCardDocument(adapter, {
     prompt: "Directory declaration",
+    target: "role-reader",
     sources: [{ resource: "../../src/" }],
   });
-  assert.equal(
-    materialFields(parseFrontmatter(await adapter.readFile(card.path)).data).sources![0]!.version,
-    undefined,
+  assert.deepEqual(
+    materialFields(parseFrontmatter(await adapter.readFile(card.path)).data).sources,
+    [{ resource: "../../src/" }],
   );
-  const pinned = await createCardDocument(adapter, {
-    prompt: "Node declaration",
-    sources: [{ resource: "/Main/Main.md" }],
-  });
   await assert.rejects(
-    verifyCardSourceVersion(adapter, pinned.path, {
-      ...materialFields(parseFrontmatter(await adapter.readFile(pinned.path)).data).sources![0]!,
-      resource: "/Main/Main.md/",
+    createCardDocument(adapter, {
+      prompt: "Node declaration",
+      target: "role-reader",
+      sources: [{ resource: "/Main/Main.md/" }],
     }),
-    /must address/,
+    /must point to Workspace files/,
   );
   const raw = serializeFrontmatter(
     { id: "node-main", type: "prompt", resource: "/Main/Main.md/" },

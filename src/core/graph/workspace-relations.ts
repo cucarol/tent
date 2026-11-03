@@ -4,18 +4,12 @@ import { loadTent } from "../store/tree.js";
 import { buildNodeIndex } from "../base/okf-index.js";
 import { extractOutLinksDetailed, extractNodeMentions, resolveOutLink } from "../base/links.js";
 import { resolveTargetPath } from "../base/link-target.js";
-import {
-  materialFields,
-  materialLocator,
-  resolvedMaterialOccurrences,
-  type MaterialSource,
-} from "../base/material.js";
+import { materialFields, materialLocator, resolvedMaterialOccurrences } from "../base/material.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { parseRoleDocument } from "../store/role-document.js";
-import { parseCardDocument, verifyCardSourceVersions } from "./card-document.js";
+import { parseCardDocument } from "./card-document.js";
 import { isCardId, isRoleId } from "../base/id.js";
 import { CARDS_DIR, ROLES_DIR, nodeNotePath } from "../base/paths.js";
-import type { DocumentVersion } from "../store/history-port.js";
 import { contentEtag } from "../base/etag.js";
 import type { Node } from "../base/types.js";
 
@@ -42,8 +36,6 @@ export type WorkspaceRelation = {
   range?: { start: number; end: number };
   index?: number;
   title?: string;
-  version?: DocumentVersion;
-  changedSince?: boolean;
 };
 
 /** One live document load. Discovery does not capture, receive Cards, or repair documents. */
@@ -140,11 +132,6 @@ export async function resolveDocumentRelations(
   }
   const relations: WorkspaceRelation[] = [];
   const knownIds = new Set(nodes.map((node) => node.id));
-  const pinned: Array<{
-    relation: WorkspaceRelation;
-    owner: string;
-    source: MaterialSource;
-  }> = [];
   for (const document of documents) {
     const fields = materialFields(document.data);
     for (const occurrence of resolvedMaterialOccurrences(document.data, document.path)) {
@@ -161,9 +148,6 @@ export async function resolveDocumentRelations(
         ...(occurrence.index === undefined ? {} : { index: occurrence.index }),
         ...(typeof source?.title === "string" ? { title: source.title } : {}),
       };
-      if (document.ref.kind === "card" && source?.version !== undefined) {
-        pinned.push({ relation, owner: document.path, source });
-      }
       relations.push(relation);
     }
     for (const link of extractOutLinksDetailed(document.body, true)) {
@@ -205,19 +189,6 @@ export async function resolveDocumentRelations(
         target: { kind: "node", id: mention.targetNodeId },
         range: { start: mention.range.start, end: mention.range.end },
       });
-    }
-  }
-  const retained = await verifyCardSourceVersions(fs, pinned);
-  for (const [i, { relation }] of pinned.entries()) {
-    const value = retained[i]!;
-    if (value instanceof Error) relation.target = { kind: "invalid", error: value.message };
-    else {
-      relation.target = {
-        kind: value.version.path.startsWith(ROLES_DIR + "/") ? "role" : "node",
-        id: String(parseFrontmatter(value.raw).data.id),
-      };
-      relation.version = value.version;
-      relation.changedSince = value.changedSince;
     }
   }
   return relations;

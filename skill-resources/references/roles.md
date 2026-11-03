@@ -1,9 +1,7 @@
 # Role commands
 
-| When | Command | Read |
+| When | Do | Read |
 | --- | --- | --- |
-| Read a Role | `tent role show <role-id>`; continue with `page.next` as `--start`, `--end`, `--expected-etag` | `text`, `etag` |
-| Replace the body | `tent role write <role-id> --base-etag <etag> --body -` | `etag` |
-| Retire | Clear its Cards first: take returned receipts, finish outstanding returns, `tent card move <card-id> --to <role-id>` pending ones; then `tent role write <role-id> --status deprecated --base-etag <etag>` | `etag`; `PENDING_CARDS` names the Cards still in the way |
-
-On an ETag conflict, read again, merge and write with the new `etag`.
+| Read or edit a Role | Open `.tent/roles/<role-id>.md` with your own tools | frontmatter `title` and `status`; the body |
+| Retire | Clear its Cards: take results returned to it, finish returns it owes, cancel and resend its pending Cards. Then set `status: deprecated` in its file | `tent workspace check` names Cards still in the way |
+| Remove for good | `tent role delete <role-id>` | `PENDING_CARDS` names Cards still in the way |

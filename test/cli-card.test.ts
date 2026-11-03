@@ -10,11 +10,8 @@ import { spawn } from "node:child_process";
 import { runCardCommand, cardHelpText } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
-import { readCardDocument } from "../src/core/graph/card-document.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { git } from "./helpers.js";
 
 async function fileSnapshot(root: string): Promise<Record<string, string>> {
   const files: Record<string, string> = {};
@@ -54,31 +51,28 @@ test("Card watch checks once without any file writes and distinguishes timeout f
     assert.equal(result.stdout, "");
     assert.ok(result.stderr);
   }
-  assert.match(cardHelpText("watch"), /2 = timeout \(no output\); 1 = error/);
+  assert.match(cardHelpText(), /2 = timeout \(no output\); 1 = error/);
 });
 
 test("Card watch returns only committed current pending input for the exact Role", async (t) => {
   const { root, globals } = await fixture(t);
   const role = value(await runRoleCommand("create", ["--title", "Watch"], globals));
   const other = value(await runRoleCommand("create", ["--title", "Other"], globals));
-  const create = (title: string, target?: string) =>
+  const create = (title: string, target: string) =>
     runCardCommand(
       "create",
-      ["--prompt", "Work", "--title", title, ...(target ? ["--target", target] : [])],
+      ["--prompt", "Work", "--title", title, "--target", target],
       globals,
     ).then(value);
-  await create("Public");
   await create("Other", other.roleId);
   const consumed = await create("Consumed", role.roleId);
   value(await runCardCommand("take", [consumed.cardId, "--role", role.roleId], globals));
   const cancelled = await create("Cancelled", role.roleId);
-  value(
-    await runCardCommand("deprecate", [cancelled.cardId, "--base-etag", cancelled.etag], globals),
-  );
+  value(await runCardCommand("deprecate", [cancelled.cardId], globals));
   const first = await create("First\nline", role.roleId);
   const second = await create("Second", role.roleId);
   const systemRoot = path.join(root, ".tent");
-  const unpublished = (await fs.readFile(path.join(root, first.path), "utf8")).replaceAll(
+  const unpublished = (await fs.readFile(cardFile(root, first.cardId), "utf8")).replaceAll(
     first.cardId,
     "card-unpublished",
   );
@@ -248,25 +242,38 @@ function value(result: { exitCode: number; stdout: string; stderr: string }) {
   assert.equal(result.exitCode, 0, result.stderr);
   return JSON.parse(result.stdout);
 }
+function cardFile(root: string, cardId: string) {
+  return path.join(root, ".tent", "cards", `${cardId}.md`);
+}
 
 test("Card list reads live headers and diagnostics without derived progress or capture", async (t) => {
   const { root, globals } = await fixture(t);
+  const role = value(await runRoleCommand("create", ["--title", "Worker"], globals));
   const goal = value(
     await runNodeCommand("create", ["Goal", "--type", "goal", "--body", "Deliver"], globals),
   ).node;
   const card = value(
     await runCardCommand(
       "create",
-      ["--title", "Recorded title", "--prompt", "Deliver", "--source", goal.nodeId],
+      [
+        "--title",
+        "Recorded title",
+        "--prompt",
+        "Deliver",
+        "--source",
+        goal.nodeId,
+        "--target",
+        role.roleId,
+      ],
       globals,
     ),
   );
   const adapter = openTestFs(path.join(root, ".tent"));
-  const file = path.join(root, card.path);
+  const file = cardFile(root, card.cardId);
   const original = parseFrontmatter(await fs.readFile(file, "utf8"));
   const head = await adapter.history.currentCommit();
   const edited = serializeFrontmatter(
-    { ...original.data, title: "Live title", state: "consumed" },
+    { ...original.data, title: "Live title", state: "consumed", receivedBy: role.roleId },
     original.body,
     original.keyOrder,
   );
@@ -306,76 +313,37 @@ test("Card list reads live headers and diagnostics without derived progress or c
   assert.equal(await adapter.history.currentCommit(), head);
 });
 
-test("Card CLI deprecates tasks with CAS, filters them and displays a reception notice", async (t) => {
+test("Card deprecate cancels a task, hides it from lists and marks a later take", async (t) => {
   const { root, globals } = await fixture(t);
+  const role = value(await runRoleCommand("create", ["--title", "Worker"], globals));
   const card = value(
-    await runCardCommand("create", ["--prompt", "Read the requirements Node."], globals),
+    await runCardCommand(
+      "create",
+      ["--prompt", "Read the requirements Node.", "--target", role.roleId],
+      globals,
+    ),
   );
-  const before = await fs.readFile(path.join(root, card.path), "utf8");
-  assert.equal((await runCardCommand("deprecate", [card.cardId], globals)).exitCode, 1);
-  assert.equal(
-    (await runCardCommand("deprecate", [card.cardId, "--base-etag", "stale"], globals)).exitCode,
-    1,
-  );
-  assert.equal(await fs.readFile(path.join(root, card.path), "utf8"), before);
-  const cancelled = value(
-    await runCardCommand("deprecate", [card.cardId, "--base-etag", card.etag], globals),
-  );
+  const cancelled = value(await runCardCommand("deprecate", [card.cardId], globals));
   assert.equal(cancelled.status, "deprecated");
   assert.equal(value(await runCardCommand("list", [], globals)).items.length, 0);
+  assert.equal(
+    value(await runCardCommand("list", ["--role", role.roleId], globals)).items.length,
+    0,
+  );
   assert.equal(
     value(await runCardCommand("list", ["--include-deprecated", "--state", "pending"], globals))
       .items[0].cardId,
     card.cardId,
   );
-  const shown = value(await runCardCommand("show", [card.cardId], globals));
-  assert.equal(shown.text, "Read the requirements Node.");
-  assert.match(shown.notice, /deprecated/);
-  assert.deepEqual(shown.currentReferences, []);
-  const taken = value(await runCardCommand("take", [card.cardId], globals));
+  const taken = value(await runCardCommand("take", [card.cardId, "--role", role.roleId], globals));
   assert.equal(taken.status, "deprecated");
   assert.equal(taken.state, "consumed");
-  assert.match(
-    (await runCardCommand("show", [card.cardId], { workspace: root })).stdout,
-    /deprecated/,
-  );
-});
-
-test("deprecated Card show and take expose readable current Node reference files", async (t) => {
-  const { root, globals } = await fixture(t);
-  const card = value(await runCardCommand("create", ["--prompt", "Cancelled task"], globals));
-  const body = `[Task](/cards/${card.cardId}.md)\n`;
-  const reference = value(
-    await runNodeCommand("create", ["Reference.md", "--type", "prompt", "--body", body], globals),
-  ).node;
-  value(await runCardCommand("deprecate", [card.cardId, "--base-etag", card.etag], globals));
-  const core = await readCardDocument(openTestFs(path.join(root, ".tent")), card.cardId);
-  assert.ok("currentReferences" in core);
-  assert.ok("version" in core);
-  assert.deepEqual(core.currentReferences, [
-    { kind: "node", id: reference.nodeId, path: "Reference.md/Reference.md.md" },
-  ]);
-  for (const command of ["show", "take"]) {
-    const result = value(await runCardCommand(command, [card.cardId], globals));
-    assert.deepEqual(result.currentReferences, [
-      { kind: "node", id: reference.nodeId, path: reference.path },
-    ]);
-    assert.equal(
-      parseFrontmatter(await fs.readFile(path.join(root, result.currentReferences[0].path), "utf8"))
-        .body,
-      body,
-    );
-    if (command === "show") assert.deepEqual(result.version, core.version);
-  }
-});
-
-test("Card CLI supports an ordinary Session without creating a Role", async (t) => {
-  const { root, globals } = await fixture(t);
-  const card = value(await runCardCommand("create", ["--prompt", "do this"], globals));
-  const taken = value(await runCardCommand("take", [card.cardId], globals));
-  assert.equal(taken.state, "consumed");
-  assert.equal(taken.receivedBy, undefined);
-  assert.equal(value(await runRoleCommand("list", [], globals)).items.length, 0);
+  assert.equal(taken.text, "Read the requirements Node.");
+  assert.match(taken.notice, /deprecated/);
+  const text = await runCardCommand("take", [card.cardId, "--role", role.roleId], {
+    workspace: root,
+  });
+  assert.match(text.stdout, /^This Card is deprecated; its task was cancelled\.$/m);
 });
 
 test("Card CLI help and invalid flags are handled before workspace or input access", async () => {
@@ -383,6 +351,7 @@ test("Card CLI help and invalid flags are handled before workspace or input acce
   assert.equal((await runCardCommand("help", [], globals)).stdout, cardHelpText());
   for (const [sub, args] of [
     ["create", ["--prompt"]],
+    ["create", ["--prompt", "work"]],
     ["list", ["--prompt=text"]],
     ["history", ["card-a"]],
     ["publish", ["card-a", "--base-etag", "hash"]],
@@ -391,48 +360,24 @@ test("Card CLI help and invalid flags are handled before workspace or input acce
     ["list", ["--state", "interrupted"]],
     ["continue", ["card-a", "--role", "role-a"]],
     ["consume", ["card-a"]],
+    ["show", ["card-a"]],
+    ["move", ["card-a", "--to", "role-a"]],
+    ["take", ["card-a"]],
     ["return", ["card-a"]],
+    ["deprecate", ["card-a", "--base-etag", "hash"]],
     ["create", ["--pointer", "node:a"]],
-    ["move", ["card-a", "--public"]],
-    ["move", ["card-a", "--public", "--to", "role-a", "--base-etag", "hash"]],
   ] as const) {
     const result = await runCardCommand(sub, [...args], globals);
     assert.equal(result.exitCode, 1);
     assert.doesNotMatch(result.stderr, /Not inside a Tent/);
   }
-});
-
-test("Card CLI moves pending input and locks the target at reception", async (t) => {
-  const { root, globals } = await fixture(t);
-  const role = value(await runRoleCommand("create", ["--title", "Reviewer"], globals));
-  const card = value(await runCardCommand("create", ["--prompt", "Review"], globals));
-  const moved = value(
-    await runCardCommand(
-      "move",
-      [card.cardId, "--to", role.roleId, "--base-etag", card.etag],
-      globals,
-    ),
-  );
-  assert.equal(moved.target, role.roleId);
-  const opened = value(
-    await runCardCommand("move", [card.cardId, "--public", "--base-etag", moved.etag], globals),
-  );
-  assert.equal(opened.target, null);
-  assert.equal(value(await runCardCommand("list", [], globals)).items.length, 1);
-  value(await runCardCommand("take", [card.cardId], globals));
-  assert.equal(
-    (
-      await runCardCommand(
-        "move",
-        [card.cardId, "--to", role.roleId, "--base-etag", opened.etag],
-        globals,
-      )
-    ).exitCode,
-    1,
+  assert.match(
+    (await runCardCommand("create", ["--prompt", "work"], globals)).stderr,
+    /requires --target <role-id>/,
   );
 });
 
-test("Card CLI creates ordered sources, previews and receives with an explicit Role without Service", async (t) => {
+test("Card CLI creates ordered sources and receives with its Role without Service", async (t) => {
   const { root, globals } = await fixture(t);
   const role = value(await runRoleCommand("create", ["--title", "Reviewer"], globals));
   const prompt = " \r\n\tKeep layout.  \n😀";
@@ -445,23 +390,25 @@ test("Card CLI creates ordered sources, previews and receives with an explicit R
         "--source",
         "客户访谈结论",
         "--source",
-        JSON.stringify({ resource: "https://example.invalid", custom: { preserve: true } }),
+        "https://example.invalid",
         "--target",
         role.roleId,
       ],
       { ...globals, stdin: prompt },
     ),
   );
-  const preview = value(await runCardCommand("get", [card.cardId], globals));
-  assert.equal(preview.text, prompt);
-  assert.equal(preview.state, "pending");
+  assert.equal(card.state, "pending");
+  assert.equal(card.target, role.roleId);
+  const stored = parseFrontmatter(await fs.readFile(cardFile(root, card.cardId), "utf8"));
   assert.deepEqual(
-    preview.sources.map((s: { resource: string }) => s.resource),
+    (stored.data.sources as { resource: string }[]).map((s) => s.resource),
     ["客户访谈结论", "https://example.invalid"],
   );
   const taken = value(await runCardCommand("take", [card.cardId, "--role", role.roleId], globals));
   assert.equal(taken.state, "consumed");
   assert.equal(taken.replayed, false);
+  assert.equal(taken.text, prompt);
+  assert.deepEqual(taken.sources, [{ name: "客户访谈结论" }, { name: "https://example.invalid" }]);
   assert.equal(
     value(await runCardCommand("take", [card.cardId, "--role", role.roleId], globals)).replayed,
     true,
@@ -469,81 +416,62 @@ test("Card CLI creates ordered sources, previews and receives with an explicit R
   assert.equal((await fs.readdir(path.join(root, ".tent"))).includes("card-consumptions"), false);
 });
 
-test("Card create warns for unavailable pinned sections while publishing and supports node-id#Heading", async (t) => {
+test("Card sources are live addresses: create warns for unavailable sections and take follows a moved Node", async (t) => {
   const { root, globals } = await fixture(t);
-  const sourceFile = path.join(root, ".tent", "Task", "Task.md");
-  await fs.mkdir(path.dirname(sourceFile));
-  await fs.writeFile(
-    sourceFile,
-    serializeFrontmatter(
-      { id: "node-task", type: "goal" },
-      "Old opening.\n" +
-        "x".repeat(1800) +
-        "\n## Heading\nPinned late requirement.\n## Repeat\none\n## Repeat\ntwo",
-    ),
-  );
-  const validResponse = await runCardCommand(
-    "create",
-    ["--prompt", "Work", "--source", "node-task#Heading"],
-    globals,
-  );
-  const valid = value(validResponse);
-  assert.equal(validResponse.stderr, "");
-  const stored = parseFrontmatter(await fs.readFile(path.join(root, valid.path), "utf8"));
-  const selected = (
-    stored.data.sources as { resource: string; version: { commit: string; path: string } }[]
-  )[0]!;
-  assert.equal(selected.resource, "../Task/Task.md#Heading");
-  assert.equal(selected.version.path, "Task/Task.md");
-  assert.match(selected.version.commit, /^[a-f0-9]{64}$/);
-  const shown = value(await runCardCommand("show", [valid.cardId], globals));
-  const reference = shown.agentContext.sections
-    .find((item: { kind: string }) => item.kind === "references")
-    .items.find((item: { nodeId?: string }) => item.nodeId === "node-task");
-  assert.match(reference.text, /^## Heading\nPinned late requirement/);
-  assert.equal(reference.heading, "Heading");
-  const missing = await runCardCommand(
-    "create",
-    ["--prompt", "Work", "--source", "node-task#Missing"],
-    globals,
-  );
-  const missingCard = value(missing);
-  assert.match(missing.stderr, /Warning: source .*Missing.*pinned version.*section not found/);
-  assert.match(missing.stderr, /the Card keeps it/);
-  assert.equal(
-    parseFrontmatter(await fs.readFile(path.join(root, missingCard.path), "utf8")).data.state,
-    "pending",
-  );
-  await fs.writeFile(
-    sourceFile,
-    serializeFrontmatter(
-      { id: "node-task", type: "goal" },
-      "Today opening.\n## Missing\nToday section.",
-    ),
-  );
-  for (const [heading, warning] of [
-    ["Heading", false],
-    ["Missing", true],
-    ["Repeat", true],
-  ] as const) {
-    const response = await runCardCommand(
+  const role = value(await runRoleCommand("create", ["--title", "Worker"], globals));
+  const create = (source: string) =>
+    runCardCommand(
       "create",
-      [
-        "--prompt",
-        "Work",
-        "--source",
-        JSON.stringify({ resource: `.tent/Task/Task.md#${heading}`, version: selected.version }),
-      ],
+      ["--prompt", "Work", "--target", role.roleId, "--source", source],
       globals,
     );
-    const created = value(response);
-    assert.equal(created.state, "pending");
-    assert.equal(response.stderr.includes("Warning: source"), warning, response.stderr);
-    if (heading === "Repeat") assert.match(response.stderr, /heading is duplicated/);
-    const published = parseFrontmatter(await fs.readFile(path.join(root, created.path), "utf8"));
-    assert.deepEqual(
-      (published.data.sources as { version: object }[])[0]!.version,
-      selected.version,
-    );
+  const task = value(
+    await runNodeCommand(
+      "create",
+      [
+        "Task",
+        "--type",
+        "goal",
+        "--body",
+        "Opening.\n## Heading\nRequirement.\n## Repeat\none\n## Repeat\ntwo",
+      ],
+      globals,
+    ),
+  ).node;
+  const validResponse = await create(`${task.nodeId}#Heading`);
+  const valid = value(validResponse);
+  assert.equal(validResponse.stderr, "");
+  assert.deepEqual(
+    parseFrontmatter(await fs.readFile(cardFile(root, valid.cardId), "utf8")).data.sources,
+    [{ resource: "../Task/Task.md#Heading" }],
+  );
+  for (const [heading, warning] of [
+    ["Missing", /selects an unavailable section/],
+    ["Repeat", /heading is duplicated/],
+  ] as const) {
+    const response = await create(`${task.nodeId}#${heading}`);
+    assert.equal(value(response).state, "pending");
+    assert.match(response.stderr, warning);
+    assert.ok(response.stderr.includes(`"${task.nodeId}#${heading}"`), response.stderr);
+    assert.match(response.stderr, /the Card keeps it/);
   }
+  const missingResponse = await create("./docs/missing.md");
+  const missing = value(missingResponse);
+  assert.match(missingResponse.stderr, /names no existing Workspace file/);
+
+  value(await runNodeCommand("rename", [task.nodeId, "Moved"], globals));
+  const taken = value(await runCardCommand("take", [valid.cardId, "--role", role.roleId], globals));
+  assert.deepEqual(taken.sources, [
+    { name: "Moved", path: `${path.join(root, ".tent", "Moved", "Moved.md")}#Heading` },
+  ]);
+  const text = await runCardCommand("take", [missing.cardId, "--role", role.roleId], {
+    workspace: root,
+  });
+  assert.equal(text.exitCode, 0, text.stderr);
+  assert.ok(
+    text.stdout.endsWith(
+      `\n\nSources:\n- docs/missing.md: ${path.join(root, "docs", "missing.md")} (not found)\n`,
+    ),
+    text.stdout,
+  );
 });

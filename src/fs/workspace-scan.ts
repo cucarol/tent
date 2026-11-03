@@ -8,7 +8,6 @@ import { selectSection } from "../core/base/markdown-section.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { readRepositorySources } from "./repository-sources.js";
 import { repositoryCommand as git } from "./repository-command.js";
-export { readAgentContextRepository } from "./agent-context-repository.js";
 import {
   workspaceDraftReportPath,
   type WorkspaceDraftSummary,

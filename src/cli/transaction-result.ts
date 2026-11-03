@@ -3,7 +3,6 @@ import type { NodeFs } from "../fs/node-fs.js";
 /** Rendering only; recovery and conflict classification belong to Core. */
 export async function transactionResult<T extends { stdout: string; stderr: string }>(
   action: (opened: (fs: NodeFs) => Promise<void>) => Promise<T>,
-  operation?: "workspace.brief",
 ): Promise<T> {
   let adapter: NodeFs | undefined;
   const adapters = new Set<NodeFs>();
@@ -15,13 +14,6 @@ export async function transactionResult<T extends { stdout: string; stderr: stri
     });
     const conflicts = adapter?.recoveryConflicts;
     if (!conflicts?.length) return result;
-    if (operation === "workspace.brief")
-      return {
-        ...result,
-        stderr:
-          result.stderr +
-          `Transaction recovery kept ${conflicts.length} external edits; inspect with tent workspace check --json.\n`,
-      };
     let stdout = result.stdout;
     try {
       const value: unknown = JSON.parse(stdout);

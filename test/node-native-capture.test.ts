@@ -199,7 +199,7 @@ test("valid native metadata retains exact declarations and opaque provenance val
 });
 
 for (const malformed of ["yaml", "schema"] as const)
-  test(`native ${malformed} errors remain untouched and visible in brief and check`, async (t) => {
+  test(`native ${malformed} errors remain untouched and visible in check`, async (t) => {
     const { adapter, goal, output, options, parse } = await fixture(t);
     const file = "需求/结果/结果.md";
     const previous = await adapter.history.currentCommit();
@@ -209,18 +209,6 @@ for (const malformed of ["yaml", "schema"] as const)
         ? original.replace("type: output", "type: [")
         : original.replace("type: output", "type: invalid");
     await adapter.writeFile(file, raw);
-    const brief = parse(await runWorkspaceCommand("brief", [], options));
-    const invalidNodes = brief.workspaceIssues.items.filter(
-      (item: { kind: string }) => item.kind === "invalid",
-    );
-    assert.equal(invalidNodes.length, 1);
-    assert.ok(invalidNodes[0].line.includes(file));
-    const text = await runWorkspaceCommand("brief", [], { ...options, json: false });
-    const lines = text.stdout.trimEnd().split("\n");
-    assert.ok(lines.length);
-    const invalidLine = lines.findIndex((line) => line.includes(file));
-    assert.ok(invalidLine >= 0 && invalidLine < lines.indexOf("Input Cards"));
-    assert.ok(lines.some((line) => line.includes("tent workspace check --workspace")));
     const checked = await runWorkspaceCommand("check", [], options);
     assert.equal(checked.exitCode, 1);
     assert.match(checked.stdout, /结果/);
@@ -239,12 +227,9 @@ test("an unretained invalid descendant cannot be moved or captured through its v
   const file = "需求/坏文件/坏文件.md";
   const raw = "---\nid: node-badnative\ntype: invalid\n---\nKeep these bytes";
   await adapter.writeFile(file, raw);
-  const brief = parse(await runWorkspaceCommand("brief", [], options));
-  assert.ok(
-    brief.workspaceIssues.items.some(
-      (item: { kind: string; line: string }) => item.kind === "invalid" && item.line.includes(file),
-    ),
-  );
+  const checked = await runWorkspaceCommand("check", [], options);
+  assert.equal(checked.exitCode, 1);
+  assert.match(checked.stdout, /坏文件/);
   assert.equal((await runNodeCommand("rename", [goal, "Moved"], options)).exitCode, 1);
   assert.equal(await adapter.readFile(file), raw);
   assert.equal(await adapter.exists("Moved"), false);

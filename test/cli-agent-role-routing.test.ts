@@ -39,7 +39,8 @@ function runCli(
 test("top-level help presents the canonical public collaboration model", async () => {
   const help = await runCli("--help");
   assert.equal(help.code, 0, help.stderr);
-  assert.match(help.stdout, /tent role list\|show\|create/);
+  assert.match(help.stdout, /tent role create\|delete/);
+  assert.match(help.stdout, /tent card list --role/);
   assert.doesNotMatch(help.stdout, /config\|write|OKF facts/);
   assert.match(help.stdout, /tent card/);
   assert.doesNotMatch(help.stdout, /role-init/);
@@ -71,7 +72,7 @@ test("retired Role initialization and checkpoint commands stay absent", async ()
 });
 
 test("subcommand help works without required fields, stdin or a Workspace", async () => {
-  for (const sub of ["list", "show", "write", "create"]) {
+  for (const sub of ["create", "delete"]) {
     for (const flag of ["--help", "-h"]) {
       const result = await runRoleCommand(sub, [flag], { cwd: "C:/does-not-exist/tent-help" });
       assert.equal(result.exitCode, 0, result.stderr);

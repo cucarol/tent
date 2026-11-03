@@ -12,13 +12,7 @@ import {
   normalizeOptionalNodeType,
 } from "../src/core/base/node-type.js";
 import { NODE_TAG_PRESETS, countNodeTags, isNodeTagPreset } from "../src/core/base/tags.js";
-import {
-  listCardDocuments,
-  readCardDocument,
-  verifyCardSourceVersion,
-  verifyCardSourceVersions,
-} from "../src/core/graph/card-document.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { readNode } from "../src/core/read/node-query.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { scaffoldTent } from "../src/core/store/scaffold.js";
@@ -207,51 +201,9 @@ test("a historical version with a former suffixed type is rejected like any inva
       () => "accepted",
       (error: Error) => error.message,
     );
-    // Card take/show, workspace check and relation queries over a pinned source.
-    const source = { resource: `../${file}`, version };
-    const single = await verifyCardSourceVersion(adapter, "cards/card-history.md", source).then(
-      () => "accepted",
-      (error: Error) => error.message,
-    );
-    const [batch] = await verifyCardSourceVersions(adapter, [
-      { owner: "cards/card-history.md", source },
-    ]);
-    // card list/show over a received Card that pinned the retained version.
-    const cardId = `card-${name.toLowerCase()}`;
-    await adapter.mkdir("cards");
-    for (const state of ["pending", "consumed"]) {
-      const cardRaw = serializeFrontmatter(
-        {
-          type: "card",
-          id: cardId,
-          schemaVersion: 3,
-          state,
-          sources: [{ resource: `../${file}`, version }],
-        },
-        "Implement the goal.\n",
-      );
-      await adapter.writeFile(`cards/${cardId}.md`, cardRaw);
-      await adapter.history.captureUnlocked([{ path: `cards/${cardId}.md`, raw: cardRaw }]);
-    }
-    const listed = (await listCardDocuments(adapter)).items.find(
-      (item) => item.cardId === cardId,
-    ) as Record<string, unknown>;
-    const shown = (await readCardDocument(adapter, cardId)) as Record<string, unknown>;
-    outcomes.push({
-      read,
-      single,
-      batch: batch instanceof Error ? batch.message : "accepted",
-      list: [listed.state, "progress" in listed, "totalGoalCount" in listed],
-      show: [shown.state, "progress" in shown, "totalGoalCount" in shown],
-    });
+    outcomes.push({ read });
   }
-  assert.deepEqual(outcomes[0], {
-    read: message,
-    single: message,
-    batch: message,
-    list: ["consumed", false, false],
-    show: ["consumed", false, false],
-  });
+  assert.deepEqual(outcomes[0], { read: message });
   assert.deepEqual(outcomes[1], outcomes[0], "a padded former type is invalid too");
   assert.deepEqual(outcomes[2], outcomes[0], "the same result as an unknown type");
 });

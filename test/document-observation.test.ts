@@ -13,8 +13,8 @@ import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { contentEtag } from "../src/core/base/etag.js";
 import { withFileReadScope } from "../src/fs/file-state-cache.js";
 
-const card = (id: string, body = "private body", extra = "") =>
-  `---\ntype: card\nid: ${id}\nschemaVersion: 3\nstate: pending\ntitle: ${id}\n${extra}---\n${body}`;
+const card = (id: string, body = "private body") =>
+  `---\ntype: card\nid: ${id}\nschemaVersion: 3\nstate: pending\ntarget: role-a\ntitle: ${id}\n---\n${body}`;
 
 async function fixture(t: TestContext, raw = card("card-a")) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "document-observation-"));
@@ -174,13 +174,8 @@ test("Card lists preserve live validation, full-body uncaptured, revision and fa
   const f = await fixture(t);
   const retained = card("card-a");
   await f.adapter.history.captureUnlocked([{ path: f.relative, raw: retained }]);
-  await fs.writeFile(
-    path.join(f.root, "cards/card-b.md"),
-    card("card-b", "B", "order: '!first~card-b'\n"),
-  );
-  await f.adapter.history.captureUnlocked([
-    { path: "cards/card-b.md", raw: card("card-b", "B", "order: '!first~card-b'\n") },
-  ]);
+  await fs.writeFile(path.join(f.root, "cards/card-b.md"), card("card-b", "B"));
+  await f.adapter.history.captureUnlocked([{ path: "cards/card-b.md", raw: card("card-b", "B") }]);
   await fs.writeFile(
     path.join(f.root, "cards/card-c.md"),
     "---\ntype: card\nid: card-c\nstate: strange\n---\ninvalid",
@@ -207,7 +202,7 @@ test("Card lists preserve live validation, full-body uncaptured, revision and fa
     (await listCardDocuments(f.adapter, { state: "pending", retainedState: true })).items
       .filter((i) => !i.diagnostic)
       .map((i) => i.cardId),
-    ["card-b", "card-a"],
+    ["card-a", "card-b"],
   );
   await fs.writeFile(f.filename, retained.replace("private body", "changed body"));
   const edited = await listCardDocuments(f.adapter, { retainedState: true });

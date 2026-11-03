@@ -6,11 +6,8 @@ import { spawn } from "node:child_process";
 import test, { type TestContext } from "node:test";
 import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import { SqliteDocumentHistory } from "../src/core/store/sqlite-history.js";
-import {
-  createRoleContext,
-  editRoleContext,
-  requireRoleDocument,
-} from "../src/core/read/role-context.js";
+import { createRoleContext } from "../src/core/read/role-context.js";
+import { createCardDocument } from "../src/core/graph/card-document.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { testScratchRoot, initializeFixtureHistory } from "./scratch.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
@@ -128,23 +125,27 @@ test(
 );
 
 test(
-  "fresh Role CLI opening waits for EXCLUSIVE then reports the original stale-base CAS conflict",
+  "fresh Role CLI opening waits for EXCLUSIVE then reports the original refusal",
   { timeout: 20000 },
   async (t) => {
     const f = await fixture(t);
-    await editRoleContext(f.adapter, "role-shared", { body: "winner", baseEtag: f.created.etag });
+    await createCardDocument(f.adapter, {
+      cardId: "card-waiting",
+      prompt: "Work",
+      target: "role-shared",
+    });
     const head = await f.adapter.history.currentCommit();
     const result = await duringExclusive(t, f.system, {
       kind: "write",
       workspace: f.root,
-      args: ["role-shared", "--body", "loser", "--base-etag", f.created.etag],
+      args: ["role-shared"],
     });
     assert.equal(result.ok, true, result.stack);
     assert.equal(result.releasedBeforeResult, true);
     assert.equal(result.value.exitCode, 1);
-    assert.match(result.value.stderr, /Role context changed/);
+    assert.match(result.value.stderr, /Role has unfinished Cards: card-waiting/);
     assert.doesNotMatch(result.value.stderr, /database is locked/);
-    assert.equal((await requireRoleDocument(f.adapter, "role-shared")).body, "winner");
+    assert.equal(await f.adapter.exists(f.created.path), true);
     assert.equal(await f.adapter.history.currentCommit(), head);
     assert.match(await f.adapter.history.read(f.created.version!), /initial/);
   },

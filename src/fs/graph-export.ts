@@ -1,4 +1,4 @@
-import { resolvedMaterialOccurrences, sourcesSchema } from "../core/base/material.js";
+import { resolvedMaterialOccurrences } from "../core/base/material.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -15,7 +15,6 @@ import {
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { liveContextReader } from "../core/read/context-reader-factory.js";
 import type { FsAdapter } from "../core/store/adapter.js";
-import { verifyCardSourceVersion } from "../core/graph/card-document.js";
 import { isHistoryDocument } from "../core/store/document-history.js";
 import { renameWithRetry } from "./rename-with-retry.js";
 
@@ -101,12 +100,7 @@ async function validateMaterial(root: string, workspaceId: string, files: FileEn
       };
       visit(fromMarkdown(body));
     };
-    const collect = (
-      raw: string,
-      sourcePath: string,
-      origin: Origin,
-      gitSources = new Set<number>(),
-    ) => {
+    const collect = (raw: string, sourcePath: string, origin: Origin) => {
       const parsed = parseFrontmatter(raw);
       let occurrences: ReturnType<typeof resolvedMaterialOccurrences> = [];
       try {
@@ -119,12 +113,6 @@ async function validateMaterial(root: string, workspaceId: string, files: FileEn
         });
       }
       for (const { locator, error, ...occurrence } of occurrences) {
-        if (
-          occurrence.field === "sources" &&
-          occurrence.index !== undefined &&
-          gitSources.has(occurrence.index)
-        )
-          continue;
         const declaration = { origin, documentPath: sourcePath, ...occurrence };
         if (!locator || locator.kind === "unresolved") {
           unresolvedMaterials.push({ ...declaration, ...(error ? { error } : {}) });
@@ -134,6 +122,8 @@ async function validateMaterial(root: string, workspaceId: string, files: FileEn
           externalMaterials.push(declaration);
           continue;
         }
+        // Card sources are addresses that take resolves; a moved target is not missing material.
+        if (sourcePath.startsWith("cards/")) continue;
         const kind = packed.get(locator.target);
         if (kind === "directory" || locator.target === ".") directories.add(locator.target);
         else owned.add(locator.target); // Missing declared bundle files fail the same inventory check.
@@ -146,20 +136,13 @@ async function validateMaterial(root: string, workspaceId: string, files: FileEn
       if (!isHistoryDocument(file.path) && !/^(?:roles|cards)\/[^/]+\.md$/.test(file.path))
         continue;
       const raw = await adapter.readFile(file.path),
-        data = parseFrontmatter(raw).data,
-        gitSources = new Set<number>();
-      if (/^cards\/[^/]+\.md$/.test(file.path)) {
-        if (data.type === "card" && data.schemaVersion === 3) {
-          const sources = sourcesSchema.parse(data.sources);
-          for (let index = 0; index < sources.length; index++) {
-            const source = sources[index]!;
-            if (source.version === undefined) continue;
-            await verifyCardSourceVersion(adapter, file.path, source);
-            gitSources.add(index);
-          }
-        } else throw new Error(`Unsupported Card document: ${file.path}`);
-      }
-      collect(raw, file.path, { kind: "live" }, gitSources);
+        data = parseFrontmatter(raw).data;
+      if (
+        /^cards\/[^/]+\.md$/.test(file.path) &&
+        (data.type !== "card" || data.schemaVersion !== 3)
+      )
+        throw new Error(`Unsupported Card document: ${file.path}`);
+      collect(raw, file.path, { kind: "live" });
     }
     for (const target of owned)
       if (packed.get(target) !== "file")
@@ -230,7 +213,7 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
       mount.workspaceId,
       files,
     );
-    // Validating retained Card sources may build disposable indexes in the copy.
+    // Reading the copy may build disposable indexes in it.
     const copiedGit = path.join(candidate, ".tent", ".git");
     const gitEntries = await fs.readdir(copiedGit).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];

@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, type TestContext } from "node:test";
 import { runRoleCommand } from "../src/cli/role-commands.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { initializeFixtureRepository } from "./scratch.js";
 
@@ -91,27 +92,22 @@ test("full direct CLI preserves Role text, Unicode, duplicate flags and stdin", 
     assert.equal(result.code, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
-  {
-    const role = await run("role", "create", ["--title=discard", "--title=审查 😀"]);
-    assert.match(role.roleId, /^role-/);
-    let document = await run("role", "show", ["--", role.roleId]);
-    const text = "-- body=文本 😀\r\n\t spaces  \n";
-    await run("role", "write", [
-      role.roleId,
-      "--body=discard",
-      `--body=${text}`,
-      `--base-etag=${document.etag}`,
-    ]);
-    document = await run("role", "show", [role.roleId]);
-    assert.equal(document.text, text);
-    await run(
-      "role",
-      "write",
-      [role.roleId, "--body", "-", `--base-etag=${document.etag}`],
-      text + "stdin\n",
+  const saved = async (roleId: string) =>
+    parseFrontmatter(
+      await fs.readFile(path.join(workspace, ".tent/roles", `${roleId}.md`), "utf8"),
     );
-    assert.equal((await run("role", "show", [role.roleId])).text, text + "stdin\n");
-  }
+  const text = "-- body=文本 😀\r\n\t spaces  \n";
+  const role = await run("role", "create", [
+    "--title=discard",
+    "--title=审查 😀",
+    "--body=discard",
+    `--body=${text}`,
+  ]);
+  assert.match(role.roleId, /^role-/);
+  assert.equal((await saved(role.roleId)).data.title, "审查 😀");
+  assert.equal((await saved(role.roleId)).body, text);
+  const piped = await run("role", "create", ["--title", "Piped", "--body", "-"], text + "stdin\n");
+  assert.equal((await saved(piped.roleId)).body, text + "stdin\n");
 });
 
 test("new and retired agent-hooks parse only their own options in isolated directories", async (t) => {

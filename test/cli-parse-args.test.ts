@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
-import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { scaffoldInWorkspace } from "./scaffold.js";
 
 const scratch = testScratchRoot();
 
@@ -123,7 +123,13 @@ test("full CLI preserves text, stdin, repeated options and terminators through d
       { resource: "customer discussion" },
     ]);
 
+    const savedCard = async (cardId: string) =>
+      parseFrontmatter(
+        await fs.readFile(path.join(workspace, ".tent/cards", `${cardId}.md`), "utf8"),
+      );
+    await success("role", "create", ["--id", "role-worker", "--title", "Worker"]);
     const card = await success("card", "create", [
+      "--target=role-worker",
       "--prompt=discard",
       "--prompt=" + text,
       "--source",
@@ -131,18 +137,22 @@ test("full CLI preserves text, stdin, repeated options and terminators through d
       "--source",
       "docs/SPEC.md",
     ]);
-    const readCard = await success("card", "get", [card.cardId]);
-    assert.equal(readCard.text, text);
-    assert.deepEqual(
-      readCard.sources.map((source: { resource: string }) => source.resource),
-      ["../--named-node/--named-node.md", "docs/SPEC.md"],
+    const readCard = await savedCard(card.cardId);
+    assert.equal(readCard.body, text);
+    assert.deepEqual(readCard.data.sources, [
+      { resource: "../--named-node/--named-node.md" },
+      { resource: "docs/SPEC.md" },
+    ]);
+    const stdinCard = await success(
+      "card",
+      "create",
+      ["--target", "role-worker", "--prompt", "-"],
+      text,
     );
-    assert.equal(readCard.sources[0].version.path, "--named-node/--named-node.md");
-    const stdinCard = await success("card", "create", ["--prompt", "-"], text);
-    assert.equal((await success("card", "get", ["--", stdinCard.cardId])).text, text);
+    assert.equal((await savedCard(stdinCard.cardId)).body, text);
     for (const [command, sub, args] of [
       ["node", "create", ["Rejected", "--type=prompt", "--body", "--retain-version"]],
-      ["card", "create", ["--prompt=valid", "--unknown"]],
+      ["card", "create", ["--target=role-worker", "--prompt=valid", "--unknown"]],
     ] as const) {
       const rejected = await cli(command, sub, [...args]);
       assert.equal(rejected.code, 1);

@@ -1,6 +1,4 @@
 import { transactionResult } from "./transaction-result.js";
-import { agentContextOutput } from "./agent-context.js";
-import { contextExcerpt, originalContextBytes } from "../core/read/agent-context-page.js";
 import { workspaceReadPaths } from "./read-paths.js";
 import { formatCliTime } from "./time-text.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
@@ -8,36 +6,30 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { NodeFs } from "../fs/node-fs.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
-import { isFile, missingExplicitSources, workspaceMaterialFields } from "./material-input.js";
-import { localMaterialPath, materialLocator, type MaterialSource } from "../core/base/material.js";
+import { missingExplicitSources, workspaceMaterialFields } from "./material-input.js";
+import { stat } from "node:fs/promises";
+import {
+  isDirectoryMaterial,
+  localMaterialPath,
+  materialLocator,
+  type MaterialSource,
+} from "../core/base/material.js";
+import { markdownMaterialHeading } from "../core/base/material-section.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import {
-  verifyCardSourceVersions,
   cardSourceSectionWarnings,
   createCardDocument,
-  readCardDocument,
   takeCardDocument,
   returnCardDocument,
   listCardDocuments,
   watchCardDocuments,
-  moveCardDocument,
   deprecateCardDocument,
   type CardDocumentState,
 } from "../core/graph/card-document.js";
-import { pageItems, pageText, formatTextPage, uncapturedNotice } from "./reader-page.js";
+import { pageItems, uncapturedNotice } from "./reader-page.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 
-const CARD_COMMANDS = [
-  "create",
-  "move",
-  "deprecate",
-  "list",
-  "get",
-  "show",
-  "take",
-  "return",
-  "watch",
-];
+const CARD_COMMANDS = ["create", "list", "take", "return", "watch", "deprecate"];
 
 export type CardCommandOptions = {
   workspace?: string;
@@ -63,7 +55,7 @@ async function runCardCommandOpened(
 ): Promise<CardCommandResult> {
   const errorContext: ErrorContext = { workspace: globals.workspace };
   if (!sub || ["help", "--help", "-h"].includes(sub) || args.includes("--help"))
-    return { exitCode: 0, stdout: cardHelpText(sub), stderr: "" };
+    return { exitCode: 0, stdout: cardHelpText(), stderr: "" };
   try {
     if (!CARD_COMMANDS.includes(sub)) throw unknownCommandError("tent card", sub, CARD_COMMANDS);
     const fields = [
@@ -72,17 +64,13 @@ async function runCardCommandOpened(
         ? ["prompt", "title", "target", "return-to", "id"]
         : sub === "return"
           ? ["role", "result"]
-          : sub === "move"
-            ? ["to", "base-etag", "before", "after"]
-            : sub === "deprecate"
-              ? ["base-etag"]
-              : sub === "list"
-                ? ["role", "state", "start", "limit", "expected-revision"]
-                : sub === "watch"
-                  ? ["role", "timeout"]
-                  : ["show", "get"].includes(sub)
-                    ? ["view", "start", "end", "expected-etag"]
-                    : ["role"]),
+          : sub === "list"
+            ? ["role", "state", "start", "limit", "expected-revision"]
+            : sub === "watch"
+              ? ["role", "timeout"]
+              : sub === "take"
+                ? ["role"]
+                : []),
     ];
     const { values, positionals } = parseArgs({
       args,
@@ -91,97 +79,60 @@ async function runCardCommandOpened(
         ...Object.fromEntries(fields.map((key) => [key, { type: "string" as const }])),
         json: { type: "boolean" },
         ...(sub === "create" ? { source: { type: "string", multiple: true } as const } : {}),
-        ...(sub === "list"
-          ? {
-              "include-open": { type: "boolean" } as const,
-              "include-deprecated": { type: "boolean" } as const,
-            }
-          : {}),
-        ...(sub === "move" ? { public: { type: "boolean" } as const } : {}),
-        ...(sub === "watch" ? { "include-open": { type: "boolean" } as const } : {}),
+        ...(sub === "list" ? { "include-deprecated": { type: "boolean" } as const } : {}),
       },
     });
     const value = (key: string) => (values as Record<string, unknown>)[key] as string | undefined;
     const number = (key: string) => (value(key) === undefined ? undefined : Number(value(key)));
     errorContext.workspace = value("workspace") ?? globals.workspace;
-    if (positionals.length === 1 && !["create", "list", "watch"].includes(sub))
+    const selected = !["create", "list", "watch"].includes(sub);
+    if (positionals.length === 1 && selected)
       errorContext.target = { kind: "card", id: positionals[0]! };
-    if (positionals.length !== (["create", "list", "watch"].includes(sub) ? 0 : 1))
-      throw new Error("Expected one Card id except for create/list/watch");
-    if (sub === "watch" && !value("role")) throw new Error("Watch requires --role role-ID");
+    if (positionals.length !== (selected ? 1 : 0))
+      throw new Error(
+        selected ? `Usage: tent card ${sub} <card-id>` : `tent card ${sub} takes no Card id`,
+      );
+    if (sub === "create" && !value("target"))
+      throw new Error("Card create requires --target <role-id>, the Role that will take it");
+    if (["take", "return", "watch"].includes(sub) && !value("role"))
+      throw new Error(`tent card ${sub} requires --role <role-id>`);
     if (
       sub === "watch" &&
       value("timeout") !== undefined &&
       !/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(value("timeout")!)
     )
       throw new Error("--timeout must be a nonnegative number of seconds");
-    if (value("view") !== undefined && !["body", "raw"].includes(value("view")!))
-      throw new Error("--view must be body or raw");
-    if (
-      ["get", "show"].includes(sub) &&
-      (value("start") === undefined) !== (value("end") === undefined)
-    )
-      throw new Error("Supply both --start and --end");
-    if (["get", "show"].includes(sub) && number("start")! > 0 && !value("expected-etag"))
-      throw new Error("--start after zero requires --expected-etag from the previous page");
     if (
       value("state") !== undefined &&
       !["pending", "consumed", "returned", "closed"].includes(value("state")!)
     )
-      throw new Error("Invalid --state");
+      throw new Error("--state must be pending, consumed, returned or closed");
     if (sub === "return" && value("result") === undefined)
-      throw new Error("Return requires --result TEXT");
-    if (sub === "return" && !value("role"))
-      throw new Error("Return requires --role role-ID, the Role that took the Card.");
-    if (["deprecate", "move"].includes(sub) && !value("base-etag"))
-      throw new Error(`tent card ${sub} needs --base-etag from show.`);
-    if (
-      sub === "move" &&
-      (!value("base-etag") ||
-        (value("to") !== undefined && values.public === true) ||
-        (value("before") !== undefined && value("after") !== undefined) ||
-        ![value("to"), values.public, value("before"), value("after")].some(Boolean))
-    )
-      throw new Error(
-        "Move requires --base-etag and a destination (--to role-ID or --public), a position (--before or --after card-ID), or both",
-      );
+      throw new Error("tent card return requires --result <one line>");
     const { systemRoot, workspaceRoot } = await resolveWorkspacePaths({
       cwd: globals.cwd,
       workspace: value("workspace") ?? globals.workspace,
     });
-    const mutation = ["create", "move", "deprecate", "take", "return"].includes(sub);
+    const mutation = ["create", "deprecate", "take", "return"].includes(sub);
     const fs = new NodeFs(systemRoot, "cli"),
       id = positionals[0]!;
     await opened(fs);
-    let result: unknown;
-    const assemble =
-      ["show", "take"].includes(sub) && value("view") !== "raw" && (number("start") ?? 0) === 0;
-    let warnings: string[] = [];
+    const json = values.json === true || globals.json === true;
     if (sub === "watch") {
-      const items = (
-        await watchCardDocuments(fs, value("role")!, number("timeout"), {
-          includeOpen: values["include-open"] === true,
-        })
-      ).map((item) => ({
-        ...item,
-        take: `tent card take ${item.cardId} --role ${value("role")!}`,
-      }));
+      const items = (await watchCardDocuments(fs, value("role")!, number("timeout"))).map(
+        (item) => ({ ...item, take: `tent card take ${item.cardId} --role ${value("role")!}` }),
+      );
       return {
         exitCode: items.length ? 0 : 2,
         stdout: !items.length
           ? ""
-          : (values.json === true || globals.json === true
+          : (json
               ? JSON.stringify(items)
               : items
                   .map((item) =>
                     item.state === "returned"
                       ? `${item.cardId} returned by ${item.receivedBy}: ${item.result}`
-                      : [
-                          item.cardId,
-                          item.fromPublic ? "[public]" : undefined,
-                          item.title?.replace(/\s+/g, " "),
-                          item.take,
-                        ]
+                      : [item.cardId, item.title?.replace(/\s+/g, " "), item.take]
                           .filter(Boolean)
                           .join("  "),
                   )
@@ -190,6 +141,8 @@ async function runCardCommandOpened(
       };
     }
     await captureNativeNodeEdits(fs);
+    let result: unknown;
+    let warnings: string[] = [];
     if (sub === "create") {
       let prompt = value("prompt") ?? "";
       if (prompt === "-") {
@@ -202,9 +155,7 @@ async function runCardCommandOpened(
       }
       const sources = (
         ((values as Record<string, unknown>).source as string[] | undefined) ?? []
-      ).map((source) =>
-        source.trimStart().startsWith("{") ? JSON.parse(source) : { resource: source },
-      );
+      ).map((source) => ({ resource: source }));
       const material = await workspaceMaterialFields({ sources }, "cards/input.md", workspaceRoot);
       warnings = await missingExplicitSources(
         sources,
@@ -220,28 +171,55 @@ async function runCardCommandOpened(
         returnTo: value("return-to"),
         ...material,
       });
-      result = created;
-      warnings.push(...(await cardSourceSectionWarnings(fs, created.version)));
+      warnings.push(
+        ...(await cardSourceSectionWarnings(
+          fs,
+          created.path,
+          created.sources,
+          sources.map((source) => source.resource),
+        )),
+      );
+      result = {
+        cardId: created.cardId,
+        state: created.state,
+        target: created.target,
+        ...(created.returnTo ? { returnTo: created.returnTo } : {}),
+      };
+    } else if (sub === "take") {
+      const taken = await takeCardDocument(fs, id, value("role"));
+      result = {
+        cardId: taken.cardId,
+        path: path.join(systemRoot, taken.path),
+        ...(taken.title ? { title: taken.title } : {}),
+        state: taken.state,
+        target: taken.target,
+        ...(taken.returnTo ? { returnTo: taken.returnTo } : {}),
+        receivedBy: taken.receivedBy,
+        ...(taken.result ? { result: taken.result } : {}),
+        replayed: taken.replayed,
+        status: taken.status,
+        ...(taken.notice ? { notice: taken.notice } : {}),
+        // Closing a returned Card only delivers its result; the task went out already.
+        ...(taken.state === "closed"
+          ? {}
+          : {
+              text: taken.text,
+              sources: await sourcePointers(fs, systemRoot, taken.path, taken.sources),
+            }),
+      };
     } else if (sub === "return")
       result = await returnCardDocument(fs, id, {
         roleId: value("role")!,
         result: value("result")!,
       });
-    else if (sub === "deprecate") result = await deprecateCardDocument(fs, id, value("base-etag")!);
-    else if (sub === "move")
-      result = await moveCardDocument(fs, id, {
-        target: values.public === true ? null : value("to"),
-        before: value("before"),
-        after: value("after"),
-        expectedEtag: value("base-etag")!,
-      });
-    else if (sub === "list")
+    else if (sub === "deprecate") result = await deprecateCardDocument(fs, id);
+    else
       result = pageItems(
         await listCardDocuments(fs, {
           retainedState: true,
           roleId: value("role"),
+          waiting: value("role") !== undefined && value("state") === undefined,
           state: value("state") as CardDocumentState | undefined,
-          includeOpen: values["include-open"] === true,
           includeDeprecated: values["include-deprecated"] === true,
         }),
         "card.list",
@@ -251,77 +229,13 @@ async function runCardCommandOpened(
           expectedRevision: value("expected-revision"),
         },
       );
-    else if (sub === "get" || sub === "show") {
-      const options = {
-        view: value("view") as "body" | "raw" | undefined,
-        expectedEtag: value("expected-etag"),
-        retainedState: true,
-      };
-      const document = workspaceReadPaths(await readCardDocument(fs, id, options), workspaceRoot);
-      result = pageText(document, `card.${sub}:${id}`, {
-        start: number("start"),
-        end: number("end"),
-        ...(assemble
-          ? {
-              maxBytes: Math.max(
-                originalContextBytes / 2,
-                originalContextBytes -
-                  512 * ((Array.isArray(document.sources) ? document.sources.length : 0) + 1),
-              ),
-              pageEnd: Math.min(
-                number("end") ?? document.range.end,
-                contextExcerpt(document.text, 1600).text.length,
-              ),
-            }
-          : {}),
-      });
-    } else {
-      const document = {
-        ...workspaceReadPaths(await takeCardDocument(fs, id, value("role")), workspaceRoot),
-        workspaceRoot,
-      };
-      result = pageText(document, `card.get:${id}`, {
-        maxBytes: Math.max(
-          originalContextBytes / 2,
-          originalContextBytes - 512 * (document.sources.length + 1),
-        ),
-        pageEnd: contextExcerpt(document.text, 1600).text.length,
-      });
-    }
-    result = workspaceReadPaths(result, workspaceRoot);
-    const json = values.json === true || globals.json === true;
-    const sourceLines =
-      !json && ["show", "get", "take"].includes(sub)
-        ? await cardSourceLines(
-            fs,
-            workspaceRoot,
-            result as { path?: string; sources?: unknown },
-            assemble
-              ? (lines) =>
-                  Buffer.byteLength(formatCard(result, sub, lines, value("target")).trimEnd()) <=
-                  originalContextBytes
-              : undefined,
-          )
-        : undefined;
-    if (assemble) {
-      const output = mutation ? { ...(result as object), workspaceRoot } : (result as object);
-      const response = await agentContextOutput(
-        fs,
-        workspaceRoot,
-        { kind: "card", cardId: id },
-        output,
-        json,
-        (entry) => formatCard(entry, sub, sourceLines, value("target")),
-      );
-      return { ...response, stderr: warnings.length ? `${warnings.join("\n")}\n` : "" };
-    }
+    if (sub !== "take") result = workspaceReadPaths(result, workspaceRoot);
     return {
       exitCode: 0,
       stdout:
         (json
           ? JSON.stringify(mutation ? { ...(result as object), workspaceRoot } : result)
-          : formatCard(result, sub, sourceLines, value("target")) +
-            (mutation ? `\nWorkspace: ${workspaceRoot}` : "")) + "\n",
+          : formatCard(result, sub)) + "\n",
       stderr: warnings.length ? `${warnings.join("\n")}\n` : "",
     };
   } catch (error) {
@@ -333,109 +247,79 @@ async function runCardCommandOpened(
   }
 }
 
-export function cardHelpText(_sub?: string) {
-  return `tent card — send work to a Role and collect the result
+export function cardHelpText() {
+  return `tent card — hand work to a Role and collect the result
 
-  tent card create --prompt <text>|- [--title <text>] [--source <node-id|path>]... [--target <role-id>] [--return-to <role-id>] [--id <card-id>]
-  tent card show <card-id> [--view body|raw] [--start <n> --end <n> --expected-etag <etag>]
-  tent card list [--role <role-id> [--include-open]] [--state pending|consumed|returned|closed] [--include-deprecated]
+  tent card create --prompt <text>|- --target <role-id> [--title <text>] [--source <node-id|path>]... [--return-to <role-id>] [--id <card-id>]
+  tent card list [--role <role-id>] [--state pending|consumed|returned|closed] [--include-deprecated]
                  [--limit <n>] [--start <n> --expected-revision <revision>]
-  tent card take <card-id> [--role <role-id>]
+  tent card take <card-id> --role <role-id>
   tent card return <card-id> --role <role-id> --result <one line>
-  tent card watch --role <role-id> [--include-open] [--timeout <seconds>]
-  tent card move <card-id> [--to <role-id> | --public] [--before <card-id> | --after <card-id>] --base-etag <etag>
-  tent card deprecate <card-id> --base-etag <etag>
+  tent card watch --role <role-id> [--timeout <seconds>]
+  tent card deprecate <card-id>
 
-A Card is a short request that points at Nodes. Keep the requirements in Nodes and change them there; a sent Card's input never changes.
-Sources keep their order. Paths start at the Workspace root: docs/req.md, ./docs/req.md and /docs/req.md are the same file; end a directory with /. Name a Node by its id or its .tent/ path. An explicit ./, / or .tent/ source that names nothing prints a warning; the Card keeps it. Bare descriptive sources are kept without that warning.
-Each Role has a queue, and Cards without --target wait in the public area. New Cards join the end; take from the front. move changes the queue or the place in it.
-take receives a Card and prints its input; it needs --role for a targeted Card or one with --return-to. With --return-to, the receiver returns one line of at most 200 characters, with details in Nodes, and the return-to Role takes the Card again to close it. Repeating the same take or return is a replay, not a second run.
-watch waits for the Role's pending Cards in queue order, then Cards returned to it in return order. --include-open adds public Cards, marked [public]; taking one claims it. It checks every 3 seconds; --timeout 0 checks once. Exit codes: 0 = Cards (one line each, or a JSON array); 2 = timeout (no output); 1 = error.
-show previews a Card without taking it; show and take include related Agent context on the first page. Continue long input with page.next using --start, --end and --expected-etag; raw and continuation pages have no assembly. list shows newest first, except --state pending, which shows queue order. deprecate cancels a Card and hides it from lists.
+Write the task in the Card; sources point at the Nodes and files it needs. A sent Card never changes.
+Sources keep their order. Name a Node by its id, a section as node-id#Heading. Paths start at the Workspace root: docs/req.md, ./docs/req.md and /docs/req.md are the same file; end a directory with /. An explicit ./, / or .tent/ source that names nothing prints a warning; the Card keeps it. Bare descriptive sources are kept without that warning.
+list --role shows what waits for that Role: Cards to take, oldest first, then returns it owes, then results returned to it. With --state it lists that state instead; without --role, all Cards, newest first.
+take prints the task, then each source's name and path; read the sources with your own tools. With --return-to, the receiver returns one line of at most 200 characters, and the return-to Role takes the Card again to read the result and close it. Repeating the same take or return is a replay, not a second run.
+watch waits for Cards addressed to the Role, oldest first, then Cards returned to it. It checks every 3 seconds; --timeout 0 checks once. Exit codes: 0 = Cards (one line each, or a JSON array); 2 = timeout (no output); 1 = error.
+deprecate cancels a Card. To change a task or its Role, cancel the Card and send a new one.
 --workspace <path> picks the Workspace; --json prints JSON. In Git Bash, run commands whose arguments start with / with MSYS_NO_PATHCONV=1.
 `;
 }
 
-/** Text-only source summary: addresses with pinned identities or local file presence. */
-async function cardSourceLines(
+/** Where each source lives, for the receiver's own tools; nothing is read on its behalf. */
+async function sourcePointers(
   fs: NodeFs,
-  workspaceRoot: string,
-  card: { path?: string; sources?: unknown },
-  fits?: (summary: string) => boolean,
-): Promise<string | undefined> {
-  if (!card.path || !Array.isArray(card.sources) || !card.sources.length) return undefined;
-  const owner = card.path.replace(/^\.tent\//, "");
-  const sources = card.sources as MaterialSource[];
-  const pinned = await verifyCardSourceVersions(
-    fs,
-    sources.flatMap((source) => (source.version !== undefined ? [{ owner, source }] : [])),
-  );
-  let next = 0;
-  const lines: string[] = [];
-  const display = (value: string, label: string) => {
-    const excerpt = contextExcerpt(value.replace(/[\r\n\t]/g, " "), 120);
-    return (
-      excerpt.text + (excerpt.truncated || excerpt.text !== value ? ` [${label} truncated]` : "")
-    );
-  };
-  for (const [index, source] of sources.entries()) {
-    let detail: string;
-    if (source.version !== undefined) {
-      const read = pinned[next++]!;
-      const version = source.version as { commit?: unknown; path?: unknown };
-      const short = `@${String(version.commit).slice(0, 7)}`;
-      const file = String(version.path);
-      if (read instanceof Error)
-        detail = `pinned ${short}, unavailable: ${display(read.message, "diagnostic")}`;
-      else if (file.startsWith("roles/")) {
-        const roleId = path.posix.basename(file, ".md");
-        const title = parseFrontmatter(read.raw).data.title;
-        detail = `Role ${display(typeof title === "string" && title ? title : roleId, "title")}  ${roleId}  ${short}`;
-      } else {
-        const name = path.posix.basename(path.posix.dirname(file));
-        detail = `Node ${display(name, "name")}  ${String(parseFrontmatter(read.raw).data.id)}  ${short}`;
-      }
-    } else {
+  tentRoot: string,
+  owner: string,
+  sources: ReadonlyArray<{ resource: string; file?: string; gone?: string }>,
+) {
+  const workspaceRoot = path.dirname(tentRoot);
+  return Promise.all(
+    sources.map(async (source) => {
+      if (source.gone) return { name: source.gone, missing: true as const };
       let locator;
-      try {
-        locator = materialLocator(source.resource, owner, true);
-      } catch {
-        locator = undefined;
-      }
       let filename: string | undefined;
       try {
-        if (locator) filename = localMaterialPath(locator, workspaceRoot);
+        locator = materialLocator(source.resource, owner, true);
+        filename = source.file
+          ? path.join(tentRoot, source.file)
+          : localMaterialPath(locator, workspaceRoot);
       } catch {
-        locator = undefined;
+        return { name: source.resource };
       }
-      if (!locator) detail = "invalid address";
-      else if (locator.kind === "unresolved") detail = "description text";
-      else if (filename === undefined) detail = "remote address, not fetched";
-      else detail = (await isFile(filename)) ? "file exists" : "file missing";
-    }
-    const readable = workspaceReadPaths({ path: owner, sources: [source] }, workspaceRoot)
-      .sources[0] as MaterialSource & { path?: string; heading?: string };
-    lines.push(
-      `  ${index + 1}. ${readable.path ?? source.resource}${readable.heading ? ` # ${readable.heading}` : ""}  ${detail}`,
-    );
-  }
-  const summary = (count: number) =>
-    [
-      "Sources:",
-      ...lines.slice(0, count),
-      ...(count < lines.length
-        ? [
-            `  ${lines.length - count} source summaries omitted; the raw Card read below lists all source addresses and versions.`,
-          ]
-        : []),
-    ].join("\n");
-  let count = lines.length;
-  while (count && fits && !fits(summary(count))) count--;
-  return summary(count);
+      if (locator.kind === "unresolved") return { name: locator.text };
+      if (filename === undefined) return { name: source.resource };
+      const heading = markdownMaterialHeading(locator);
+      const directory = isDirectoryMaterial(locator);
+      const pointer = filename + (directory ? path.sep : "");
+      const found = await stat(filename).then(
+        (info) => (directory ? info.isDirectory() : info.isFile()),
+        () => false,
+      );
+      const where = heading === undefined ? pointer : `${pointer}#${heading}`;
+      const inTent = path.relative(tentRoot, filename).split(path.sep);
+      let name = path.relative(workspaceRoot, filename).split(path.sep).join("/");
+      if (inTent[0] === "roles" && inTent.length === 2) {
+        const roleId = path.basename(filename, ".md");
+        try {
+          const title = parseFrontmatter(await fs.readFile(`roles/${roleId}.md`)).data.title;
+          name = typeof title === "string" && title.trim() ? title : roleId;
+        } catch {
+          name = roleId;
+        }
+      } else if (inTent[0] === "cards" && inTent.length === 2)
+        name = path.basename(filename, ".md");
+      else if (inTent[0] !== ".." && inTent.length >= 2 && inTent.at(-1) === `${inTent.at(-2)}.md`)
+        name = inTent.at(-2)!;
+      return { name, path: where, ...(found ? {} : { missing: true as const }) };
+    }),
+  );
 }
 
-function formatCard(value: unknown, sub: string, sourceLines?: string, target?: string) {
-  const identity = value as {
+function formatCard(value: unknown, sub: string) {
+  const card = value as {
     cardId: string;
     title?: string;
     target?: string;
@@ -444,47 +328,42 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
     returnTo?: string;
     result?: string;
     replayed?: boolean;
-    etag?: string;
-    path?: string;
+    notice?: string;
+    text?: string;
+    sources?: Array<{ name: string; path?: string; missing?: true }>;
   };
   if (sub === "create")
-    return `cardId: ${identity.cardId}\ntarget: ${target ?? "public"}\nstate: ${identity.state}${identity.returnTo ? `\nreturnTo: ${identity.returnTo}` : ""}`;
-  const header = [
-    [identity.cardId, identity.title, identity.path].filter(Boolean).join("  "),
-    "target" in identity ? `Target: ${identity.target ?? target ?? "public"}` : undefined,
-    identity.etag ? `ETag: ${identity.etag}` : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n");
-  if (["show", "get", "take"].includes(sub)) {
-    const result = value as {
-      state?: string;
-      returnTo?: string;
-      receivedBy?: string;
-      result?: string;
-      diagnostic?: string | { code: string; message: string };
-      notice?: string;
-      replayed?: boolean;
-      currentReferences?: Array<{ kind: string; id: string; path: string }>;
-      currentReferencesDiagnostic?: string;
-    };
     return [
-      header,
-      result.replayed !== undefined ? `Replayed: ${result.replayed}` : undefined,
-      result.state,
-      result.returnTo ? `Return to: ${result.returnTo}` : undefined,
-      result.result ? `Result: ${result.result}` : undefined,
-      result.notice,
-      typeof result.diagnostic === "object"
-        ? `${result.diagnostic.code}: ${result.diagnostic.message}`
-        : result.diagnostic,
-      result.currentReferences?.map((ref) => `${ref.kind} ${ref.id}  ${ref.path}`).join("\n"),
-      result.currentReferencesDiagnostic,
-      sourceLines,
-      formatTextPage(value),
+      `cardId: ${card.cardId}`,
+      `target: ${card.target}`,
+      `state: ${card.state}`,
+      card.returnTo ? `returnTo: ${card.returnTo}` : undefined,
     ]
-      .filter((part) => part !== undefined && part !== "")
-      .join("\n\n");
+      .filter(Boolean)
+      .join("\n");
+  if (sub === "take") {
+    const header = [
+      [card.cardId, card.title].filter(Boolean).join("  "),
+      `State: ${card.state}`,
+      card.state !== "closed" && card.returnTo ? `Return to: ${card.returnTo}` : undefined,
+      card.state === "closed" ? `Result: ${card.result}` : undefined,
+      `Replayed: ${card.replayed}`,
+      card.notice,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (card.text === undefined) return header;
+    const sources = card.sources?.length
+      ? [
+          "Sources:",
+          ...card.sources.map((source) =>
+            source.path
+              ? `- ${source.name}: ${source.path}${source.missing ? " (not found)" : ""}`
+              : `- ${source.name}${source.missing ? " (not found)" : ""}`,
+          ),
+        ].join("\n")
+      : undefined;
+    return [header, card.text.trim(), sources].filter(Boolean).join("\n\n");
   }
   if (sub === "list") {
     const result = value as {
@@ -521,5 +400,14 @@ function formatCard(value: unknown, sub: string, sourceLines?: string, target?: 
         .join("\n") + (result.page.hasMore ? `\nNext: ${JSON.stringify(result.page.next)}` : "")
     );
   }
-  return `${header}\nState: ${identity.state ?? sub}${identity.status ? `\nStatus: ${identity.status}` : ""}${identity.returnTo ? `\nReturn to: ${identity.returnTo}` : ""}${identity.result ? `\nResult: ${identity.result}` : ""}${identity.replayed !== undefined ? `\nReplayed: ${identity.replayed}` : ""}`;
+  return [
+    [card.cardId, card.title].filter(Boolean).join("  "),
+    `State: ${card.state}`,
+    card.status === "deprecated" ? `Status: ${card.status}` : undefined,
+    card.returnTo ? `Return to: ${card.returnTo}` : undefined,
+    card.result ? `Result: ${card.result}` : undefined,
+    card.replayed !== undefined ? `Replayed: ${card.replayed}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

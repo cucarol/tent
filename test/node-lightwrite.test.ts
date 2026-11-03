@@ -21,7 +21,7 @@ import { NodeSectionError, selectSection } from "../src/core/base/markdown-secti
 import { cli, extendTestLockWait } from "./helpers.js";
 
 const lockTimeoutMessage =
-  /^Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying\.\nNext: tent workspace brief(?: --workspace .+)?\n$/;
+  /^Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying\.\nNext: tent workspace check(?: --workspace .+)?\n$/;
 
 async function fixture(t: TestContext, body = "") {
   const scratch = path.resolve(testScratchRoot());

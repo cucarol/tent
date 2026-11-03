@@ -8,7 +8,6 @@ import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import { importGitHistory, convertHistoryPins } from "../src/fs/import-git-history.js";
 import { tentIndexMarker } from "../src/core/store/scaffold.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import { verifyCardSourceVersion } from "../src/core/graph/card-document.js";
 import { git } from "./helpers.js";
 import { testScratchRoot } from "./scratch.js";
 import type { DocumentVersion } from "../src/core/store/history-port.js";
@@ -164,9 +163,9 @@ test("migration rewrites only exact pin scalars, audits nested historical target
   try {
     const card = parseFrontmatter(await adapter.readFile("cards/card-input.md"));
     const source = (card.data.sources as { resource: string; version: DocumentVersion }[])[0]!;
-    const pinned = await verifyCardSourceVersion(adapter, "cards/card-input.md", source);
-    assert.equal(pinned.raw, expected);
-    const nested = (parseFrontmatter(pinned.raw).data.sources as { version: DocumentVersion }[])[0]!
+    const pinned = await adapter.history.read(source.version);
+    assert.equal(pinned, expected);
+    const nested = (parseFrontmatter(pinned).data.sources as { version: DocumentVersion }[])[0]!
       .version;
     assert.equal(await adapter.history.read(nested), goal);
     await assert.rejects(
@@ -249,20 +248,6 @@ for (const type of ["prompt", "invalid-node-type"]) {
         beforeDiagnostic,
         type === "prompt" ? null : "Node type must be goal, prompt or output.",
       );
-      const cardSource = {
-        resource: "../Target/Target.md",
-        version: rows[0]!.target,
-      };
-      if (beforeDiagnostic)
-        await assert.rejects(
-          verifyCardSourceVersion(adapter, "cards/card-pin.md", cardSource),
-          (error: Error) => error.message === beforeDiagnostic,
-        );
-      else
-        assert.equal(
-          (await verifyCardSourceVersion(adapter, "cards/card-pin.md", cardSource)).raw,
-          expected,
-        );
       assert.ok((await adapter.readFile("Target/Target.md")).includes("CURRENT"));
       for (const row of rows) {
         assert.deepEqual(row.diagnostics, { before: beforeDiagnostic, after: afterDiagnostic });

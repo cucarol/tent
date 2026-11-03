@@ -183,7 +183,6 @@ Start
 
 Read and record
   tent load <path>...                Nodes for these files: those covering them, then the prompts above, nearest first.
-  tent workspace brief               Where to start: what changed and which Cards wait.
   tent node history                  Saved Node versions.
   tent node create|rename|move|archive|delete
                                      Record facts and keep them current.
@@ -191,7 +190,8 @@ Read and record
 
 Hand off work
   tent card create|take|return|watch Send work to a Role and collect the result.
-  tent role list|show|create         Long-running work directions that receive Cards.
+  tent card list --role <role-id>    The work a Role holds.
+  tent role create|delete            Standing briefs for kinds of sessions; they receive Cards.
 
 More
   tent workspace scan|export

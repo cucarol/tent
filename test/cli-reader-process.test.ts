@@ -43,9 +43,8 @@ test("separate CLI processes retain native edits through brief and read the orig
       child.on("close", (code) => resolve({ code, stdout, stderr }));
     });
   await fs.writeFile(path.join(workspace, ".tent/A/A.md"), raw.replace("Original", "Native edit"));
-  const brief = await run(["workspace", "brief", "--json"]);
-  assert.equal(brief.code, 0, brief.stderr);
-  assert.ok(JSON.parse(brief.stdout).agentContext);
+  const checked = await run(["workspace", "check", "--json"]);
+  assert.equal(checked.code, 0, checked.stderr);
   const version = captured.versions[0]!;
   assert.notEqual(await adapter.history.currentCommit(), version.commit);
   const historical = await run([

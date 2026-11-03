@@ -4,16 +4,14 @@ import type { NodeFs } from "../fs/node-fs.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
 
-const WORKSPACE_COMMANDS = ["export", "check", "brief", "scan"];
+const WORKSPACE_COMMANDS = ["export", "check", "scan"];
 
 export const workspaceHelpText = `tent workspace — the whole Workspace at once
 
-  tent workspace brief [--role <role-id>] [--json]
   tent workspace check [--json]
   tent workspace scan [--draft <new-file>] [--json]
   tent workspace export --output <new-directory>
 
-brief: where to start. Invalid Nodes and waiting Cards. Every list shows up to 10 items, then its total and the command that lists the rest. --role keeps only that Role's Cards.
 check: broken links, invalid or missing materials, missing Markdown sections, and Node files whose disk and Tent history presence differ after valid native edits are collected. Exits 1 when it finds any; JSON still goes to stdout.
 scan: drafts a map of the project's parts when the Workspace has no Nodes; --draft saves it for node create --draft. With Nodes, it checks the map's coverage and boundaries.
 export: copies the context graph and its SQLite history to a new directory.
@@ -24,10 +22,7 @@ export async function runWorkspaceCommand(
   args: string[],
   globals: NodeCommandOptions = {},
 ): Promise<NodeCommandResult> {
-  return transactionResult(
-    (opened) => runWorkspaceCommandOpened(sub, args, globals, opened),
-    sub === "brief" ? "workspace.brief" : undefined,
-  );
+  return transactionResult((opened) => runWorkspaceCommandOpened(sub, args, globals, opened));
 }
 
 async function runWorkspaceCommandOpened(
@@ -50,7 +45,6 @@ async function runWorkspaceCommandOpened(
         draft: { type: "string" },
         limit: { type: "string" },
         cursor: { type: "string" },
-        role: { type: "string" },
         help: { type: "boolean", short: "h" },
         workspace: { type: "string" },
         json: { type: "boolean" },
@@ -62,19 +56,12 @@ async function runWorkspaceCommandOpened(
     if (positionals.length) throw new Error(workspaceHelpText);
     if (values.draft !== undefined && sub !== "scan")
       throw new Error("--draft is only valid for workspace scan");
-    if (values.role !== undefined && sub !== "brief")
-      throw new Error("--role is only valid for workspace brief");
     if (
       sub === "scan" &&
       [values.output, values.limit, values.cursor].some((value) => value !== undefined)
     )
       throw new Error(workspaceHelpText);
     if (sub === "export" && (!values.output || values.limit || values.cursor))
-      throw new Error(workspaceHelpText);
-    if (
-      sub === "brief" &&
-      [values.output, values.limit, values.cursor].some((value) => value !== undefined)
-    )
       throw new Error(workspaceHelpText);
     if (
       sub === "check" &&
@@ -213,34 +200,6 @@ async function runWorkspaceCommandOpened(
           fs.invalidNodeEdits = captureFs.invalidNodeEdits;
           return result;
         });
-    if (sub === "brief") {
-      const [
-        { assembleAgentContext },
-        { projectAgentBrief, formatAgentBrief },
-        { inspectCurrentContext },
-      ] = await Promise.all([
-        import("../core/read/agent-context.js"),
-        import("../core/read/agent-brief.js"),
-        import("../core/read/context-brief.js"),
-      ]);
-      const brief = await fs.observationScope(async () => {
-        const context = await inspectCurrentContext(fs, {
-          roleId: values.role,
-          nodes: captureNodes(),
-        });
-        const facts = await assembleAgentContext(fs, roots.workspaceRoot, {
-          kind: "brief",
-          ...(values.role ? { roleId: values.role } : {}),
-        });
-        return projectAgentBrief(context, facts, roots.workspaceRoot);
-      });
-      return {
-        exitCode: 0,
-        stdout:
-          (values.json || globals.json ? JSON.stringify(brief) : formatAgentBrief(brief)) + "\n",
-        stderr: "",
-      };
-    }
     if (sub === "check") {
       const [{ checkGraph }, { stat }] = await Promise.all([
         import("../core/check/graph-check.js"),

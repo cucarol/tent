@@ -122,25 +122,25 @@ Node 名称在所有平台按 Windows 文件名校验：不得含 `< > : " / \ |
 
 文件、目录和末尾一个 `*` 的文件名前缀都能通过 `resource` 或 `sources` 提供普通覆盖。对每个改动文件，精确文件及实际改动的章节优先，否则取最近的目录或前缀，同等具体的都给。没有 `track` 或代码所有权，覆盖也不按 type 继承规则；按 type 取 prompt 只发生在 `tent load`（SPEC §5）。linked worktree 的改动按 checkout 内相对路径匹配；Stop 给出的 Node 路径始终在主 checkout 的 `.tent` 下。
 
-`status` 为 `draft`、`stable`（默认）或 `deprecated`，只作用于本文档；`node archive` 弃用子树，要重新启用 Node，改回其 status。`node delete` 删除子树；`node rename` 与 `node move` 保持 id 并更新指向它的链接。Card 来源仍钉住所选版本，Node 创建不会自动选择或回答某张 Card。
+`status` 为 `draft`、`stable`（默认）或 `deprecated`，只作用于本文档；`node archive` 弃用子树，要重新启用 Node，改回其 status。`node delete` 删除子树；`node rename` 与 `node move` 保持 id 并更新指向它的链接。Card 来源只是地址，Node 创建不会自动选择或回答某张 Card。
 
 ## Role 与 Card 的维护者说明
 
-Role 在 `.tent/roles/<role-id>.md` 中保存持续方向的目的、边界、方法和 Node 入口。它提供上下文，不占用锁，也不登记或绑定宿主 Session；多个会话可以按同一 Role 工作。共享事实由 Node 保存，Role 只链接事实入口。
+Role 在 `.tent/roles/<role-id>.md` 中保存持续方向的目的、边界、方法和 Node 入口。它提供上下文，不占用锁，也不登记或绑定宿主 Session；多个会话可以按同一 Role 工作。`role create` 之后，Role 文件和 Node 一样用宿主自带工具读改。共享事实由 Node 保存，Role 只链接事实入口。
 
-Card 保存一次固定输入：短指令、可选接收 Role、可选返回地址 returnTo，以及按顺序排列的来源。Node 和 Role 来源钉住所选版本，其他来源保留地址。CLI 将从 Workspace 根目录传入的路径转换为相对 Card 文档的地址。发布后的 prompt、title、sources 和 returnTo 不可修改，手工修改会报告为 `INPUT_CHANGED`。接收者开始时没有发送方的对话；prompt 写明目标，来源承载其余内容。需求变化写回来源 Node，接收者在 brief 中获知变化后读取当前 Node。
+Card 保存一次固定输入：任务正文、接收 Role（必填）、可选返回地址 returnTo，以及按顺序排列的来源。来源只是地址：创建时检查 Node 和 Role 来源存在，不复制、不钉版本；接收者用自己的工具读当前内容。CLI 将从 Workspace 根目录传入的路径转换为相对 Card 文档的地址。发布后的正文、title、sources、target 和 returnTo 不可修改，手工修改会报告为 `INPUT_CHANGED`。接收者开始时没有发送方的对话；正文写明任务，来源指向其余内容。需求变化写回来源 Node；尚未决定的要求留在 draft Node。
 
-brief 常规刷新跳过已 closed、没有 returnTo 的 consumed、以及 deprecated 的 Card。完成名单保存在 `.tent/.git/tent-material-cache/`，随保留历史增量更新；未完成和新发现的 Card 仍读取当前文件头。手改已完成 Card 由 `workspace check` 报告，brief 不再检查它们。显式 show、take、按状态列出及 `--include-deprecated` 仍读真实文件。
+`card take` 打印任务，再逐条给来源的名字和当前位置。Node 来源按 Card 发布时那个地址上的 Node id 找它现在的文件，所以发出后改名或移动的 Node 仍能找到；不存在的路径标 `(not found)`。`workspace check` 不检查 Card 来源：发出的 Card 改不了，来源失效就作废重发。
 
-Card 只记录四种投递状态：`pending`、`consumed`、`returned`、`closed`。`show` 只预览，`take` 记录接收；相同 Role 重试返回 `replayed: true`，应继续已有工作。没有 returnTo 的 Card 收下即完成；有 returnTo 的 Card 已接未交回时才算在做。target 与 returnTo 都是投递地址，不记录发送者，不能指向同一 Role。有 target 的 Card 必须带对应 Role 接收；带 returnTo 的公开 Card 也必须由一个不同的 Role 接收，只有不带 returnTo 的公开 Card 可以匿名接收。仅 pending Card 可以改派，不能改派给 returnTo；取消使用 `deprecate`，保留原输入与接收记录，默认列表隐藏它。旧 Card 没有 returnTo，按相同规则解释，无需转换。
+常规列表和 watch 跳过已 closed、没有 returnTo 的 consumed、以及 deprecated 的 Card。完成名单保存在 `.tent/.git/tent-material-cache/`，随保留历史增量更新；未完成和新发现的 Card 仍读取当前文件头。手改已完成 Card 由 `workspace check` 报告。
 
-`card return <id> --role <role-id> --result TEXT` 由接收 Role 交回，必须先 take；结果非空、单行、不超过 200 个 Unicode 字符（code points），细节写进 Node，结果可带 Node id。交回记录 returned 和 result，returnTo Role 再次 take 收下结果后变成 closed，原 receivedBy 不变。相同结果交回是重放，收回后也一样；换结果会拒绝，修正写进 Node，有新的工作再发 Card。不另存发送者、交回人或结果 Node 列表。Card 完成不由 goal 或 output 推导；后续变化不会撤回 Card 的交回结果。
+Card 只记录四种投递状态：`pending`、`consumed`、`returned`、`closed`。`take` 记录接收；相同 Role 重试返回 `replayed: true`，应继续已有工作。没有 returnTo 的 Card 收下即完成；有 returnTo 的 Card 已接未交回时才算在做。target 与 returnTo 都是投递地址，不记录发送者，不能指向同一 Role。改任务或改接收 Role 都是作废重发：`deprecate` 保留原输入与接收记录，默认列表隐藏它。每个 Role 的 pending Card 按发布时间排队。
 
-Node 的普通 `sources` 可以保留与 Card 的来源关系，但 Node 的 type 和父子位置不决定 Card 是否完成。接收、交回与收回仍由 Card 命令显式表达；需要对方继续做事或拍板才发新 Card。
+`card return <id> --role <role-id> --result TEXT` 由接收 Role 交回，必须先 take；结果非空、单行、不超过 200 个 Unicode 字符（code points），细节写进 Node，结果可带 Node id。交回记录 returned 和 result，returnTo Role 再次 take 收下结果后变成 closed，原 receivedBy 不变。相同结果交回是重放，收回后也一样；换结果会拒绝，修正写进 Node，有新的工作再发 Card。Card 完成不由 goal 或 output 推导；后续变化不会撤回 Card 的交回结果。
 
-未完成的 Card 投递会阻断 Role 删除：它是 pending Card 的 target、pending/consumed/returned Card 的 returnTo，或带 returnTo 的 consumed Card 的 receivedBy。报错列出全部阻断 Card；可以撤销 Card，pending 的目标也可转交。作废 Card 一律不挡；交回后释放接收 Role，收回后释放返回 Role。删除不改写历史投递事实。
+Card 还在等某个 Role 时（它是 pending Card 的 target、未收回 Card 的 returnTo，或带 returnTo、尚未交回的 consumed Card 的 receivedBy），`role delete` 拒绝并列出全部这些 Card；Role 文件被手改成 deprecated 时，`workspace check` 逐张报出。作废 Card 一律不挡。删除不改写历史投递事实。
 
-`card watch` 只观察提交到 Tent Git 的、指向指定 Role 的未作废 pending Card，以及 returnTo 为该 Role 的 returned Card，不写文件或历史。返回结果的一行是 `card-ID returned by role-X: <结果>`，直到该 Role take 收回前都会再次出现。空闲时每三秒检查 HEAD；`--timeout 0` 只检查一次，适合宿主的定时检查。宿主能在后台命令结束时唤醒 Agent 时，空闲 Role 可在后台运行它。公开输入通过 list 的 `--include-open` 查询。Hook 行为和宿主验收边界见下文。
+`card watch` 只观察已保存的、指向指定 Role 的未作废 pending Card，以及 returnTo 为该 Role 的 returned Card，不写文件或历史。返回结果的一行是 `card-ID returned by role-X: <结果>`，直到该 Role take 收回前都会再次出现。空闲时每三秒检查 HEAD；`--timeout 0` 只检查一次，适合宿主的定时检查。宿主能在后台命令结束时唤醒 Agent 时，空闲 Role 可在后台运行它。Hook 行为和宿主验收边界见下文。
 
 ## Hook 边界
 
@@ -154,9 +154,7 @@ Node 的普通 `sources` 可以保留与 Card 的来源关系，但 Node 的 typ
 
 速度测量每个宿主各取 11 对相邻交替的 Stop 命令与裸 `node -e 0`，使用每对墙钟差的中位数，不减两组中位数；保留全部原始配对和离群值，不筛快样本。两边都含 Node 启动，Tent 不额外套命令 shell；宿主自带 shell 不计为 Tent 开销。7,570 文件仓库的小改动护栏为额外 600 ms，全脏为两秒；在 `.scratch` 的项目与真实图谱副本上分别测量。未测新候选就不沿用旧数字声称通过，超时先报告，不为速度改覆盖或捕获语义。
 
-`workspace brief` 的规则见 [SPEC](SPEC.md#brief)。
-
-提示可能显示在界面或后续轮次，不能证明本次交付已维护上下文。Card 的接收、交回与收回由投递状态表达；Node 的 sources 可保留与 Card 的来源关系。Role 通过命令参数明确选择，没有隐式 Session 绑定。
+提示可能显示在界面或后续轮次，不能证明本次交付已维护上下文。Card 的接收、交回与收回由投递状态表达。Role 通过命令参数明确选择，没有隐式 Session 绑定。
 
 更新插件时保留项目 `.tent/`、真实材料及无关宿主设置。
 

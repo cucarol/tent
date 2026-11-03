@@ -9,9 +9,9 @@ import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 
-test("direct export preserves published document sources after live rename/deletion and rejects invalid history", async (t) => {
+test("direct export keeps Card source addresses unchanged after live rename and deletion", async (t) => {
   const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "direct-export-"));
@@ -41,6 +41,8 @@ test("direct export preserves published document sources after live rename/delet
     await runCardCommand(
       "create",
       [
+        "--target",
+        role.roleId,
         "--prompt",
         "Read originals",
         "--source",
@@ -53,13 +55,12 @@ test("direct export preserves published document sources after live rename/delet
       globals,
     ),
   );
-  const published = parse(await runCardCommand("show", [card.cardId], globals));
-  assert.deepEqual(
-    published.sources
-      .slice(0, 2)
-      .map((source: { version: { path: string } }) => source.version.path),
-    ["Source/Source.md", `roles/${role.roleId}.md`],
-  );
+  const published = await adapter.readFile(`cards/${card.cardId}.md`);
+  assert.deepEqual(parseFrontmatter(published).data.sources, [
+    { resource: "../Source/Source.md" },
+    { resource: `../roles/${role.roleId}.md` },
+    { resource: "../../external.txt" },
+  ]);
   await runNodeCommand("rename", [node.nodeId, "Moved"], globals).then(parse);
   await fs.unlink(path.join(tentRoot, "roles", `${role.roleId}.md`));
   await adapter.writeFile("temp/not-exported.json", "runtime only");
@@ -75,18 +76,7 @@ test("direct export preserves published document sources after live rename/delet
     false,
   );
   const restored = openTestFs(path.join(exported.outputDir, ".tent"));
-  assert.equal(
-    await restored.readFile(`cards/${card.cardId}.md`),
-    await adapter.readFile(`cards/${card.cardId}.md`),
-  );
-  for (const source of published.sources.filter(
-    (source: { version?: unknown }) => source.version,
-  )) {
-    assert.equal(
-      await restored.history.read(source.version),
-      await adapter.history.read(source.version),
-    );
-  }
+  assert.equal(await restored.readFile(`cards/${card.cardId}.md`), published);
   assert.equal(await restored.exists("temp/not-exported.json"), false);
   await assert.rejects(fs.stat(path.join(exported.outputDir, "external.txt")), { code: "ENOENT" });
   const manifest = JSON.parse(await fs.readFile(exported.manifestPath, "utf8"));
@@ -96,16 +86,4 @@ test("direct export preserves published document sources after live rename/delet
     ),
   );
   assert.deepEqual(await fs.readFile(path.join(tentRoot, ".git/history.sqlite")), before);
-  const raw = await adapter.readFile(`cards/${card.cardId}.md`),
-    parsed = parseFrontmatter(raw);
-  const sources = parsed.data.sources as { version?: { commit: string } }[];
-  sources[0]!.version!.commit = "0".repeat(64);
-  await fs.writeFile(
-    path.join(tentRoot, "cards", `${card.cardId}.md`),
-    serializeFrontmatter(parsed.data, parsed.body),
-  );
-  const rejected = await runWorkspaceCommand("export", ["--output", "output/bad-history"], globals);
-  assert.equal(rejected.exitCode, 1);
-  assert.match(rejected.stderr, /SQLite|event|history/i);
-  await assert.rejects(fs.stat(path.join(workspace, "output/bad-history")), { code: "ENOENT" });
 });

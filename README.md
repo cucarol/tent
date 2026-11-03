@@ -27,7 +27,7 @@ Everything lives in `.tent/` at the project root, as Markdown files with indepen
 
 - **Node**: one durable fact. Its `type` is exactly `goal`, `prompt` or `output`: what the work is for, what is given to get there, and what came out. It may cover the files it is about, or none. `tags` such as `decision` or `issue` say what form the content takes. They change no behavior.
 - **Role**: a continuing direction of work, with its purpose and boundaries. Several sessions can work as the same Role.
-- **Card**: one handoff. It carries a short prompt and pins the Nodes it points to. When it names a Role to return to, the result comes back to that Role.
+- **Card**: one handoff to a Role. It carries the task and points to the Nodes and files it needs. When it names a Role to return to, the result comes back to that Role.
 
 Most work needs no Role and no Card.
 
@@ -85,7 +85,7 @@ Then, from the clone, run `claude plugin marketplace add "$PWD/release/claude-co
 
 Agents run these commands through the Skills; you rarely need to. `tent` is the npm command; with a plugin, the agent runs the bundled `cli.mjs`.
 
-Role and Card writes that replace content must present the ETag they read, so two sessions cannot silently overwrite each other. The exact rules are in [docs/SPEC.md](docs/SPEC.md).
+`tent --help` lists them; the exact rules are in [docs/SPEC.md](docs/SPEC.md).
 
 ## Status
 

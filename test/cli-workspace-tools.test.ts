@@ -70,7 +70,7 @@ test("CLI validation errors name the command, argument and field instead of issu
   }
 });
 
-test("CLI creates material Nodes and Cards and preserves Role CAS", async () => {
+test("CLI creates material Nodes and Cards whose sources are plain addresses", async () => {
   const scratch = path.resolve(testScratchRoot());
   await mkdir(scratch, { recursive: true });
   const root = await mkdtemp(path.join(scratch, "cli-workspace-tools-"));
@@ -125,49 +125,23 @@ test("CLI creates material Nodes and Cards and preserves Role CAS", async () => 
     assert.equal(invalidRefs.exitCode, 1);
     assert.equal(await openTestFs(path.join(workspace, ".tent")).exists("Invalid refs"), false);
     await initializeFixtureHistory(path.join(workspace, ".tent"));
-    const source = {
-      resource: "./refs/example.pdf",
-      title: "Reference document",
-    };
+    const { roleId } = result(await runRoleCommand("create", ["--title", "Reviewer"], globals));
     const input = result(
       await runCardCommand(
         "create",
-        ["--source", ".tent/Fact/Fact.md", "--source", JSON.stringify(source)],
+        ["--target", roleId, "--source", ".tent/Fact/Fact.md", "--source", "./refs/example.pdf"],
         globals,
       ),
     );
-    const savedInput = result(await runCardCommand("get", [input.cardId], globals));
-    assert.equal(savedInput.sources[0].resource, "../Fact/Fact.md");
-    assert.equal(savedInput.sources[0].version.path, "Fact/Fact.md");
-    assert.deepEqual(savedInput.sources[1], {
-      ...source,
-      resource: "../../refs/example.pdf",
-      path: "refs/example.pdf",
-    });
-    const invalid = await runCardCommand(
-      "create",
-      ["--source", JSON.stringify({ resource: "" })],
-      globals,
-    );
+    const savedInput = parseFrontmatter(
+      await readFile(path.join(workspace, ".tent/cards", `${input.cardId}.md`), "utf8"),
+    ).data;
+    assert.deepEqual(savedInput.sources, [
+      { resource: "../Fact/Fact.md" },
+      { resource: "../../refs/example.pdf" },
+    ]);
+    const invalid = await runCardCommand("create", ["--target", roleId, "--source", ""], globals);
     assert.equal(invalid.exitCode, 1);
-    const created = result(await runRoleCommand("create", ["--title", "Reviewer"], globals));
-    const roleId = created.roleId;
-    const before = result(await runRoleCommand("show", [roleId], globals));
-    result(
-      await runRoleCommand("write", [roleId, "--body", "-", "--base-etag", before.etag], {
-        ...globals,
-        stdin: "Review the facts.\n",
-      }),
-    );
-    const after = result(await runRoleCommand("show", [roleId], globals));
-    assert.equal(after.text, "Review the facts.\n");
-    const stale = await runRoleCommand(
-      "write",
-      [roleId, "--body", "Stale", "--base-etag", before.etag],
-      globals,
-    );
-    assert.equal(stale.exitCode, 1);
-    assert.equal(result(await runRoleCommand("show", [roleId], globals)).etag, after.etag);
   } finally {
     await removeTestFixture(root, {
       recursive: true,

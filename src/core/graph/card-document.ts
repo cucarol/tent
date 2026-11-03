@@ -1,7 +1,7 @@
 import { hasDocumentHistory } from "../store/history-port.js";
 import { isDeepStrictEqual } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
-import { readOnlyFs, withTentMutation, type FsAdapter } from "../store/adapter.js";
+import { withTentMutation, type FsAdapter } from "../store/adapter.js";
 import { parseFrontmatter, serializeFrontmatter } from "../base/frontmatter.js";
 import { isCardId, isRoleId, makeCardId } from "../base/id.js";
 import {
@@ -9,11 +9,11 @@ import {
   cardRecordPath,
   roleDocumentPath,
   MUTATION_LOCK_PATH,
+  ROLES_DIR,
   nodeNotePath,
 } from "../base/paths.js";
 import { contentEtag } from "../base/etag.js";
 import { documentLifecycle } from "../base/document-status.js";
-import { documentVersionSchema, type DocumentVersion } from "../store/history-port.js";
 import {
   materialLocator,
   isDirectoryMaterial,
@@ -27,16 +27,11 @@ import { boundary, ReaderError, type ReaderRange } from "./context-reader.js";
 import { canonicalSha256 } from "../base/canonical-digest.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { assertSystemMaterial, systemMaterialPath } from "./material-target.js";
-import {
-  documentHeader,
-  loadNodeCatalog,
-  readCatalogDocument,
-  type NodeCatalog,
-} from "./node-catalog.js";
-import { listWorkspaceRelations, type DocumentRef } from "./workspace-relations.js";
 import { cardSourceIdentityError } from "./card-context.js";
-import { retainedDocumentFs, uncapturedChecker } from "./retained-read.js";
-import { cardOrderKey, cardOrderBetween, validCardOrder } from "../base/card-order.js";
+import { loadNodeCatalog } from "./node-catalog.js";
+import type { DocumentVersion } from "../store/history-port.js";
+import { uncapturedChecker } from "./retained-read.js";
+import { cardOrderKey } from "../base/card-order.js";
 import { markdownMaterialHeading } from "../base/material-section.js";
 import { NodeSectionError, selectSection } from "../base/markdown-section.js";
 
@@ -48,7 +43,6 @@ type CardFields = Record<string, unknown> & {
   sources: MaterialSource[];
   title?: string;
   target?: string;
-  order?: string;
   returnTo?: string;
   result?: string;
   state: CardDocumentState;
@@ -96,6 +90,12 @@ export function parseCardDocument(id: string, raw: string): CardDocument {
   }
   return cardFromParsed(id, raw, parsed);
 }
+/** A live Card file; retired fields stay readable only in retained versions. */
+export function parseCurrentCardDocument(id: string, raw: string): CardDocument {
+  const card = parseCardDocument(id, raw);
+  assertCurrentCardFields(card.data);
+  return card;
+}
 function cardFromParsed(
   id: string,
   raw: string,
@@ -127,8 +127,6 @@ function validateCardHeader(id: string, data: Record<string, unknown>) {
     invalid("Card title must be nonempty text");
   if (data.target !== undefined && (typeof data.target !== "string" || !isRoleId(data.target)))
     invalid("Card target must be an explicit Role id");
-  if (data.order !== undefined && !validCardOrder(id, data.order))
-    invalid("Invalid Card queue order; use card move to change position");
   if (
     data.returnTo !== undefined &&
     (typeof data.returnTo !== "string" || !isRoleId(data.returnTo))
@@ -157,9 +155,21 @@ function validateCardHeader(id: string, data: Record<string, unknown>) {
     validateResult(data.result);
   } else if (data.result !== undefined) invalid("Only returned or closed Cards have a result");
 }
+/** Retired fields stay readable in retained versions but not in the current document. */
+function assertCurrentCardFields(data: Record<string, unknown>) {
+  if (data.target === undefined) invalid("Card needs a target Role");
+  if (data.order !== undefined) invalid("Card field order is retired; remove it from the document");
+  if (
+    Array.isArray(data.sources) &&
+    data.sources.some((source) => source && typeof source === "object" && "version" in source)
+  )
+    invalid("Card source versions are retired; remove version from each source");
+}
 function inputOf(document: CardDocument) {
-  const { state, receivedBy, result, status, target, order, ...fields } = document.data;
-  return { fields, body: document.body };
+  const { state, receivedBy, result, status, target, order, sources, ...fields } = document.data;
+  // Earlier publications pinned source versions; a Card's input is the addresses alone.
+  const addresses = sources.map(({ version, ...source }) => source);
+  return { fields: { ...fields, sources: addresses }, body: document.body };
 }
 function stateOf(document: CardDocument) {
   return {
@@ -167,7 +177,6 @@ function stateOf(document: CardDocument) {
     receivedBy: document.data.receivedBy,
     result: document.data.result,
     target: document.data.target,
-    order: document.data.order,
     status: document.data.status,
   };
 }
@@ -193,10 +202,6 @@ function cardConflict(
   message: string,
 ): never {
   throw new CardDocumentError(code, message, { current: { etag: card.etag, ...stateOf(card) } });
-}
-function checkEtag(card: CardDocument, expectedEtag: string) {
-  if (!expectedEtag || card.etag !== expectedEtag)
-    cardConflict(card, "STATE_CHANGED", "Card bytes changed; reread before saving");
 }
 async function checkUnchanged(fs: FsAdapter, card: CardDocument) {
   if ((await fs.readFile(card.path)) !== card.raw)
@@ -244,154 +249,99 @@ async function roleAvailable(
   }
 }
 
-function sourceVersion(fs: FsAdapter, owner: string, source: MaterialSource) {
-  const version = documentVersionSchema.parse(source.version),
-    locator = materialLocator(source.resource, owner, true);
-  const file = systemMaterialPath(locator, fs.workspaceRoot);
-  if (
-    isDirectoryMaterial(locator) ||
-    file !== version.path ||
-    version.path === ".." ||
-    version.path.startsWith("../") ||
-    version.path.startsWith(CARDS_DIR + "/") ||
-    !isHistoryDocument(version.path)
-  )
-    invalid("A source historical version must address its selected Tent Node or Role");
-  return version;
+function validateSource(file: string, raw: string, data = parseFrontmatter(raw).data) {
+  const error = cardSourceIdentityError(file, raw, data);
+  if (error) invalid(error);
 }
 
-/** Validate a retained source without consulting or capturing its live document. */
-export async function verifyCardSourceVersion(
+function internalSourcePath(fs: FsAdapter, owner: string, source: MaterialSource) {
+  const locator = materialLocator(source.resource, owner, true);
+  const file = !isDirectoryMaterial(locator)
+    ? systemMaterialPath(locator, fs.workspaceRoot)
+    : undefined;
+  return file &&
+    file !== ".." &&
+    !file.startsWith("../") &&
+    !file.startsWith(CARDS_DIR + "/") &&
+    isHistoryDocument(file)
+    ? file
+    : undefined;
+}
+
+/** Sources are addresses the receiver reads live; Node and Role sources must still parse. */
+async function checkSources(fs: FsAdapter, owner: string, sources: MaterialSource[]) {
+  for (const [i, source] of sources.entries()) {
+    try {
+      await assertSystemMaterial(fs, materialLocator(source.resource, owner, true));
+    } catch (error) {
+      throw new MaterialAddressError(
+        `Invalid sources[${i}].resource: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const file = internalSourcePath(fs, owner, source);
+    if (!file) continue;
+    if (fs.invalidNodeEdits?.has(file))
+      invalid(`Invalid Node source: ${file}: ${fs.invalidNodeEdits.get(file)}`);
+    validateSource(
+      file,
+      new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await fs.readBinary(file)),
+    );
+  }
+}
+
+/**
+ * Advisory: a Node or Role source that selects a section its current text lacks.
+ * `sources` are the stored addresses; `typed` names each one as the sender wrote it.
+ */
+export async function cardSourceSectionWarnings(
   fs: FsAdapter,
   owner: string,
-  source: MaterialSource,
+  sources: MaterialSource[],
+  typed: readonly string[] = sources.map((source) => source.resource),
 ) {
-  const version = sourceVersion(fs, owner, source);
-  const history = await historyOf(fs);
-  const changedSince = await history.changedSince(version);
-  const raw = await history.read(version);
-  validateSource(version.path, raw);
-  return { version, raw, changedSince };
-}
-
-/** A query-scoped batch, with the same address and identity checks as single-source reads. */
-export async function verifyCardSourceVersions(
-  fs: FsAdapter,
-  sources: ReadonlyArray<{ owner: string; source: MaterialSource }>,
-) {
-  const selected = sources.map(({ owner, source }) => {
-    try {
-      return sourceVersion(fs, owner, source);
-    } catch (error) {
-      return error instanceof Error ? error : new Error(String(error));
-    }
-  });
-  const versions = selected.filter((value): value is DocumentVersion => !(value instanceof Error));
-  let retained: Awaited<ReturnType<NonNullable<FsAdapter["history"]>["readVersions"]>> = [];
-  if (versions.length) {
-    try {
-      if (!fs.history)
-        throw new CardDocumentError(
-          "UNPUBLISHED",
-          "Card operations require independent Tent history",
-        );
-      retained = await fs.history.readVersions(versions);
-    } catch (error) {
-      retained = versions.map(() => (error instanceof Error ? error : new Error(String(error))));
-    }
-  }
-  let index = 0;
-  return selected.map((version) => {
-    if (version instanceof Error) return version;
-    const value = retained[index++]!;
-    if (value instanceof Error) return value;
-    try {
-      validateSource(value.version.path, value.raw, value.frontmatter);
-      return value;
-    } catch (error) {
-      return error instanceof Error ? error : new Error(String(error));
-    }
-  });
-}
-
-/** Advisory section diagnostics use the source pins in the actual published Card. */
-export async function cardSourceSectionWarnings(fs: FsAdapter, publication: DocumentVersion) {
-  const history = await historyOf(fs);
-  const card = parseFrontmatter(await history.read(publication));
-  const sources = sourcesSchema.parse(card.data.sources).filter((source) => source.version);
-  const retained = await verifyCardSourceVersions(
-    fs,
-    sources.map((source) => ({ owner: publication.path, source })),
-  );
   const warnings: string[] = [];
-  for (const [index, source] of sources.entries()) {
-    const read = retained[index]!;
-    if (read instanceof Error) continue;
-    const heading = markdownMaterialHeading(
-      materialLocator(source.resource, publication.path, true),
-    );
-    if (heading === undefined) continue;
+  for (const [i, source] of sources.entries()) {
+    const heading = markdownMaterialHeading(materialLocator(source.resource, owner, true));
+    const file = internalSourcePath(fs, owner, source);
+    if (heading === undefined || !file) continue;
     try {
-      selectSection(parseFrontmatter(read.raw).body, heading);
+      selectSection(parseFrontmatter(await fs.readFile(file)).body, heading);
     } catch (error) {
       if (!(error instanceof NodeSectionError)) throw error;
       warnings.push(
-        `Warning: source ${JSON.stringify(source.resource)} selects an unavailable section in its pinned version ${JSON.stringify(read.version)}: ${error.message}; the Card keeps it.`,
+        `Warning: source ${JSON.stringify(typed[i] ?? source.resource)} selects an unavailable section: ${error.message}; the Card keeps it.`,
       );
     }
   }
   return warnings;
 }
 
-/** Only the selected Node/Role bytes are captured. External declarations remain addresses. */
-async function captureSources(fs: FsAdapter, owner: string, sources: MaterialSource[]) {
-  const history = await historyOf(fs),
-    selected: Array<{ path: string; raw: string }> = [];
-  const paths = new Map<number, string>();
-  for (let i = 0; i < sources.length; i++) {
-    const source = sources[i]!,
-      locator = materialLocator(source.resource, owner, true);
-    const file = !isDirectoryMaterial(locator)
-      ? systemMaterialPath(locator, fs.workspaceRoot)
-      : undefined;
-    const internal =
-      file &&
-      file !== ".." &&
-      !file.startsWith("../") &&
-      !file.startsWith(CARDS_DIR + "/") &&
-      isHistoryDocument(file);
-    if (source.version !== undefined) {
-      await verifyCardSourceVersion(fs, owner, source);
-      continue;
-    }
-    try {
-      await assertSystemMaterial(fs, locator);
-    } catch (error) {
-      throw new MaterialAddressError(
-        `Invalid sources[${i}].resource: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    if (internal) {
-      if (fs.invalidNodeEdits?.has(file))
-        invalid(`Invalid Node source: ${file}: ${fs.invalidNodeEdits.get(file)}`);
-      const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-        await fs.readBinary(file),
-      );
-      validateSource(file, raw);
-      paths.set(i, file);
-      if (!selected.some((item) => item.path === file)) selected.push({ path: file, raw });
-    }
-  }
-  const versions = selected.length
-    ? (await history.captureUnlocked(selected, { operation: "document.external-capture" })).versions
-    : [];
-  return sources.map((source, i) =>
-    paths.has(i) ? { ...source, version: versions.find((v) => v.path === paths.get(i))! } : source,
+/**
+ * Where each source is now. A Node source means the Node at that address when the Card was
+ * published; when that Node has moved since, its id leads to the current file, and when it is
+ * gone the source names its id as gone rather than whatever now has its path.
+ */
+async function currentSources(fs: FsAdapter, card: CardDocument, published: DocumentVersion) {
+  let catalog: ReturnType<typeof loadNodeCatalog> | undefined;
+  return Promise.all(
+    card.data.sources.map(async ({ resource }) => {
+      const file = internalSourcePath(fs, card.path, { resource });
+      if (!file || file.startsWith(ROLES_DIR + "/") || !fs.history) return { resource, file };
+      const idIn = async (read: Promise<string>) => {
+        try {
+          return parseFrontmatter(await read).data.id;
+        } catch {
+          return undefined;
+        }
+      };
+      const id = await idIn(fs.history.read({ commit: published.commit, path: file }));
+      if (typeof id !== "string") return { resource, file };
+      if ((await idIn(fs.readFrontmatter ? fs.readFrontmatter(file) : fs.readFile(file))) === id)
+        return { resource, file };
+      const node = (await (catalog ??= loadNodeCatalog(fs))).byId.get(id);
+      return node ? { resource, file: nodeNotePath(node.path) } : { resource, gone: id };
+    }),
   );
-}
-function validateSource(file: string, raw: string, data = parseFrontmatter(raw).data) {
-  const error = cardSourceIdentityError(file, raw, data);
-  if (error) invalid(error);
 }
 
 type CardAction =
@@ -400,7 +350,7 @@ async function checkedCard(fs: FsAdapter, id: string, action?: CardAction) {
   const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
     await fs.readBinary(cardPath(id)),
   );
-  const current = parseCardDocument(id, raw),
+  const current = parseCurrentCardDocument(id, raw),
     history = await historyOf(fs);
   const versions = await history.pathVersions(current.path);
   if (!versions.first || !versions.latest)
@@ -475,6 +425,7 @@ export function createCardDocument(
         path = cardPath(id);
       await requireUnusedId(fs, id);
       if (typeof input.prompt !== "string") invalid("Card prompt must be text");
+      if (input.target === undefined) invalid("Card needs a target Role");
       const sources = input.sources ?? [];
       sourcesSchema.parse(sources);
       const fields = {
@@ -488,11 +439,11 @@ export function createCardDocument(
         state: "pending",
       };
       const prompt = await canonicalDocumentReferences(fs, path, fields, input.prompt);
-      const card = parseCardDocument(id, serializeFrontmatter(fields, prompt));
+      const card = parseCurrentCardDocument(id, serializeFrontmatter(fields, prompt));
       requireInput(card);
       if (card.data.target) await roleAvailable(fs, card.data.target);
       if (card.data.returnTo) await roleAvailable(fs, card.data.returnTo);
-      card.data.sources = await captureSources(fs, path, card.data.sources);
+      await checkSources(fs, path, card.data.sources);
       const raw = serializeFrontmatter(card.data, card.body, card.keyOrder);
       await fs.writeFile(path, raw);
       const captured = await history
@@ -508,6 +459,7 @@ export function createCardDocument(
         state: "pending" as const,
         target: card.data.target,
         returnTo: card.data.returnTo,
+        sources: card.data.sources,
         etag: contentEtag(raw),
         version: captured.versions[0]!,
       };
@@ -516,102 +468,12 @@ export function createCardDocument(
   );
 }
 
-/** Pending destination and queue position share the reception lock and ETag. */
-export function moveCardDocument(
-  fs: FsAdapter,
-  id: string,
-  input: { target?: string | null; before?: string; after?: string; expectedEtag: string },
-) {
-  return withTentMutation(
-    fs,
-    async () => {
-      const { current, history, version } = await checkedCard(fs, id);
-      if (current.data.state !== "pending")
-        cardConflict(current, "RECEPTION_CONFLICT", "Card has already been received");
-      checkEtag(current, input.expectedEtag);
-      if (documentLifecycle(current.data).status === "deprecated")
-        invalid("Cancelled Card cannot move");
-      if (input.before !== undefined && input.after !== undefined)
-        invalid("Choose before or after, not both");
-      const target = input.target === undefined ? current.data.target : (input.target ?? undefined);
-      if (target !== undefined) await roleAvailable(fs, target);
-      if (target !== undefined && target === current.data.returnTo)
-        invalid("Card target must differ from returnTo");
-      const referenceId = input.before ?? input.after;
-      if (referenceId === id) invalid("A Card cannot be its own position reference");
-      const queue = (
-        await listCardDocumentHeaders(await retainedDocumentFs(fs), { state: "pending" })
-      ).items.filter((item) => !item.diagnostic && item.target === target && item.cardId !== id);
-      const reference = referenceId === undefined ? undefined : await checkedCard(fs, referenceId);
-      if (
-        reference &&
-        (reference.current.data.state !== "pending" ||
-          reference.current.data.target !== target ||
-          documentLifecycle(reference.current.data).status === "deprecated")
-      )
-        invalid("Position reference must be pending in the destination queue");
-      let position = queue.length;
-      if (referenceId !== undefined) {
-        position = queue.findIndex((item) => item.cardId === referenceId);
-        if (position < 0) invalid("Position reference is unavailable in the destination queue");
-        if (input.after !== undefined) position++;
-      }
-      const lower = queue[position - 1]?.orderKey as string | undefined;
-      const upper = queue[position]?.orderKey as string | undefined;
-      const publishedAt = (await history.firstCommitTimes([current.path])).get(current.path)!;
-      const oldKey = cardOrderKey(id, publishedAt, current.data.order);
-      const fields = { ...current.data };
-      if (target === undefined) delete fields.target;
-      else fields.target = target;
-      if (
-        target !== current.data.target ||
-        (lower !== undefined && oldKey <= lower) ||
-        (upper !== undefined && oldKey >= upper)
-      ) {
-        if (!queue.length) delete fields.order;
-        else fields.order = cardOrderBetween(id, lower, upper);
-      }
-      const raw =
-        current.data.target === fields.target && current.data.order === fields.order
-          ? current.raw
-          : serializeFrontmatter(fields, current.body, current.keyOrder);
-      if (reference) await checkUnchanged(fs, reference.current);
-      await checkUnchanged(fs, current);
-      if (raw === current.raw)
-        return {
-          cardId: id,
-          path: current.path,
-          etag: current.etag,
-          state: current.data.state,
-          target: target ?? null,
-          order: fields.order,
-          version,
-        };
-      await fs.writeFile(current.path, raw);
-      const captured = await history.captureUnlocked([{ path: current.path, raw }], {
-        operation: "card.move",
-      });
-      return {
-        cardId: id,
-        path: current.path,
-        etag: contentEtag(raw),
-        state: current.data.state,
-        target: target ?? null,
-        order: fields.order,
-        version: captured.versions[0]!,
-      };
-    },
-    { operation: "card.move" },
-  );
-}
-
 /** Cancel a published task without altering its recorded input or reception. */
-export function deprecateCardDocument(fs: FsAdapter, id: string, expectedEtag: string) {
+export function deprecateCardDocument(fs: FsAdapter, id: string) {
   return withTentMutation(
     fs,
     async () => {
       const { current, history, version } = await checkedCard(fs, id);
-      checkEtag(current, expectedEtag);
       const raw =
         current.data.status === "deprecated"
           ? current.raw
@@ -643,41 +505,10 @@ export function deprecateCardDocument(fs: FsAdapter, id: string, expectedEtag: s
   );
 }
 
-async function deprecatedCardNotice(fs: FsAdapter, card: CardDocument) {
-  if (documentLifecycle(card.data).status !== "deprecated") return {};
-  const notice =
-    "This Card is deprecated; its task was cancelled. Review current references before acting.";
-  try {
-    const catalog = await loadNodeCatalog(fs);
-    const references = new Map<string, DocumentRef & { path: string }>();
-    const relations = await listWorkspaceRelations(fs);
-    const published = new Set(
-      (await listCardDocuments(fs, { includeDeprecated: true })).items
-        .filter((item) => !item.diagnostic)
-        .map((item) => item.cardId),
-    );
-    for (const relation of relations) {
-      if (relation.target.kind !== "card" || relation.target.id !== card.data.id) continue;
-      const { from } = relation;
-      if (from.kind === "card" && !published.has(from.id)) continue;
-      const path =
-        from.kind === "node"
-          ? nodeNotePath(catalog.byId.get(from.id)!.path)
-          : from.kind === "role"
-            ? roleDocumentPath(from.id)
-            : cardPath(from.id);
-      const data = parseFrontmatter(await fs.readFile(path)).data;
-      const status = documentLifecycle(data).status;
-      if (status !== "stable" && status !== "draft") continue;
-      references.set(`${from.kind}:${from.id}`, { ...from, path });
-    }
-    return { notice, currentReferences: [...references.values()] };
-  } catch (error) {
-    return {
-      notice,
-      currentReferencesDiagnostic: error instanceof Error ? error.message : String(error),
-    };
-  }
+function deprecatedCardNotice(card: CardDocument) {
+  return documentLifecycle(card.data).status === "deprecated"
+    ? { notice: "This Card is deprecated; its task was cancelled." }
+    : {};
 }
 
 type PageOptions = {
@@ -758,24 +589,17 @@ export async function readCardDocument(fs: FsAdapter, id: string, options: PageO
     if (checked.current.raw !== raw)
       throw new ReaderError("SOURCE_CHANGED", "Card changed during lookup");
     const { current, history, publishedVersion } = checked;
-    const notice = async () => {
-      if (documentLifecycle(current.data).status !== "deprecated") return {};
-      const readNotice = async () =>
-        deprecatedCardNotice(options.retainedState ? await retainedDocumentFs(fs) : fs, current);
-      return fs.observationScope ? fs.observationScope(readNotice) : readNotice();
-    };
     const metadata = {
       publishedVersion,
       sources: current.data.sources,
       title: current.data.title,
       target: current.data.target,
-      order: current.data.order,
       state: current.data.state,
       receivedBy: current.data.receivedBy,
       returnTo: current.data.returnTo,
       result: current.data.result,
       ...documentLifecycle(current.data),
-      ...(await notice()),
+      ...deprecatedCardNotice(current),
       ...(options.retainedState && (await uncapturedChecker(fs))(current.path, raw)
         ? { uncaptured: true as const }
         : {}),
@@ -808,35 +632,12 @@ export function takeCardDocument(
         throw new CardDocumentError("RECEPTION_CONFLICT", "Card is not current");
       const receivingReturn = current.data.state === "returned" || current.data.state === "closed";
       const target = receivingReturn ? current.data.returnTo : current.data.target;
-      if ((target || current.data.returnTo) && roleId === undefined)
+      if (target !== roleId)
         throw new CardDocumentError(
           "RECEPTION_CONFLICT",
-          current.data.returnTo && !receivingReturn
-            ? `Card ${id} returns to ${current.data.returnTo}; take it with --role <your role-id>.`
-            : target
-              ? `Card ${id} is addressed to ${target}; you took it as no Role.`
-              : `Card ${id} requires an explicit receiving Role.`,
-        );
-      if (!receivingReturn && current.data.returnTo === roleId && roleId !== undefined)
-        cardConflict(
-          current,
-          "RECEPTION_CONFLICT",
-          `${roleId} receives this Card's return, not its input; take it with another Role.`,
-        );
-      if (target && target !== roleId)
-        throw new CardDocumentError(
-          "RECEPTION_CONFLICT",
-          `Card ${id} is addressed to ${target}; you took it as ${roleId}.`,
-        );
-      if (
-        !receivingReturn &&
-        current.data.state !== "pending" &&
-        current.data.receivedBy !== roleId
-      )
-        cardConflict(
-          current,
-          "RECEPTION_CONFLICT",
-          `Card was already received by ${current.data.receivedBy ?? "an ordinary session"}`,
+          roleId === undefined
+            ? `Card ${id} is addressed to ${target}; take it with --role ${target}.`
+            : `Card ${id} is addressed to ${target}; you took it as ${roleId}.`,
         );
       const state = current.data.state;
       const nextState = receivingReturn ? "closed" : "consumed";
@@ -848,14 +649,13 @@ export function takeCardDocument(
               {
                 ...current.data,
                 state: nextState,
-                ...(!receivingReturn && roleId !== undefined ? { receivedBy: roleId } : {}),
+                ...(!receivingReturn ? { receivedBy: roleId } : {}),
               },
               current.body,
               current.keyOrder,
             );
       const metadata = {
-        publishedVersion,
-        sources: current.data.sources,
+        sources: await currentSources(fs, current, publishedVersion),
         title: current.data.title,
         target: current.data.target,
         state: nextState,
@@ -864,7 +664,7 @@ export function takeCardDocument(
         result: current.data.result,
         replayed,
         ...documentLifecycle(current.data),
-        ...(await deprecatedCardNotice(fs, current)),
+        ...deprecatedCardNotice(current),
       };
       // Qualification/history reads above can yield to an external editor. Do not let
       // the filesystem writer adopt those newer bytes as the basis for this decision.
@@ -968,7 +768,6 @@ type WatchedCard = {
   state?: "returned";
   receivedBy?: string;
   result?: string;
-  fromPublic?: true;
 };
 
 function retryableWatchRead(error: unknown): boolean {
@@ -988,7 +787,6 @@ export async function watchCardDocuments(
   fs: FsAdapter,
   roleId: string,
   timeoutSeconds?: number,
-  options: { includeOpen?: boolean } = {},
 ): Promise<WatchedCard[]> {
   if (timeoutSeconds !== undefined && (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0))
     throw new Error("--timeout must be a nonnegative number of seconds");
@@ -1011,9 +809,7 @@ export async function watchCardDocuments(
           if (!name.endsWith(".md") || !isCardId(id)) continue;
           const card = parseCardDocument(id, raw);
           if (
-            ((card.data.state === "pending" &&
-              (card.data.target === roleId ||
-                (options.includeOpen && card.data.target === undefined))) ||
+            ((card.data.state === "pending" && card.data.target === roleId) ||
               (card.data.state === "returned" && card.data.returnTo === roleId)) &&
             documentLifecycle(card.data).status !== "deprecated"
           )
@@ -1025,15 +821,14 @@ export async function watchCardDocuments(
               selected.map((card) => card.path),
             )
           : { published: new Map<string, string>(), returned: new Map<string, string>() };
-        const group = (card: CardDocument) =>
-          card.data.state === "returned" ? 2 : card.data.target === roleId ? 0 : 1;
+        const group = (card: CardDocument) => (card.data.state === "returned" ? 1 : 0);
         selected.sort((a, b) => {
           const lane = group(a) - group(b);
           if (lane) return lane;
           const key = (card: CardDocument) =>
             card.data.state === "returned"
               ? (returnedTimes.get(card.path) ?? "~")
-              : cardOrderKey(card.data.id, times.get(card.path)!, card.data.order);
+              : cardOrderKey(card.data.id, times.get(card.path)!);
           const ak = key(a),
             bk = key(b);
           return ak < bk ? -1 : ak > bk ? 1 : a.data.id < b.data.id ? -1 : 1;
@@ -1047,9 +842,6 @@ export async function watchCardDocuments(
                 receivedBy: card.data.receivedBy,
                 result: card.data.result,
               }
-            : {}),
-          ...(card.data.state === "pending" && card.data.target === undefined
-            ? { fromPublic: true as const }
             : {}),
         }));
         // Failed reads must leave this head unobserved for the next poll.
@@ -1096,12 +888,25 @@ export async function completedCardPaths(fs: FsAdapter): Promise<ReadonlySet<str
   }
 }
 
+function forRole(data: Record<string, unknown>, roleId: string, waiting?: boolean) {
+  if (!waiting)
+    return data.state === "pending"
+      ? data.target === roleId
+      : data.receivedBy === roleId || data.returnTo === roleId;
+  return (
+    (data.state === "pending" && data.target === roleId) ||
+    (data.state === "consumed" && data.receivedBy === roleId && data.returnTo !== undefined) ||
+    (data.state === "returned" && data.returnTo === roleId)
+  );
+}
+
 export async function listCardDocumentHeaders(
   fs: FsAdapter,
   options: {
     cardIds?: readonly string[];
     roleId?: string;
-    includeOpen?: boolean;
+    /** With roleId: Cards waiting for that Role to take, return or read a result. */
+    waiting?: boolean;
     state?: CardDocumentState;
     includeDeprecated?: boolean;
     uncaptured?: boolean;
@@ -1145,26 +950,19 @@ export async function listCardDocumentHeaders(
           uncaptured = isUncaptured?.(path, observed ?? raw) ?? false;
           const data = parseFrontmatter(raw).data;
           validateCardHeader(id, data);
+          assertCurrentCardFields(data);
           if (options.unfinishedOnly && completedCard(data)) continue;
           const state = data.state;
           if (!options.includeDeprecated && documentLifecycle(data).status === "deprecated")
             continue;
           if (options.state && state !== options.state) continue;
-          if (
-            options.roleId &&
-            (state === "pending"
-              ? data.target !== options.roleId &&
-                !(options.includeOpen && data.target === undefined)
-              : data.receivedBy !== options.roleId && data.returnTo !== options.roleId)
-          )
-            continue;
+          if (options.roleId && !forRole(data, options.roleId, options.waiting)) continue;
           const item = {
             cardId: id,
             path,
             title: data.title,
             state,
             target: data.target,
-            ...(data.order !== undefined ? { order: data.order } : {}),
             receivedBy: data.receivedBy,
             returnTo: data.returnTo,
             result: data.result,
@@ -1193,8 +991,7 @@ export async function listCardDocumentHeaders(
       for (const item of selected) {
         const time = times.get(item.path);
         item.publishedAt = time ?? null;
-        if (time)
-          item.orderKey = cardOrderKey(String(item.cardId), time, item.order as string | undefined);
+        if (time) item.orderKey = cardOrderKey(String(item.cardId), time);
       }
     } catch {
       for (let i = 0; i < items.length; i++) {
@@ -1214,6 +1011,18 @@ export async function listCardDocumentHeaders(
     item.publishedAt ??= null;
     return item.publishedAt !== null;
   });
+  if (options.waiting) {
+    const lane = (item: Record<string, unknown>) =>
+      item.diagnostic ? 3 : item.state === "pending" ? 0 : item.state === "consumed" ? 1 : 2;
+    visible.sort((a, b) => {
+      const order = lane(a) - lane(b);
+      if (order) return order;
+      const ak = String(a.orderKey ?? a.cardId),
+        bk = String(b.orderKey ?? b.cardId);
+      return ak < bk ? -1 : ak > bk ? 1 : 0;
+    });
+    return { items: visible, sourceSets, sourceErrors };
+  }
   visible.sort((a, b) => {
     if (options.state === "pending" && !a.diagnostic && !b.diagnostic) {
       const queue = (item: Record<string, unknown>) =>
@@ -1248,238 +1057,4 @@ export async function listCardDocuments(
     return { revision: canonicalSha256(visible), items: visible };
   };
   return fs.observationScope ? fs.observationScope(read) : read();
-}
-
-export type ReceivedCardSourceChange = {
-  cardId: string;
-  title?: string;
-  receivedBy?: string;
-  nodeId: string;
-  resource: string;
-  path?: string;
-  state: "changed" | "missing";
-  publishedVersion: DocumentVersion;
-  currentEtag?: string;
-  reason: string;
-};
-export type ReceivedCardSourceDiagnostic = {
-  cardId?: string;
-  nodeId?: string;
-  resource?: string;
-  message: string;
-};
-
-/** Compare in-progress Cards' pinned Node bytes with live content, without capture or recovery. */
-export async function inspectReceivedCardSourceChanges(
-  fs: FsAdapter,
-  options: { roleId?: string } = {},
-  listedCards?: Pick<Awaited<ReturnType<typeof listCardDocuments>>, "items">,
-  currentCatalog?: NodeCatalog | Promise<NodeCatalog | undefined>,
-) {
-  const items: ReceivedCardSourceChange[] = [];
-  const diagnostics: ReceivedCardSourceDiagnostic[] = [];
-  const readonly = readOnlyFs(fs);
-  try {
-    if (!(await readonly.exists(CARDS_DIR))) return { items, diagnostics };
-    const listed =
-      listedCards ?? (await listCardDocuments(readonly, { ...options, state: "consumed" }));
-    for (const item of listed.items) {
-      if (item.diagnostic && item.state !== "pending")
-        diagnostics.push({ cardId: String(item.cardId), message: String(item.diagnostic) });
-    }
-    const candidates = listed.items.filter(
-      (item) => !item.diagnostic && item.state === "consumed" && typeof item.returnTo === "string",
-    );
-    if (!candidates.length) return { items, diagnostics };
-    const live = new Map<string, string | Error>();
-    let nextRead = 0;
-    const liveReads = Promise.all(
-      Array.from({ length: Math.min(16, candidates.length) }, async () => {
-        for (;;) {
-          const item = candidates[nextRead++];
-          if (!item) return;
-          const id = String(item.cardId);
-          try {
-            const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-              await readonly.readBinary(cardPath(id)),
-            );
-            live.set(id, raw);
-          } catch (error) {
-            live.set(id, error instanceof Error ? error : new Error(String(error)));
-          }
-        }
-      }),
-    );
-    const history = await historyOf(readonly);
-    // One identity/history scan and two source batches serve the whole query.
-    const identities = await history.identityVersions();
-    const first = new Map(Object.entries(identities.first));
-    const latest = new Map(Object.entries(identities.latest));
-    const requested = candidates.flatMap((item) => {
-      const id = String(item.cardId),
-        published = first.get(id),
-        current = latest.get(id);
-      return published && current ? [published, current] : [];
-    });
-    const [retained] = await Promise.all([history.readVersions(requested), liveReads]);
-    const retainedCard = (id: string, value: Exclude<(typeof retained)[number], Error>) =>
-      value.frontmatter
-        ? cardFromParsed(id, value.raw, {
-            data: value.frontmatter,
-            body: value.raw.slice(documentHeader(value.raw).length),
-            keyOrder: [],
-          })
-        : parseCardDocument(id, value.raw);
-    type SelectedSource = { card: CardDocument; owner: string; source: MaterialSource };
-    const retainedById = new Map<string, typeof retained>();
-    let offset = 0;
-    for (const item of candidates) {
-      const id = String(item.cardId);
-      if (first.has(id) && latest.has(id))
-        retainedById.set(id, retained.slice(offset, (offset += 2)));
-    }
-    const validateCard = async (item: Record<string, unknown>) => {
-      const id = String(item.cardId),
-        selected: SelectedSource[] = [];
-      let diagnostic: ReceivedCardSourceDiagnostic | undefined;
-      try {
-        if (!first.has(id) || !latest.has(id))
-          throw new Error("Card publication history is unavailable");
-        const versions = retainedById.get(id)!;
-        const published = versions[0]!,
-          previous = versions[1]!;
-        if (published instanceof Error) throw published;
-        if (previous instanceof Error) throw previous;
-        const raw = live.get(id)!;
-        if (raw instanceof Error) throw raw;
-        const previousCard = retainedCard(id, previous);
-        const current = raw === previous.raw ? previousCard : parseCardDocument(id, raw);
-        validateRetainedCard(current, retainedCard(id, published), previousCard);
-        if (
-          documentLifecycle(current.data).status === "deprecated" ||
-          current.data.state !== "consumed" ||
-          current.data.returnTo === undefined ||
-          (options.roleId && current.data.receivedBy !== options.roleId)
-        )
-          return { selected };
-        for (const source of current.data.sources) {
-          if (!source.version) continue;
-          const version = sourceVersion(fs, current.path, source);
-          if (!version.path.startsWith("roles/"))
-            selected.push({ card: current, owner: current.path, source });
-        }
-      } catch (error) {
-        diagnostic = {
-          cardId: id,
-          message: error instanceof Error ? error.message : String(error),
-        };
-      }
-      return { selected, diagnostic };
-    };
-    const checked: Awaited<ReturnType<typeof validateCard>>[] = new Array(candidates.length);
-    let next = 0;
-    await Promise.all(
-      Array.from({ length: Math.min(16, candidates.length) }, async () => {
-        for (;;) {
-          const index = next++;
-          if (index >= candidates.length) return;
-          checked[index] = await validateCard(candidates[index]!);
-        }
-      }),
-    );
-    const selected = checked.flatMap((entry) => entry.selected);
-    for (const entry of checked) if (entry.diagnostic) diagnostics.push(entry.diagnostic);
-    if (!selected.length) return { items, diagnostics };
-    const sources = await verifyCardSourceVersions(readonly, selected);
-    const catalog = (await currentCatalog) ?? (await loadNodeCatalog(readonly));
-    const observed = new Map<string, Awaited<ReturnType<typeof readCatalogDocument>> | Error>();
-    const liveNodes = [
-      ...new Set(
-        sources
-          .filter((source) => !(source instanceof Error))
-          .map((source) => {
-            if (source instanceof Error) throw source;
-            return String((source.frontmatter ?? parseFrontmatter(source.raw).data).id);
-          }),
-      ),
-    ];
-    let nextLive = 0;
-    await Promise.all(
-      Array.from({ length: Math.min(16, liveNodes.length) }, async () => {
-        for (;;) {
-          const id = liveNodes[nextLive++];
-          if (!id) return;
-          const node = catalog.byId.get(id);
-          if (!node) continue;
-          try {
-            observed.set(id, await readCatalogDocument(readonly, node));
-          } catch (error) {
-            observed.set(id, error instanceof Error ? error : new Error(String(error)));
-          }
-        }
-      }),
-    );
-    for (const [index, entry] of selected.entries()) {
-      const { card, source } = entry;
-      let nodeId: string | undefined;
-      try {
-        const pinned = sources[index]!;
-        if (pinned instanceof Error) throw pinned;
-        nodeId = String((pinned.frontmatter ?? parseFrontmatter(pinned.raw).data).id);
-        const node = catalog.byId.get(nodeId);
-        const base = {
-          cardId: card.data.id,
-          title: card.data.title,
-          receivedBy: card.data.receivedBy,
-          nodeId,
-          resource: source.resource,
-          publishedVersion: pinned.version,
-        };
-        if (!node) {
-          if (
-            [...catalog.byPath.values()].some(
-              (value) =>
-                value.nodeId === nodeId ||
-                (value.invalid && nodeNotePath(value.path) === pinned.version.path),
-            )
-          )
-            throw new Error("Source Node exists but its identity is invalid or duplicated");
-          items.push({
-            ...base,
-            state: "missing",
-            reason: "Source Node is missing from the current workspace",
-          });
-          continue;
-        }
-        if (!observed.has(nodeId)) {
-          try {
-            observed.set(nodeId, await readCatalogDocument(readonly, node));
-          } catch (error) {
-            observed.set(nodeId, error instanceof Error ? error : new Error(String(error)));
-          }
-        }
-        const current = observed.get(nodeId)!;
-        if (current instanceof Error) throw current;
-        if (current.raw === pinned.raw) continue;
-        items.push({
-          ...base,
-          path: nodeNotePath(node.path),
-          state: "changed",
-          currentEtag: current.etag,
-          reason:
-            "Current Node content differs from the source version retained at Card publication",
-        });
-      } catch (error) {
-        diagnostics.push({
-          cardId: card.data.id,
-          nodeId,
-          resource: source.resource,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-  } catch (error) {
-    diagnostics.push({ message: error instanceof Error ? error.message : String(error) });
-  }
-  return { items, diagnostics };
 }

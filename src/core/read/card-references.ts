@@ -10,7 +10,7 @@ import { isNodeId } from "../base/id.js";
 import { canonicalIdentityError } from "../store/tree.js";
 import { nodeNotePath, cardRecordPath } from "../base/paths.js";
 import { selectSection } from "../base/markdown-section.js";
-import { parseCardDocument, verifyCardSourceVersions } from "../graph/card-document.js";
+import { parseCardDocument } from "../graph/card-document.js";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import type { Nodes } from "mdast";
 
@@ -194,44 +194,10 @@ export async function readCardBodyReferences(fs: FsAdapter, cardId: string) {
   if (!publication) throw new Error("Card has no retained publication");
   const card = parseCardDocument(cardId, await fs.history.read(publication));
   const nodes = await historicalContextNodes(fs, publication.commit);
-  const bindings = new Map<string, ContextNode | Error>();
-  const sources = card.data.sources.filter((source) => source.version !== undefined);
-  const pins = await verifyCardSourceVersions(
-    fs,
-    sources.map((source) => ({ owner: file, source })),
-  );
-  for (const [index, read] of pins.entries()) {
-    if (read instanceof Error) {
-      const address = sources[index]!.resource.split("#")[0]!;
-      for (const ref of resolveBodyNodeReferences(`[source](${address})`, file, nodes))
-        if (ref.nodeId) bindings.set(ref.nodeId, read);
-      continue;
-    }
-    const selected = (await historicalContextNodes(fs, read.version.commit)).find(
-      (node) => node.version?.path === read.version.path,
-    );
-    if (!selected) {
-      bindings.set(
-        String(parseFrontmatter(read.raw).data.id),
-        new Error("Pinned source is not a unique historical Node"),
-      );
-      continue;
-    }
-    const previous = bindings.get(selected.nodeId);
-    bindings.set(
-      selected.nodeId,
-      previous &&
-        (previous instanceof Error ||
-          previous.version?.commit !== selected.version?.commit ||
-          previous.version?.path !== selected.version?.path)
-        ? new Error(`Ambiguous pinned versions for ${selected.nodeId}`)
-        : selected,
-    );
-  }
   return {
     publication,
     card,
     nodes,
-    references: resolveBodyNodeReferences(card.body, file, nodes, bindings),
+    references: resolveBodyNodeReferences(card.body, file, nodes),
   };
 }

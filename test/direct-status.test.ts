@@ -8,10 +8,9 @@ import { test } from "node:test";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
-import { listRoleContexts } from "../src/core/read/role-context.js";
 import { listCardDocuments } from "../src/core/graph/card-document.js";
 
-test("Node, Role and Card discovery reads headers without bodies or Git capture", async (t) => {
+test("Node and Card discovery reads headers without bodies or Git capture", async (t) => {
   const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "direct-status-"));
@@ -29,7 +28,7 @@ test("Node, Role and Card discovery reads headers without bodies or Git capture"
   for (let i = 0; i < 25; i++)
     await adapter.writeFile(
       `cards/card-${i}.md`,
-      `---\ntype: card\nid: card-${i}\nschemaVersion: 3\nstate: pending\nsources: []\n---\nunread input`,
+      `---\ntype: card\nid: card-${i}\nschemaVersion: 3\ntarget: role-own\nstate: pending\nsources: []\n---\nunread input`,
     );
   await adapter.writeFile(
     "cards/card-legacy.md",
@@ -48,10 +47,8 @@ test("Node, Role and Card discovery reads headers without bodies or Git capture"
     throw new Error("status captured history");
   };
   const nodes = await loadNodeCatalog(adapter);
-  const roles = await listRoleContexts(adapter);
   const cards = await listCardDocuments(adapter, { includeDeprecated: true });
   assert.equal(nodes.byId.size, 1);
-  assert.equal(roles.items[0]?.title, "Own");
   assert.equal(cards.items.length, 1);
   assert.equal(cards.items[0]!.cardId, "card-legacy");
   assert.match(String(cards.items[0]!.diagnostic), /header unavailable/);

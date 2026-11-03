@@ -5,10 +5,10 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { createNode, renameNode } from "../src/core/graph/ops.js";
+import { createNode } from "../src/core/graph/ops.js";
 import { listWorkspaceRelations } from "../src/core/graph/workspace-relations.js";
 import { createCardDocument } from "../src/core/graph/card-document.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { testScratchRoot } from "./scratch.js";
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
@@ -34,7 +34,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
   return { workspace, root, adapter, env };
 }
 
-test("workspace relations use Markdown occurrences across identities and retained Card targets after moves", async (t) => {
+test("workspace relations use Markdown occurrences across identities and Card source addresses", async (t) => {
   const { adapter, env, root } = await fixture(t);
   const id = await createNode(env, {
     name: "Alpha",
@@ -55,6 +55,7 @@ test("workspace relations use Markdown occurrences across identities and retaine
   );
   const card = await createCardDocument(adapter, {
     prompt: "[Role](../roles/role-ui.md)",
+    target: "role-ui",
     sources: [{ resource: "/Alpha/Alpha.md", title: "Original" }],
   });
   const before = await fs.readFile(path.join(root, ".git/history.sqlite"), "hex");
@@ -71,19 +72,7 @@ test("workspace relations use Markdown occurrences across identities and retaine
   });
   assert.equal(relations.find((r) => r.raw === "description")!.target.kind, "unresolved");
   assert.equal(relations.find((r) => r.raw === "./bad%GG")!.target.kind, "invalid");
-  const pinned = relations.find((r) => r.from.id === card.cardId && r.via === "sources")!;
-  assert.equal(pinned.changedSince, false);
-  assert.equal(pinned.title, "Original");
-  const role = parseFrontmatter(await adapter.readFile("roles/role-ui.md"));
-  role.data.sources = [{ resource: "description" }];
-  await adapter.writeFile("roles/role-ui.md", serializeFrontmatter(role.data, role.body));
-  await renameNode(env, id, "Beta");
-  // A new identity at the old path cannot retarget the Card's retained source.
-  await createNode(env, { name: "Alpha", type: "prompt", parentPath: "", body: "Replacement" });
-  const after = (await listWorkspaceRelations(adapter)).find(
-    (r) => r.from.id === card.cardId && r.via === "sources",
-  )!;
-  assert.deepEqual(after.target, { kind: "node", id });
-  assert.equal(after.changedSince, true);
-  assert.equal(parseFrontmatter(await adapter.history.read(pinned.version!)).data.id, id);
+  const source = relations.find((r) => r.from.id === card.cardId && r.via === "sources")!;
+  assert.deepEqual(source.target, { kind: "node", id });
+  assert.equal(source.title, "Original");
 });

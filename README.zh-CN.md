@@ -27,7 +27,7 @@ Tent 是项目的上下文图谱：记下你定了什么，又做出了什么。
 
 - **Node**：一条长期事实。`type` 只能是 `goal`、`prompt` 或 `output`：为了什么、为此给了什么、做出了什么。它可以管着它说的那些文件，也可以不管任何文件。`tags` 说明内容是什么形式，比如 `decision`、`issue`，不改变任何行为。
 - **Role**：一个持续的工作方向，写明目的和边界。几个会话可以按同一个 Role 干活。
-- **Card**：一次交接。它带一段简短的提示，并钉住它指向的 Node。写了交回给哪个 Role，结果就回到那个 Role 手里。
+- **Card**：交给一个 Role 的一次交接。它写明任务，指向要用的 Node 和文件。写了交回给哪个 Role，结果就回到那个 Role 手里。
 
 大部分工作用不到 Role 和 Card。
 
@@ -85,7 +85,7 @@ npm run plugin:build
 
 这些命令平时由 Agent 通过 Skill 运行，你很少需要自己敲。`tent` 是 npm 装的命令；用插件时，Agent 运行包里的 `cli.mjs`。
 
-Role 和 Card 中替换内容的写入必须带上读到的 ETag，两个会话不会悄悄覆盖对方。精确规则见 [docs/SPEC.md](docs/SPEC.md)。
+`tent --help` 列出全部命令；精确规则见 [docs/SPEC.md](docs/SPEC.md)。
 
 ## 现状
 

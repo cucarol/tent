@@ -7,7 +7,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const usage =
-  "Usage: node wake.mjs --role <role-id> [--workspace <root>] [--include-open] [--thread <id>] [--codex <path>] [--stop]\n" +
+  "Usage: node wake.mjs --role <role-id> [--workspace <root>] [--thread <id>] [--codex <path>] [--stop]\n" +
   "       node wake.mjs --tell <role-id> --from <role-id> --message <text>|- [--workspace <root>] [--codex <path>]";
 const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
 const self = fileURLToPath(import.meta.url);
@@ -17,7 +17,7 @@ const flags = new Set();
 const args = process.argv.slice(2);
 for (let index = 0; index < args.length; index++) {
   const name = args[index].replace(/^--/, "");
-  if (["include-open", "stop", "run"].includes(name)) flags.add(name);
+  if (["stop", "run"].includes(name)) flags.add(name);
   else if (
     ["role", "workspace", "thread", "codex", "seen", "tell", "from", "message"].includes(name) &&
     index + 1 < args.length
@@ -101,7 +101,6 @@ function watch(once) {
       options.role,
       "--workspace",
       workspace,
-      ...(flags.has("include-open") ? ["--include-open"] : []),
       ...(once ? ["--timeout", "0"] : []),
     ],
     { encoding: "utf8", windowsHide: true, maxBuffer: 16 * 1024 * 1024 },

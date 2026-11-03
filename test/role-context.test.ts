@@ -4,22 +4,11 @@ import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import test, { type TestContext } from "node:test";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import {
-  createRoleContext,
-  editRoleContext,
-  requireRoleDocument,
-  readRolePage,
-  listRoleContexts,
-} from "../src/core/read/role-context.js";
+import { createRoleContext } from "../src/core/read/role-context.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
-import { contentEtag } from "../src/core/base/etag.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
-import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(testScratchRoot());
@@ -35,167 +24,7 @@ async function fixture(t: TestContext) {
   return { root, adapter };
 }
 
-test("Role reads use only the selected document, never registry, Node imports or mutation recovery", async (t) => {
-  const { adapter } = await fixture(t);
-  await createRoleContext(adapter, {
-    roleId: "role-review",
-    title: "Review",
-    body: "Independent instructions.",
-  });
-  await adapter.writeFile("roles.json", "invalid legacy registry");
-  await adapter.writeFile("node-move.pending.json", "not a repair request");
-  const binary = adapter.readBinary.bind(adapter),
-    read = adapter.readFile.bind(adapter);
-  adapter.readBinary = async (p) => {
-    assert.equal(p, "roles/role-review.md");
-    return binary(p);
-  };
-  adapter.readFile = async () => {
-    throw new Error("No other body should be loaded");
-  };
-  const writes: string[] = [];
-  const write = adapter.writeFile.bind(adapter);
-  adapter.writeFile = async (p, raw) => {
-    writes.push(p);
-    await write(p, raw);
-  };
-  const document = await readRolePage(adapter, "role-review", { capture: true, view: "raw" });
-  assert.match(document.text, /Independent instructions./);
-  assert.equal(await adapter.history.read(document.version!), document.text);
-  const listed = await listRoleContexts(adapter);
-  assert.deepEqual(
-    listed.items.map((r) => r.roleId),
-    ["role-review"],
-  );
-  assert.deepEqual(writes, []);
-  assert.equal(await read("roles.json"), "invalid legacy registry");
-  await assert.rejects(() => requireRoleDocument(adapter, "role-missing"), /not found/);
-});
-
-test("Role no-op retains exact bytes and explicit edits preserve unknown YAML and local status", async (t) => {
-  const { adapter } = await fixture(t);
-  const raw =
-    "\uFEFF---\r\ntype: role\r\nid: role-review\r\nstatus: deprecated\r\ncustom: {x: [one, two]} # keep\r\n---\r\nold text\r\n";
-  await adapter.writeFile("roles/role-review.md", raw);
-  const calls: string[] = [],
-    write = adapter.writeFile.bind(adapter);
-  adapter.writeFile = async (p, value) => {
-    calls.push(p);
-    await write(p, value);
-  };
-  const noop = await editRoleContext(adapter, "role-review", {
-    body: "old text\r\n",
-    baseEtag: contentEtag(raw),
-  });
-  assert.equal(noop.changed, false);
-  assert.deepEqual(calls, []);
-  assert.equal(await adapter.history.read(noop.version!), raw);
-  const saved = await editRoleContext(adapter, "role-review", {
-    body: "new text\r\n",
-    baseEtag: noop.etag,
-  });
-  const after = await requireRoleDocument(adapter, "role-review");
-  assert.equal(after.etag, saved.etag);
-  assert.equal(after.raw, raw.replace("old text", "new text"));
-  assert.equal(parseFrontmatter(after.raw).data.status, "deprecated");
-  await assert.rejects(
-    () => editRoleContext(adapter, "role-review", { baseEtag: noop.etag, body: "stale" }),
-    /changed/,
-  );
-  await assert.rejects(
-    () =>
-      editRoleContext(adapter, "role-review", {
-        baseEtag: saved.etag,
-        frontmatter: { id: "role-another" },
-      }),
-    /mismatch/,
-  );
-  assert.deepEqual(
-    calls.filter((p: string) => p !== ".git/tent-transaction.json"),
-    ["roles/role-review.md"],
-  );
-});
-
-test("long Role reads continue across fresh CLI processes and reject changes between pages", async (t) => {
-  const { root, adapter } = await fixture(t);
-  const body = "中文😀\r\n".repeat(7000);
-  await createRoleContext(adapter, { roleId: "role-long", title: "Long", body });
-  const first = await readRolePage(adapter, "role-long");
-  assert.equal(first.text, body);
-  const unqualified = await runRoleCommand("show", ["role-long", "--start", "2", "--end", "10"], {
-    workspace: root,
-  });
-  assert.equal(unqualified.exitCode, 1);
-  assert.match(unqualified.stderr, /expected-etag/);
-  const next = {
-    view: "body" as const,
-    range: { unit: "utf16" as const, start: 1000, end: body.length },
-    expectedEtag: first.etag,
-  };
-  const script =
-    "import {runRoleCommand} from './src/cli/role-commands.ts'; const r=await runRoleCommand('show',JSON.parse(process.argv[1]),{workspace:process.argv[2]}); process.stdout.write(r.stdout); process.stderr.write(r.stderr); process.exitCode=r.exitCode;";
-  const args = [
-    "role-long",
-    "--start",
-    String(next.range.start),
-    "--end",
-    String(next.range.end),
-    "--expected-etag",
-    next.expectedEtag,
-    "--json",
-  ];
-  const result = await promisify(execFile)(
-    process.execPath,
-    ["--import", "tsx", "--input-type=module", "-e", script, JSON.stringify(args), root],
-    { cwd: process.cwd(), windowsHide: true },
-  );
-  const second = JSON.parse(result.stdout);
-  assert.equal(second.range.start, next.range.start);
-  assert.equal(second.text, body.slice(next.range.start, second.range.end));
-  await adapter.writeFile(
-    "roles/role-long.md",
-    (await adapter.readFile("roles/role-long.md")) + "external edit",
-  );
-  await assert.rejects(() => readRolePage(adapter, "role-long", next), /changed/);
-});
-
-test("two CLI processes cannot both save a Role against the same observed bytes", async (t) => {
-  const { root, adapter } = await fixture(t);
-  const created = await createRoleContext(adapter, {
-    roleId: "role-shared",
-    title: "Shared",
-    body: "initial",
-  });
-  const script =
-    "import {runRoleCommand} from './src/cli/role-commands.ts'; const r=await runRoleCommand('write',JSON.parse(process.argv[1]),{workspace:process.argv[2]}); process.stdout.write(JSON.stringify(r));";
-  const run = (body: string) =>
-    promisify(execFile)(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "-e",
-        script,
-        JSON.stringify(["role-shared", "--body", body, "--base-etag", created.etag]),
-        root,
-      ],
-      { cwd: process.cwd(), windowsHide: true },
-    );
-  const results = (await Promise.all([run("first"), run("second")])).map((r) =>
-    JSON.parse(r.stdout),
-  );
-  assert.equal(results.filter((r) => r.exitCode === 0).length, 1);
-  assert.match(
-    results.find((r) => r.exitCode !== 0).stderr,
-    /changed|already running another write operation/i,
-  );
-  const latest = await requireRoleDocument(adapter, "role-shared");
-  assert.ok(["first", "second"].includes(latest.body));
-  assert.match(await adapter.history.read(created.version!), /initial/);
-});
-
-test("Role CLI works without Service and legacy or missing Roles never become empty open context", async (t) => {
+test("Role create writes one retained document without Service or a registry", async (t) => {
   const { root, adapter } = await fixture(t);
   const registry = "legacy registry is not consulted";
   await adapter.writeFile("roles.json", registry);
@@ -205,57 +34,24 @@ test("Role CLI works without Service and legacy or missing Roles never become em
   });
   assert.equal(created.exitCode, 0, created.stderr);
   const saved = JSON.parse(created.stdout);
-  const shown = await runRoleCommand("show", [saved.roleId], { workspace: root, json: true });
-  assert.equal(JSON.parse(shown.stdout).text, "--instructions\r\n");
+  const raw = await adapter.readFile(`roles/${saved.roleId}.md`);
+  const role = parseFrontmatter(raw);
+  assert.equal(role.data.id, saved.roleId);
+  assert.equal(role.data.type, "role");
+  assert.equal(role.data.title, "审查");
+  assert.equal(role.body, "--instructions\r\n");
   assert.equal(await adapter.readFile("roles.json"), registry);
-  const legacy = "---\ntype: role\nroleId: role-old\n---\noriginal\n";
-  await adapter.writeFile("roles/role-old.md", legacy);
-  await assert.rejects(() => requireRoleDocument(adapter, "role-old"), /identity.*path mismatch/);
-  assert.equal(await adapter.readFile("roles/role-old.md"), legacy);
-  assert.ok(
-    (await listRoleContexts(adapter)).items.find((r) => r.roleId === "role-old")!.diagnostic,
-  );
-  assert.equal(
-    (await adapter.listDir("roles")).some(
-      (r) => r.name.endsWith(".cards.json") || r.name.endsWith(".original"),
-    ),
-    false,
-  );
-});
-
-test("Role discovery separates unreadable files from invalid headers and keeps listing", async (t) => {
-  const { adapter } = await fixture(t);
-  await createRoleContext(adapter, { roleId: "role-good", title: "Good", body: "Readable." });
-  await createRoleContext(adapter, { roleId: "role-locked", title: "Locked", body: "Hidden." });
-  await adapter.writeFile("roles/role-old.md", "---\ntype: role\nroleId: role-old\n---\nold\n");
-  const readFrontmatter = adapter.readFrontmatter.bind(adapter);
-  t.mock.method(adapter, "readFrontmatter", async (file: string) => {
-    if (file === "roles/role-locked.md")
-      throw Object.assign(new Error("EACCES: permission denied, open 'role-locked.md'"), {
-        code: "EACCES",
-      });
-    return readFrontmatter(file);
-  });
-  const { items } = await listRoleContexts(adapter);
   assert.deepEqual(
-    items.map((role) => [role.roleId, role.title, role.diagnostic]),
-    [
-      ["role-good", "Good", undefined],
-      [
-        "role-locked",
-        undefined,
-        "Role file is unreadable: EACCES: permission denied, open 'role-locked.md'.",
-      ],
-      [
-        "role-old",
-        undefined,
-        "Role header is invalid: Role document identity/path mismatch: roles/role-old.md; inspect the original file.",
-      ],
-    ],
+    (await adapter.listDir("roles")).map((entry) => entry.name),
+    [`${saved.roleId}.md`],
   );
+  const version = (await adapter.history.pathVersions(`roles/${saved.roleId}.md`)).latest!;
+  assert.equal(await adapter.history.read(version), raw);
+  const text = await runRoleCommand("create", ["--title", "Second"], { workspace: root });
+  assert.match(text.stdout, /^Created role-\S+ {2}Second\nFile: .*roles[\\/]role-\S+\.md\n$/);
 });
 
-test("Role writes canonicalize known Node ids in Markdown links", async (t) => {
+test("Role create canonicalizes known Node ids in Markdown links", async (t) => {
   const { adapter } = await fixture(t);
   await adapter.writeFile("Fact/Fact.md", "---\nid: node-fact\ntype: prompt\n---\nFact");
   const created = await createRoleContext(adapter, {
@@ -264,41 +60,7 @@ test("Role writes canonicalize known Node ids in Markdown links", async (t) => {
     body: "[fact](node-fact)",
   });
   assert.equal(
-    (await requireRoleDocument(adapter, created.roleId)).body,
+    parseFrontmatter(await adapter.readFile(created.path)).body,
     "[fact](../Fact/Fact.md)",
   );
-});
-
-test("Role lists filter deprecated headers before paging and mark explicit inclusion", async (t) => {
-  const { root, adapter } = await fixture(t);
-  for (const [roleId, status] of [
-    ["role-a", "deprecated"],
-    ["role-b", "stable"],
-    ["role-c", "draft"],
-  ])
-    await adapter.writeFile(
-      `roles/${roleId}.md`,
-      `---\ntype: role\nid: ${roleId}\ntitle: ${roleId}\nstatus: ${status}\n---\nBody\n`,
-    );
-  const head = await adapter.history.currentCommit();
-  assert.deepEqual(
-    (await listRoleContexts(adapter)).items.map((r) => r.roleId),
-    ["role-b", "role-c"],
-  );
-  assert.deepEqual(
-    (await listRoleContexts(adapter, { includeDeprecated: true })).items.map((r) => r.status),
-    ["deprecated", "stable", "draft"],
-  );
-  const first = await runRoleCommand("list", ["--limit", "1", "--json"], { workspace: root });
-  assert.equal(first.exitCode, 0);
-  assert.equal(JSON.parse(first.stdout).items[0].roleId, "role-b");
-  const text = await runRoleCommand("list", ["--include-deprecated"], { workspace: root });
-  assert.match(text.stdout, /role-a  role-a  deprecated/);
-  const hidden = await runRoleCommand("list", [], { workspace: root });
-  assert.doesNotMatch(hidden.stdout, /role-a/);
-  const json = await runRoleCommand("list", ["--include-deprecated", "--json"], {
-    workspace: root,
-  });
-  assert.equal(JSON.parse(json.stdout).items[0].status, "deprecated");
-  assert.equal(await adapter.history.currentCommit(), head);
 });

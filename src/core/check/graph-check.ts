@@ -7,18 +7,13 @@ import { resolveOutLink, rewriteMarkdownDestinations } from "../base/links.js";
 import { resolveTargetPath } from "../base/link-target.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { parseRoleDocument } from "../store/role-document.js";
-import {
-  completedCardPaths,
-  parseCardDocument,
-  verifyCardSourceVersions,
-} from "../graph/card-document.js";
+import { completedCardPaths, parseCurrentCardDocument } from "../graph/card-document.js";
 import {
   materialLocator,
   localMaterialPath,
   resourceSchema,
   isDirectoryMaterial,
   isPrefixMaterial,
-  type MaterialSource,
 } from "../base/material.js";
 import { CARDS_DIR, ROLES_DIR, ORDER_PATH, nodeNotePath } from "../base/paths.js";
 import { isNodeId, isRoleId, isCardId } from "../base/id.js";
@@ -27,6 +22,8 @@ import { NodeSectionError } from "../base/markdown-section.js";
 import { isHistoryDocument } from "../store/document-history.js";
 import { assertSystemMaterial } from "../graph/material-target.js";
 import { readCardBodyReferences } from "../read/card-references.js";
+import { rolesHoldingCard } from "../graph/role-cards.js";
+import { documentLifecycle } from "../base/document-status.js";
 import { loadNodeCatalog } from "../graph/node-catalog.js";
 
 export type GraphCheckIssue =
@@ -267,6 +264,9 @@ async function checkGraphInScope(
       }
     }
   const foundCards = new Set<string>();
+  const listedRoles = new Set<string>();
+  const retiredRoles = new Set<string>();
+  const heldCards: Array<{ path: string; id: string; roles: string[] }> = [];
   for (const [directory, kind] of [
     [ROLES_DIR, "role"],
     [CARDS_DIR, "card"],
@@ -278,6 +278,7 @@ async function checkGraphInScope(
       const id = entry.name.slice(0, -3);
       const file = `${directory}/${entry.name}`;
       if (kind === "card") foundCards.add(file);
+      else listedRoles.add(id);
       if (selected) {
         // Reference identity needs metadata only; unrelated bodies are never inspected.
         try {
@@ -287,7 +288,7 @@ async function checkGraphInScope(
           let valid = true;
           try {
             if (kind === "role") parseRoleDocument(id, raw);
-            else parseCardDocument(id, raw);
+            else parseCurrentCardDocument(id, raw);
           } catch {
             valid = false;
           }
@@ -307,16 +308,31 @@ async function checkGraphInScope(
       directoryDocuments.push({
         path: file,
         validate: (raw) => {
-          if (kind === "role") parseRoleDocument(id, raw);
-          else {
-            parseCardDocument(id, raw);
+          if (kind === "role") {
+            const status = documentLifecycle(parseFrontmatter(parseRoleDocument(id, raw).raw).data);
+            if (status.status !== "stable" && status.status !== "draft") retiredRoles.add(id);
+          } else {
+            const card = parseCurrentCardDocument(id, raw);
             if (completed.has(file)) completedDocuments.push({ path: file, raw });
+            heldCards.push({ path: file, id, roles: rolesHoldingCard(card.data) });
           }
         },
       });
     }
     await readDocuments(directoryDocuments);
   }
+  // Role files are edited natively, so retiring one can strand the Cards that wait on it.
+  // An unreadable Role or Role area is already reported and proves nothing about the Card.
+  const rolesListed = !result.errors.some((item) => item.path === ROLES_DIR);
+  if (!selected)
+    for (const card of heldCards)
+      for (const role of card.roles.filter(
+        (role) => retiredRoles.has(role) || (rolesListed && !listedRoles.has(role)),
+      ))
+        error(
+          card.path,
+          `Card waits on ${role}, which is not a current Role; cancel it with tent card deprecate ${card.id}`,
+        );
   for (const file of completed)
     if (!foundCards.has(file))
       error(file, "Completed Card retained in Tent history is missing on disk");
@@ -327,22 +343,6 @@ async function checkGraphInScope(
   const byPath = new Map(lookupDocuments.map((document) => [document.path, document]));
   const byId = new Map(
     lookupDocuments.filter((document) => document.valid && document.id).map((d) => [d.id!, d]),
-  );
-  const pinned = documents.flatMap((document) =>
-    document.path.startsWith(`${CARDS_DIR}/`) && Array.isArray(document.data.sources)
-      ? document.data.sources.flatMap((source: unknown, index) =>
-          source &&
-          typeof source === "object" &&
-          !Array.isArray(source) &&
-          (source as Record<string, unknown>).version !== undefined
-            ? [{ owner: document.path, index, source: source as MaterialSource }]
-            : [],
-        )
-      : [],
-  );
-  const retained = await verifyCardSourceVersions(readonlyFs, pinned);
-  const pinnedChecks = new Map(
-    pinned.map((item, index) => [JSON.stringify([item.owner, item.index]), retained[index]!]),
   );
   const fileCache = new Map<string, Promise<boolean>>();
   function exists(filename: string, directory = false) {
@@ -480,19 +480,6 @@ async function checkGraphInScope(
         ...(index === undefined ? {} : { index }),
         ...(typeof value === "string" ? { resource: value } : {}),
       };
-      const pinned =
-        field === "sources" && index !== undefined
-          ? pinnedChecks.get(JSON.stringify([document.path, index]))
-          : undefined;
-      if (pinned !== undefined) {
-        if (pinned instanceof Error)
-          result.issues.push({
-            kind: "invalid-material-address",
-            ...occurrence,
-            reason: message(pinned),
-          });
-        return;
-      }
       let filename: string | undefined;
       let sectionResource: string | undefined;
       let directory = false;
@@ -604,7 +591,8 @@ async function checkGraphInScope(
       }
     }
     if (document.data.resource !== undefined) await material("resource", document.data.resource);
-    if (document.data.sources !== undefined) {
+    // A sent Card never changes, so its source addresses are not graph findings; take resolves them.
+    if (document.data.sources !== undefined && !document.path.startsWith(`${CARDS_DIR}/`)) {
       if (!Array.isArray(document.data.sources)) {
         result.issues.push({
           kind: "invalid-material-address",

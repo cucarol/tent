@@ -13,14 +13,8 @@ import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js
 import { readNode, readNodeForEdit } from "../src/core/read/node-query.js";
 import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
-import {
-  createCardDocument,
-  readCardDocument,
-  verifyCardSourceVersion,
-} from "../src/core/graph/card-document.js";
 import { moveNode, renameNode, deleteNode } from "../src/core/graph/ops.js";
 import { archiveNode } from "../src/core/graph/node-lifecycle.js";
-import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { TRANSACTION_PATH } from "../src/core/store/file-transaction.js";
 
 async function fixture(t: TestContext) {
@@ -120,22 +114,16 @@ test("SQLite safety 2: real Core write-many retains all 112 saved documents in o
   }
 });
 
-test("SQLite safety 3: Card pins read historical bytes, ABA stays changed and status edits enforce ETags", async (t) => {
-  const { adapter, root, env } = await fixture(t),
-    card = await createCardDocument(adapter, {
-      cardId: "card-safety",
-      prompt: "fixed input",
-      sources: [{ resource: "../N000/N000.md" }],
-    });
-  const page = await readCardDocument(adapter, card.cardId),
-    source = (page.sources as { resource: string; version: DocumentVersion }[])[0]!,
-    old = await verifyCardSourceVersion(adapter, card.path, source);
+test("SQLite safety 3: retained versions read historical bytes, ABA stays changed and status edits enforce ETags", async (t) => {
+  const { adapter, root, env } = await fixture(t);
+  const source = { version: (await adapter.history.pathVersions("N000/N000.md")).latest! },
+    old = { raw: await adapter.history.read(source.version) };
   await writeNodeDocument(adapter, "node-n000", {
     baseEtag: (await readNodeForEdit(adapter, "node-n000")).etag,
     body: "CURRENT\n",
   });
   assert.match((await readNodeForEdit(adapter, "node-n000")).body, /CURRENT/);
-  assert.equal((await verifyCardSourceVersion(adapter, card.path, source)).raw, old.raw);
+  assert.equal(await adapter.history.read(source.version), old.raw);
   const historical = await readNode(adapter, "ws-safety", {
     nodeId: "node-n000",
     version: source.version,
@@ -285,23 +273,17 @@ test("SQLite safety 5: file and database publication cuts settle whole groups an
   }
 });
 
-test("SQLite safety 6: move, rename and deletion retain old pin addresses without showing history as current", async (t) => {
-  const { adapter, env } = await fixture(t),
-    card = await createCardDocument(adapter, {
-      cardId: "card-move",
-      prompt: "fixed input",
-      sources: [{ resource: "../N000/N000.md" }],
-    }),
-    page = await readCardDocument(adapter, card.cardId),
-    source = (page.sources as { resource: string; version: DocumentVersion }[])[0]!,
-    fixed = await verifyCardSourceVersion(adapter, card.path, source);
+test("SQLite safety 6: move, rename and deletion keep retained versions readable without showing history as current", async (t) => {
+  const { adapter, env } = await fixture(t);
+  const version = (await adapter.history.pathVersions("N000/N000.md")).latest!,
+    fixed = { raw: await adapter.history.read(version) };
   await moveNode(env, "node-n000", "node-n001", { mode: "inside" });
   await renameNode(env, "node-n000", "Moved");
   assert.equal((await readNodeForEdit(adapter, "node-n000")).path, "N001/Moved");
-  assert.equal((await verifyCardSourceVersion(adapter, card.path, source)).raw, fixed.raw);
+  assert.equal(await adapter.history.read(version), fixed.raw);
   await deleteNode(env, "node-n000");
   await assert.rejects(readNodeForEdit(adapter, "node-n000"), /Node not found/);
-  assert.equal((await verifyCardSourceVersion(adapter, card.path, source)).raw, fixed.raw);
+  assert.equal(await adapter.history.read(version), fixed.raw);
   assert.equal(
     (await adapter.retainedDocumentPaths())!.some((p) => p.includes("Moved/")),
     false,

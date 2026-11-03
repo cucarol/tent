@@ -232,7 +232,7 @@ test("warm mutation header parses retain authority identity errors and tolerate 
   assert.equal(await adapter.history.read({ commit: result.commit, path: "Fact/Fact.md" }), raw);
 });
 
-test("warm brief observes same-size native edits and bad headers without changing authority on a hit", async (t) => {
+test("warm check observes same-size native edits and bad headers without changing authority on a hit", async (t) => {
   const root = await fixture(t);
   await scaffoldInWorkspace(openTestFs(root), {
     name: "Cache",
@@ -243,15 +243,12 @@ test("warm brief observes same-size native edits and bad headers without changin
   await captureFixtureDocuments(system);
   const file = path.join(system, "Fact", "Fact.md");
   const cache = path.join(system, ".git", "tent-material-cache", "document-headers.bin");
-  const brief = async () => {
-    const result = await runWorkspaceCommand("brief", ["--json"], { workspace: root });
-    assert.equal(result.exitCode, 0, result.stderr);
-    return result.stdout;
-  };
-  const first = await brief();
+  const check = () => runWorkspaceCommand("check", ["--json"], { workspace: root });
+  const first = await check();
+  assert.equal(first.exitCode, 0, first.stderr || first.stdout);
   const head = await historyHead(system);
   const raw = await fs.readFile(file, "utf8");
-  assert.equal(await brief(), first);
+  assert.equal((await check()).stdout, first.stdout);
   assert.equal(await historyHead(system), head);
   assert.equal(await fs.readFile(file, "utf8"), raw);
   const stat = await fs.stat(file);
@@ -259,27 +256,19 @@ test("warm brief observes same-size native edits and bad headers without changin
   assert.equal(edited.length, raw.length);
   await fs.writeFile(file, edited);
   await fs.utimes(file, stat.atime, stat.mtime);
-  const after = await brief();
-  assert.notEqual(after, first);
-  assert.equal(
-    JSON.parse(after).agentContext.sections.find(
-      (section: { kind: string }) => section.kind === "references",
-    ).items.length,
-    1,
-  );
+  const after = await check();
+  assert.equal(after.exitCode, 0, after.stderr || after.stdout);
   const catalog = await loadNodeCatalog(openTestFs(system));
   assert.equal(catalog.byId.get("node-cachetest")?.type, "output");
   assert.equal(await fs.readFile(file, "utf8"), edited);
   assert.notEqual(await historyHead(system), head);
-  await fs.rm(cache);
-  assert.equal(await brief(), after);
   const retained = await historyHead(system);
+  await fs.rm(cache);
+  assert.equal((await check()).stdout, after.stdout);
+  assert.equal(await historyHead(system), retained);
   await fs.writeFile(file, edited.replace("type: output", "type: [bad"));
-  const invalid = JSON.parse(await brief());
-  const invalidNodes = invalid.workspaceIssues.items.filter(
-    (item: { kind: string }) => item.kind === "invalid",
-  );
-  assert.equal(invalidNodes.length, 1);
-  assert.match(invalidNodes[0].line, /YAML/);
+  const invalid = await check();
+  assert.equal(invalid.exitCode, 1);
+  assert.match(invalid.stdout, /YAML/);
   assert.equal(await historyHead(system), retained);
 });

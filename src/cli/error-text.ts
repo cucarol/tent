@@ -72,7 +72,7 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
           ? `Role ${roleId} is deprecated.`
           : message;
     }
-    next = ["tent", "role", "list"];
+    next = ["tent", "role", "--help"];
   } else if (missingNode) {
     message = `Node not found: ${missingNode}.`;
     next = ["tent", "workspace", "check"];
@@ -85,11 +85,9 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
       message.replace(/^Batch item @[A-Za-z][\w-]*: /, ""),
     )
   ) {
-    if (command.endsWith(" create")) next = ["tent", "workspace", "brief"];
-    else if (target?.kind === "node") next = ["tent", "node", "history", target.id];
-    else if (target?.kind === "card") next = ["tent", "card", "show", target.id];
-    else if (target?.kind === "role") next = ["tent", "role", "show", target.id];
-    else next = ["tent", "workspace", "brief"];
+    if (target?.kind === "node") next = ["tent", "node", "history", target.id];
+    else if (target?.kind === "card") next = ["tent", "card", "list"];
+    else next = ["tent", "workspace", "check"];
   }
   if (context.workspace) next.push("--workspace", context.workspace);
   const comment =

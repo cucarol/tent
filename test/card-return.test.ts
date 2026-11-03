@@ -16,7 +16,6 @@ import {
   watchCardDocuments,
   readCardDocument,
   listCardDocuments,
-  moveCardDocument,
 } from "../src/core/graph/card-document.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 
@@ -106,16 +105,16 @@ test("Card returns once, repeatedly wakes its return recipient, then closes with
     );
 });
 
-test("Return addressing is published input; public Cards require a distinct receiving Role", async (t) => {
+test("Return addressing is published input; every Card names the Role that takes it", async (t) => {
   const { adapter, create } = await fixture(t);
   await assert.rejects(create({ returnTo: "role-worker" }), /differ/);
   await assert.rejects(create({ returnTo: "role-missing" }), /Role unavailable/);
-  const card = await create({ target: undefined });
-  await assert.rejects(takeCardDocument(adapter, card.cardId), /take it with --role/);
-  await assert.rejects(takeCardDocument(adapter, card.cardId, "role-owner"), /not its input/);
+  await assert.rejects(create({ target: undefined }), /needs a target Role/);
+  const card = await create();
+  await assert.rejects(takeCardDocument(adapter, card.cardId), /take it with --role role-worker/);
   await assert.rejects(
-    moveCardDocument(adapter, card.cardId, { target: "role-owner", expectedEtag: card.etag }),
-    /differ/,
+    takeCardDocument(adapter, card.cardId, "role-owner"),
+    /addressed to role-worker; you took it as role-owner/,
   );
   const raw = await adapter.readFile(card.path);
   await adapter.writeFile(card.path, raw.replace("returnTo: role-owner", "returnTo: role-other"));
@@ -225,7 +224,7 @@ test("CLI create, return, watch, list and take expose the same delivery result",
   const id = JSON.parse(made.stdout).cardId;
   const missingRole = await run("return", [id, "--result", "done"]);
   assert.equal(missingRole.exitCode, 1);
-  assert.match(missingRole.stderr, /Return requires --role role-ID, the Role that took the Card\./);
+  assert.match(missingRole.stderr, /tent card return requires --role <role-id>/);
   assert.equal((await run("take", [id, "--role", "role-worker"])).exitCode, 0);
   const returned = await run("return", [
     id,

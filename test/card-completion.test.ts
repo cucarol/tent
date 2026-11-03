@@ -13,7 +13,6 @@ import {
   readCardDocument,
   takeCardDocument,
 } from "../src/core/graph/card-document.js";
-import { inspectCurrentContext, makeContextBrief } from "../src/core/read/context-brief.js";
 import { checkGraph } from "../src/core/check/graph-check.js";
 import { git } from "./helpers.js";
 
@@ -32,7 +31,7 @@ async function fixture(t: TestContext) {
   const root = path.join(workspace, ".tent");
   const adapter = openTestFs(root);
   const cards = [
-    ["plain", { state: "consumed" }],
+    ["plain", { state: "consumed", receivedBy: "role-worker" }],
     [
       "closed",
       { state: "closed", returnTo: "role-owner", receivedBy: "role-worker", result: "done" },
@@ -48,7 +47,14 @@ async function fixture(t: TestContext) {
   const documents = cards.map(([id, fields]) => ({
     path: `cards/card-${id}.md`,
     raw: serializeFrontmatter(
-      { type: "card", id: `card-${id}`, schemaVersion: 3, sources: [], ...fields },
+      {
+        type: "card",
+        id: `card-${id}`,
+        schemaVersion: 3,
+        sources: [],
+        target: "role-worker",
+        ...fields,
+      },
       "Original input",
     ),
   }));
@@ -72,7 +78,7 @@ async function fixture(t: TestContext) {
   return { workspace, root, adapter, cache };
 }
 
-test("brief validates only unfinished headers and skips retained completed bytes", async (t) => {
+test("unfinished Card lists validate only unfinished headers and skip retained completed bytes", async (t) => {
   const { adapter } = await fixture(t);
   assert.deepEqual([...(await completedCardPaths(adapter))].sort(), [
     "cards/card-closed.md",
@@ -91,8 +97,9 @@ test("brief validates only unfinished headers and skips retained completed bytes
     if (file === "cards") cardDirectories++;
     return listDir(file);
   });
-  const brief = makeContextBrief(await inspectCurrentContext(adapter));
-  assert.deepEqual(brief.cardInputs.map((item) => item.cardId).sort(), [
+  const unfinished = async () => (await listCardDocuments(adapter, { unfinishedOnly: true })).items;
+  const listed = await unfinished();
+  assert.deepEqual(listed.map((item) => item.cardId).sort(), [
     "card-pending",
     "card-returned",
     "card-working",
@@ -104,12 +111,11 @@ test("brief validates only unfinished headers and skips retained completed bytes
   ]);
   assert.equal(cardDirectories, 1);
   await adapter.writeFile("cards/card-plain.md", "---\nid: [broken\n");
-  assert.deepEqual(makeContextBrief(await inspectCurrentContext(adapter)), brief);
+  assert.deepEqual(await unfinished(), listed);
   const pending = await adapter.readFile("cards/card-pending.md");
   await adapter.writeFile("cards/card-pending.md", pending.replace("Original", "Changed"));
   await adapter.writeFile("cards/card-new.md", "---\nid: [broken\n");
-  const inspected = await inspectCurrentContext(adapter);
-  assert.ok(inspected.cards.items.some((item) => item.cardId === "card-new" && item.diagnostic));
+  assert.ok((await unfinished()).some((item) => item.cardId === "card-new" && item.diagnostic));
 });
 
 test("completion membership follows immutable SQLite events across long-lived and fresh readers", async (t) => {
@@ -117,7 +123,7 @@ test("completion membership follows immutable SQLite events across long-lived an
     original = [...(await completedCardPaths(adapter))].sort();
   const fresh = openTestFs(root);
   assert.deepEqual([...(await completedCardPaths(fresh))].sort(), original);
-  await takeCardDocument(adapter, "card-pending");
+  await takeCardDocument(adapter, "card-pending", "role-worker");
   assert.ok((await completedCardPaths(fresh)).has("cards/card-pending.md"));
   const old = await adapter.history.currentCommit();
   await adapter.remove("cards/card-plain.md");
@@ -154,7 +160,9 @@ test("explicit Card reads and workspace check still inspect completed native edi
   );
   const shown = await readCardDocument(adapter, "card-plain");
   assert.match(shown.text, /Changed input/);
-  await assert.rejects(takeCardDocument(adapter, "card-plain"), { code: "INPUT_CHANGED" });
+  await assert.rejects(takeCardDocument(adapter, "card-plain", "role-worker"), {
+    code: "INPUT_CHANGED",
+  });
   assert.ok(
     (await listCardDocuments(adapter, { state: "consumed" })).items.some(
       (item) => item.cardId === "card-plain",

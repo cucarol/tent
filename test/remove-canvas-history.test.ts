@@ -155,10 +155,8 @@ test("one-off removal preserves Node times, shared blobs and event identities, t
   assert.equal(events.length, originalEvents.length);
   assert.deepEqual(events.at(-1)!.changes, []);
   await after.close();
-  for (const sub of ["check", "brief"]) {
-    const result = await runWorkspaceCommand(sub, ["--json"], { workspace: root });
-    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
-  }
+  const checked = await runWorkspaceCommand("check", ["--json"], { workspace: root });
+  assert.equal(checked.exitCode, 0, checked.stderr || checked.stdout);
 });
 
 test("canvas cleanup also works after a private-Git import creates recordless format 2", async (t) => {

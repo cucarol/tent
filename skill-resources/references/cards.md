@@ -2,16 +2,13 @@
 
 | When | Command | Read |
 | --- | --- | --- |
-| Pending work | `tent card list --role <role-id> --include-open --state pending` | `items[].cardId`, in queue order |
-| Received work | `tent card list --role <role-id> --state consumed` | `items[].returnTo`: set means a return is still owed |
-| Hand a pending Card on | `tent card move <card-id> --to <role-id> --base-etag <etag>` (or `--public`) | `etag` |
-| Reorder a queue | `tent card move <card-id> --before <card-id> --base-etag <etag>` (or `--after`; add `--to` or `--public` to place it in another queue) | `etag` |
-| Cancel | `tent card deprecate <card-id> --base-etag <etag>` | `status` |
+| Pending work only | `tent card list --role <role-id> --state pending` | `items[].cardId`, in queue order |
+| Cancel | `tent card deprecate <card-id>` | `status` |
+| A Card as sent | Open `.tent/cards/<card-id>.md` | frontmatter `state` and `result`; the body is the task |
 
-- `--source` takes a Node id or a Workspace-root path such as `docs/req.md`; Nodes are pinned to their current version.
-- `state` tracks delivery only: `pending`, then `consumed`. Without `returnTo`, `consumed` is complete. With it, the receiver returns the Card (`returned`) and the `returnTo` Role takes it again to close it (`closed`). Goal progress lives on the goals, not on Cards.
-- A Card with `returnTo` needs a receiving Role other than its `returnTo`. Repeating the same return is a replay; a different result is rejected, so put corrections in a Node.
-- Each Role's pending Cards form a queue, oldest first unless someone reordered it. Untargeted Cards form the public area: it wakes no Role, and the first Role to take a Card there claims it.
-- A Role with unfinished Cards cannot be deleted; deprecate those Cards, or move pending ones.
-- Continue a paged `show` or `list` with the `page.next` values as `--start`, `--end`, `--expected-etag` or `--expected-revision`.
-- `notice` on `show` or `take` marks a cancelled Card.
+- `state` tracks delivery only: `pending`, then `consumed` when taken. Without `returnTo`, `consumed` is complete. With it, the receiver returns the Card (`returned`) and the `returnTo` Role takes it again to close it (`closed`).
+- A Card with `returnTo` needs a receiving Role other than its `returnTo`. Repeating the same take or return is a replay; a different result is rejected.
+- Each Role's pending Cards form a queue, oldest first. To send a pending Card elsewhere, cancel it and send it again.
+- Cancelling does not reach a receiver that already took the Card; `notice` on its `take` marks a cancelled Card.
+- A Role with unfinished Cards cannot be deleted; cancel those Cards first.
+- Continue a paged `list` with the `page.next` values as `--start` and `--expected-revision`.

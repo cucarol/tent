@@ -4,17 +4,11 @@ import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { parseArgs } from "node:util";
 import { NodeFs } from "../fs/node-fs.js";
 import { resolveWorkspacePaths } from "./workspace-path.js";
-import {
-  createRoleContext,
-  editRoleContext,
-  listRoleContexts,
-  readRolePage,
-} from "../core/read/role-context.js";
-import { pageItems, pageText, formatTextPage } from "./reader-page.js";
+import { createRoleContext } from "../core/read/role-context.js";
 import { deleteRole } from "../core/write/role-delete.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 
-const ROLE_COMMANDS = ["list", "show", "write", "create", "delete"];
+const ROLE_COMMANDS = ["create", "delete"];
 
 export type RoleCommandOptions = {
   workspace?: string;
@@ -43,33 +37,20 @@ async function runRoleCommandOpened(
     return { exitCode: 0, stdout: roleHelpText(), stderr: "" };
   try {
     if (!ROLE_COMMANDS.includes(sub)) throw unknownCommandError("tent role", sub, ROLE_COMMANDS);
-    const flags = [
-      "workspace",
-      ...(sub === "list"
-        ? ["start", "limit", "expected-revision"]
-        : sub === "show"
-          ? ["view", "start", "end", "expected-etag"]
-          : sub === "delete"
-            ? ["base-etag"]
-            : sub === "create"
-              ? ["title", "body", "id"]
-              : ["body", "raw", "base-etag", "title", "status"]),
-    ];
+    const flags = ["workspace", ...(sub === "create" ? ["title", "body", "id"] : [])];
     const { values, positionals } = parseArgs({
       args,
       allowPositionals: true,
       options: {
         ...Object.fromEntries(flags.map((key) => [key, { type: "string" as const }])),
-        ...(sub === "list" ? { "include-deprecated": { type: "boolean" as const } } : {}),
         json: { type: "boolean" },
         help: { type: "boolean", short: "h" },
       },
     });
     if (values.help) return { exitCode: 0, stdout: roleHelpText(), stderr: "" };
     const value = (key: string) => (values as Record<string, unknown>)[key] as string | undefined;
-    const number = (key: string) => (value(key) === undefined ? undefined : Number(value(key)));
     errorContext.workspace = value("workspace") ?? globals.workspace;
-    const selected = ["show", "write", "delete"].includes(sub);
+    const selected = sub === "delete";
     if (positionals.length === 1 && selected)
       errorContext.target = { kind: "role", id: positionals[0]! };
     const text = async (key: string) => {
@@ -81,94 +62,37 @@ async function runRoleCommandOpened(
       return Buffer.concat(chunks).toString("utf8");
     };
     if (positionals.length !== (selected ? 1 : 0))
-      throw new Error("Expected an explicit Role id only for show/write/delete");
+      throw new Error(
+        selected ? "Usage: tent role delete <role-id>" : "tent role create takes no Role id",
+      );
     if (sub === "create" && !value("title")?.trim())
       throw new Error("Role create requires --title");
-    if (["write", "delete"].includes(sub) && !value("base-etag"))
-      throw new Error(`tent role ${sub} needs --base-etag from show.`);
-    if (sub === "show" && (value("start") === undefined) !== (value("end") === undefined))
-      throw new Error("Supply both --start and --end");
-    if (sub === "show" && number("start")! > 0 && !value("expected-etag"))
-      throw new Error("--start after zero requires --expected-etag from the previous page");
-    if (value("view") !== undefined && !["raw", "body"].includes(value("view")!))
-      throw new Error("--view must be raw or body");
     const { systemRoot, workspaceRoot } = await resolveWorkspacePaths({
       cwd: globals.cwd,
       workspace: value("workspace") ?? globals.workspace,
     });
-    const mutation = ["create", "write", "delete"].includes(sub);
     const fs = new NodeFs(systemRoot, "cli");
     await opened(fs);
     await captureNativeNodeEdits(fs);
-    let result: unknown;
-    if (sub === "list")
-      result = pageItems(
-        await listRoleContexts(fs, { includeDeprecated: values["include-deprecated"] === true }),
-        "role.list",
-        {
-          start: number("start"),
-          limit: number("limit"),
-          expectedRevision: value("expected-revision"),
-        },
-      );
-    else if (sub === "show") {
-      const options = {
-        view: value("view") as "body" | "raw" | undefined,
-        expectedEtag: value("expected-etag"),
-        uncaptured: true,
-      };
-      const observed = workspaceReadPaths(
-        await readRolePage(fs, positionals[0]!, options),
-        workspaceRoot,
-      );
-      pageText(observed, `role.show:${positionals[0]}`, {
-        start: number("start"),
-        end: number("end"),
-        maxBytes: 16 * 1024 - 256,
-      });
-      result = pageText(
-        workspaceReadPaths(
-          await readRolePage(fs, positionals[0]!, {
-            ...options,
-            expectedEtag: observed.etag,
-          }),
-          workspaceRoot,
-        ),
-        `role.show:${positionals[0]}`,
-        { start: number("start"), end: number("end") },
-      );
-    } else if (sub === "create")
-      result = await createRoleContext(fs, {
-        roleId: value("id"),
-        title: value("title")!,
-        body: await text("body"),
-      });
-    else if (sub === "delete")
-      result = await deleteRole(fs, positionals[0]!, { baseEtag: value("base-etag")! });
-    else {
-      const frontmatter = Object.fromEntries(
-        ["title", "status"]
-          .filter((key) => value(key) !== undefined)
-          .map((key) => [key, value(key)]),
-      );
-      result = await editRoleContext(fs, positionals[0]!, {
-        baseEtag: value("base-etag")!,
-        raw: await text("raw"),
-        body: await text("body"),
-        ...(Object.keys(frontmatter).length ? { frontmatter } : {}),
-      });
-    }
-    result = workspaceReadPaths(result, workspaceRoot);
+    const result = workspaceReadPaths(
+      sub === "create"
+        ? await createRoleContext(fs, {
+            roleId: value("id"),
+            title: value("title")!,
+            body: await text("body"),
+          })
+        : await deleteRole(fs, positionals[0]!),
+      workspaceRoot,
+    ) as { roleId: string; path: string };
     const json = values.json === true || globals.json === true;
     return {
       exitCode: 0,
       stdout:
         (json
-          ? JSON.stringify(mutation ? { ...(result as object), workspaceRoot } : result)
-          : (sub === "create"
-              ? `Created ${(result as { roleId: string }).roleId}  ${value("title")}`
-              : formatRole(result, sub)) + (mutation ? `\nWorkspace: ${workspaceRoot}` : "")) +
-        "\n",
+          ? JSON.stringify({ ...result, workspaceRoot })
+          : sub === "create"
+            ? `Created ${result.roleId}  ${value("title")}\nFile: ${result.path}`
+            : `Deleted ${result.roleId}`) + "\n",
       stderr: "",
     };
   } catch (error) {
@@ -181,39 +105,13 @@ async function runRoleCommandOpened(
 }
 
 export function roleHelpText() {
-  return `tent role — long-running work directions that receive Cards
+  return `tent role — standing briefs for kinds of sessions; a Role receives Cards
 
-  tent role list [--include-deprecated] [--limit <n>] [--start <n> --expected-revision <revision>]
-  tent role show <role-id> [--view body|raw] [--start <n> --end <n> --expected-etag <etag>]
   tent role create --title <text> [--body <text>|-] [--id <role-id>]
-  tent role write <role-id> --base-etag <etag> [--body <text>|- | --raw <text>|-] [--title <text>] [--status draft|stable|deprecated]
-  tent role delete <role-id> --base-etag <etag>
+  tent role delete <role-id>
 
-A Role's body holds its purpose, boundaries, way of working and links to Nodes; shared facts stay in Nodes.
-show reads in pages; continue with page.next. Writes need the latest ETag.
-Retire a Role with write --status deprecated. First collect returned Cards, finish outstanding returns, move pending targets or deprecate unfinished Cards; the same goes for delete, which removes the document for good. Tent's Git keeps the history, and the id is never reused.
+After create, read and edit .tent/roles/<role-id>.md with your own tools.
+Retire a Role by setting status: deprecated in its file, or delete it; either way, first take or return its Cards, or cancel them with tent card deprecate.
 --workspace <path> picks the Workspace; --json prints JSON.
 `;
-}
-
-function formatRole(value: unknown, sub: string) {
-  const identity = value as { roleId: string; path?: string; etag?: string };
-  if (sub === "delete") return `Deleted ${identity.roleId}`;
-  if (sub === "show")
-    return `${identity.roleId}  ${identity.path ?? ""}\nETag: ${identity.etag}\n${formatTextPage(value)}`;
-  if (sub === "list") {
-    const result = value as {
-      items: Array<{ roleId: string; title?: string; status?: string }>;
-      page: { hasMore: boolean; next?: unknown };
-    };
-    return (
-      result.items
-        .map(
-          (item) =>
-            `${item.roleId}  ${item.title ?? ""}${item.status === "deprecated" ? "  deprecated" : ""}`,
-        )
-        .join("\n") + (result.page.hasMore ? `\nNext: ${JSON.stringify(result.page.next)}` : "")
-    );
-  }
-  return `Updated ${identity.roleId}\nETag: ${identity.etag}`;
 }

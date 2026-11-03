@@ -368,8 +368,6 @@ test(
       "--prompt",
       "Review this context",
     ]);
-    const input = await json(["card", "show", card.cardId]);
-    assert.equal(input.sources[0].version.path, "context/context.md");
     const nodeFile = path.join(workspace, ".tent/context/context.md");
     const before = await fs.readFile(nodeFile, "utf8");
     const versions = await json(["node", "history", node.nodeId]);
@@ -390,6 +388,7 @@ test(
     const taken = await json(["card", "take", card.cardId, "--role", role.roleId]);
     assert.equal(taken.state, "consumed");
     assert.equal("progress" in taken, false);
+    assert.deepEqual(taken.sources, [{ name: "context", path: nodeFile }]);
     assert.equal((await json(["card", "take", card.cardId, "--role", role.roleId])).replayed, true);
     await assert.rejects(
       cli(["card", "interrupt", card.cardId]),

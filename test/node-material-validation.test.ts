@@ -21,12 +21,8 @@ import { NodeWriteError, writeNodeDocument } from "../src/core/graph/node-docume
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { testScratchRoot } from "./scratch.js";
 import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
-import {
-  createRoleContext,
-  editRoleContext,
-  requireRoleDocument,
-} from "../src/core/read/role-context.js";
-import { createCardDocument, verifyCardSourceVersion } from "../src/core/graph/card-document.js";
+import { createRoleContext } from "../src/core/read/role-context.js";
+import { createCardDocument } from "../src/core/graph/card-document.js";
 import { renameNode } from "../src/core/graph/rename-ops.js";
 
 async function fixture(t: TestContext) {
@@ -218,54 +214,53 @@ test("root escape repairs preserve encoded path components and query/fragment po
     );
 });
 
-test("Card creation validates pinned path and URI sources after live rename or deletion", async (t) => {
+test("Card creation keeps path and URI source addresses and rejects ones that name nothing", async (t) => {
   const { root, adapter, env, id, note } = await fixture(t);
   await initializeFixtureHistory(path.join(root, ".tent"));
   await createRoleContext(adapter, { roleId: "role-review", title: "Review", body: "direction" });
-  const rolePath = "roles/role-review.md";
+  await createRoleContext(adapter, { roleId: "role-old", title: "Old", body: "direction" });
+  const rolePath = "roles/role-old.md";
+  const sources = [note, rolePath].flatMap((file) => [
+    { resource: "/" + file, title: "relative" },
+    { resource: pathToFileURL(path.join(root, ".tent", file)).href, title: "URI" },
+  ]);
   const saved = await createCardDocument(adapter, {
     prompt: "Original evidence",
-    sources: [note, rolePath].flatMap((file) => [
-      { resource: "/" + file, title: "relative" },
-      { resource: pathToFileURL(path.join(root, ".tent", file)).href, title: "URI" },
-    ]),
+    target: "role-review",
+    sources,
   });
-  const sources = parseFrontmatter(await adapter.readFile(saved.path)).data
-    .sources as MaterialSource[];
-  const original = await Promise.all(
-    sources.map((source) => verifyCardSourceVersion(adapter, saved.path, source)),
-  );
+  assert.deepEqual(parseFrontmatter(await adapter.readFile(saved.path)).data.sources, sources);
   await renameNode(env, id, "Moved");
   await adapter.remove(rolePath);
   assert.equal(await adapter.exists(note), false);
-  const forwarded = await createCardDocument(adapter, { prompt: "Use retained evidence", sources });
-  assert.deepEqual(parseFrontmatter(await adapter.readFile(forwarded.path)).data.sources, sources);
-  for (let index = 0; index < sources.length; index++)
-    assert.equal(
-      (await verifyCardSourceVersion(adapter, forwarded.path, sources[index]!)).raw,
-      original[index]!.raw,
-    );
-
   await adapter.writeFile("attachments/ordinary.md", "ordinary bytes");
-  const pinned = sources[0]!;
   const invalid: MaterialSource[] = [
-    { ...pinned, version: { ...pinned.version!, commit: "0".repeat(64) } },
-    { ...pinned, resource: "/A/Moved/Moved.md" },
+    ...sources,
     { resource: "/attachments/ordinary.md" },
     {
-      resource: "/attachments/ordinary.md",
-      version: { ...pinned.version!, path: "attachments/ordinary.md" },
+      resource: "/A/Moved/Moved.md",
+      version: { commit: "0".repeat(64), path: "A/Moved/Moved.md" },
     },
   ];
   const head = await historyHead(path.join(root, ".tent"));
   for (let index = 0; index < invalid.length; index++) {
     const cardId = `card-invalid${index}`;
     await assert.rejects(
-      createCardDocument(adapter, { cardId, prompt: "Reject", sources: [invalid[index]!] }),
+      createCardDocument(adapter, {
+        cardId,
+        prompt: "Reject",
+        target: "role-review",
+        sources: [invalid[index]!],
+      }),
     );
     assert.equal(await adapter.exists(`cards/${cardId}.md`), false);
     assert.equal(await historyHead(path.join(root, ".tent")), head);
   }
+  await createCardDocument(adapter, {
+    prompt: "Moved evidence",
+    target: "role-review",
+    sources: [{ resource: "/A/Moved/Moved.md" }],
+  });
 });
 
 test("ordinary .tent files are rejected consistently by new declarations and live observations", async (t) => {
@@ -273,7 +268,6 @@ test("ordinary .tent files are rejected consistently by new declarations and liv
   await initializeFixtureHistory(path.join(root, ".tent"));
   await adapter.writeFile("attachments/ordinary.md", "ordinary bytes");
   await createRoleContext(adapter, { roleId: "role-review", title: "Review", body: "direction" });
-  const role = await requireRoleDocument(adapter, "role-review");
   const live = await readNodeForEdit(adapter, id);
   for (const resource of [
     "/attachments/ordinary.md",
@@ -307,11 +301,11 @@ test("ordinary .tent files are rejected consistently by new declarations and liv
       /Materials must point/,
     );
     await assert.rejects(
-      editRoleContext(adapter, "role-review", { baseEtag: role.etag, frontmatter: { resource } }),
-      /Materials must point/,
-    );
-    await assert.rejects(
-      createCardDocument(adapter, { prompt: "Review", sources: [{ resource }] }),
+      createCardDocument(adapter, {
+        prompt: "Review",
+        target: "role-review",
+        sources: [{ resource }],
+      }),
       /Materials must point/,
     );
     await assert.rejects(adapter.observeMaterial(resource, note), /Materials must point/);
@@ -334,27 +328,20 @@ test("ordinary .tent files are rejected consistently by new declarations and liv
   await writeNodeDocument(adapter, id, { baseEtag: retained.etag, body: "editable legacy" });
 });
 
-test("file URI Node, Role and Card addresses retain native history and response semantics", async (t) => {
+test("file URI Node, Role and Card addresses keep native document and response semantics", async (t) => {
   const { root, adapter, env, note } = await fixture(t);
   await initializeFixtureHistory(path.join(root, ".tent"));
   await createRoleContext(adapter, { roleId: "role-review", title: "Review", body: "direction" });
   const uri = (file: string) => pathToFileURL(path.join(root, ".tent", file)).href;
   const card = await createCardDocument(adapter, {
     prompt: "Review native documents",
+    target: "role-review",
     sources: [{ resource: uri(note) }, { resource: uri("roles/role-review.md") }],
   });
-  const sources = parseFrontmatter(await adapter.readFile(card.path)).data.sources as Array<{
-    resource: string;
-    version: { path: string };
-  }>;
-  assert.deepEqual(
-    sources.map((source) => source.resource),
-    [uri(note), uri("roles/role-review.md")],
-  );
-  assert.deepEqual(
-    sources.map((source) => source.version.path),
-    [note, "roles/role-review.md"],
-  );
+  assert.deepEqual(parseFrontmatter(await adapter.readFile(card.path)).data.sources, [
+    { resource: uri(note) },
+    { resource: uri("roles/role-review.md") },
+  ]);
   await createNode(env, {
     parentPath: "",
     name: "Consumer",

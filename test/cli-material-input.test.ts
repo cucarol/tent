@@ -160,61 +160,48 @@ test("cold-start creation normalizes explicit material paths under nested parent
   assert.deepEqual(checked.errors, []);
 });
 
-test("Card CLI file sources use the Workspace root while Node sources retain their versions", async (t) => {
+test("Card CLI file and Node sources are stored as Workspace-root addresses without versions", async (t) => {
   const { root, globals, parse } = await fixture(t);
+  parse(await runRoleCommand("create", ["--id", "role-worker", "--title", "Worker"], globals));
   const sources = [
     "docs/req.md",
     "./docs/req.md",
     "/docs/req.md",
-    JSON.stringify({
-      resource: "/docs/req.md",
-      title: "Requirements",
-      custom: true,
-    }),
     "node-goal",
     ".tent/Goal/Goal.md",
   ];
   const card = parse(
     await runCardCommand(
       "create",
-      ["--prompt", "Read the requirements.", ...sources.flatMap((source) => ["--source", source])],
-      globals,
-    ),
-  );
-  const shown = parse(await runCardCommand("show", [card.cardId], globals));
-  assert.deepEqual(
-    shown.sources
-      .slice(0, 4)
-      .map(({ path: _path, ...source }: { path?: string; [key: string]: unknown }) => source),
-    [
-      { resource: "../../docs/req.md" },
-      { resource: "../../docs/req.md" },
-      { resource: "../../docs/req.md" },
-      { resource: "../../docs/req.md", title: "Requirements", custom: true },
-    ],
-  );
-  for (const source of shown.sources.slice(4)) {
-    assert.equal(source.resource, "../Goal/Goal.md");
-    assert.equal(source.version.path, "Goal/Goal.md");
-    assert.match(source.version.commit, /^[a-f0-9]{64}$/);
-  }
-  assert.equal(shown.sources[0].path, "docs/req.md");
-  assert.equal(shown.sources[4].path, ".tent/Goal/Goal.md");
-  const retained = shown.sources[4].version;
-  const selected = parse(
-    await runCardCommand(
-      "create",
       [
         "--prompt",
-        "Read the retained requirements.",
-        "--source",
-        JSON.stringify({ resource: "/.tent/Goal/Goal.md", version: retained }),
+        "Read the requirements.",
+        "--target",
+        "role-worker",
+        ...sources.flatMap((source) => ["--source", source]),
       ],
       globals,
     ),
   );
-  const selectedRead = parse(await runCardCommand("show", [selected.cardId], globals));
-  assert.deepEqual(selectedRead.sources[0].version, retained);
+  const stored = parseFrontmatter(
+    await fs.readFile(path.join(root, ".tent/cards", `${card.cardId}.md`), "utf8"),
+  ).data;
+  assert.deepEqual(stored.sources, [
+    { resource: "../../docs/req.md" },
+    { resource: "../../docs/req.md" },
+    { resource: "../../docs/req.md" },
+    { resource: "../Goal/Goal.md" },
+    { resource: "../Goal/Goal.md" },
+  ]);
+  const taken = parse(
+    await runCardCommand("take", [card.cardId, "--role", "role-worker"], globals),
+  );
+  const requirement = {
+    name: "docs/req.md",
+    path: path.join(taken.workspaceRoot, "docs", "req.md"),
+  };
+  const goal = { name: "Goal", path: path.join(taken.workspaceRoot, ".tent", "Goal", "Goal.md") };
+  assert.deepEqual(taken.sources, [requirement, requirement, requirement, goal, goal]);
   const checked = parse(await runWorkspaceCommand("check", [], { workspace: root, json: true }));
   assert.deepEqual(checked.issues, []);
   assert.deepEqual(checked.errors, []);
@@ -230,8 +217,6 @@ test("successful mutation output identifies the resolved Workspace in human and 
   assert.ok(created.stdout.includes(root));
   const role = parse(await runRoleCommand("create", ["--title", "Review"], globals));
   assert.equal(role.workspaceRoot, root);
-  const roleRead = parse(await runRoleCommand("show", [role.roleId], globals));
-  assert.equal("workspaceRoot" in roleRead, false);
   assert.equal(
     parseFrontmatter(await fs.readFile(path.join(root, ".tent/Goal/Goal.md"), "utf8")).data
       .resource,
@@ -241,10 +226,15 @@ test("successful mutation output identifies the resolved Workspace in human and 
 
 test("Card response source roots match stored documents while ordinary CLI paths stay Workspace-rooted", async (t) => {
   const { root, globals, parse, cli, get } = await fixture(t);
+  parse(await runRoleCommand("create", ["--id", "role-worker", "--title", "Worker"], globals));
   const card = parse(
-    await runCardCommand("create", ["--prompt", "Respond", "--source", "node-goal"], globals),
+    await runCardCommand(
+      "create",
+      ["--prompt", "Respond", "--source", "node-goal", "--target", "role-worker"],
+      globals,
+    ),
   );
-  parse(await runCardCommand("take", [card.cardId], globals));
+  parse(await runCardCommand("take", [card.cardId, "--role", "role-worker"], globals));
   const created = (
     await cli("create", [
       "Manual response",
@@ -262,7 +252,9 @@ test("Card response source roots match stored documents while ordinary CLI paths
     { resource: `/cards/${card.cardId}.md` },
     { resource: "../../../docs/req.md" },
   ]);
-  const read = parse(await runCardCommand("show", [card.cardId], globals));
+  const read = parseFrontmatter(
+    await fs.readFile(path.join(root, ".tent/cards", `${card.cardId}.md`), "utf8"),
+  ).data;
   assert.equal(read.state, "consumed");
   assert.equal("progress" in read, false);
   assert.equal("outputNodeIds" in read, false);

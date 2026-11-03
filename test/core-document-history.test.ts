@@ -2,13 +2,6 @@ import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { testScratchRoot } from "./scratch.js";
 import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
 import { readNode, readNodeForEdit, listNodes, searchNodes } from "../src/core/read/node-query.js";
-import {
-  createRoleContext,
-  editRoleContext,
-  requireRoleDocument,
-  readRolePage,
-  listRoleContexts,
-} from "../src/core/read/role-context.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
@@ -54,56 +47,41 @@ async function fixture(t: TestContext) {
   return { root, workspace, workspaceId, mount, adapter };
 }
 
-for (const kind of ["Node", "Role"] as const) {
-  test(`${kind} normalization rejects intervening editor bytes before capture or save`, async (t) => {
-    const { adapter, mount } = await fixture(t);
-    const selected =
-      kind === "Node"
-        ? { id: "node-alpha", path: "A/A.md" }
-        : { id: "role-review", path: "roles/role-review.md" };
-    if (kind === "Role")
-      await createRoleContext(adapter, {
-        roleId: selected.id,
-        title: "Review",
-        body: "Original role",
-      });
-    const original = await adapter.readFile(selected.path);
-    await adapter.history.captureUnlocked([{ path: selected.path, raw: original }]);
-    const head = await adapter.history.currentCommit();
-    const external = original + "\nUSER EXTERNAL EDIT";
-    const header = adapter.readFrontmatter.bind(adapter);
-    let peerReads = 0;
-    adapter.readFrontmatter = async (file) => {
-      const result = await header(file);
-      // Node lookup scans once before CAS; canonicalization performs the next scan.
-      if (file === "B/B.md" && ++peerReads === (kind === "Node" ? 2 : 1))
-        await fs.writeFile(path.join(mount.systemRoot, selected.path), external);
-      return result;
-    };
-    const send = (baseEtag: string) =>
-      kind === "Node"
-        ? writeNodeDocument(adapter, selected.id, { baseEtag, body: "new [peer](node-bravo)" })
-        : editRoleContext(adapter, selected.id, { baseEtag, body: "new [peer](node-bravo)" });
-    try {
-      await assert.rejects(send(contentEtag(original)), (error) => {
-        if (kind === "Node") {
-          assert.ok(error instanceof NodeWriteError);
-          assert.equal(error.code, "ETAG_CONFLICT");
-        } else assert.match(String(error), /Role context changed/);
-        return true;
-      });
-    } finally {
-      adapter.readFrontmatter = header;
-    }
-    assert.equal(await adapter.readFile(selected.path), external);
-    assert.equal(await adapter.history.currentCommit(), head);
-    const saved = await send(contentEtag(external));
-    assert.ok(saved.version);
-    const finalRaw = await adapter.readFile(selected.path);
-    assert.equal(parseFrontmatter(finalRaw).body, "new [peer](../B/B.md)");
-    assert.equal(await adapter.history.read(saved.version), finalRaw);
-  });
-}
+test("Node normalization rejects intervening editor bytes before capture or save", async (t) => {
+  const { adapter, mount } = await fixture(t);
+  const selected = { id: "node-alpha", path: "A/A.md" };
+  const original = await adapter.readFile(selected.path);
+  await adapter.history.captureUnlocked([{ path: selected.path, raw: original }]);
+  const head = await adapter.history.currentCommit();
+  const external = original + "\nUSER EXTERNAL EDIT";
+  const header = adapter.readFrontmatter.bind(adapter);
+  let peerReads = 0;
+  adapter.readFrontmatter = async (file) => {
+    const result = await header(file);
+    // Node lookup scans once before CAS; canonicalization performs the next scan.
+    if (file === "B/B.md" && ++peerReads === 2)
+      await fs.writeFile(path.join(mount.systemRoot, selected.path), external);
+    return result;
+  };
+  const send = (baseEtag: string) =>
+    writeNodeDocument(adapter, selected.id, { baseEtag, body: "new [peer](node-bravo)" });
+  try {
+    await assert.rejects(send(contentEtag(original)), (error) => {
+      assert.ok(error instanceof NodeWriteError);
+      assert.equal(error.code, "ETAG_CONFLICT");
+      return true;
+    });
+  } finally {
+    adapter.readFrontmatter = header;
+  }
+  assert.equal(await adapter.readFile(selected.path), external);
+  assert.equal(await adapter.history.currentCommit(), head);
+  const saved = await send(contentEtag(external));
+  assert.ok(saved.version);
+  const finalRaw = await adapter.readFile(selected.path);
+  assert.equal(parseFrontmatter(finalRaw).body, "new [peer](../B/B.md)");
+  assert.equal(await adapter.history.read(saved.version), finalRaw);
+});
 
 test("independent Core writers share CAS, selected reads and exact history", async (t) => {
   const { adapter, mount } = await fixture(t);
@@ -291,7 +269,7 @@ test("explicit read capture and Core saves retain only selected documents; histo
   );
 });
 
-test("batch writes share a commit, Role reads capture explicitly, and history failures never report a successful save", async (t) => {
+test("batch writes share a commit and history failures never report a successful save", async (t) => {
   const h = await fixture(t),
     { adapter } = h;
   // New identities in one operation have one history commit.
@@ -301,22 +279,6 @@ test("batch writes share a commit, Role reads capture explicitly, and history fa
   });
   assert.equal(String((await adapter.history.changesInRange()).length), "1");
   assert.equal((await adapter.retainedDocumentPaths())!.join("\n"), "C/C.md\nD/D.md");
-  const role = await createRoleContext(adapter, { title: "Writer", body: "" });
-  const rolePath = `roles/${role.roleId}.md`;
-  await adapter.writeFile(
-    rolePath,
-    `---\ntype: role\nid: ${role.roleId}\ntitle: Writer\n---\nEditor role context`,
-  );
-  const head = await adapter.history.currentCommit();
-  await listRoleContexts(adapter);
-  assert.equal(await adapter.history.currentCommit(), head);
-  await requireRoleDocument(adapter, role.roleId);
-  assert.equal(await adapter.history.currentCommit(), head);
-  const roleRead = {
-    document: await readRolePage(adapter, role.roleId, { capture: true, view: "raw" }),
-  };
-  assert.ok(roleRead.document.version);
-  assert.equal(await adapter.history!.read(roleRead.document.version), roleRead.document.text);
   const original = await readNodeForEdit(adapter, "node-alpha");
   const capture = adapter.history!.captureUnlocked.bind(adapter.history);
   adapter.history!.captureUnlocked = async (changes, metadata) => {

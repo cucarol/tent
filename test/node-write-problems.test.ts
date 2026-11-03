@@ -116,7 +116,14 @@ test("selected Node inspection shares full workspace diagnostics and reads only 
   await adapter.writeFile(
     "cards/card-good.md",
     serializeFrontmatter(
-      { id: "card-good", type: "card", schemaVersion: 3, state: "pending", sources: [] },
+      {
+        id: "card-good",
+        type: "card",
+        schemaVersion: 3,
+        target: "role-good",
+        state: "pending",
+        sources: [],
+      },
       "[bad](node-cardbad)",
     ),
   );

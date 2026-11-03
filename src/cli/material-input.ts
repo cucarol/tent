@@ -96,7 +96,7 @@ export async function missingExplicitSources(
   const warnings: string[] = [];
   for (const [index, source] of input.entries()) {
     const value = source.resource.trim();
-    if (source.version !== undefined || !/^(?:\.\/|\/|\.tent\/)/.test(value)) continue;
+    if (!/^(?:\.\/|\/|\.tent\/)/.test(value)) continue;
     const address = stored[index]!.resource;
     let filename: string | undefined;
     try {

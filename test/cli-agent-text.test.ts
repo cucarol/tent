@@ -157,26 +157,20 @@ test("surviving text receipts identify Nodes, versions, Roles and Cards without 
   assert.match(receipt, /target: role-text/);
   assert.match(receipt, /state: pending/);
   assert.doesNotMatch(receipt, /^\s*\{/);
+  assert.match(await fs.readFile(path.join(root, ".tent/roles/role-text.md"), "utf8"), /Role body/);
   for (const [call, patterns] of [
-    [() => role("list", []), [/role-text/, /Text Role/]],
-    [() => role("show", ["role-text"]), [/role-text/, /roles\/role-text.md/, /Role body/, /ETag:/]],
     [() => card("list", []), [/card-text/, /Text Card/]],
-    [
-      () => card("show", ["card-text"]),
-      [/card-text/, /Text Card/, /Card body/, /Target: role-text/, /ETag:/],
-    ],
-    [() => card("get", ["card-text"]), [/card-text/, /Text Card/, /Card body/]],
+    [() => card("list", ["--role", "role-text"]), [/card-text/, /Text Card/]],
     [() => card("watch", ["--role", "role-text", "--timeout", "0"]), [/card-text/, /Text Card/]],
     [
       () => card("take", ["card-text", "--role", "role-text"]),
-      [/card-text/, /consumed/, /Replayed: false/],
+      [/card-text/, /consumed/, /Replayed: false/, /Card body/],
     ],
     [() => card("take", ["card-text", "--role", "role-text"]), [/card-text/, /Replayed: true/]],
   ] as Array<[() => Promise<Result>, RegExp[]]>) {
     const text = ok(await call());
     for (const pattern of patterns) assert.match(text, pattern);
   }
-  ok(await workspace("brief"));
   ok(await workspace("check"));
   assert.match(await adapter.readFile("Goal/Renamed/Renamed.md"), /Child body/);
   assert.match(cardHelpText(), /newest first/);
@@ -223,57 +217,42 @@ test("fixed-id creation refuses name/id collisions without overwriting and point
 
 test("unknown identities, invalid input and wrong Role errors end in a single runnable Next command", async (t) => {
   const { node, card, role, next } = await fixture(t);
+  ok(await role("create", ["--id", "role-target", "--title", "Target"]));
+  ok(await role("create", ["--id", "role-other", "--title", "Other"]));
   for (const [call, pattern] of [
-    [() => card("show", ["card-missing"]), /card list/],
-    [() => role("show", ["role-missing"]), /role list/],
+    [() => role("delete", ["role-missing"]), /role --help/],
     [() => node("create", ["Bad", "--type", "unknown"]), /node create --help/],
     [() => node("create", ["CON", "--type", "prompt"]), /node create --help/],
   ] as Array<[() => Promise<Result>, RegExp]>)
     await next(await call(), pattern);
-  ok(await role("create", ["--id", "role-target", "--title", "Target"]));
-  ok(await role("create", ["--id", "role-other", "--title", "Other"]));
   ok(await card("create", ["--id", "card-target", "--target", "role-target", "--prompt", "Work"]));
-  const missingCard = await card("show", ["card-missing"]);
+  const missingCard = await card("take", ["card-missing", "--role", "role-target"]);
   assert.equal(missingCard.stderr.split("\n")[0], "Card not found: card-missing.");
   await next(missingCard, /card list/);
-  await next(await card("take", ["card-target", "--role", "role-other"]), /card show card-target/);
-});
-
-test("Role recovery targets come from parsed operands, not ID-like body values", async (t) => {
-  const { role, next, adapter } = await fixture(t);
-  ok(await role("create", ["--id", "role-target", "--title", "Target", "--body", "Role body"]));
-  const oldRole = etag(ok(await role("show", ["role-target"])));
-  ok(await role("write", ["role-target", "--body", "Latest role body", "--base-etag", oldRole]));
-  const before = await adapter.readFile("roles/role-target.md");
-  const head = await adapter.history.currentCommit();
-  for (const args of [
-    ["role-target", "--body", "node-goal"],
-    ["--body=node-goal", "role-target"],
-  ]) {
-    const recovered = await next(
-      await role("write", [...args, "--base-etag", oldRole]),
-      /^Next: tent role show role-target /,
-    );
-    assert.match(recovered, /^role-target\s+\.tent\/roles\/role-target\.md$/m);
-    assert.match(recovered, /Latest role body/);
-    assert.doesNotMatch(recovered, /Goal body/);
-  }
-  assert.equal(await adapter.readFile("roles/role-target.md"), before);
-  assert.equal(await adapter.history.currentCommit(), head);
+  await next(await card("take", ["card-target", "--role", "role-other"]), /card list/);
 });
 
 test("unknown subcommands preserve the command diagnosis and leave existing Cards and Roles unchanged", async (t) => {
   const { node, card, role, workspace, next, adapter } = await fixture(t);
-  ok(await card("create", ["--id", "card-existing", "--prompt", "Existing card"]));
   ok(await role("create", ["--id", "role-existing", "--title", "Existing role"]));
+  ok(
+    await card("create", [
+      "--id",
+      "card-existing",
+      "--target",
+      "role-existing",
+      "--prompt",
+      "Existing card",
+    ]),
+  );
   const before = await adapter.readFile("cards/card-existing.md");
   const beforeRole = await adapter.readFile("roles/role-existing.md");
   const head = await adapter.history.currentCommit();
   for (const [group, run, args, required] of [
     ["node", node, ["node-peer"], ["create", "history"]],
-    ["card", card, ["card-existing"], ["show", "take", "return"]],
-    ["role", role, ["role-existing"], ["list", "show", "write"]],
-    ["workspace", workspace, [], ["brief", "check", "scan"]],
+    ["card", card, ["card-existing"], ["create", "take", "return"]],
+    ["role", role, ["role-existing"], ["create", "delete"]],
+    ["workspace", workspace, [], ["check", "scan"]],
   ] as const) {
     const failed = await run("frob", [...args]);
     const lines = failed.stderr.trimEnd().split("\n");
@@ -284,11 +263,6 @@ test("unknown subcommands preserve the command diagnosis and leave existing Card
     assert.doesNotMatch(failed.stderr, /not found|Usage:/i);
     await next(failed, new RegExp(`^Next: tent ${group} --help`));
   }
-  assert.match(ok(await card("show", ["card-existing"])), /Existing card/);
-  assert.match(
-    ok(await role("show", ["role-existing"])),
-    /^role-existing\s+\.tent\/roles\/role-existing\.md$/m,
-  );
   assert.equal(await adapter.readFile("cards/card-existing.md"), before);
   assert.equal(await adapter.readFile("roles/role-existing.md"), beforeRole);
   assert.equal(await adapter.history.currentCommit(), head);
@@ -334,70 +308,61 @@ test("missing Nodes have a short diagnosis and runnable graph inspection without
   assert.equal(await adapter.history.currentCommit(), head);
 });
 
-test("missing Card and Role ETags name the command and recover through show", async (t) => {
-  const { node, card, role, next, adapter } = await fixture(t);
-  ok(await card("create", ["--id", "card-existing", "--prompt", "Existing card"]));
-  ok(await role("create", ["--id", "role-existing", "--title", "Existing role"]));
-  const before = await adapter.readFile("Peer/Peer.md");
-  const head = await adapter.history.currentCommit();
-  for (const sub of ["deprecate", "move"]) {
-    const failed = await card(sub, ["card-existing", ...(sub === "move" ? ["--public"] : [])]);
-    assert.equal(failed.stderr.split("\n")[0], `tent card ${sub} needs --base-etag from show.`);
-    await next(failed, /^Next: tent card show card-existing /);
-  }
-  for (const sub of ["write", "delete"]) {
-    const failed = await role(sub, [
-      "role-existing",
-      ...(sub === "write" ? ["--body", "Lost"] : []),
-    ]);
-    assert.equal(failed.stderr.split("\n")[0], `tent role ${sub} needs --base-etag from show.`);
-    await next(failed, /^Next: tent role show role-existing /);
-  }
-  assert.equal(await adapter.readFile("Peer/Peer.md"), before);
-  assert.equal(await adapter.history.currentCommit(), head);
-});
-
-test("missing Roles in Card flags and Workspace filters hide system diagnostics and point to role list", async (t) => {
-  const { root, card, role, workspace, next, adapter } = await fixture(t);
-  ok(await card("create", ["--id", "card-existing", "--prompt", "Existing card"]));
+test("missing Roles in Card flags hide system diagnostics and point to role help", async (t) => {
+  const { root, card, role, next, adapter } = await fixture(t);
+  ok(await role("create", ["--id", "role-real", "--title", "Real"]));
+  ok(
+    await card("create", [
+      "--id",
+      "card-existing",
+      "--target",
+      "role-real",
+      "--prompt",
+      "Existing",
+    ]),
+  );
   const head = await adapter.history.currentCommit();
   for (const call of [
-    () => role("show", ["role-missing"]),
+    () => role("delete", ["role-missing"]),
     () => card("create", ["--prompt", "Work", "--target", "role-missing"]),
-    () => card("create", ["--prompt", "Work", "--return-to", "role-missing"]),
+    () =>
+      card("create", ["--prompt", "Work", "--target", "role-real", "--return-to", "role-missing"]),
     () => card("take", ["card-existing", "--role", "role-missing"]),
     () => card("return", ["card-existing", "--role", "role-missing", "--result", "Done"]),
     () => card("watch", ["--role", "role-missing", "--timeout", "0"]),
     () => card("list", ["--role", "role-missing"]),
-    () => workspace("brief", ["--role", "role-missing"]),
   ]) {
     const failed = await call();
     const diagnosis = failed.stderr.split("\n")[0]!;
     assert.equal(diagnosis, "Role not found: role-missing.");
     assert.doesNotMatch(diagnosis, /Error:|ENOENT|stat|roles[\\/]/);
     assert.equal(diagnosis.includes(root), false);
-    await next(failed, /^Next: tent role list /);
+    await next(failed, /^Next: tent role --help /);
   }
   assert.equal(await adapter.history.currentCommit(), head);
 });
 
-test("deprecated Roles are identified without system diagnostics in Card flags and Workspace filters", async (t) => {
-  const { card, role, workspace, next, adapter } = await fixture(t);
+test("deprecated Roles are identified without system diagnostics in Card flags", async (t) => {
+  const { root, card, role, next, adapter } = await fixture(t);
+  ok(await role("create", ["--id", "role-real", "--title", "Real"]));
   ok(await role("create", ["--id", "role-retired", "--title", "Retired"]));
-  const base = etag(ok(await role("show", ["role-retired"])));
-  ok(await role("write", ["role-retired", "--base-etag", base, "--status", "deprecated"]));
+  const file = path.join(root, ".tent/roles/role-retired.md");
+  await fs.writeFile(
+    file,
+    (await fs.readFile(file, "utf8")).replace("type: role\n", "type: role\nstatus: deprecated\n"),
+  );
   const head = await adapter.history.currentCommit();
   for (const call of [
     () => card("create", ["--prompt", "Work", "--target", "role-retired"]),
-    () => card("create", ["--prompt", "Work", "--return-to", "role-retired"]),
+    () =>
+      card("create", ["--prompt", "Work", "--target", "role-real", "--return-to", "role-retired"]),
     () => card("watch", ["--role", "role-retired", "--timeout", "0"]),
     () => card("list", ["--role", "role-retired"]),
-    () => workspace("brief", ["--role", "role-retired"]),
   ]) {
     const failed = await call();
     assert.equal(failed.stderr.split("\n")[0], "Role role-retired is deprecated.");
     assert.doesNotMatch(failed.stderr, /Error:|Role unavailable|not current|ENOENT/);
-    await next(failed, /^Next: tent role list /);
+    await next(failed, /^Next: tent role --help /);
   }
   assert.equal(await adapter.history.currentCommit(), head);
 });
@@ -435,14 +400,26 @@ test("real lock timeout gives a runnable inspection command without creating the
     await holder;
   }
   assert.match(result.stderr, /still busy after waiting 8 seconds/);
-  await next(result, /workspace brief/);
+  await next(result, /workspace check/);
   assert.equal(await adapter.exists("Busy"), false);
 });
 
 test("Next is directly executable by the host shell when the workspace contains spaces and an apostrophe", async (t) => {
-  const { role } = await fixture(t);
+  const { card, role } = await fixture(t);
   ok(await role("create", ["--id", "role-shell", "--title", "Shell role"]));
-  const failure = await role("show", ["role-missing"]);
+  ok(
+    await card("create", [
+      "--id",
+      "card-shell",
+      "--title",
+      "Shell card",
+      "--target",
+      "role-shell",
+      "--prompt",
+      "Work",
+    ]),
+  );
+  const failure = await card("take", ["card-missing", "--role", "role-shell"]);
   const next = failure.stderr
     .trimEnd()
     .split("\n")
@@ -465,7 +442,7 @@ test("Next is directly executable by the host shell when the workspace contains 
     },
   );
   assert.equal(stderr, "");
-  assert.match(stdout, /role-shell.*Shell role/);
+  assert.match(stdout, /card-shell.*Shell card/);
 });
 
 for (const state of [undefined, "pending"] as const) {

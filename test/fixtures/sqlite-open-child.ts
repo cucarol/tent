@@ -16,7 +16,7 @@ process.once("message", async () => {
     const value =
       input.kind === "read"
         ? await history.currentCommit()
-        : await runRoleCommand("write", input.args, { workspace: input.workspace });
+        : await runRoleCommand("delete", input.args, { workspace: input.workspace });
     process.send!({ phase: "result", ok: true, value, elapsed: performance.now() - started });
   } catch (error) {
     process.send!({

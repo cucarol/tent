@@ -428,7 +428,7 @@ test("scan rejects removed history flags and incompatible options before reading
     assert.match(result.stderr, /Unknown option '--commits'/);
   }
   assert.match(
-    (await runWorkspaceCommand("brief", ["--commits", "2"])).stderr,
+    (await runWorkspaceCommand("check", ["--commits", "2"])).stderr,
     /Unknown option '--commits'/,
   );
   assert.equal((await runWorkspaceCommand("scan", ["--limit", "2"])).exitCode, 1);

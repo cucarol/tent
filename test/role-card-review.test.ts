@@ -9,7 +9,6 @@ import { NodeFs } from "../src/fs/node-fs.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
 import { createCardDocument, takeCardDocument } from "../src/core/graph/card-document.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
@@ -77,7 +76,7 @@ test("RC1: native editor writes during first reception and replay survive reject
   assert.equal(await fs.readFile(disk, "utf8"), consumed);
 });
 
-test("RC2: external same-stem Markdown remains listed-only at publication", async (t) => {
+test("RC2: external same-stem Markdown and Tent documents stay addresses at publication", async (t) => {
   const { adapter } = await fixture(t);
   const nodeRaw = "---\nid: node-main\ntype: prompt\n---\nexact selected bytes";
   await adapter.writeFile("Main/Main.md", nodeRaw);
@@ -88,28 +87,23 @@ test("RC2: external same-stem Markdown remains listed-only at publication", asyn
     { resource: "/Main/Main.md" },
     { resource: "/roles/role-a.md" },
   ];
-  const readBinary = adapter.readBinary.bind(adapter),
-    reads: string[] = [];
+  const readBinary = adapter.readBinary.bind(adapter);
   adapter.readBinary = async (p) => {
-    reads.push(p);
     assert.ok(!p.startsWith("../"));
     return readBinary(p);
   };
   const created = await createCardDocument(adapter, {
     cardId: "card-addresses",
     prompt: "references",
+    target: "role-a",
     sources,
   });
-  assert.deepEqual(reads, ["Main/Main.md", "roles/role-a.md"]);
-  const saved = parseFrontmatter(await adapter.readFile(created.path)).data.sources as Array<
-    Record<string, unknown>
-  >;
-  assert.deepEqual(saved.slice(0, 3), sources.slice(0, 3));
-  assert.equal(await adapter.history.read(saved[3]!.version as DocumentVersion), nodeRaw);
-  assert.ok(saved[4]!.version);
+  assert.deepEqual(parseFrontmatter(await adapter.readFile(created.path)).data.sources, sources);
+  assert.equal(await adapter.readFile("Main/Main.md"), nodeRaw);
   await assert.rejects(
     createCardDocument(adapter, {
       prompt: "outside",
+      target: "role-a",
       sources: [{ resource: "../../../outside/outside.md" }],
     }),
     /outside the Workspace/,
