@@ -330,6 +330,7 @@ test("either existing artifact prevents publication without replacing it or leav
     await fs.writeFile(preserved, "keep my work\n");
     await assert.rejects(writeWorkspaceDraft(root, draft, { items: [] }, denseSummary()), {
       code: "EEXIST",
+      message: `${preserved} already exists; choose a new --draft file.`,
     });
     assert.equal(await fs.readFile(preserved, "utf8"), "keep my work\n");
     await assert.rejects(fs.stat(absent), { code: "ENOENT" });
@@ -344,10 +345,10 @@ test("ordinary failure after creating and partially writing the second artifact 
   const originalOpen = fs.open;
   const mocked = t.mock.method(fs, "open", async (...args: Parameters<typeof originalOpen>) => {
     const handle = await originalOpen(...args);
-    if (args[0] === report) {
+    if (args[0] === draft) {
       const originalWrite = handle.writeFile.bind(handle);
       t.mock.method(handle, "writeFile", async () => {
-        await originalWrite("partial report bytes");
+        await originalWrite("partial draft bytes");
         throw Object.assign(new Error("injected second artifact write failure"), { code: "EIO" });
       });
     }

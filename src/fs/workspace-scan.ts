@@ -16,8 +16,8 @@ import { serializeWorkspaceDraftReport } from "../core/check/workspace-draft-rep
 
 /**
  * The explicit draft is a new editable file, never a replacement for live collaboration state.
- * The two artifacts publish separately: ordinary errors remove only this call's files,
- * but a process crash may leave one artifact behind.
+ * The report publishes first, so a draft always has its report; ordinary errors remove only
+ * this call's files, and a crash between the two leaves at most the report.
  */
 export async function writeWorkspaceDraft(
   workspaceRoot: string,
@@ -38,17 +38,22 @@ export async function writeWorkspaceDraft(
     );
   const report = workspaceDraftReportPath(filename);
   const files = [
-    { filename, content: JSON.stringify(batch, null, 2) + "\n" },
     {
       filename: report,
       content: serializeWorkspaceDraftReport(summary, { draft: filename, report }),
     },
+    { filename, content: JSON.stringify(batch, null, 2) + "\n" },
   ];
   const created: string[] = [];
   try {
     for (const file of files) {
       const target = path.join(parent, path.basename(file.filename));
-      const handle = await open(target, "wx");
+      const handle = await open(target, "wx").catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+        throw Object.assign(new Error(`${target} already exists; choose a new --draft file.`), {
+          code: "EEXIST",
+        });
+      });
       created.push(target);
       try {
         await handle.writeFile(file.content, "utf8");
