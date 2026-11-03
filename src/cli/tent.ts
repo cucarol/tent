@@ -10,12 +10,6 @@ import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import { readBuildIdentity, formatBuildIdentity } from "./build-identity.js";
 import { cliErrorText, unknownCommandError } from "./error-text.js";
 
-export const refreshNativeHookIndex: typeof import("../fs/native-hook-index-refresh.js").refreshNativeHookIndex =
-  async (...args) =>
-    (await import("../fs/native-hook-index-refresh.js")).refreshNativeHookIndex(...args);
-export const checkNativeNodeWrites: typeof import("../fs/node-write-problems.js").checkNativeNodeWrites =
-  async (...args) => (await import("../fs/node-write-problems.js")).checkNativeNodeWrites(...args);
-
 export function isInWorkspaceSystemRoot(systemRoot: string): boolean {
   return workspaceRootFromSystemRoot(systemRoot) !== undefined;
 }
@@ -73,6 +67,8 @@ async function main() {
     const [sub, ...rest] = args;
     const result = await runHookCommand(sub ?? "help", rest, { packageRoot: packageRoot() });
     process.stdout.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+    process.exitCode = result.exitCode;
     return;
   }
   if (cmd === "new") {
@@ -170,8 +166,8 @@ Start
 
 Read and record
   tent workspace brief               Where to start: what changed and which Cards wait.
-  tent node get|list|search          Read Nodes.
-  tent node create|append|write
+  tent node history                  Saved Node versions.
+  tent node create|rename|move|archive|delete
                                      Record facts and keep them current.
   tent workspace check               Broken links and missing materials.
 
@@ -180,8 +176,8 @@ Hand off work
   tent role list|show|create         Long-running work directions that receive Cards.
 
 More
-  tent workspace scan|check-modules|export
-  tent hook start|stop --host codex|claude-code
+  tent workspace scan|export
+  tent hook stop --host codex|claude-code
                                      Called by the host's hooks, not by hand.
   tent <node|card|role|workspace> --help
                                      Every command and option in that group.
@@ -200,6 +196,9 @@ async function newTent(target: string): Promise<void> {
   const fsa = new NodeFs(workspaceRoot);
   if (await fsa.exists(".tent")) return fail(`Target is already a Tent: ${workspaceRoot}`);
 
+  const { initializeProjectGit } = await import("../fs/project-git.js");
+  if (await initializeProjectGit(workspaceRoot))
+    console.log(`Initialized a Git repository in ${workspaceRoot}`);
   await initializeTentWorkspace(workspaceRoot);
 
   console.log(

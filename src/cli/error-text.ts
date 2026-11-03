@@ -41,13 +41,6 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
       showDetails = false;
     }
   }
-  if (
-    command === "tent node link-output" &&
-    message.startsWith("Output file not found:") &&
-    context.workspaceRoot &&
-    context.outputResource
-  )
-    message = `Output file not found: ${context.outputResource} (local paths resolve from the Workspace root ${context.workspaceRoot}).`;
   const missingNode =
     /^(?:(?:Parent )?Node not found: |Node is not readable in this source: )(node-[a-z0-9]+)\.?$/i.exec(
       message,
@@ -68,7 +61,7 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
   let next = [...command.split(" ").slice(0, 3), "--help"];
   if (/^Unknown command: tent (?:node|card|role|workspace) /.test(message))
     next = [...command.split(" ").slice(0, 2), "--help"];
-  else if (existing) next = ["tent", "node", "get", existing, "--full"];
+  else if (existing) next = ["tent", "node", "history", existing];
   else if (missingRole || unavailableRole || /^target Role.*missing/i.test(message)) {
     if (missingRole) message = `Role not found: ${missingRole}.`;
     else if (unavailableRole) {
@@ -82,7 +75,7 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
     next = ["tent", "role", "list"];
   } else if (missingNode) {
     message = `Node not found: ${missingNode}.`;
-    next = ["tent", "node", "list", "--full"];
+    next = ["tent", "workspace", "check"];
   } else if (missingCard) {
     message = `Card not found: ${target!.id}.`;
     next = ["tent", "card", "list"];
@@ -93,14 +86,14 @@ export function cliErrorText(error: unknown, command: string, context: ErrorCont
     )
   ) {
     if (command.endsWith(" create")) next = ["tent", "workspace", "brief"];
-    else if (target?.kind === "node") next = ["tent", "node", "get", target.id, "--full"];
+    else if (target?.kind === "node") next = ["tent", "node", "history", target.id];
     else if (target?.kind === "card") next = ["tent", "card", "show", target.id];
     else if (target?.kind === "role") next = ["tent", "role", "show", target.id];
     else next = ["tent", "workspace", "brief"];
   }
   if (context.workspace) next.push("--workspace", context.workspace);
   const comment =
-    /^tent node (?:create|write-many)(?: |$)/.test(command) &&
+    /^tent node create(?: |$)/.test(command) &&
     message === "Node type must be goal, prompt or output."
       ? "  # words like decision or evidence go in --tags"
       : "";

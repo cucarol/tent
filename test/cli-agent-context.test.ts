@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import {
@@ -95,60 +94,6 @@ after(async () => {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
 });
 
-test("CLI context Node: bounded first body, exact full/raw/batch and unchanged continuation addresses", async () => {
-  const root = await workspace();
-  const response = await runNodeCommand("get", ["node-z0"], { workspace: root, json: true });
-  await evidence("node-first", response);
-  const first = result(response);
-  assert.ok(first.agentContext);
-  assert.ok(bytes(response.stdout) <= 16384);
-  assert.ok(
-    first.agentContext.sections
-      .find((section: { kind: string }) => section.kind === "references")
-      .items.some((item: { nodeId?: string }) => item.nodeId === "node-z0"),
-  );
-  assert.deepEqual(
-    first.agentContext.sections
-      .find((section: { kind: string }) => section.kind === "tests")
-      .items.map((item: { path: string }) => item.path),
-    ["test/a.test.ts"],
-  );
-  assert.ok(Array.from(first.text).length <= 1600);
-  assert.ok(first.partial);
-  assert.match(first.etag, /^read:/);
-  const next = await runNodeCommand(
-    "get",
-    ["node-z0", "--cursor", first.page.nextCursor, "--expected-etag", first.page.next.expectedEtag],
-    { workspace: root, json: true },
-  );
-  await evidence("node-next", next);
-  const continued = result(next);
-  assert.equal(continued.agentContext, undefined);
-  const full = await runNodeCommand("get", ["node-z0", "--full"], { workspace: root, json: true });
-  await evidence("node-full", full);
-  const complete = result(full);
-  assert.ok(complete.text.length > first.text.length);
-  assert.ok(!complete.etag.startsWith("read:"));
-  assert.equal(complete.agentContext, undefined);
-  assert.equal(
-    complete.text.slice(first.range.end, first.range.end + continued.text.length),
-    continued.text,
-  );
-  for (const args of [
-    ["get", "node-z0", "--view", "raw"],
-    ["read-many", "node-z0", "node-z1"],
-  ]) {
-    const output = result(
-      await runNodeCommand(args[0]!, args.slice(1), { workspace: root, json: true }),
-    );
-    assert.equal(output.agentContext, undefined);
-  }
-  const text = await runNodeCommand("get", ["node-z0"], { workspace: root });
-  await evidence("node-text", text);
-  assert.equal(text.exitCode, 0, text.stderr);
-  assert.ok(bytes(text.stdout) <= 16384);
-});
-
 test("CLI context Card: source-order half-page originals, show/take and --start continuation", async () => {
   const root = await workspace();
   const response = await runCardCommand("show", ["card-page"], { workspace: root, json: true });
@@ -206,35 +151,8 @@ test("CLI context Card: source-order half-page originals, show/take and --start 
   assert.ok(bytes(take.stdout) <= 16384);
 });
 
-test("CLI context resource and brief: first page wiring, timed facts and preserved native capture", async () => {
+test("CLI brief retains timed facts and native capture", async () => {
   const root = await workspace();
-  const response = await runNodeCommand("search", ["--resource", "src/a.ts", "--limit", "1"], {
-    workspace: root,
-    json: true,
-  });
-  await evidence("resource-first", response);
-  const first = result(response);
-  assert.ok(
-    first.agentContext.sections
-      .find((section: { kind: string }) => section.kind === "references")
-      .items.some((item: { nodeId?: string }) => item.nodeId === "node-z0"),
-  );
-  assert.deepEqual(
-    first.agentContext.sections
-      .find((section: { kind: string }) => section.kind === "tests")
-      .items.map((item: { path: string }) => item.path),
-    ["test/a.test.ts"],
-  );
-  assert.ok(first.agentContext);
-  assert.ok(bytes(response.stdout) <= 16384);
-  const next = result(
-    await runNodeCommand(
-      "search",
-      ["--resource", "src/a.ts", "--limit", "1", "--cursor", first.page.nextCursor],
-      { workspace: root, json: true },
-    ),
-  );
-  assert.equal(next.agentContext, undefined);
   const file = path.join(root, ".tent/Source0/Source0.md");
   await fs.appendFile(file, "\nA newly retained edit.\n");
   const brief = await runWorkspaceCommand("brief", [], { workspace: root, json: true });
@@ -318,24 +236,6 @@ test("CLI context projection: later categories compress first; unknown text and 
     measure,
   ).sections.find((section) => section.kind === "changes")!.items[0]!;
   assert.equal(change.text, diff);
-});
-
-test("CLI context summary: an explicit summary does not falsely claim original text is above", async () => {
-  const root = await workspace();
-  const response = await runNodeCommand("get", ["node-z0", "--view", "summary"], {
-    workspace: root,
-    json: true,
-  });
-  await evidence("node-summary", response);
-  const value = result(response);
-  assert.ok(value.agentContext);
-  assert.equal(value.text, undefined);
-  const original = value.agentContext.sections
-    .find((section: { kind: string }) => section.kind === "references")
-    .items.find((item: { nodeId: string }) => item.nodeId === "node-z0");
-  assert.equal(original.textInBody, undefined);
-  assert.ok(original.text?.length);
-  assert.ok(bytes(response.stdout) <= 16384);
 });
 
 test("CLI context newline budget: existing body pages reserve the terminator and preserve every byte", () => {
@@ -582,9 +482,7 @@ test("CLI context omitted tests: eleven real import witnesses report the missing
   assert.equal(uncertainty?.nodeId, "node-reader");
   assert.match(uncertainty!.why!, /no CLI lists all.*own tools/);
   assert.match(page.readNotice, /Source commands read bodies only/);
-  assert.ok(
-    page.sourceReads.some((read) => read.command?.includes("tent node get node-reader --full")),
-  );
+  assert.ok(page.sourceReads.every((read) => !read.command?.includes("tent node get")));
   assert.match(
     formatAgentContextPage(page),
     /1 tests entries omitted; no CLI lists this complete assembled list/,
@@ -602,26 +500,8 @@ test("CLI context omitted tests: eleven real import witnesses report the missing
   );
 });
 
-test("CLI context explicit first range: zero starts assemble while positive offsets remain plain continuation", async () => {
+test("CLI Card explicit first range assembles context", async () => {
   const root = await workspace();
-  const node = result(
-    await runNodeCommand(
-      "get",
-      ["node-z0", "--range", JSON.stringify({ unit: "utf16", start: 0, end: 9 })],
-      { workspace: root, json: true },
-    ),
-  );
-  assert.ok(node.agentContext);
-  assert.equal(node.text, "汉😀".repeat(3));
-  const nodeNext = result(
-    await runNodeCommand(
-      "get",
-      ["node-z0", "--range", JSON.stringify({ unit: "utf16", start: 9, end: 18 })],
-      { workspace: root, json: true },
-    ),
-  );
-  assert.equal(nodeNext.agentContext, undefined);
-  assert.equal(nodeNext.text, node.text);
   const card = result(
     await runCardCommand("show", ["card-page", "--start", "0", "--end", "10"], {
       workspace: root,
@@ -766,21 +646,29 @@ test("API context source revision: edits beyond visible excerpts invalidate cont
   await scaffoldTent(memory, { name: "Revision" });
   memory.history.completedCardPaths = async () => new Set();
   const put = (body: string) =>
-    memory.writeFile("Root/Root.md", serializeFrontmatter({ id: "node-root", type: "goal" }, body));
-  await put("A".repeat(1600) + "old tail");
-  for (let index = 0; index < 11; index++)
-    await memory.writeFile(
-      `Root/Child${index}/Child${index}.md`,
-      serializeFrontmatter({ id: `node-child${index}`, type: "goal" }, ""),
+    memory.writeFile(
+      "Root/Root.md",
+      serializeFrontmatter({ id: "node-root", type: "goal", resource: "../../src/a.ts" }, body),
     );
-  const repository = { trackedFiles: [], sources: { files: [], errors: [] } };
+  await put("A".repeat(1600) + "old tail");
+  const sourceFiles = [
+    { path: "src/a.ts", content: "export const a=1;" },
+    ...Array.from({ length: 11 }, (_, index) => ({
+      path: `test/t${index}.test.ts`,
+      content: "import {a} from '../src/a'; a;",
+    })),
+  ];
+  const repository = {
+    trackedFiles: sourceFiles.map((file) => file.path),
+    sources: { files: sourceFiles, errors: [] },
+  };
   const first = await assembleAgentContext(
     memory,
     scratch,
     { kind: "node", nodeId: "node-root" },
     { repository },
   );
-  const next = first.sections.find((section) => section.kind === "unknown")!.next!;
+  const next = first.sections.find((section) => section.kind === "tests")!.next!;
   assert.ok(next);
   await put("A".repeat(1600) + "different tail");
   await assert.rejects(
@@ -794,8 +682,11 @@ test("API context source revision: edits beyond visible excerpts invalidate cont
   );
   await put("A".repeat(1600) + "old tail");
   const sourceRepository = {
-    trackedFiles: ["unseen.ts"],
-    sources: { files: [{ path: "unseen.ts", content: "export const value=1;" }], errors: [] },
+    trackedFiles: [...repository.trackedFiles, "unseen.ts"],
+    sources: {
+      files: [...sourceFiles, { path: "unseen.ts", content: "export const value=1;" }],
+      errors: [],
+    },
   };
   const observed = await assembleAgentContext(
     memory,
@@ -803,8 +694,8 @@ test("API context source revision: edits beyond visible excerpts invalidate cont
     { kind: "node", nodeId: "node-root" },
     { repository: sourceRepository },
   );
-  const page = observed.sections.find((section) => section.kind === "unknown")!.next!;
-  sourceRepository.sources.files[0]!.content = "export const value=2;";
+  const page = observed.sections.find((section) => section.kind === "tests")!.next!;
+  sourceRepository.sources.files.at(-1)!.content = "export const value=2;";
   await assert.rejects(
     assembleAgentContext(
       memory,
@@ -846,49 +737,4 @@ test("CLI context read basis: a stale primary body cannot be labelled with newly
     ),
     /changed/i,
   );
-});
-
-test("CLI context retains tests and its revision when unused project history is unavailable", async () => {
-  const root = await workspace();
-  const read = async () =>
-    result(await runNodeCommand("get", ["node-z0"], { workspace: root, json: true }));
-  const before = await read();
-  const headPath = path.join(root, ".git/HEAD");
-  const originalHead = await fs.readFile(headPath, "utf8");
-  const brokenRef = path.join(root, ".git/refs/heads/context-unavailable");
-  await fs.mkdir(path.dirname(brokenRef), { recursive: true });
-  await fs.writeFile(brokenRef, "a".repeat(40) + "\n");
-  try {
-    await fs.writeFile(headPath, "ref: refs/heads/context-unavailable\n");
-    const after = await read();
-    assert.deepEqual(after.agentContext, before.agentContext);
-    assert.deepEqual(
-      after.agentContext.sections
-        .find((section: { kind: string }) => section.kind === "tests")
-        .items.map((item: { path: string }) => item.path),
-      ["test/a.test.ts"],
-    );
-  } finally {
-    await fs.writeFile(headPath, originalHead);
-    await fs.unlink(brokenRef);
-  }
-});
-
-test("CLI context keeps unavailable required source bytes unknown", async () => {
-  const root = await workspace();
-  const filename = path.join(root, "src/a.ts");
-  const original = await fs.readFile(filename);
-  await fs.unlink(filename);
-  try {
-    const response = result(
-      await runNodeCommand("get", ["node-z0"], { workspace: root, json: true }),
-    );
-    const unknown = response.agentContext.sections.find(
-      (section: { kind: string }) => section.kind === "unknown",
-    );
-    assert.match(JSON.stringify(unknown), /Referenced repository source unavailable: src\/a.ts/);
-    assert.match(JSON.stringify(unknown), /Static test discovery is incomplete/);
-  } finally {
-    await fs.writeFile(filename, original);
-  }
 });

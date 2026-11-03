@@ -102,7 +102,7 @@ export class SqliteDocumentHistory implements DocumentHistory {
         if (version !== 2 && !(create && version === 0))
           throw new Error(
             version === 1
-              ? "Tent SQLite history format 1 requires offline conversion; run node scripts/one-off/remove-node-records-history.mjs <workspaceRoot>"
+              ? "Tent history format 1 must be converted offline: from a Tent checkout, run node scripts/one-off/remove-node-records-history.mjs <workspaceRoot>"
               : `Unsupported Tent SQLite history format: ${version}`,
           );
         db.exec("PRAGMA synchronous=EXTRA; PRAGMA foreign_keys=ON");

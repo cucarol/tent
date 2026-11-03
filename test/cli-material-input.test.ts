@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test, { type TestContext } from "node:test";
 import { testScratchRoot, initializeFixtureWorkspace } from "./scratch.js";
@@ -13,8 +12,7 @@ import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import { git } from "./helpers.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(testScratchRoot());
@@ -55,12 +53,14 @@ async function fixture(t: TestContext) {
     assert.equal(result.exitCode, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
-  const cli = async (sub: string, args: string[]) =>
-    parse(await runNodeCommand(sub, args, globals));
-  const get = async (id: string) => {
-    const read = await cli("get", [id, "--full", "--view", "raw"]);
-    return { ...parseFrontmatter(read.text).data, ...read };
+  const paths = new Map<string, string>([["node-goal", ".tent/Goal/Goal.md"]]);
+  const cli = async (sub: string, args: string[]) => {
+    const result = parse(await runNodeCommand(sub, args, globals));
+    if (result.node) paths.set(result.node.nodeId, result.node.path);
+    return result;
   };
+  const get = async (id: string) =>
+    parseFrontmatter(await fs.readFile(path.join(root, paths.get(id)!), "utf8")).data;
   return { root, globals, parse, cli, get };
 }
 
@@ -84,16 +84,16 @@ test("CLI material paths stay Workspace-rooted from different process working di
   const declaration = {
     resource: "./rich/console.py#Width",
     sources: [
-      { resource: "./rich/console.*", track: "structure" },
-      { resource: "rich/console.*", track: "structure" },
+      { resource: "./rich/console.*" },
+      { resource: "rich/console.*" },
       { resource: "/rich/" },
     ],
   };
   const expected = {
     resource: "../../../rich/console.py#Width",
     sources: [
-      { resource: "../../../rich/console.*", track: "structure" },
-      { resource: "../../../rich/console.*", track: "structure" },
+      { resource: "../../../rich/console.*" },
+      { resource: "../../../rich/console.*" },
       { resource: "../../../rich/" },
     ],
   };
@@ -111,43 +111,9 @@ test("CLI material paths stay Workspace-rooted from different process working di
     );
     assert.deepEqual(JSON.parse(stdout), expected, `process cwd: ${cwd}`);
   }
-  const batch = {
-    items: [
-      { op: "create", ref: "library", name: "Rich library", type: "goal" },
-      {
-        op: "create",
-        ref: "console",
-        parent: "@library",
-        name: "Console",
-        type: "goal",
-        sources: [declaration.sources[0]],
-      },
-    ],
-  };
-  const cli = fileURLToPath(new URL("../src/cli/tent.ts", import.meta.url));
-  await execute(
-    process.execPath,
-    [
-      "--import",
-      loader,
-      cli,
-      "node",
-      "write-many",
-      "--workspace",
-      workspace,
-      "--json",
-      "--input-json",
-      JSON.stringify(batch),
-    ],
-    { cwd: workspace, windowsHide: true },
-  );
-  const saved = parseFrontmatter(
-    await fs.readFile(path.join(workspace, ".tent", document), "utf8"),
-  );
-  assert.deepEqual(saved.data.sources, [expected.sources[0]]);
 });
 
-test("cold-start material declarations share the Workspace root", async (t) => {
+test("cold-start creation normalizes explicit material paths under nested parents", async (t) => {
   const { root, globals, parse, cli, get } = await fixture(t);
   const goal = (
     await cli("create", [
@@ -156,31 +122,11 @@ test("cold-start material declarations share the Workspace root", async (t) => {
       "goal",
       "--parent",
       "node-goal",
-      "--sources-json",
-      JSON.stringify([{ resource: "docs/req.md", title: "Requirements" }]),
+      "--source",
+      "docs/req.md",
     ])
   ).node;
-  const cold = await get(goal.nodeId);
-  assert.equal(cold.sources[0].resource, "../../../docs/req.md");
-  const card = parse(
-    await runCardCommand(
-      "create",
-      ["--prompt", "Implement the goal", "--source", goal.nodeId],
-      globals,
-    ),
-  );
-  assert.equal(card.workspaceRoot, root);
-  const taken = parse(await runCardCommand("take", [card.cardId], globals));
-  assert.equal(taken.workspaceRoot, root);
-  const linked = await cli("link-output", [
-    goal.nodeId,
-    "--resource",
-    "/docs/proof.txt",
-    "--card",
-    card.cardId,
-  ]);
-  assert.equal(linked.workspaceRoot, root);
-  assert.equal((await get(linked.nodeId)).resource, "../../../../docs/proof.txt");
+  assert.deepEqual((await get(goal.nodeId)).sources, [{ resource: "../../../docs/req.md" }]);
   const explicit = (
     await cli("create", [
       "Explicit",
@@ -190,130 +136,28 @@ test("cold-start material declarations share the Workspace root", async (t) => {
       goal.nodeId,
       "--resource",
       "./docs/proof.txt",
-      "--sources-json",
-      JSON.stringify([
-        { resource: "/docs/req.md#Requirements" },
-        { resource: "customer discussion" },
-      ]),
+      "--source",
+      "/docs/req.md#Requirements",
+      "--source",
+      "customer discussion",
     ])
   ).node;
   const saved = await get(explicit.nodeId);
-  assert.equal(saved.resource, (await get(linked.nodeId)).resource);
+  assert.equal(saved.resource, "../../../../docs/proof.txt");
   assert.deepEqual(saved.sources, [
     { resource: "../../../../docs/req.md#Requirements" },
     { resource: "customer discussion" },
   ]);
-  assert.equal((await cli("search", ["--resource", "docs/proof.txt"])).items.length, 2);
-  const checked = parse(await runWorkspaceCommand("check", [], globals));
-  assert.deepEqual(checked.issues, []);
-  assert.deepEqual(checked.errors, []);
-});
-
-test("structured writes convert new material paths and preserve descriptors read from disk", async (t) => {
-  const { root, cli, get } = await fixture(t);
-  const created = (
-    await cli("create", [
-      "Note",
-      "--type",
-      "prompt",
-      "--parent",
-      "node-goal",
-      "--resource",
-      "docs/proof.txt",
-    ])
-  ).node;
-  const initial = await get(created.nodeId);
-  await cli("write", [
-    created.nodeId,
-    "--input-json",
-    JSON.stringify({
-      baseEtag: initial.etag,
-      frontmatter: {
-        resource: initial.resource,
-        sources: [{ resource: "./docs/req.md", custom: { retain: true } }],
-      },
-    }),
-  ]);
-  const updated = await get(created.nodeId);
-  assert.equal(updated.resource, initial.resource);
-  assert.deepEqual(updated.sources, [
-    { resource: "../../../docs/req.md", custom: { retain: true } },
-  ]);
-  await cli("write", [
-    created.nodeId,
-    "--input-json",
-    JSON.stringify({
-      baseEtag: updated.etag,
-      frontmatter: {
-        sources: updated.sources,
-        description: "Preserve read-back paths",
-      },
-    }),
-  ]);
-  const retained = await get(created.nodeId);
-  assert.deepEqual(retained.sources, updated.sources);
-  const batch = await cli("write-many", [
-    "--input-json",
-    JSON.stringify({
-      items: [
-        {
-          op: "create",
-          ref: "child",
-          parent: "@parent",
-          name: "Batch Child",
-          type: "output",
-          resource: "/docs/proof.txt",
-          sources: [{ resource: "docs/req.md" }, { resource: "@parent" }],
-        },
-        {
-          op: "create",
-          ref: "parent",
-          name: "Batch Parent",
-          type: "goal",
-          sources: [{ resource: "./not-created-yet.txt" }],
-        },
-        {
-          op: "update",
-          nodeId: created.nodeId,
-          baseEtag: retained.etag,
-          frontmatter: { resource: "docs/req.md", sources: retained.sources },
-        },
-      ],
-    }),
-  ]);
-  assert.equal(batch.workspaceRoot, root);
-  const child = await get(batch.results[0].nodeId);
-  assert.equal(batch.results[0].path, ".tent/Batch Parent/Batch Child/Batch Child.md");
-  assert.equal(child.resource, "../../../docs/proof.txt");
-  assert.deepEqual(child.sources, [
-    { resource: "../../../docs/req.md" },
-    { resource: "../Batch%20Parent.md" },
-  ]);
-  assert.equal(
-    (await get(batch.results[1].nodeId)).sources[0].resource,
-    "../../not-created-yet.txt",
-  );
-  const final = await get(created.nodeId);
-  assert.equal(final.resource, "../../../docs/req.md");
-  assert.deepEqual(final.sources, retained.sources);
-  const raw = serializeFrontmatter(
-    { id: created.nodeId, type: "prompt", resource: "../../../docs/proof.txt" },
-    "Raw bytes use stored addresses.",
-  );
-  await cli("write-many", [
-    "--input-json",
-    JSON.stringify({
-      items: [{ op: "update", nodeId: created.nodeId, baseEtag: final.etag, raw }],
-    }),
-  ]);
-  assert.equal((await get(created.nodeId)).resource, "../../../docs/proof.txt");
   const outside = await runNodeCommand(
     "create",
     ["Outside", "--type", "prompt", "--resource", "../outside.txt"],
-    { workspace: root, json: true },
+    { workspace: root },
   );
   assert.equal(outside.exitCode, 1);
   assert.match(outside.stderr, /outside the Workspace/);
+  const checked = parse(await runWorkspaceCommand("check", [], globals));
+  assert.deepEqual(checked.issues, []);
+  assert.deepEqual(checked.errors, []);
 });
 
 test("Card CLI file sources use the Workspace root while Node sources retain their versions", async (t) => {
@@ -388,8 +232,6 @@ test("successful mutation output identifies the resolved Workspace in human and 
   assert.equal(role.workspaceRoot, root);
   const roleRead = parse(await runRoleCommand("show", [role.roleId], globals));
   assert.equal("workspaceRoot" in roleRead, false);
-  const nodeRead = parse(await runNodeCommand("get", ["node-goal", "--full"], globals));
-  assert.equal("workspaceRoot" in nodeRead, false);
   assert.equal(
     parseFrontmatter(await fs.readFile(path.join(root, ".tent/Goal/Goal.md"), "utf8")).data
       .resource,
@@ -410,15 +252,14 @@ test("Card response source roots match stored documents while ordinary CLI paths
       "output",
       "--parent",
       "node-goal",
-      "--sources-json",
-      JSON.stringify([
-        { resource: `/cards/${card.cardId}.md`, title: "Response" },
-        { resource: "/docs/req.md" },
-      ]),
+      "--source",
+      `/cards/${card.cardId}.md`,
+      "--source",
+      "/docs/req.md",
     ])
   ).node;
   assert.deepEqual((await get(created.nodeId)).sources, [
-    { resource: `/cards/${card.cardId}.md`, title: "Response" },
+    { resource: `/cards/${card.cardId}.md` },
     { resource: "../../../docs/req.md" },
   ]);
   const read = parse(await runCardCommand("show", [card.cardId], globals));

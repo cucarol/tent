@@ -6,11 +6,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { git } from "./helpers.js";
 import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 
 async function fixture(t: TestContext) {
@@ -28,103 +26,6 @@ async function fixture(t: TestContext) {
     adapter: openTestFs(path.join(workspace, ".tent")),
   };
 }
-
-test("CLI writes a mutually linked batch from stdin and rejects a failed mixed batch without saving", async (t) => {
-  const { workspace, globals, adapter } = await fixture(t);
-  const create = await runNodeCommand("write-many", ["--input-json", "-"], {
-    ...globals,
-    stdin: JSON.stringify({
-      items: [
-        {
-          op: "create",
-          ref: "child",
-          parent: "@parent",
-          name: "Child",
-          type: "prompt",
-          body: "[Parent](@parent)",
-        },
-        { op: "create", ref: "parent", name: "Parent", type: "goal", body: "[Child](@child)" },
-      ],
-    }),
-  });
-  assert.equal(create.exitCode, 0, create.stderr);
-  const created = JSON.parse(create.stdout);
-  assert.deepEqual(
-    created.results.map((item: { path: string }) => item.path),
-    [".tent/Parent/Child/Child.md", ".tent/Parent/Parent.md"],
-  );
-  assert.ok(
-    created.results.every((item: { etag: string }) => item.etag && !item.etag.startsWith("read:")),
-  );
-  const systemRoot = path.join(workspace, ".tent");
-  assert.equal((await adapter.history.changesInRange()).length, 1);
-  const check = await runWorkspaceCommand("check", [], globals);
-  assert.equal(check.exitCode, 0, check.stderr || check.stdout);
-  assert.deepEqual(JSON.parse(check.stdout), { documents: 2, issues: [], notices: [], errors: [] });
-  const parent = created.results[1];
-  const complete = await runNodeCommand("get", [parent.nodeId, "--full"], globals);
-  assert.equal(complete.exitCode, 0, complete.stderr);
-  const original = await adapter.readFile("Parent/Parent.md");
-  const head = await historyHead(systemRoot);
-  const failed = await runNodeCommand("write-many", ["--input-json", "-"], {
-    ...globals,
-    stdin: JSON.stringify({
-      items: [
-        {
-          op: "update",
-          nodeId: parent.nodeId,
-          baseEtag: JSON.parse(complete.stdout).etag,
-          body: "would change",
-        },
-        { op: "create", ref: "broken", parent: "@unknown", name: "Broken", type: "prompt" },
-      ],
-    }),
-  });
-  assert.equal(failed.exitCode, 1);
-  assert.match(failed.stderr, /unknown.*ref/i);
-  assert.equal(await adapter.readFile("Parent/Parent.md"), original);
-  assert.equal(await adapter.exists("Broken"), false);
-  assert.equal(await historyHead(systemRoot), head);
-  const unportable = await runNodeCommand("write-many", ["--input-json", "-"], {
-    ...globals,
-    stdin: JSON.stringify({
-      items: [
-        { op: "create", ref: "fine", name: "Fine", type: "goal" },
-        {
-          op: "create",
-          ref: "read",
-          parent: "@fine",
-          name: "Match: best of three",
-          type: "prompt",
-        },
-      ],
-    }),
-  });
-  assert.equal(unportable.exitCode, 1);
-  assert.match(unportable.stderr, /^Batch item @read: Node name cannot contain the character :/);
-  assert.match(unportable.stderr, /\nNext: tent node write-many --help/);
-  assert.equal(await adapter.exists("Fine"), false);
-  const saved = await runNodeCommand(
-    "write-many",
-    [
-      "--input-json",
-      JSON.stringify({
-        items: [
-          {
-            op: "update",
-            nodeId: parent.nodeId,
-            baseEtag: JSON.parse(complete.stdout).etag,
-            body: "updated decision",
-          },
-        ],
-      }),
-    ],
-    globals,
-  );
-  assert.equal(saved.exitCode, 0, saved.stderr);
-  assert.equal((await adapter.history.changesInRange()).length, 2);
-  assert.notEqual(JSON.parse(saved.stdout).results[0].etag, parent.etag);
-});
 
 test("workspace check reports all three problem kinds as JSON on stdout without touching files or Git", async (t) => {
   const { workspace, globals, adapter } = await fixture(t);

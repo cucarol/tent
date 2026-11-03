@@ -22,7 +22,7 @@ const metadata = [
   "generated:",
   "  by: agent # author comment",
   "  at: 2026-09-08T01:02:03Z",
-  "verified:",
+  "provenance:",
   "  by: human",
   "  at: null",
   "sources:",
@@ -47,7 +47,7 @@ test("nested YAML preserves values, comments, BOM, CRLF, and exact body-only byt
   const parsed = parseFrontmatter(prefix + body);
   assert.equal(parsed.body, body);
   assert.deepEqual(parsed.data.generated, { by: "agent", at: "2026-09-08T01:02:03Z" });
-  assert.deepEqual(parsed.data.verified, { by: "human", at: null });
+  assert.deepEqual(parsed.data.provenance, { by: "human", at: null });
   assert.equal(parsed.data.by, undefined);
   assert.equal(parsed.data.literal, "first line\n第二行 # literal\n");
   assert.equal(parsed.data.folded, "one two");

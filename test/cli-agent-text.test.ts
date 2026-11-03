@@ -1,7 +1,4 @@
 import { captureFixtureDocuments } from "./scratch.js";
-import { captureReadDocuments } from "../src/core/store/document-history.js";
-import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
-import { nodeNotePath } from "../src/core/base/paths.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { initializeFixtureHistory } from "./scratch.js";
 import { testScratchRoot } from "./scratch.js";
@@ -16,14 +13,10 @@ import { runCardCommand, cardHelpText } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { pageItems } from "../src/cli/reader-page.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { createCardDocument, listCardDocuments } from "../src/core/graph/card-document.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
 import { MUTATION_LOCK_PATH } from "../src/core/base/paths.js";
-import { git } from "./helpers.js";
-import { cliErrorText } from "../src/cli/error-text.js";
-import { NodeWriteError } from "../src/core/graph/node-document-write.js";
 
 type Result = { exitCode: number; stdout: string; stderr: string };
 const ok = (result: Result) => {
@@ -115,9 +108,9 @@ async function fixture(t: TestContext) {
   };
 }
 
-test("text lists/details identify their objects, body reads preserve text, and all relation directions describe endpoints", async (t) => {
-  const { root, node, card, role, workspace } = await fixture(t);
-  ok(
+test("surviving text receipts identify Nodes, versions, Roles and Cards without replacing host file reads", async (t) => {
+  const { root, node, card, role, workspace, adapter } = await fixture(t);
+  const created = ok(
     await node("create", [
       "Child",
       "--id",
@@ -126,10 +119,27 @@ test("text lists/details identify their objects, body reads preserve text, and a
       "prompt",
       "--parent",
       "node-goal",
+      "--description",
+      "Child facts",
       "--body",
       "## Facts\nChild body links [Peer](node-peer)",
     ]),
   );
+  assert.match(created, /node-child/);
+  const filename = path.join(root, ".tent/Goal/Child/Child.md");
+  const original = await fs.readFile(filename, "utf8");
+  assert.match(original, /Child body/);
+  assert.match(original, /description: Child facts/);
+  const versions = await node("history", ["node-child", "--json"]);
+  const version = JSON.parse(ok(versions)).items[0].changes[0].after;
+  ok(await node("rename", ["node-child", "Renamed"]));
+  assert.equal(
+    ok(await node("history", ["node-child", "--version", JSON.stringify(version)])),
+    original,
+  );
+  const history = ok(await node("history", ["node-child"]));
+  assert.ok(history.includes(version.commit));
+  assert.match(history, /Goal\/Renamed\/Renamed\.md/);
   ok(await role("create", ["--id", "role-text", "--title", "Text Role", "--body", "Role body"]));
   const receipt = ok(
     await card("create", [
@@ -148,34 +158,6 @@ test("text lists/details identify their objects, body reads preserve text, and a
   assert.match(receipt, /state: pending/);
   assert.doesNotMatch(receipt, /^\s*\{/);
   for (const [call, patterns] of [
-    [() => node("list", []), [/node-goal/, /Goal/, /node-peer/, /Peer/]],
-    [() => node("list", ["--full"]), [/node-child/, /Child/]],
-    [() => node("get", ["node-child"]), [/node-child/, /Child/, /Child body/]],
-    [() => node("get", ["node-child", "--full"]), [/node-child/, /Child/, /Child body/]],
-    [() => node("get", ["node-child", "--view", "summary"]), [/node-child/, /Child/]],
-    [() => node("get", ["node-child", "--view", "raw", "--full"]), [/node-child/, /Child body/]],
-    [() => node("history", ["node-child"]), [/node-child/, /Child\/Child.md/]],
-    [
-      () => node("read-many", ["node-child", "node-peer"]),
-      [/node-child/, /node-peer/, /Child body/, /Peer body/],
-    ],
-    [() => node("search", ["--resource", "peer.txt"]), [/node-peer/, /Peer/]],
-    [
-      () => node("relations", ["node-child", "--direction", "parent"]),
-      [/parent  /, /node-goal/, /Goal/],
-    ],
-    [
-      () => node("relations", ["node-goal", "--direction", "children"]),
-      [/children  /, /node-child/, /Child/],
-    ],
-    [
-      () => node("relations", ["node-child", "--direction", "outgoing"]),
-      [/link/, /node-peer/, /Peer/],
-    ],
-    [
-      () => node("relations", ["node-peer", "--direction", "incoming"]),
-      [/link/, /node-child/, /Child/],
-    ],
     [() => role("list", []), [/role-text/, /Text Role/]],
     [() => role("show", ["role-text"]), [/role-text/, /roles\/role-text.md/, /Role body/, /ETag:/]],
     [() => card("list", []), [/card-text/, /Text Card/]],
@@ -194,64 +176,10 @@ test("text lists/details identify their objects, body reads preserve text, and a
     const text = ok(await call());
     for (const pattern of patterns) assert.match(text, pattern);
   }
-  await fs.writeFile(path.join(root, "input.md"), "Before\n");
-  ok(
-    await node("create", [
-      "Material",
-      "--id",
-      "node-material",
-      "--type",
-      "prompt",
-      "--resource",
-      "input.md",
-      "--body",
-      "material fact",
-    ]),
-  );
-  await fs.writeFile(path.join(root, "input.md"), "After\n");
   ok(await workspace("brief"));
   ok(await workspace("check"));
-  ok(await node("tags", []));
+  assert.match(await adapter.readFile("Goal/Renamed/Renamed.md"), /Child body/);
   assert.match(cardHelpText(), /newest first/);
-});
-
-test("complete first-page ETags authorize writes; partial and stale reads fail with runnable recovery commands", async (t) => {
-  const { node, next, adapter } = await fixture(t);
-  const first = etag(ok(await node("get", ["node-peer"])));
-  assert.doesNotMatch(first, /^read:/);
-  ok(await node("write", ["node-peer", "--body", "Changed body", "--base-etag", first]));
-  const completeRaw = etag(ok(await node("get", ["node-peer", "--view", "raw"])));
-  assert.doesNotMatch(completeRaw, /^read:/);
-  ok(await node("write", ["node-peer", "--body", "Raw-read body", "--base-etag", completeRaw]));
-  await next(
-    await node("write", ["node-peer", "--body", "Stale", "--base-etag", first]),
-    /node get node-peer --full/,
-  );
-  ok(
-    await node("create", [
-      "Long",
-      "--id",
-      "node-long",
-      "--type",
-      "prompt",
-      "--body",
-      "long text ".repeat(4000),
-    ]),
-  );
-  const partial = etag(ok(await node("get", ["node-long"])));
-  assert.match(partial, /^read:/);
-  const before = await adapter.readFile("Long/Long.md");
-  const head = await adapter.history.currentCommit();
-  await next(
-    await node("write", ["node-long", "--body", "Incomplete", "--base-etag", partial]),
-    /node get node-long --full/,
-  );
-  assert.equal(await adapter.readFile("Long/Long.md"), before);
-  assert.equal(await adapter.history.currentCommit(), head);
-  assert.match(
-    nodeHelpText("get"),
-    /An ETag that starts with read: comes from a partial page and allows only metadata edits/,
-  );
 });
 
 test("fixed-id creation refuses name/id collisions without overwriting and points to the existing Node", async (t) => {
@@ -260,7 +188,7 @@ test("fixed-id creation refuses name/id collisions without overwriting and point
   assert.match(ok(await node("create", args)), /node-fixed/);
   const before = await adapter.readFile("Fixed/Fixed.md"),
     head = await adapter.history.currentCommit();
-  await next(await node("create", args), /node get node-fixed --full/);
+  await next(await node("create", args), /node history node-fixed/);
   await next(
     await node("create", [
       "Fixed",
@@ -271,11 +199,11 @@ test("fixed-id creation refuses name/id collisions without overwriting and point
       "--body",
       "Overwrite",
     ]),
-    /node get node-fixed --full/,
+    /node history node-fixed/,
   );
   await next(
     await node("create", ["Other", "--id", "node-fixed", "--type", "prompt"]),
-    /node get node-fixed --full/,
+    /node history node-fixed/,
   );
   assert.equal(await adapter.readFile("Fixed/Fixed.md"), before);
   assert.equal(await adapter.exists("Other"), false);
@@ -293,18 +221,13 @@ test("fixed-id creation refuses name/id collisions without overwriting and point
   );
 });
 
-test("unknown identities, invalid input, missing material and wrong Role errors end in a single runnable Next command", async (t) => {
+test("unknown identities, invalid input and wrong Role errors end in a single runnable Next command", async (t) => {
   const { node, card, role, next } = await fixture(t);
   for (const [call, pattern] of [
-    [() => node("get", ["node-missing"]), /node list --full/],
     [() => card("show", ["card-missing"]), /card list/],
     [() => role("show", ["role-missing"]), /role list/],
     [() => node("create", ["Bad", "--type", "unknown"]), /node create --help/],
     [() => node("create", ["CON", "--type", "prompt"]), /node create --help/],
-    [
-      () => node("link-output", ["node-goal", "--resource", "./missing.txt"]),
-      /node link-output --help/,
-    ],
   ] as Array<[() => Promise<Result>, RegExp]>)
     await next(await call(), pattern);
   ok(await role("create", ["--id", "role-target", "--title", "Target"]));
@@ -316,31 +239,13 @@ test("unknown identities, invalid input, missing material and wrong Role errors 
   await next(await card("take", ["card-target", "--role", "role-other"]), /card show card-target/);
 });
 
-test("recovery targets come from parsed command operands, not ID-like body or name values", async (t) => {
-  const { node, role, next, adapter } = await fixture(t);
-  const oldNode = etag(ok(await node("get", ["node-peer"])));
-  ok(await node("append", ["node-peer", "--body", "Latest target body"]));
+test("Role recovery targets come from parsed operands, not ID-like body values", async (t) => {
+  const { role, next, adapter } = await fixture(t);
   ok(await role("create", ["--id", "role-target", "--title", "Target", "--body", "Role body"]));
   const oldRole = etag(ok(await role("show", ["role-target"])));
   ok(await role("write", ["role-target", "--body", "Latest role body", "--base-etag", oldRole]));
-  // Discovery remains read-only, including recovery through the full list.
-  ok(await node("list", ["--full"]));
-  const before = await adapter.readFile("Peer/Peer.md");
-  const beforeRole = await adapter.readFile("roles/role-target.md");
+  const before = await adapter.readFile("roles/role-target.md");
   const head = await adapter.history.currentCommit();
-  for (const args of [
-    ["node-peer", "--body", "node-goal"],
-    ["--body", "node-goal", "node-peer"],
-    ["--body=node-goal", "node-peer"],
-  ]) {
-    const recovered = await next(
-      await node("write", [...args, "--base-etag", oldNode]),
-      /^Next: tent node get node-peer --full /,
-    );
-    assert.match(recovered, /^node-peer\nETag: /);
-    assert.match(recovered, /Latest target body/);
-    assert.doesNotMatch(recovered, /Goal body/);
-  }
   for (const args of [
     ["role-target", "--body", "node-goal"],
     ["--body=node-goal", "role-target"],
@@ -353,17 +258,7 @@ test("recovery targets come from parsed command operands, not ID-like body or na
     assert.match(recovered, /Latest role body/);
     assert.doesNotMatch(recovered, /Goal body/);
   }
-  for (const args of [
-    ["node-goal", "--parent", "node-missing"],
-    ["--parent=node-missing", "node-goal"],
-  ]) {
-    const failed = await node("create", [...args, "--type", "prompt"]);
-    assert.equal(failed.stderr.split("\n")[0], "Node not found: node-missing.");
-    await next(failed, /^Next: tent node list --full /);
-  }
-  assert.equal(await adapter.exists("node-goal"), false);
-  assert.equal(await adapter.readFile("Peer/Peer.md"), before);
-  assert.equal(await adapter.readFile("roles/role-target.md"), beforeRole);
+  assert.equal(await adapter.readFile("roles/role-target.md"), before);
   assert.equal(await adapter.history.currentCommit(), head);
 });
 
@@ -375,7 +270,7 @@ test("unknown subcommands preserve the command diagnosis and leave existing Card
   const beforeRole = await adapter.readFile("roles/role-existing.md");
   const head = await adapter.history.currentCommit();
   for (const [group, run, args, required] of [
-    ["node", node, ["node-peer"], ["get", "write"]],
+    ["node", node, ["node-peer"], ["create", "history"]],
     ["card", card, ["card-existing"], ["show", "take", "return"]],
     ["role", role, ["role-existing"], ["list", "show", "write"]],
     ["workspace", workspace, [], ["brief", "check", "scan"]],
@@ -424,33 +319,27 @@ test("unknown top-level commands show one command list and runnable help", async
   assert.match(help.stdout, /^Tent keeps a context graph/);
 });
 
-test("missing Nodes have a short diagnosis and runnable discovery without writes", async (t) => {
+test("missing Nodes have a short diagnosis and runnable graph inspection without writes", async (t) => {
   const { node, next, adapter } = await fixture(t);
   const head = await adapter.history.currentCommit();
-  for (const flags of [[], ["--full"], ["--json"]]) {
-    const failed = await node("get", ["node-missing", ...flags]);
+  for (const [sub, args] of [
+    ["rename", ["node-missing", "Missing"]],
+    ["archive", ["node-missing"]],
+  ] as const) {
+    const failed = await node(sub, [...args]);
     assert.equal(failed.stderr.split("\n")[0], "Node not found: node-missing.");
     assert.doesNotMatch(failed.stderr, /Error:|ENOENT|not readable/);
-    await next(failed, /^Next: tent node list --full /);
+    await next(failed, /^Next: tent workspace check /);
   }
   assert.equal(await adapter.history.currentCommit(), head);
 });
 
-test("missing ETags name the command and recover through a complete Node read or Card and Role show", async (t) => {
+test("missing Card and Role ETags name the command and recover through show", async (t) => {
   const { node, card, role, next, adapter } = await fixture(t);
   ok(await card("create", ["--id", "card-existing", "--prompt", "Existing card"]));
   ok(await role("create", ["--id", "role-existing", "--title", "Existing role"]));
   const before = await adapter.readFile("Peer/Peer.md");
   const head = await adapter.history.currentCommit();
-  for (const sub of ["write"]) {
-    const failed = await node(sub, ["node-peer", ...(sub === "write" ? ["--body", "Lost"] : [])]);
-    assert.equal(
-      failed.stderr.split("\n")[0],
-      `tent node ${sub} needs --base-etag from a complete read.`,
-    );
-    assert.doesNotMatch(failed.stderr, /Usage:|workspace brief/);
-    await next(failed, /^Next: tent node get node-peer --full /);
-  }
   for (const sub of ["deprecate", "move"]) {
     const failed = await card(sub, ["card-existing", ...(sub === "move" ? ["--public"] : [])]);
     assert.equal(failed.stderr.split("\n")[0], `tent card ${sub} needs --base-etag from show.`);
@@ -513,94 +402,19 @@ test("deprecated Roles are identified without system diagnostics in Card flags a
   assert.equal(await adapter.history.currentCommit(), head);
 });
 
-test("judge W1-W4 wording is exact, Next runs, and text conflicts do not expose JSON read bases", async (t) => {
-  const { root, node, next, adapter } = await fixture(t);
-  const workspaceArg =
-    process.platform === "win32"
-      ? `'${root.replaceAll("'", "''")}'`
-      : `'${root.replaceAll("'", `'"'"'`)}'`;
-  const nextLine = (command: string) => `Next: tent node ${command} --workspace ${workspaceArg}`;
-  ok(await node("list", ["--full"]));
-  const first = etag(ok(await node("get", ["node-peer"])));
-  ok(await node("write", ["node-peer", "--body", "Current text", "--base-etag", first]));
-  const current = etag(ok(await node("get", ["node-peer"])));
-  const before = await adapter.readFile("Peer/Peer.md");
-  const head = await adapter.history.currentCommit();
-  const args = ["node-peer", "--body", "Stale text", "--base-etag", first];
-  const stale = await node("write", args);
-  assert.equal(
-    stale.stderr,
-    `Node node-peer changed after your read: etag ${first} is stale.\n${nextLine("get node-peer --full")}\n`,
-  );
-  await next(stale, /node get node-peer --full/);
-  const jsonStale = await node("write", [...args, "--json"]);
-  assert.equal(jsonStale.exitCode, 1);
-  assert.equal(jsonStale.stderr.split("\n")[0], "etag conflict");
-  const details = JSON.parse(jsonStale.stderr.split("\n")[1]!);
-  assert.equal(details.nodeId, "node-peer");
-  assert.equal(details.baseEtag, first);
-  assert.equal(details.currentEtag, `read:${current}`);
-  assert.equal(
-    cliErrorText(new NodeWriteError("ETAG_CONFLICT", "etag conflict"), "tent node write", {
-      target: { kind: "node", id: "node-peer" },
-      workspace: root,
-    }),
-    `The Node changed after your read; its etag is stale.\n${nextLine("get node-peer --full")}`,
-  );
-  const partial = etag(
-    ok(await node("get", ["node-peer", "--range", '{"unit":"utf16","start":0,"end":2}'])),
-  );
-  assert.match(partial, /^read:/);
-  const incomplete = await node("write", ["node-peer", "--body", "Lost", "--base-etag", partial]);
-  assert.equal(
-    incomplete.stderr,
-    `A read: ETag comes from a partial read and allows metadata edits only.\n${nextLine("get node-peer --full")}\n`,
-  );
-  await next(incomplete, /node get node-peer --full/);
-  for (const [sub, input] of [
-    ["create", ["Bad type", "--type", "decision"]],
-    [
-      "write-many",
-      [
-        "--input-json",
-        JSON.stringify({
-          items: [{ op: "create", ref: "bad", name: "Bad type", type: "evidence" }],
-        }),
-      ],
-    ],
-  ] as const) {
-    const failed = await node(sub, [...input]);
-    assert.equal(
-      failed.stderr,
-      `Node type must be goal, prompt or output.\n${nextLine(`${sub} --help`)}  # words like decision or evidence go in --tags\n`,
-    );
-    await next(failed, new RegExp(`node ${sub} --help`));
-  }
-  const missing = await node("link-output", ["node-goal", "--resource", "./missing.txt"]);
-  assert.equal(
-    missing.stderr,
-    `Output file not found: ./missing.txt (local paths resolve from the Workspace root ${root}).\n${nextLine("link-output --help")}\n`,
-  );
-  await next(missing, /node link-output --help/);
-  assert.equal(await adapter.exists("Bad type"), false);
-  assert.equal(await adapter.readFile("Peer/Peer.md"), before);
-  assert.equal(await adapter.history.currentCommit(), head);
-});
-
-test("judge help explains stable ids and partial-read limits once", () => {
-  const create = nodeHelpText("create"),
-    get = nodeHelpText("get");
-  const createText =
-    "--id fixes the new id, so a retry cannot create a duplicate. Names follow Windows file-name rules on every platform.";
-  const getText =
-    "An ETag that starts with read: comes from a partial page and allows only metadata edits; read with --full before replacing content.";
-  assert.equal(create.split(createText).length, 2);
-  assert.equal(get.split(getText).length, 2);
+test("Node help exposes only creation, structural changes and historical reads", () => {
+  const help = nodeHelpText();
+  for (const sub of ["create", "rename", "move", "archive", "delete", "history"])
+    assert.match(help, new RegExp(`tent node ${sub} `));
+  assert.match(nodeHelpText("create"), /--description/);
+  assert.match(nodeHelpText("create"), /--resource/);
+  assert.match(nodeHelpText("create"), /--source/);
+  assert.match(nodeHelpText("create"), /--draft/);
+  assert.match(nodeHelpText("history"), /--version/);
   assert.doesNotMatch(
-    create,
-    /--id supplies the Node identity|Name collisions identify|Names must be valid Windows path segments|Inspect an uncertain result before retrying/,
+    help,
+    /tent node (?:get|list|read-many|search|relations|tags|append|write|write-many|link-output)(?: |$)/,
   );
-  assert.doesNotMatch(get, /body was truncated\.|For a partial page, read|Incomplete reads expose/);
 });
 
 test("real lock timeout gives a runnable inspection command without creating the requested Node", async (t) => {
@@ -626,8 +440,9 @@ test("real lock timeout gives a runnable inspection command without creating the
 });
 
 test("Next is directly executable by the host shell when the workspace contains spaces and an apostrophe", async (t) => {
-  const { node } = await fixture(t);
-  const failure = await node("get", ["node-missing"]);
+  const { role } = await fixture(t);
+  ok(await role("create", ["--id", "role-shell", "--title", "Shell role"]));
+  const failure = await role("show", ["role-missing"]);
   const next = failure.stderr
     .trimEnd()
     .split("\n")
@@ -650,7 +465,7 @@ test("Next is directly executable by the host shell when the workspace contains 
     },
   );
   assert.equal(stderr, "");
-  assert.match(stdout, /node-goal.*Goal/);
+  assert.match(stdout, /role-shell.*Shell role/);
 });
 
 for (const state of [undefined, "pending"] as const) {

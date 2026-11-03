@@ -10,8 +10,6 @@ import { fileURLToPath } from "node:url";
 import { test, type TestContext } from "node:test";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { NodeFs } from "../src/fs/node-fs.js";
-import { git } from "./helpers.js";
 import { initializeFixtureRepository } from "./scratch.js";
 
 async function fixture(t: TestContext) {

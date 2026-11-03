@@ -1,24 +1,21 @@
 import { captureFixtureDocuments } from "./scratch.js";
 import { removeTestFixture } from "./node-fs.js";
 import { openTestFs } from "./node-fs.js";
-import { initializeFixtureHistory } from "./scratch.js";
+import { initializeFixtureHistory, initializeFixtureRepository } from "./scratch.js";
 import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { searchNodes } from "../src/core/read/node-query.js";
-import { runNodeCommand } from "../src/cli/node-commands.js";
-import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
-  await fs.mkdir(".scratch", { recursive: true });
   const root = await fs.mkdtemp(path.resolve(testScratchRoot(), "resource-search-"));
   t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  initializeFixtureRepository(root);
   await scaffoldInWorkspace(openTestFs(root), { name: "resource lookup" });
   const adapter = openTestFs(path.join(root, ".tent"));
   const add = async (name: string, fields: Record<string, unknown>, body = "Unneeded body") => {
@@ -113,44 +110,10 @@ test("lookup never reads bodies, captures changes or derives a full-document unc
   assert.equal((await search("../src/a.ts", true)).revision, result.revision);
 });
 
-test("resource lookup preserves remote exact references and rejects removed text search", async (t) => {
+test("resource lookup preserves remote exact references and rejects free-text Core requests", async (t) => {
   const { root, adapter, add, search } = await fixture(t);
   await add("Remote", { sources: [{ resource: "https://example.com/proof#part" }] });
   assert.equal((await search("https://example.com/proof#part")).items[0]?.nodeId, "node-remote");
   assert.equal((await search("https://example.com/proof#other")).items.length, 0);
   await assert.rejects(searchNodes(adapter, "ws-lookup", root, { query: "proof" }));
-  const cli = await runNodeCommand("search", ["proof"], { workspace: root });
-  assert.equal(cli.exitCode, 1);
-  assert.match(cli.stderr, /search --resource/);
-});
-
-test("header lookup retains paging budgets and cursor checks without reading bodies", async (t) => {
-  const { root, add, adapter } = await fixture(t);
-  for (let index = 0; index < 25; index++)
-    await add(`Entry${String(index).padStart(2, "0")}`, { resource: "../../src/a.ts" });
-  const run = async (extra: string[] = []) => {
-    const result = await runNodeCommand(
-      "search",
-      ["--resource", "src/a.ts", "--limit", "10", ...extra],
-      { workspace: root, json: true },
-    );
-    assert.equal(result.exitCode, 0, result.stderr);
-    assert.ok(Buffer.byteLength(result.stdout) <= 10 * 1024);
-    return JSON.parse(result.stdout);
-  };
-  const first = await run();
-  assert.equal(first.items.length, 10);
-  const body = await adapter.readFile("Entry00/Entry00.md");
-  await adapter.writeFile("Entry00/Entry00.md", body + "new body");
-  const second = await run(["--cursor", first.page.nextCursor]);
-  assert.equal(second.items.length, 10);
-  assert.notEqual(second.items[0].nodeId, first.items[0].nodeId);
-  await add("Entry24", { resource: "../../src/b.ts" });
-  const stale = await runNodeCommand(
-    "search",
-    ["--resource", "src/a.ts", "--cursor", first.page.nextCursor],
-    { workspace: root, json: true },
-  );
-  assert.equal(stale.exitCode, 1);
-  assert.match(stale.stderr, /source changed/);
 });

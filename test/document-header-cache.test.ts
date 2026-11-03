@@ -15,13 +15,11 @@ import {
   withFrontmatterCache,
 } from "../src/core/base/frontmatter.js";
 import { withDocumentHeaderCache } from "../src/fs/document-header-cache.js";
-import { runNodeCommand } from "../src/cli/node-commands.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 import { contentEtag } from "../src/core/base/etag.js";
 import { deserialize } from "node:v8";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { git } from "./helpers.js";
 import { testScratchRoot } from "./scratch.js";
 
 async function fixture(t: TestContext) {
@@ -269,9 +267,8 @@ test("warm brief observes same-size native edits and bad headers without changin
     ).items.length,
     1,
   );
-  const listed = await runNodeCommand("list", [], { workspace: root, json: true });
-  assert.equal(listed.exitCode, 0, listed.stderr);
-  assert.equal(JSON.parse(listed.stdout).items[0].type, "output");
+  const catalog = await loadNodeCatalog(openTestFs(system));
+  assert.equal(catalog.byId.get("node-cachetest")?.type, "output");
   assert.equal(await fs.readFile(file, "utf8"), edited);
   assert.notEqual(await historyHead(system), head);
   await fs.rm(cache);

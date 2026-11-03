@@ -1,6 +1,6 @@
 # One-shot history migration
 
-Tent stores Markdown on disk and immutable event history in `.tent/.git/history.sqlite`. The operational `.git` directory contains no private Git history repository or runtime fallback. Its `ignore-context/.git` subtree is an empty unborn tool context for the existing Git ignore interpreter, created only during workspace initialization or migration setup; it has no commits and never stores document history. Missing Git leaves ignore-dependent observations explicitly unknown while SQLite initialization and document CRUD remain available. Fixed versions retain `{commit,path}`; `commit` is now a 64-hex opaque event identity.
+Tent stores Markdown on disk and immutable event history in `.tent/.git/history.sqlite`. The operational `.git` directory contains no private Git repository for history or ignore rules. Git is required for a Tent workspace; `tent new` initializes the project repository when needed. Directory membership uses the project's Git, without a private ignore context or an unfiltered directory walk. Fixed versions retain `{commit,path}`; `commit` is now a 64-hex opaque event identity.
 
 Stop all writers and work on a complete offline workspace copy, including its current `.tent` files and private Git objects. Preserve dirty files and unretained Nodes: a Git archive of HEAD alone is not a copy of the current workspace. Keep project material files in that copy so their relative addresses remain meaningful.
 
@@ -23,7 +23,7 @@ The audit must establish all of the following before a converted `.tent` is publ
 
 The importer accepts a linear, single-parent history (including an unborn empty workspace). It rejects merges, additional history roots, unmapped events, malformed fixed addresses or resource/version disagreements, missing historical objects, unsupported pinned YAML aliases, symbolic links and unsettled file operations. These address/object failures are distinct from an existing historical target identity diagnostic. It never silently substitutes a current file for a historical target. An unsupported source, changed source or changed target diagnostic stops the import; any incomplete fresh target is diagnostic data, not an active workspace. Review the error and source evidence rather than rerunning into that same target.
 
-Fixed-source resource validation covers document-relative and bundle-root addresses. The utility conservatively rejects absolute `file:` source pins whose original-root identity cannot be established in this offline namespace. It does not rewrite resource addresses or guess an original workspace root. This is a limit of the migration utility; ordinary runtime material reads retain their existing `file:` behavior.
+Fixed-source resource validation covers document-relative and bundle-root addresses. The utility conservatively rejects absolute `file:` source pins whose original-root identity cannot be established in this offline namespace. It does not rewrite resource addresses or guess an original workspace root. This is a limit of the migration utility. At runtime a `file:` directory outside the project's repository is only an address checked for existence; Tent never enumerates its members.
 
 After auditing, an operator may place the converted graph in the copied workspace and validate it through normal reads. Retain the original copy and external audit until that validation and independent review are complete. Switching a live workspace is a separate explicit action.
 
@@ -33,7 +33,19 @@ SQLite uses DELETE rollback journals with synchronous EXTRA. Markdown and the da
 
 Tent 0.2.0 kept the web map's layout in `.tent/canvas.json`, with its history. Later versions have no map and do not accept that file in history. Run this once in each workspace from 0.2.0; a workspace still on private-Git history takes the migration above first.
 
-1. Stop every agent session, Hook and `tent ui` that writes to the workspace.
+1. Stop every agent session, Hook and other writer to the workspace.
 2. Download [remove-canvas-history.mjs](../scripts/one-off/remove-canvas-history.mjs) and run `node remove-canvas-history.mjs <project folder>`. It needs only Node.js 22.19+.
 
 It deletes `.tent/canvas.json` and the layout entries in `.tent/.git/history.sqlite`, then prints a JSON summary of what it removed. Nodes, Roles, Cards and every event's identity, time and parent stay unchanged; an event that only changed the layout stays as an empty event. It refuses to run while a write is unsettled, and a second run changes nothing.
+
+## Remove retired Node metadata
+
+Node coverage now comes directly from `resource` and `sources`, using the most specific file, changed Markdown section, directory or prefix. Source `track` fields and the distinction between coverage and code ownership are retired. The Node frontmatter field `verified` is also retired and reported by `workspace check`; it is not a confirmation mechanism. Node `type` remains required as `goal`, `prompt` or `output`, with the same behavior for each; `description` is an optional string.
+
+From a Tent source checkout, preview the current Node documents that contain either retired field:
+
+```sh
+node scripts/one-off/remove-source-track.mjs <workspaceRoot>
+```
+
+The default mode writes nothing and prints `{apply:false,changed:[...]}` with affected Node paths. After reviewing the preview on a project copy and stopping its writers, add `--apply` to remove the top-level `verified` field and remove `track` keys from current Nodes' `sources` descriptors. The tool verifies that other frontmatter values remain unchanged and that the files still match its initial reads before writing. Node bodies, other metadata, Card and Role documents, historical versions and pinned Card sources stay unchanged. The migration audit's `verified` property described above is a report result, not a Node field, and stays unchanged. A second run reports no changes. The runtime does not convert old documents automatically.

@@ -18,7 +18,6 @@ import {
   verifyCardSourceVersion,
   verifyCardSourceVersions,
 } from "../src/core/graph/card-document.js";
-import { readCardGoalIds } from "../src/core/graph/card-context.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { readNode } from "../src/core/read/node-query.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
@@ -217,12 +216,6 @@ test("a historical version with a former suffixed type is rejected like any inva
     const [batch] = await verifyCardSourceVersions(adapter, [
       { owner: "cards/card-history.md", source },
     ]);
-    // Goal attribution still validates the pinned source identity.
-    const sourceGoals = (
-      await readCardGoalIds(adapter, [
-        { cardId: "card-history", sources: [{ resource: `/${file}`, version }] },
-      ])
-    ).get("card-history")!;
     // card list/show over a received Card that pinned the retained version.
     const cardId = `card-${name.toLowerCase()}`;
     await adapter.mkdir("cards");
@@ -244,26 +237,18 @@ test("a historical version with a former suffixed type is rejected like any inva
       (item) => item.cardId === cardId,
     ) as Record<string, unknown>;
     const shown = (await readCardDocument(adapter, cardId)) as Record<string, unknown>;
-    const anonymous = (text: unknown) =>
-      String(text).replace(`../${file}`, "<source>").replace(`/${file}`, "<source>");
     outcomes.push({
       read,
       single,
       batch: batch instanceof Error ? batch.message : "accepted",
-      goalIds: [...sourceGoals.goalIds],
-      diagnostics: sourceGoals.diagnostics.map(anonymous),
       list: [listed.state, "progress" in listed, "totalGoalCount" in listed],
       show: [shown.state, "progress" in shown, "totalGoalCount" in shown],
     });
   }
-  // An invalid pin is diagnosed, never read as a Card without goals.
-  const diagnostic = `Cannot read Card source <source>: Error: ${message}`;
   assert.deepEqual(outcomes[0], {
     read: message,
     single: message,
     batch: message,
-    goalIds: [],
-    diagnostics: [diagnostic],
     list: ["consumed", false, false],
     show: ["consumed", false, false],
   });

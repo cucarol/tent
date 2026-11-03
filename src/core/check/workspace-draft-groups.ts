@@ -13,10 +13,9 @@ export type DraftUnit = {
 };
 const ordered = (values: Iterable<string>) => [...new Set(values)].sort(comparePaths);
 const code = (file: string) => isCodeSource(file) && !isTestSource(file);
-export const draftMaterial = (value: string, structure = true): ModuleMapMaterial => ({
+export const draftMaterial = (value: string): ModuleMapMaterial => ({
   path: value.endsWith("/") ? value.slice(0, -1) : value,
   kind: value.endsWith("/") ? "directory" : "prefix",
-  ...(structure ? { track: "structure" as const } : {}),
 });
 export const draftPrefix = (file: string) =>
   file.slice(0, file.length - path.posix.extname(file).length).replace(/\.pb$/, "") + ".";
@@ -211,7 +210,7 @@ export function draftRootPackageUnits(
   if (sources.length <= DRAFT_CODE_FILES)
     return [{ key, materials: sources.map((file) => draftMaterial(draftPrefix(file))) }];
   return [
-    { key, materials: [{ path: ".", kind: "directory", track: "structure" }] },
+    { key, materials: [{ path: ".", kind: "directory" }] },
     ...draftFlatUnits(flatGroups(sources, imports), files, key),
   ];
 }

@@ -73,11 +73,11 @@ test("content time ignores metadata, tracks body and material-address edits and 
     tags: ["spec"],
     status: "draft",
     generated: { by: "test/1", at: stamp(2) },
-    verified: [{ by: "human:reader", at: stamp(2) }],
+    provenance: [{ by: "human:reader", at: stamp(2) }],
   });
   await save(
     "Out",
-    { ...out, verified: [{ by: "human:reader", at: "2026-01-02T08:00:00+08:00" }] },
+    { ...out, provenance: [{ by: "human:reader", at: "2026-01-02T08:00:00+08:00" }] },
     "Conclusion",
   );
   await commit(2);

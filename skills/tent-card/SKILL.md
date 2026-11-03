@@ -13,7 +13,6 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows; more c
 | Preview, or check handed-off work | `tent card show <card-id>` | `text`, `sources`; `state`, `result` |
 | Start on it | `tent card take <card-id> --role <role-id>` | `replayed` (`true`: continue that work), `sources` |
 | `tent workspace brief` lists `changedCardSources` | Read each source's `path` | the current file |
-| The result file is in the Workspace checkout | `tent node link-output <goal-id> --resource <path> --card <card-id>` | `cardId` |
 | Done with a Card that has `returnTo` | `tent card return <card-id> --role <role-id> --result '<one line>'` | `state: returned` |
 | A Card you sent is `returned` | `tent card take <card-id> --role <role-id>` | `result`; the Card is `closed` |
 | Idle as a Role | Wait as [your host does](../tent-role/references/host-role.md) | the Cards it names; take the first |

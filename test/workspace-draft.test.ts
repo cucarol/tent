@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
+import { materialOccurrences } from "../src/core/base/material.js";
 import { repositoryFacts } from "../src/core/base/repository-facts.js";
 import type { RepositoryImport } from "../src/core/base/repository-imports.js";
 import {
@@ -53,6 +54,16 @@ const edge = (from: string, to: string, kind: "file" | "directory" = "file"): Re
 function check(input: WorkspaceScanResult) {
   const draft = draftWorkspaceModules(input);
   nodeWriteBatchInputSchema.parse(draft.batch);
+  for (const item of draft.batch.items) {
+    if (item.op !== "create") continue;
+    assert.equal(typeof item.resource, "string");
+    const materials = materialOccurrences(item);
+    assert.equal(
+      materials.length,
+      draft.nodes.find((node) => node.id === item.ref)!.materials.length,
+    );
+  }
+
   return {
     draft,
     check: checkModuleMap({
@@ -134,7 +145,7 @@ test("parsed Python guards and function imports do not form a draft or checked l
         name: dir,
         path: dir,
         body: "",
-        materials: [{ path: dir, kind: "directory", track: "structure" }],
+        materials: [{ path: dir, kind: "directory" }],
       })),
     });
     assert.equal(
@@ -158,10 +169,9 @@ test("draft separates tests and generated code, preserves root evidence and stab
   const input = scan(files, edges),
     { draft, check: report } = check(input);
   assert.equal(report.issues.length, 0);
-  assert.equal(
-    report.modules.some((module) => module.name === "Tests"),
-    false,
-  );
+  assert.deepEqual(report.modules.find((module) => module.name === "Tests")?.files, [
+    "tests/item.test.ts",
+  ]);
   assert.ok(
     report.modules.some((module) => module.generatedFiles === 1 && module.productionFiles === 0),
   );
@@ -206,9 +216,7 @@ test("draft groups a flat directory by imports, keeps the actual cycle and creat
     draft.batch,
   );
   assert.equal(
-    report.issues.some((issue) =>
-      ["map.uncovered", "map.unowned", "deps.cycle"].includes(issue.code),
-    ),
+    report.issues.some((issue) => ["map.uncovered", "deps.cycle"].includes(issue.code)),
     false,
   );
 });
@@ -342,9 +350,7 @@ test("draft splits a large dense import cycle without losing files or suppressin
     report.modules.find((module) => module.files.includes(files[0]!))!.files.includes(files[53]!),
   );
   assert.ok(report.issues.some((issue) => issue.code === "deps.cycle"));
-  assert.ok(
-    !report.issues.some((issue) => issue.code === "map.unowned" || issue.code === "map.uncovered"),
-  );
+  assert.ok(!report.issues.some((issue) => issue.code === "map.uncovered"));
   assert.ok(draft.batch.items.every((item) => item.op === "create" && item.body === ""));
   assert.deepEqual(
     draftWorkspaceModules(scan([...files].reverse(), [...edges].reverse())).batch,
@@ -561,11 +567,7 @@ test("mixed-case operational names yield a directly writable top-level draft", a
     options,
   );
   assert.equal(scanned.exitCode, 0, scanned.stderr);
-  const batch = await fs.readFile(path.join(root, ".scratch/batch.json"), "utf8");
-  const written = await runNodeCommand("write-many", ["--input-json", "-", "--json"], {
-    ...options,
-    stdin: batch,
-  });
+  const written = await saveDraft(root, ".scratch/batch.json");
   assert.equal(written.exitCode, 0, written.stderr);
   assert.equal(await adapter.readFile(`roles/${roleId}.md`), originalRole);
   assert.equal((await loadTent(adapter)).byPath.size, 4);
@@ -587,6 +589,23 @@ async function fixture(t: TestContext) {
   };
   return { root, adapter, write };
 }
+async function saveDraft(
+  root: string,
+  filename: string,
+  supplied?: ReturnType<typeof nodeWriteBatchInputSchema.parse>,
+) {
+  const batch =
+    supplied ??
+    nodeWriteBatchInputSchema.parse(
+      JSON.parse(await fs.readFile(path.join(root, filename), "utf8")),
+    );
+  for (const item of batch.items)
+    if (item.op === "create" && !(item.body ?? "").trim())
+      item.body = `This part owns ${item.name}.`;
+  await fs.writeFile(path.join(root, filename), JSON.stringify(batch));
+  return runNodeCommand("create", ["--draft", filename, "--json"], { workspace: root });
+}
+
 async function snapshot(root: string, prefix = ""): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
   for (const entry of (await fs.readdir(root, { withFileTypes: true })).sort((a, b) =>
@@ -603,7 +622,7 @@ async function snapshot(root: string, prefix = ""): Promise<Record<string, strin
   return result;
 }
 
-test("scan --draft writes an exact editable batch and full report; existing write-many produces the same checked map", async (t) => {
+test("scan --draft writes an exact editable batch and full report; create --draft produces the same checked map", async (t) => {
   const { root, adapter, write } = await fixture(t);
   await write("src/domain/item.ts");
   await write("src/adapter/client.ts", "import { value } from '../domain/item';");
@@ -637,10 +656,7 @@ test("scan --draft writes an exact editable batch and full report; existing writ
   assert.ok(!batch.items.some((item) => item.op === "create" && item.ref === "map"));
   const first = batch.items[0];
   if (first.op === "create") first.name = "Renamed code";
-  const written = await runNodeCommand("write-many", ["--input-json", "-", "--json"], {
-    workspace: root,
-    stdin: JSON.stringify(batch),
-  });
+  const written = await saveDraft(root, ".scratch/batch.json", batch);
   assert.equal(written.exitCode, 0, written.stderr);
   const tree = await loadTent(adapter);
   assert.equal(tree.byPath.size, batch.items.length);
@@ -652,11 +668,19 @@ test("scan --draft writes an exact editable batch and full report; existing writ
   assert.deepEqual(actual.inspectionErrors, []);
   assert.deepEqual(actual.issues, summary.issues);
   assert.equal(actual.modules.length, summary.modules.length);
+  const mapped = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
+  assert.equal(mapped.exitCode, 0, mapped.stderr);
+  const part = JSON.parse(mapped.stdout).parts.find(
+    (item: { name: string }) => item.name === "Setup",
+  );
+  assert.equal(part.path, ".tent/Setup");
+  assert.equal(part.files, 2);
+
   const again = await runWorkspaceCommand("scan", ["--draft", ".scratch/again.json"], {
     workspace: root,
   });
-  assert.equal(again.exitCode, 1);
-  assert.match(again.stderr, /Existing Nodes/);
+  assert.equal(again.exitCode, 0, again.stderr);
+  assert.equal(again.stdout, "");
   await assert.rejects(fs.stat(path.join(root, ".scratch/again.json")), { code: "ENOENT" });
 });
 
@@ -730,10 +754,7 @@ test("hierarchical draft writes once after renaming a parent and preserves child
   const parent = batch.items.find((item) => item.op === "create" && item.name === "src")!;
   assert.equal(parent.op, "create");
   if (parent.op === "create") parent.name = "Library product";
-  const result = await runNodeCommand("write-many", ["--input-json", "-", "--json"], {
-    workspace: root,
-    stdin: JSON.stringify(batch),
-  });
+  const result = await saveDraft(root, ".scratch/layers.json", batch);
   assert.equal(result.exitCode, 0, result.stderr);
   const repository = await readModuleMapRepository(root);
   const actual = await checkWorkspaceModules(adapter, root, repository);
@@ -747,7 +768,7 @@ test("hierarchical draft writes once after renaming a parent and preserves child
   assert.ok(actual.modules.some((module) => module.path.startsWith("Library product/library/")));
 });
 
-test("a size-split cycle stays small when the Agent records its linked exception in a child prompt", async (t) => {
+test("a size-split cycle stays small when the declaring part records its linked exception", async (t) => {
   const { root, adapter, write } = await fixture(t);
   const files = Array.from({ length: 12 }, (_, i) => `lib/part${i}.ts`);
   for (const file of files)
@@ -780,18 +801,10 @@ test("a size-split cycle stays small when the Agent records its linked exception
   );
   assert.ok(batch.items.every((item) => item.op === "create" && item.body === ""));
   const [first, second] = cycle.facts.nodeIds as string[];
-  batch.items.push({
-    op: "create",
-    ref: "rule",
-    parent: `@${first}`,
-    name: "Rendering contract",
-    type: "prompt",
-    body: `allow:deps.cycle [Partner](@${second}) Keep both parts small; coordinate the rendering contract.`,
-  });
-  const written = await runNodeCommand("write-many", ["--input-json", "-"], {
-    workspace: root,
-    stdin: JSON.stringify(batch),
-  });
+  const declaring = batch.items.find((item) => item.op === "create" && item.ref === first);
+  if (!declaring || declaring.op !== "create") throw new Error("Missing cycle part");
+  declaring.body = `allow:deps.cycle [Partner](@${second}) Keep both parts small; coordinate the rendering contract.`;
+  const written = await saveDraft(root, ".scratch/cycle.json", batch);
   assert.equal(written.exitCode, 0, written.stderr);
   const report = await checkWorkspaceModules(adapter, root, await readModuleMapRepository(root));
   assert.deepEqual(report.issues, []);
@@ -802,7 +815,7 @@ test("a size-split cycle stays small when the Agent records its linked exception
   assert.ok(report.modules.every((module) => module.productionFiles <= 10));
 });
 
-test("draft and live module queries derive current Python and script test imports without changing ordinary scan", async (t) => {
+test("draft and live scan derive current Python and script test imports", async (t) => {
   const { root, write } = await fixture(t);
   await write("pkg/alpha.py", "def alpha(): pass\n");
   await write("other/beta.py", "def beta(): pass\n");
@@ -810,7 +823,6 @@ test("draft and live module queries derive current Python and script test import
   await write("tests/test_alpha.py", "from pkg.alpha import alpha\n");
   await write("tests/helper.test.ts", 'import "../lib/helper";');
   await git(root, "add", ".");
-  const ordinary = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
   const prepared = await runWorkspaceCommand("scan", ["--draft", ".scratch/tests.json", "--json"], {
     workspace: root,
   });
@@ -826,15 +838,11 @@ test("draft and live module queries derive current Python and script test import
     summary.modules.find((module: { name: string }) => module.name === "lib")!.testedBy,
     ["tests/helper.test.ts"],
   );
-  const batch = await fs.readFile(path.join(root, ".scratch/tests.json"), "utf8");
-  const written = await runNodeCommand("write-many", ["--input-json", "-"], {
-    workspace: root,
-    stdin: batch,
-  });
+  const written = await saveDraft(root, ".scratch/tests.json");
   assert.equal(written.exitCode, 0, written.stderr);
   const before = await snapshot(path.join(root, ".tent"));
   const query = async () => {
-    const response = await runWorkspaceCommand("check-modules", ["--json"], { workspace: root });
+    const response = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
     assert.equal(response.exitCode, 0, response.stderr || response.stdout);
     return JSON.parse(response.stdout);
   };
@@ -854,11 +862,6 @@ test("draft and live module queries derive current Python and script test import
     ["tests/test_alpha.py"],
   );
   assert.deepEqual(await snapshot(path.join(root, ".tent")), before);
-  // Ordinary import facts remain production-only, even while the test source changes.
-  const after = JSON.parse(
-    (await runWorkspaceCommand("scan", ["--json"], { workspace: root })).stdout,
-  );
-  assert.deepEqual(after.imports, JSON.parse(ordinary.stdout).imports);
 });
 
 test("unresolved imports are one advisory count in draft and module checks, with full JSON diagnostics", async (t) => {
@@ -876,21 +879,16 @@ test("unresolved imports are one advisory count in draft and module checks, with
     result.stdout,
     /Import issues describe unresolved code references; they are advisory/,
   );
-  const batch = await fs.readFile(path.join(root, ".scratch/batch.json"), "utf8");
-  const written = await runNodeCommand("write-many", ["--input-json", "-"], {
-    workspace: root,
-    stdin: batch,
-  });
+  const written = await saveDraft(root, ".scratch/batch.json");
   assert.equal(written.exitCode, 0, written.stderr);
-  const json = await runWorkspaceCommand("check-modules", ["--json"], { workspace: root });
+  const json = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
   assert.equal(json.exitCode, 0, json.stderr);
   assert.equal(JSON.parse(json.stdout).importIssues.length, 1);
   assert.deepEqual(JSON.parse(json.stdout).issues, []);
-  const text = await runWorkspaceCommand("check-modules", [], { workspace: root });
+  const text = await runWorkspaceCommand("scan", [], { workspace: root });
   assert.equal(text.exitCode, 0);
   assert.equal(text.stdout, "");
-  assert.equal(text.stderr.trim().split("\n").length, 1);
-  assert.match(text.stderr, /^imports 1 references/);
+  assert.equal(text.stderr, "");
 });
 
 test("draft refuses replacement and .tent destinations, and normal scan remains unchanged", async (t) => {
@@ -961,7 +959,7 @@ test("draft CLI keeps full issue counts and exit 1 when both receipt formats omi
   assert.deepEqual(await snapshot(path.join(root, ".tent")), before);
 });
 
-test("a generated scan draft resumes through staged write-many and removes its report only on completion", async (t) => {
+test("a generated scan draft resumes through staged create --draft and removes its report only on completion", async (t) => {
   const { root, adapter, write } = await fixture(t);
   await write("a/one.ts");
   await write("b/two.ts");
@@ -984,7 +982,7 @@ test("a generated scan draft resumes through staged write-many and removes its r
   first.body = "This part owns the first independent responsibility.";
   await fs.writeFile(filename, JSON.stringify(batch));
   const options = { workspace: root, json: true };
-  const one = await runNodeCommand("write-many", ["--draft", destination], options);
+  const one = await runNodeCommand("create", ["--draft", destination], options);
   assert.equal(one.exitCode, 0, one.stderr);
   const firstNode = JSON.parse(one.stdout).results[0].nodeId;
   assert.equal((await loadTent(adapter)).byPath.size, 1);
@@ -998,7 +996,7 @@ test("a generated scan draft resumes through staged write-many and removes its r
     if (item.op === "create") item.body = `This part owns ${item.name}.`;
   }
   await fs.writeFile(filename, JSON.stringify(remaining));
-  const completed = await runNodeCommand("write-many", ["--draft", destination], options);
+  const completed = await runNodeCommand("create", ["--draft", destination], options);
   assert.equal(completed.exitCode, 0, completed.stderr);
   assert.equal(JSON.parse(completed.stdout).results.length, itemCount - 1);
   await assert.rejects(fs.stat(filename), { code: "ENOENT" });

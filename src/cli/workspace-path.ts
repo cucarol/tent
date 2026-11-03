@@ -22,5 +22,7 @@ export async function resolveWorkspacePaths(options: {
         `Expected <workspace>/.tent/.`,
     );
   }
+  const { repositoryCommand } = await import("../fs/repository-command.js");
+  await repositoryCommand(workspaceRoot, ["rev-parse", "--show-toplevel"]);
   return { workspaceRoot: path.resolve(workspaceRoot), systemRoot: path.resolve(systemRoot) };
 }

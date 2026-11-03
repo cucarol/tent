@@ -1,573 +1,338 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
-import { initializeFixtureHistory } from "./scratch.js";
-import { testScratchRoot } from "./scratch.js";
+import { initializeFixtureHistory, testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import { test } from "node:test";
-import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import test, { type TestContext } from "node:test";
 import { nodeHelpText, runNodeCommand } from "../src/cli/node-commands.js";
-import { runWorkspaceCommand, workspaceHelpText } from "../src/cli/workspace-commands.js";
-import { runRoleCommand } from "../src/cli/role-commands.js";
-import { runCardCommand } from "../src/cli/card-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { NodeFs, SystemClock } from "../src/fs/node-fs.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { moveNode } from "../src/core/graph/move-ops.js";
-import { readNode, listNodes } from "../src/core/read/node-query.js";
-import { git } from "./helpers.js";
 
-async function fixture(t: { after(fn: () => Promise<void>): void }, name: string) {
-  const scratch = path.resolve(testScratchRoot());
-  await fs.mkdir(scratch, { recursive: true });
-  const root = await fs.mkdtemp(path.join(scratch, name));
+async function fixture(t: TestContext) {
+  const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-cli-"));
   t.after(() =>
     removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
   await scaffoldInWorkspace(openTestFs(root), {
-    name,
-    nodes: [
-      { id: "node-parent", name: "Parent", type: "goal", body: "parent" },
-      { id: "node-other", name: "Other", type: "prompt", body: "unselected-body" },
-    ],
+    name: "Node commands",
+    nodes: [{ id: "node-parent", name: "Parent", type: "goal", body: "Parent body" }],
   });
   const tent = openTestFs(path.join(root, ".tent"));
-  const parse = (result: { exitCode: number; stdout: string; stderr: string }) => {
+  await initializeFixtureHistory(path.join(root, ".tent"));
+  const cli = async (sub: string, args: string[], stdin?: string) => {
+    const result = await runNodeCommand(sub, args, { workspace: root, json: true, stdin });
     assert.equal(result.exitCode, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
-  const cli = async (sub: string, args: string[], stdin?: string) =>
-    parse(await runNodeCommand(sub, args, { workspace: root, json: true, stdin }));
-  return { root, tent, cli, parse };
+  const read = async (file: string) =>
+    parseFrontmatter(await fs.readFile(path.join(root, file), "utf8"));
+  return { root, tent, cli, read };
 }
 
-test("Node, Role, Card and batch reads use text for body and raw content without a body alias", async (t) => {
-  const { root, cli, parse } = await fixture(t, "uniform-reader-text-");
-  await initializeFixtureHistory(path.join(root, ".tent"));
-  const globals = { workspace: root, json: true };
-  const role = parse(
-    await runRoleCommand("create", ["--title", "Reader", "--body", "role body"], globals),
-  );
-  const card = parse(await runCardCommand("create", ["--prompt", "card body"], globals));
-  const assertText = (value: Record<string, unknown>, expected: string, raw: boolean) => {
-    assert.equal(typeof value.text, "string");
-    assert.equal("body" in value, false);
-    if (raw) {
-      assert.match(value.text as string, /^---/);
-      assert.ok((value.text as string).endsWith(expected));
-    } else assert.equal(value.text, expected);
-  };
-  for (const view of ["body", "raw"]) {
-    for (const full of [[], ["--full"]])
-      assertText(
-        await cli("get", ["node-parent", "--view", view, ...full]),
-        "parent",
-        view === "raw",
-      );
-    const batch = await cli("read-many", ["node-parent", "node-other", "--view", view]);
-    assertText(batch.items[0], "parent", view === "raw");
-    assertText(batch.items[1], "unselected-body", view === "raw");
-    assertText(
-      parse(await runRoleCommand("show", [role.roleId, "--view", view], globals)),
-      "role body",
-      view === "raw",
-    );
-    assertText(
-      parse(await runCardCommand("show", [card.cardId, "--view", view], globals)),
-      "card body",
-      view === "raw",
-    );
-  }
-  const fullTree = await cli("list", ["--full"]);
-  assertText(
-    fullTree.nodes.find((node: { nodeId: string }) => node.nodeId === "node-parent"),
-    "parent",
-    false,
-  );
-});
-
-test("direct Node CLI creates standard materials and uses observed CAS for metadata and structure", async (t) => {
-  const { root, tent, cli } = await fixture(t, "direct-node-");
-  const sources = [
-    { resource: "./spec.md", custom: { order: [2, 1] } },
-    { resource: "customer discussion" },
-  ];
+test("create stores description, repeated sources and stdin under the selected parent", async (t) => {
+  const { root, cli, read } = await fixture(t);
+  await fs.mkdir(path.join(root, "docs"));
+  await fs.writeFile(path.join(root, "docs/spec.md"), "# Part\nFacts");
   const created = (
     await cli(
       "create",
       [
         "Child",
+        "--id",
+        "node-child",
         "--parent",
         "node-parent",
         "--type",
         "output",
+        "--description",
+        "Reusable facts.",
         "--body",
         "-",
         "--resource",
-        "src/main.ts",
-        "--sources-json",
-        JSON.stringify(sources),
+        "docs/spec.md#Part",
+        "--source",
+        "docs/spec.md",
+        "--source",
+        "customer discussion",
         "--tags",
-        "scope,proof",
+        "evidence,ui",
       ],
-      "exact body\n",
+      "Exact body\n",
     )
   ).node;
-  const id = created.nodeId;
-  const old = await cli("get", [id, "--full"]);
+  assert.equal(created.nodeId, "node-child");
   assert.equal(created.path, ".tent/Parent/Child/Child.md");
-  assert.equal(old.text, "exact body\n");
-  assert.equal("body" in old, false);
-  assert.deepEqual(parseFrontmatter(await tent.readFile("Parent/Child/Child.md")).data.sources, [
-    { ...sources[0], resource: "../../../spec.md" },
-    sources[1],
+  const saved = await read(created.path);
+  assert.equal(saved.body, "Exact body\n");
+  assert.equal(saved.data.description, "Reusable facts.");
+  assert.equal(saved.data.resource, "../../../docs/spec.md#Part");
+  assert.deepEqual(saved.data.sources, [
+    { resource: "../../../docs/spec.md" },
+    { resource: "customer discussion" },
   ]);
-  const saved = await cli(
-    "write",
-    [id, "--input-json", "-"],
-    JSON.stringify({
-      baseEtag: old.etag,
-      body: "external update",
-      frontmatter: { description: "visible summary", custom: [3, 2, 1] },
-      readBack: true,
-    }),
-  );
-  assert.equal(saved.readBack.text, "external update");
-  assert.equal(saved.path, created.path);
-  assert.equal(saved.readBack.path, created.path);
-  assert.equal(
-    parseFrontmatter(await fs.readFile(path.join(root, saved.path), "utf8")).body,
-    saved.readBack.text,
-  );
-  for (const [sub, args] of [
-    ["write", [id, "--body", "stale", "--base-etag", old.etag]],
-    [
-      "write",
-      [id, "--input-json", JSON.stringify({ baseEtag: old.etag, frontmatter: { type: "prompt" } })],
-    ],
-    [
-      "write",
-      [id, "--input-json", JSON.stringify({ baseEtag: old.etag, frontmatter: { tags: ["lost"] } })],
-    ],
-  ] as const) {
-    const rejected = await runNodeCommand(sub, [...args], { workspace: root });
-    assert.equal(rejected.exitCode, 1);
-    assert.match(rejected.stderr, /conflict|etag/i);
+  assert.deepEqual(saved.data.tags, ["evidence", "ui"]);
+});
+
+test("create validates identity, parent and safe names before publishing a Node", async (t) => {
+  const { root, cli, read } = await fixture(t);
+  await cli("create", ["Existing", "--id", "node-existing", "--type", "prompt"]);
+  for (const args of [
+    ["Duplicate", "--id", "node-existing", "--type", "goal"],
+    ["Missing parent", "--parent", "node-missing", "--type", "prompt"],
+    ["../Escape", "--type", "prompt"],
+    ["cards", "--type", "prompt"],
+    ["Invalid type", "--type", "output-asset"],
+    ["Missing type"],
+  ]) {
+    const result = await runNodeCommand("create", args, { workspace: root });
+    assert.equal(result.exitCode, 1, JSON.stringify(args));
   }
-  assert.deepEqual(
-    parseFrontmatter(await tent.readFile("Parent/Child/Child.md")).data.custom,
-    [3, 2, 1],
-  );
-  await cli("write", [
-    id,
-    "--input-json",
-    JSON.stringify({ baseEtag: saved.etag, frontmatter: { tags: ["kept", "proof", "scope"] } }),
-  ]);
-  assert.deepEqual((await cli("get", [id, "--view", "summary"])).tags, ["kept", "proof", "scope"]);
-  const tree = await cli("list", ["--full"]);
-  assert.equal(
-    tree.nodes.find((n: { nodeId: string }) => n.nodeId === "node-parent").children[0].text,
-    "external update",
-  );
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const renamed = await cli("rename", [id, "Renamed"]);
-    assert.equal(renamed.path, ".tent/Parent/Renamed/Renamed.md");
-    assert.equal(
-      parseFrontmatter(await fs.readFile(path.join(root, renamed.path), "utf8")).body,
-      "external update",
-    );
-  }
-  const env = {
-    fs: tent,
-    clock: new SystemClock(),
-    tentName: "test",
-    tentRoot: path.join(root, ".tent"),
-  };
-  await assert.rejects(moveNode(env, id, null, { mode: "inside" }, "Parent/Child"), /path changed/);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const moved = await cli("move", [id, "--parent", "root"]);
-    assert.equal(moved.path, ".tent/Renamed/Renamed.md");
-    assert.equal(
-      parseFrontmatter(await fs.readFile(path.join(root, moved.path), "utf8")).body,
-      "external update",
-    );
-  }
-  assert.equal((await cli("get", [id, "--view", "summary"])).path, ".tent/Renamed/Renamed.md");
-  await cli("delete", [id]);
-  assert.equal(await tent.exists("Renamed"), false);
-  for (const args of [["--attach-only"], ["--service-entry", "unused"], ["--data-dir", "unused"]]) {
-    const rejected = await runNodeCommand("list", args, { workspace: root });
-    assert.equal(rejected.exitCode, 1);
-    assert.match(rejected.stderr, /Unknown option/);
+  assert.equal((await read(".tent/Existing/Existing.md")).data.id, "node-existing");
+  const entries = await fs.readdir(path.join(root, ".tent"));
+  for (const absent of ["Duplicate", "Missing parent", "Escape", "Invalid type", "Missing type"])
+    assert.equal(entries.includes(absent), false, absent);
+});
+
+test("all three Node types use the same explicit material creation path", async (t) => {
+  const { cli, read } = await fixture(t);
+  for (const type of ["goal", "prompt", "output"]) {
+    const created = (
+      await cli("create", [type, "--type", type, "--source", "./src/", "--body", "Facts"])
+    ).node;
+    const saved = await read(created.path);
+    assert.equal(saved.data.type, type);
+    assert.deepEqual(saved.data.sources, [{ resource: "../../src/" }]);
+    assert.equal(saved.body, "Facts");
   }
 });
 
-test("direct selected queries read headers elsewhere, retain selected bytes and never resume pending mutations", async (t) => {
-  const { root, tent } = await fixture(t, "direct-query-");
-  await initializeFixtureHistory(path.join(root, ".tent"));
-  await tent.writeFile("node-move.pending.json", "broken pending operation");
-  const bodyReads: string[] = [];
-  const observed = new Proxy(tent, {
-    get(target, key) {
-      if (key === "readFile")
-        return async (file: string) => {
-          if (file.endsWith(".md")) bodyReads.push(file);
-          if (file === "Other/Other.md") throw new Error("unrelated body was read");
-          return target.readFile(file);
-        };
-      const value: unknown = Reflect.get(target, key);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  await listNodes(observed, "ws-test", {});
-  await readNode(observed, "ws-test", { nodeId: "node-parent", view: "summary" });
-  assert.deepEqual(bodyReads, []);
-  const read = (await readNode(observed, "ws-test", { nodeId: "node-parent", capture: true })).node;
-  assert.ok("text" in read);
-  assert.equal(read.text, "parent");
-  assert.deepEqual(bodyReads, ["Parent/Parent.md"]);
-  assert.deepEqual(await tent.history.retainedPaths(), ["Parent/Parent.md"]);
-  assert.equal(await tent.readFile("node-move.pending.json"), "broken pending operation");
-});
-
-test("separate direct CLI processes retain Git versions and reject a stale edit without a Service", async (t) => {
-  const { root, tent, parse } = await fixture(t, "direct-node-process-");
-  await initializeFixtureHistory(path.join(root, ".tent"));
-  const cli = (sub: string, args: string[]) =>
-    new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve, reject) => {
-      const child = spawn(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          path.resolve("src/cli/tent.ts"),
-          "node",
-          sub,
-          "--workspace",
-          root,
-          "--json",
-          ...args,
-        ],
-        {
-          windowsHide: true,
-          stdio: ["ignore", "pipe", "pipe"],
-          env: {
-            ...process.env,
-            TENT_SERVICE_ENTRY: "must-not-run",
-            TENT_SERVICE_DATA_DIR: path.join(root, "absent-service"),
-          },
-        },
-      );
-      let stdout = "",
-        stderr = "";
-      child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
-      child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
-      child.on("error", reject);
-      child.on("close", (code) => resolve({ exitCode: code ?? 1, stdout, stderr }));
-    });
-  const before = parse(await cli("get", ["node-parent", "--full"]));
-  const beforeVersion = (
-    await tent.history.captureUnlocked(
-      [{ path: "Parent/Parent.md", raw: await tent.readFile("Parent/Parent.md") }],
-      { operation: "test.fixture" },
-    )
-  ).versions[0];
-  assert.equal("version" in before, false);
-  const saved = parse(
-    await cli("write", ["node-parent", "--body", "next", "--base-etag", before.etag]),
-  );
-  assert.ok(saved.version.commit);
-  assert.notEqual(saved.version.commit, beforeVersion!.commit);
-  const history = parse(await cli("history", ["node-parent"]));
-  assert.ok(history.items.some((item: { changes: unknown[] }) => item.changes.length > 0));
-  const stale = await cli("write", ["node-parent", "--body", "lost", "--base-etag", before.etag]);
-  assert.equal(stale.exitCode, 1);
-  assert.match(stale.stderr, /conflict/i);
-  const prior = parse(
-    await cli("get", ["node-parent", "--version-json", JSON.stringify(beforeVersion)]),
-  );
-  assert.equal(prior.text, "parent");
-  parse(await cli("archive", ["node-parent"]));
-  assert.equal(parseFrontmatter(await tent.readFile("Parent/Parent.md")).data.status, "deprecated");
-  const archived = parse(await cli("get", ["node-parent", "--full"]));
-  parse(
-    await cli("write", [
+test("rename, move, archive and delete preserve native document edits and retain history", async (t) => {
+  const { root, tent, cli, read } = await fixture(t);
+  const created = (
+    await cli("create", [
+      "Child",
+      "--parent",
       "node-parent",
-      "--input-json",
-      JSON.stringify({
-        baseEtag: archived.etag,
-        frontmatter: { status: "stable" },
-      }),
-    ]),
+      "--type",
+      "prompt",
+      "--body",
+      "Original",
+    ])
+  ).node;
+  const filename = path.join(root, created.path);
+  await fs.writeFile(
+    filename,
+    (await fs.readFile(filename, "utf8")).replace("Original", "Native update"),
   );
-  assert.equal(parseFrontmatter(await tent.readFile("Parent/Parent.md")).data.status, "stable");
-  assert.equal(parseFrontmatter(await tent.readFile("Parent/Parent.md")).body, "next");
-  await assert.rejects(fs.stat(path.join(root, "absent-service")), { code: "ENOENT" });
-});
-
-test("node list filters exact types and every tag across a subtree, with paging and archives", async (t) => {
-  const { root, cli } = await fixture(t, "list-filters-");
-  const make = async (name: string, type: string, parent: string, tags = "") =>
-    (
-      await cli("create", [
-        name,
-        "--type",
-        type,
-        "--parent",
-        parent,
-        ...(tags ? ["--tags", tags] : []),
-      ])
-    ).node.nodeId as string;
-  const evidence = await make("Evidence", "output", "node-parent", "evidence,ui");
-  const issue = await make("Issue", "output", "node-parent", "issue,ui");
-  const decision = await make("Decision", "prompt", "node-parent", "decision");
-  const nested = await make("Nested", "goal", "node-parent");
-  const deep = await make("Deep", "output", nested, "evidence");
-  const old = await make("Old", "output", "node-other", "evidence,legacy");
-  const read = await cli("get", [old, "--full"]);
-  await cli(
-    "write",
-    [old, "--input-json", "-"],
-    JSON.stringify({ baseEtag: read.etag, frontmatter: { status: "deprecated" } }),
+  const renamed = await cli("rename", [created.nodeId, "Renamed"]);
+  assert.equal(renamed.path, ".tent/Parent/Renamed/Renamed.md");
+  assert.equal((await read(renamed.path)).body, "Native update");
+  const env = { fs: tent, clock: { now: () => "2026-11-03T00:00:00Z" }, tentName: "Node commands" };
+  await assert.rejects(
+    moveNode(env, created.nodeId, null, { mode: "inside" }, "Parent/Child"),
+    /path changed/,
   );
-  const ids = async (...args: string[]) =>
-    (await cli("list", args)).items.map((item: { nodeId: string }) => item.nodeId);
-
-  assert.deepEqual(
-    await ids("--parent", "node-parent"),
-    [evidence, issue, decision, nested],
-    "without filters only direct children are listed",
-  );
-  assert.deepEqual(await ids("--type", "output"), [evidence, issue, deep]);
-  assert.deepEqual(await ids("--tag", "ui"), [evidence, issue]);
-  assert.deepEqual(await ids("--tag", "evidence", "--tag", "ui"), [evidence]);
-  assert.deepEqual(await ids("--type", "output", "--tag", "evidence"), [evidence, deep]);
-  assert.deepEqual(
-    (await ids("--tag", "evidence", "--include-archived")).sort(),
-    [deep, evidence, old].sort(),
-  );
-  assert.deepEqual(await ids("--parent", nested, "--type", "output"), [deep]);
-  assert.deepEqual(await ids("--type", "prompt", "--tag", "decision"), [decision]);
-  assert.deepEqual(await ids("--type", "goal", "--tag", "ui"), []);
-  const first = await cli("list", ["--type", "output", "--limit", "1"]);
-  assert.deepEqual(first.scope, { parentNodeId: null, includeArchived: false, type: "output" });
-  assert.equal(first.items[0].nodeId, evidence);
-  const second = await cli("list", [
-    "--type",
-    "output",
-    "--limit",
-    "1",
-    "--cursor",
-    first.page.nextCursor,
-  ]);
-  assert.equal(second.items[0].nodeId, issue);
-
-  for (const [args, message] of [
-    [["--type", "output-evidence"], "--type must be goal, prompt or output.\n"],
-    [["--type", "Output"], "--type must be goal, prompt or output.\n"],
-    [["--full", "--type", "output"], "--full cannot be combined with reader filters or paging.\n"],
-    [["--full", "--tag", "ui"], "--full cannot be combined with reader filters or paging.\n"],
-  ] as const) {
-    const rejected = await runNodeCommand("list", [...args], { workspace: root });
-    assert.equal(rejected.exitCode, 1);
-    assert.equal(rejected.stderr, message + "Next: tent node --help\n");
-  }
-  const misplaced = await runNodeCommand("get", [evidence, "--tag", "ui"], { workspace: root });
-  assert.equal(misplaced.exitCode, 1);
-  assert.equal(misplaced.stderr, "--tag is only valid for node list\nNext: tent node --help\n");
-});
-
-test("every tag node tags counts can select its Node in node list", async (t) => {
-  const { tent, cli } = await fixture(t, "tag-filter-normalized-");
-  await tent.mkdir("Padded");
-  await tent.writeFile(
-    "Padded/Padded.md",
-    '---\nid: node-padded\ntype: prompt\ntags: ["  evidence  ", analysis, "  "]\n---\nhand-written\n',
-  );
-  assert.deepEqual((await cli("tags", [])).tags, [
-    { tag: "analysis", count: 1, preset: true },
-    { tag: "evidence", count: 1, preset: true },
-  ]);
-  for (const tag of ["evidence", "  evidence  "]) {
-    const listed = await cli("list", ["--tag", tag]);
-    assert.deepEqual(
-      listed.items.map((item: { nodeId: string; tags: string[] }) => [item.nodeId, item.tags]),
-      [["node-padded", ["evidence", "analysis"]]],
-      JSON.stringify(tag),
-    );
-  }
-});
-
-test("node tags lists tags in use with counts and preset marks; types accept exactly three values", async (t) => {
-  const { root, cli } = await fixture(t, "tag-counts-");
-  for (const [name, tags] of [
-    ["A", "evidence,ui"],
-    ["B", "ui,evidence"],
-    ["C", "decision"],
-    ["D", "issue"],
-  ])
-    await cli("create", [name, "--type", "output", "--tags", tags]);
-  const old = (await cli("create", ["Old", "--type", "output", "--tags", "legacy,evidence"])).node
-    .nodeId;
-  const read = await cli("get", [old, "--full"]);
-  await cli(
-    "write",
-    [old, "--input-json", "-"],
-    JSON.stringify({ baseEtag: read.etag, frontmatter: { status: "deprecated" } }),
-  );
-  const presets = [
-    "direction",
-    "requirement",
-    "decision",
-    "spec",
-    "reference",
-    "procedure",
-    "asset",
-    "evidence",
-    "analysis",
-    "issue",
-  ];
-  const listed = await cli("tags", []);
-  assert.deepEqual(listed.tags, [
-    { tag: "evidence", count: 2, preset: true },
-    { tag: "ui", count: 2, preset: false },
-    { tag: "decision", count: 1, preset: true },
-    { tag: "issue", count: 1, preset: true },
-  ]);
-  assert.deepEqual(listed.presets, presets);
-  assert.deepEqual((await cli("tags", ["--include-archived"])).tags.slice(0, 2), [
-    { tag: "evidence", count: 3, preset: true },
-    { tag: "ui", count: 2, preset: false },
-  ]);
-  const text = await runNodeCommand("tags", [], { workspace: root });
-  assert.equal(text.exitCode, 0, text.stderr);
+  await cli("move", [created.nodeId, "--parent", "root"]);
+  const moved = ".tent/Renamed/Renamed.md";
+  assert.equal((await read(moved)).body, "Native update");
+  await cli("archive", [created.nodeId]);
+  assert.equal((await read(moved)).data.status, "deprecated");
+  const history = await cli("history", [created.nodeId, "--limit", "1"]);
+  assert.equal(history.items.length, 1);
+  assert.ok(history.page.nextCursor);
   assert.equal(
-    text.stdout,
-    [
-      "2  evidence  (preset)",
-      "2  ui",
-      "1  decision  (preset)",
-      "1  issue  (preset)",
-      `Presets: ${presets.join(", ")}`,
-      "",
-    ].join("\n"),
+    (await cli("history", [created.nodeId, "--limit", "1", "--cursor", history.page.nextCursor]))
+      .items.length,
+    1,
   );
-  const rejectedTags = await runNodeCommand("tags", ["--limit", "2"], { workspace: root });
-  assert.equal(rejectedTags.exitCode, 1);
-
-  const created = await runNodeCommand("create", ["Bad", "--type", "output-asset"], {
-    workspace: root,
-  });
-  assert.equal(created.exitCode, 1);
-  assert.equal(created.stderr.split("\n")[0], "Node type must be goal, prompt or output.");
-  assert.match(
-    created.stderr.split("\n").slice(1).join("\n"),
-    /^Next: tent node create --help --workspace .+  # words like decision or evidence go in --tags\n$/,
-  );
-  const target = (await cli("create", ["Typed", "--type", "prompt"])).node;
-  const changed = await runNodeCommand(
-    "write",
-    [
-      target.nodeId,
-      "--input-json",
-      JSON.stringify({
-        baseEtag: (await cli("get", [target.nodeId, "--full"])).etag,
-        frontmatter: { type: "prompt-decision" },
-      }),
-    ],
-    { workspace: root },
-  );
-  assert.equal(changed.exitCode, 1);
-  assert.equal(changed.stderr.split("\n")[0], "Node type must be goal, prompt or output.");
-  assert.match(
-    changed.stderr.split("\n").slice(1).join("\n"),
-    /^Next: tent node write --help --workspace .+\n$/,
-  );
-  const full = await cli("get", [target.nodeId, "--full"]);
-  await cli("write", [
-    target.nodeId,
-    "--input-json",
-    JSON.stringify({ baseEtag: full.etag, frontmatter: { type: "goal" } }),
-  ]);
-  assert.equal((await cli("get", [target.nodeId, "--view", "summary"])).type, "goal");
+  await cli("delete", [created.nodeId]);
+  await assert.rejects(fs.stat(path.join(root, ".tent/Renamed")), { code: "ENOENT" });
 });
 
-test("link-output creates a plain output and adds only the tags it is given", async (t) => {
-  const { root, cli } = await fixture(t, "link-output-tags-");
-  await fs.writeFile(path.join(root, "page.html"), "<p>done</p>");
-  const plain = await cli("link-output", ["node-parent", "--resource", "page.html"]);
-  const plainNode = await cli("get", [plain.nodeId, "--view", "summary"]);
-  assert.equal(plainNode.type, "output");
-  assert.deepEqual(plainNode.tags, []);
-  const tagged = await cli("link-output", [
-    "node-parent",
-    "--resource",
-    "page.html",
-    "--name",
-    "Tagged",
-    "--tags",
-    "asset,ui",
-  ]);
-  const taggedNode = await cli("get", [tagged.nodeId, "--view", "summary"]);
-  assert.equal(taggedNode.type, "output");
-  assert.deepEqual(taggedNode.tags, ["asset", "ui"]);
-  assert.deepEqual(
-    (await cli("list", ["--type", "output", "--tag", "asset"])).items.map(
-      (item: { nodeId: string }) => item.nodeId,
-    ),
-    [tagged.nodeId],
+test("removed Node commands and creation flags reject without capturing or rewriting native edits", async (t) => {
+  const { root, tent, cli } = await fixture(t);
+  const created = (
+    await cli("create", ["Kept", "--id", "node-kept", "--type", "prompt", "--body", "Before"])
+  ).node;
+  const filename = path.join(root, created.path);
+  await fs.writeFile(
+    filename,
+    (await fs.readFile(filename, "utf8")).replace("Before", "Native edit awaiting capture"),
   );
-});
-
-test("removed convenience commands are unavailable and leave document and history unchanged", async (t) => {
-  const { root, tent, cli } = await fixture(t, "removed-node-commands-");
-  await initializeFixtureHistory(path.join(root, ".tent"));
-  await cli("create", [
-    "Tagged",
-    "--id",
-    "node-tagged",
-    "--type",
-    "prompt",
-    "--tags",
-    "evidence",
-    "--body",
-    "## Facts\nKept.\n",
-  ]);
-  const captured = await tent.readFile("Tagged/Tagged.md");
-  await tent.writeFile(
-    "Tagged/Tagged.md",
-    captured.replace("Kept.", "Native edit awaiting capture."),
-  );
-  const before = await tent.readFile("Tagged/Tagged.md");
+  const before = await fs.readFile(filename, "utf8");
   const head = await tent.history.currentCommit();
-  const globals = { workspace: root, json: true };
-  for (const [command, args] of [
-    ["get-section", ["node-tagged", "--heading", "Facts"]],
-    [
-      "write-section",
-      ["node-tagged", "--heading", "Facts", "--body", "lost", "--base-etag", "stale"],
-    ],
-    ["type", ["node-tagged", "output", "--base-etag", "stale"]],
-    ["diff", ["--from-json", "{}", "--to-json", "{}"]],
-    ...["set", "add", "remove"].map((action) => [
+  const calls: Array<[string, string[]]> = [
+    ...[
+      "get",
+      "list",
+      "read-many",
+      "search",
       "tags",
-      [action, "node-tagged", "lost", "--base-etag", "stale"],
+      "write",
+      "write-many",
+      "append",
+      "create-many",
+      "link-output",
+      "get-section",
+      "write-section",
+      "type",
+      "diff",
+    ].map((command): [string, string[]] => [command, ["node-kept"]]),
+    ...["--sources-json", "--card", "--role"].map((flag): [string, string[]] => [
+      "create",
+      ["Rejected", "--type", "output", flag, "{}"],
     ]),
-  ] as Array<[string, string[]]>) {
-    const result = await runNodeCommand(command, args, globals);
+  ];
+  for (const [command, args] of calls) {
+    const result = await runNodeCommand(command, args, { workspace: root });
     assert.equal(result.exitCode, 1, command);
     assert.equal(result.stdout, "", command);
-    assert.equal(await tent.readFile("Tagged/Tagged.md"), before, command);
+    assert.equal(await fs.readFile(filename, "utf8"), before, command);
     assert.equal(await tent.history.currentCommit(), head, command);
   }
-  const removedChanges = await runWorkspaceCommand("changes", [], globals);
-  assert.equal(removedChanges.exitCode, 1);
-  assert.equal(removedChanges.stdout, "");
-  assert.equal(await tent.history.currentCommit(), head);
-  assert.ok((await cli("tags", [])).tags.some((item: { tag: string }) => item.tag === "evidence"));
+  await assert.rejects(fs.stat(path.join(root, ".tent/Rejected")), { code: "ENOENT" });
   assert.doesNotMatch(
     nodeHelpText(),
-    /tent node (?:get-section|write-section|type|diff)\b|tags set\|add\|remove/,
+    /tent node (?:get|list|write|append|search|tags|link-output)\b/,
   );
-  assert.doesNotMatch(workspaceHelpText, /workspace changes/);
+});
+
+test("create preserves an unsettled recovery record and fails before publishing a Node", async (t) => {
+  const { root, tent } = await fixture(t);
+  const parentFile = path.join(root, ".tent/Parent/Parent.md");
+  const parent = await fs.readFile(parentFile, "utf8");
+  const marker = path.join(root, ".tent/node-move.pending.json");
+  await fs.writeFile(marker, "Unsettled move record");
+  const head = await tent.history.currentCommit();
+  const result = await runNodeCommand("create", ["Blocked", "--type", "prompt"], {
+    workspace: root,
+  });
+  assert.equal(result.exitCode, 1);
+  assert.equal(await fs.readFile(marker, "utf8"), "Unsettled move record");
+  assert.equal(await fs.readFile(parentFile, "utf8"), parent);
+  assert.equal(await tent.history.currentCommit(), head);
+  await assert.rejects(fs.stat(path.join(root, ".tent/Blocked")), { code: "ENOENT" });
+});
+
+test("history --version prints exact complete bytes after moves and deletion and rejects missing paths", async (t) => {
+  const { root, tent, cli } = await fixture(t);
+  const body = "A full retained paragraph.\r\n".repeat(6000) + "trailing spaces  \r\n\r\n";
+  const created = (await cli("create", ["Historical", "--type", "output", "--body", body])).node;
+  const raw = await fs.readFile(path.join(root, created.path), "utf8");
+  const listing = await cli("history", [created.nodeId]);
+  const original = listing.items.find(
+    (item: { operation: string }) => item.operation === "node.create",
+  ).changes[0].after;
+  const selector = JSON.stringify(original);
+  await cli("rename", [created.nodeId, "Moved"]);
+  await cli("move", [created.nodeId, "--parent", "node-parent"]);
+  const result = await runNodeCommand("history", [created.nodeId, "--version", selector], {
+    workspace: root,
+  });
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(result.stdout, raw);
+  const json = await cli("history", [created.nodeId, "--version", selector]);
+  assert.equal(json.text, raw);
+  assert.equal(json.partial, false);
+  await cli("delete", [created.nodeId]);
+  const deleted = (await cli("history", [created.nodeId])).items.find(
+    (item: { operation: string }) => item.operation === "node.delete",
+  ).commit;
+  const missing = await runNodeCommand(
+    "history",
+    [created.nodeId, "--version", JSON.stringify({ ...original, commit: deleted })],
+    { workspace: root },
+  );
+  assert.equal(missing.exitCode, 1);
+  assert.equal(missing.stdout, "");
+  assert.match(missing.stderr, /Document absent at SQLite event/);
+  assert.equal(
+    (await runNodeCommand("history", [created.nodeId, "--version", selector], { workspace: root }))
+      .stdout,
+    raw,
+  );
+  const head = await tent.history.currentCommit();
+  for (const args of [
+    [created.nodeId, "--version", "f".repeat(64)],
+    [created.nodeId, "--version", original.commit],
+    [created.nodeId, "--version", JSON.stringify({ commit: original.commit })],
+    [created.nodeId, "--version", JSON.stringify({ ...original, path: "Absent/Absent.md" })],
+    [created.nodeId, "--version", selector, "--limit", "1"],
+  ]) {
+    assert.equal((await runNodeCommand("history", args, { workspace: root })).exitCode, 1);
+    assert.equal(await tent.history.currentCommit(), head);
+  }
+});
+
+test("history --version reads an unchanged Node in another event and verifies its identity", async (t) => {
+  const { root, cli } = await fixture(t);
+  const created = (await cli("create", ["Original", "--type", "prompt", "--body", "Facts"])).node;
+  const original = (await cli("history", [created.nodeId])).items[0].changes[0].after;
+  const raw = await fs.readFile(path.join(root, created.path), "utf8");
+  const other = (await cli("create", ["Other", "--type", "goal", "--body", "Other facts"])).node;
+  const otherVersion = (await cli("history", [other.nodeId])).items[0].changes[0].after;
+  assert.equal(
+    (
+      await cli("history", [
+        created.nodeId,
+        "--version",
+        JSON.stringify({
+          ...original,
+          commit: otherVersion.commit,
+        }),
+      ])
+    ).text,
+    raw,
+  );
+  const wrong = await runNodeCommand(
+    "history",
+    [created.nodeId, "--version", JSON.stringify(otherVersion)],
+    { workspace: root },
+  );
+  assert.equal(wrong.exitCode, 1);
+  assert.equal(wrong.stdout, "");
+  assert.match(wrong.stderr, /belongs to another Node/);
+});
+
+test("history --version permits retired fields in historical raw but rejects invalid ids and types", async (t) => {
+  const { root, tent, cli } = await fixture(t);
+  const created = (await cli("create", ["Legacy", "--id", "node-legacy", "--type", "prompt"])).node;
+  const historical =
+    "---\r\nid: node-legacy\r\ntype: prompt\r\nverified: true\r\nsha256: old\r\nsources:\r\n  - resource: old input\r\n    sha256: retired\r\n---\r\nHistorical bytes  \r\n\r\n";
+  const file = "Legacy/Legacy.md";
+  const saved = await tent.history.captureUnlocked([{ path: file, raw: historical }], {
+    operation: "test.old-document",
+  });
+  assert.equal(
+    (await cli("history", [created.nodeId, "--version", JSON.stringify(saved.versions[0])])).text,
+    historical,
+  );
+  for (const [raw, diagnostic] of [
+    [historical.replace("type: prompt", "type: custom"), /type must be goal, prompt or output/],
+    [historical.replace("type: prompt\r\n", ""), /type must be goal, prompt or output/],
+    [historical.replace("id: node-legacy", "id: legacy"), /canonical Node id/],
+  ] as const) {
+    const version = (
+      await tent.history.captureUnlocked([{ path: file, raw }], {
+        operation: "test.invalid-document",
+      })
+    ).versions[0];
+    const rejected = await runNodeCommand(
+      "history",
+      [created.nodeId, "--version", JSON.stringify(version)],
+      {
+        workspace: root,
+      },
+    );
+    assert.equal(rejected.exitCode, 1);
+    assert.equal(rejected.stdout, "");
+    assert.match(rejected.stderr, diagnostic);
+  }
+  await fs.writeFile(path.join(root, created.path), historical);
+  const { loadNodeCatalog } = await import("../src/core/graph/node-catalog.js");
+  assert.match(
+    (await loadNodeCatalog(tent)).tree.byPath.get("Legacy")!.invalidReason!,
+    /Node field .* is retired/,
+  );
 });

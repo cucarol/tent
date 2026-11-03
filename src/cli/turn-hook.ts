@@ -1,181 +1,127 @@
 import path from "node:path";
-import { createTurnPathResolver, readGitCheckout } from "../core/workspace/git-checkout.js";
-import { changedTurnFiles, startTurnObservation } from "../core/return/turn-changes.js";
+import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { observeTentSystemRoot } from "../core/workspace/status.js";
+import { workspaceRootFromSystemRoot, nodeNotePath } from "../core/base/paths.js";
+import { createTurnPathResolver } from "../core/workspace/git-checkout.js";
+import { observeStopChanges } from "../fs/stop-snapshot.js";
+import { loadStopCoverage } from "../fs/stop-coverage.js";
 import {
-  formatToolTurnReview,
-  modulesForIndexedTurn,
-  nodesLinkingSections,
-  sectionsForTurn,
-} from "../core/return/tool-turn-review.js";
-import { findPreparedHookWorkspace } from "../fs/hook-material-index.js";
-import { claimStopReview, hasStopReviewClaim } from "../fs/stop-review-claim.js";
-import {
-  ownTurnContinuation,
-  readTurnRecord,
-  rememberTurnContinuation,
-  saveTurnRecord,
-} from "../fs/turn-review-state.js";
-import { observeTurnDirty } from "../fs/turn-dirty-baseline.js";
+  selectStopCoverage,
+  formatStopCoverage,
+  stopCoverageSections,
+} from "../core/return/stop-coverage.js";
 import { changedSections, settleSections } from "../fs/section-fingerprints.js";
-import { loadHookTurnReviewContent } from "../fs/turn-review-content.js";
-import { HOOK_REVIEW_BYTE_LIMIT } from "./hook-adapter.js";
-import { reprojectTurnReviewContent } from "../core/return/turn-review-content.js";
-
-export type TurnHookInput = {
-  eventName: unknown;
-  cwd: unknown;
-  sessionId: unknown;
-  turnId: unknown;
-  prompt?: unknown;
-  stopHookActive?: unknown;
-};
-
-/** Host packages normalize their fields and serialize their own Stop envelope. */
+import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
+import { checkNodeWriteProblems } from "../fs/node-write-problems.js";
+import { withFileLockGuard } from "../fs/file-lock-guard.js";
+import { NodeFs } from "../fs/node-fs.js";
+export type TurnHookInput = { eventName: unknown; cwd: unknown; stopHookActive?: unknown };
+/** The host owns only its native envelope. Adjacent Stops observe one checkout. */
 export async function runTurnHook(
-  host: string,
+  _host: string,
   input: TurnHookInput,
   serialize: (reason: string) => string,
 ): Promise<string> {
-  const silent = "{}\n";
-  const startedAt = Date.now();
-  try {
-    const { eventName, cwd, sessionId, turnId } = input;
-    if (
-      !["UserPromptSubmit", "Stop"].includes(String(eventName)) ||
-      typeof cwd !== "string" ||
-      typeof sessionId !== "string" ||
-      !sessionId ||
-      (eventName === "UserPromptSubmit" && (typeof turnId !== "string" || !turnId))
-    )
-      return silent;
-    const prepared = await findPreparedHookWorkspace(cwd);
-    if (!prepared) return silent;
-    const { systemRoot, workspaceRoot, index } = prepared;
-    const resolver = await createTurnPathResolver(workspaceRoot, cwd);
-    const checkout = resolver.checkoutRoot;
-    if (!checkout || !(await readGitCheckout(checkout))) return silent;
-    if (eventName === "UserPromptSubmit") {
-      if (typeof turnId !== "string" || !turnId) return silent;
-      if (await readTurnRecord(systemRoot, host, sessionId, turnId)) return silent;
-      const continuation = await ownTurnContinuation(systemRoot, host, sessionId, input.prompt);
-      await saveTurnRecord(
-        systemRoot,
-        host,
-        sessionId,
-        turnId,
-        continuation ?? {
-          turnId,
-          checkout,
-          baseline: await startTurnObservation(checkout, startedAt),
-        },
-      );
-      return silent;
-    }
-    const { previous: previousDirty, status } = await observeTurnDirty(
-      systemRoot,
-      checkout,
-      host,
-      sessionId,
-    );
-    const record =
-      typeof turnId === "string" && turnId
-        ? await readTurnRecord(systemRoot, host, sessionId, turnId)
-        : undefined;
-    if (input.stopHookActive === true || !record || path.relative(record.checkout, checkout) !== "")
-      return silent;
-    const stopKey = JSON.stringify([record.turnId, "turn-stop"]);
-    if (await hasStopReviewClaim(systemRoot, host, sessionId, stopKey)) return silent;
-    const files = await changedTurnFiles(checkout, record.baseline, previousDirty, status);
-    const changed = await changedSections(systemRoot, checkout, sectionsForTurn(index, files));
-    let candidates = modulesForIndexedTurn(index, {
-      files: files.map((address) => ({ kind: "written" as const, address })),
-      changedSections: new Set(changed.keys()),
-    });
-    const allModules = candidates;
-    const key = (id: string) => JSON.stringify([record.turnId, "node", id]);
-    const pending = await Promise.all(
-      candidates.map(
-        async (node) => !(await hasStopReviewClaim(systemRoot, host, sessionId, key(node.nodeId))),
-      ),
-    );
-    candidates = candidates.filter((_, i) => pending[i]);
-    const pendingModules = candidates;
-    const excludedNodeIds = new Set<string>();
-    const indexById = new Map(index.nodes.map((node) => [node.nodeId, node]));
-    const ruleIds = new Set(
-      candidates.flatMap((node) => indexById.get(node.nodeId)?.ruleNodeIds ?? []),
-    );
-    for (const id of ruleIds)
-      if (await hasStopReviewClaim(systemRoot, host, sessionId, key(id))) excludedNodeIds.add(id);
-    const loaded = await loadHookTurnReviewContent(
-      systemRoot,
-      index,
-      pendingModules,
-      excludedNodeIds,
-    );
-    candidates = loaded;
-    const owned = new Set<string>();
-    let reserved = false;
-    for (;;) {
-      let budget = HOOK_REVIEW_BYTE_LIMIT - Buffer.byteLength(serialize(""));
-      let output;
-      while (budget > 0) {
-        output = formatToolTurnReview(budget, candidates, "turn");
-        if (!output || Buffer.byteLength(serialize(output.message)) <= HOOK_REVIEW_BYTE_LIMIT)
-          break;
-        budget = Buffer.byteLength(output.message) - 1;
-      }
-      if (!output || Buffer.byteLength(serialize(output.message)) > HOOK_REVIEW_BYTE_LIMIT) {
-        if (pendingModules.every((node) => excludedNodeIds.has(node.nodeId)))
-          await settleSections(systemRoot, checkout, changed);
-        return silent;
-      }
-      // Reserve the one continuation before taking any render-only Node claims.
-      if (!reserved) {
-        if (!(await claimStopReview(systemRoot, host, sessionId, stopKey))) return silent;
-        reserved = true;
-      }
-      const competing = new Set<string>();
-      for (const node of output.ownerNodeIds) {
-        if (owned.has(node)) continue;
-        if (await claimStopReview(systemRoot, host, sessionId, key(node))) owned.add(node);
-        else competing.add(node);
-      }
-      if (competing.size) {
-        for (const id of competing) excludedNodeIds.add(id);
-        candidates = reprojectTurnReviewContent(index, loaded, excludedNodeIds);
-        continue;
-      }
-      for (const node of output.ruleNodeIds) {
-        if (owned.has(node)) continue;
-        if (await claimStopReview(systemRoot, host, sessionId, key(node))) owned.add(node);
-        else competing.add(node);
-      }
-      if (!competing.size) {
-        const unnamed = new Set(
-          allModules
-            .filter(
-              (node) =>
-                !output.ownerNodeIds.includes(node.nodeId) &&
-                pendingModules.some((candidate) => candidate.nodeId === node.nodeId) &&
-                !excludedNodeIds.has(node.nodeId),
-            )
-            .map((node) => node.nodeId),
+  if (input.eventName !== "Stop" || typeof input.cwd !== "string") return "{}\n";
+  const { systemRoot } = await observeTentSystemRoot(input.cwd);
+  if (!systemRoot) return "{}\n";
+  const workspaceRoot = workspaceRootFromSystemRoot(systemRoot);
+  if (!workspaceRoot) return "{}\n";
+  const resolver = await createTurnPathResolver(workspaceRoot, input.cwd);
+  if (!resolver.checkoutRoot || !resolver.checkoutWorkspaceRoot) return "{}\n";
+  const checkout = await fs.realpath(resolver.checkoutRoot);
+  const checkoutWorkspace = await fs.realpath(resolver.checkoutWorkspaceRoot);
+  const prefix = resolver.workspacePrefix ? `${resolver.workspacePrefix}/` : "";
+  const local = (file: string) => {
+    const matches =
+      process.platform === "win32"
+        ? file.toLowerCase().startsWith(prefix.toLowerCase())
+        : file.startsWith(prefix);
+    return matches ? file.slice(prefix.length) : undefined;
+  };
+  const identity = createHash("sha256")
+    .update(process.platform === "win32" ? checkout.toLowerCase() : checkout)
+    .digest("hex");
+  const sectionRoot = path.join(systemRoot, "temp", "stop-checkouts", identity);
+  await fs.mkdir(path.dirname(sectionRoot), { recursive: true });
+  return withFileLockGuard(
+    sectionRoot,
+    async () => {
+      const adapter = new NodeFs(systemRoot);
+      try {
+        const [snapshotResult, coverageResult] = await Promise.allSettled([
+          observeStopChanges(systemRoot, checkout),
+          loadStopCoverage(systemRoot, workspaceRoot, adapter),
+        ]);
+        if (snapshotResult.status === "rejected") throw snapshotResult.reason;
+        if (coverageResult.status === "rejected") throw coverageResult.reason;
+        const snapshot = snapshotResult.value;
+        const index = coverageResult.value;
+        const changedFiles = snapshot.files.flatMap((file) => {
+          const relative = local(file);
+          return relative === undefined ? [] : [relative];
+        });
+        const sections = await changedSections(
+          systemRoot,
+          checkoutWorkspace,
+          stopCoverageSections(index, changedFiles),
+          (file) => snapshot.readPreviousFile(prefix + file),
         );
-        const settled = new Map(
-          [...changed].filter(
-            ([section]) =>
-              ![...nodesLinkingSections(index, new Set([section]))].some((id) => unnamed.has(id)),
+        const captured = await captureNativeNodeEdits(adapter);
+        const invalid = new Set(
+          captured.invalidNodes.map((node) => path.resolve(workspaceRoot, node.path)),
+        );
+        const pointers = selectStopCoverage(
+          index,
+          changedFiles,
+          new Set(sections.changed.keys()),
+        ).filter((node) => !invalid.has(node.path));
+        const present = new Set(
+          [...(captured.catalog?.tree.byPath.values() ?? [])].map((node) =>
+            nodeNotePath(node.path),
           ),
         );
-        await settleSections(systemRoot, checkout, settled).catch(() => undefined);
-        await rememberTurnContinuation(systemRoot, host, sessionId, record.turnId, output.message);
-        return serialize(output.message);
+        const invalidNativePaths = new Set(captured.invalidNodes.map((node) => node.path.slice(6)));
+        const checked = await checkNodeWriteProblems(
+          adapter,
+          workspaceRoot,
+          captured.changedNodePaths.filter(
+            (file) => present.has(file) && !invalidNativePaths.has(file),
+          ),
+        );
+        const edited = new Set(captured.changedNodePaths.map((file) => `.tent/${file}`));
+        const nodeProblems: Record<string, string> = Object.create(null);
+        const invalidProblems = [];
+        for (const node of captured.invalidNodes) {
+          if (!edited.has(node.path)) continue;
+          const { fingerprint } = await adapter.readFrontmatterWithFingerprint(node.path.slice(6));
+          nodeProblems[node.path] = fingerprint;
+          if (snapshot.previousNodeProblems[node.path] !== fingerprint)
+            invalidProblems.push({
+              path: path.resolve(workspaceRoot, node.path),
+              problem: node.reason,
+            });
+        }
+        const problems = [
+          ...new Map(
+            [
+              ...invalidProblems,
+              ...checked.map((problem) => ({
+                path: path.resolve(workspaceRoot, problem.path),
+                problem: problem.reason,
+              })),
+            ].map((problem) => [JSON.stringify(problem), problem]),
+          ).values(),
+        ];
+        const output = formatStopCoverage(pointers, problems);
+        await settleSections(systemRoot, checkoutWorkspace, sections);
+        await snapshot.settle(nodeProblems);
+        return input.stopHookActive === true || !output ? "{}\n" : serialize(output);
+      } finally {
+        await adapter.close();
       }
-      for (const id of competing) excludedNodeIds.add(id);
-      candidates = reprojectTurnReviewContent(index, loaded, excludedNodeIds);
-    }
-  } catch {
-    return silent;
-  }
+    },
+    { waitMs: 8000, flush: false },
+  );
 }

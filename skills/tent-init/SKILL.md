@@ -10,8 +10,8 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows.
 | When | Command | Read |
 | --- | --- | --- |
 | Pick the Workspace | The folder the user names, else the project root; reuse an existing `.tent/` | — |
-| Create the Tent | `tent new <root>` | `Created Tent` line |
+| Create the Tent | `tent new <root>`; it starts a Git repository when the folder is in none | `Created Tent` line |
 | Enable Hooks | Follow [Hooks](references/host-hooks.md) | `/hooks` |
-| The project already has files | [Map it](references/map.md) | the part tree from `check-modules --json` |
+| The project already has files | [Map it](references/map.md) | the part tree from `tent workspace scan --json` |
 
 A project with no files yet starts with no Nodes; add them with tent-node as work produces facts.

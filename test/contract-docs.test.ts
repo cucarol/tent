@@ -64,13 +64,14 @@ test("Skill validation follows Markdown semantics and rejects actual nested refe
   assert.throws(() => validateDocuments(documents), /1024/);
 });
 
-test("material paths are defined once, in node-maintenance", async () => {
-  const maintenance = flat(await read("skill-resources/references/node-maintenance.md"));
+test("Node guidance distinguishes stored document paths from CLI Workspace paths", async () => {
+  const maintenance = flat(await read("skills/tent-node/SKILL.md"));
   assert.match(
     maintenance,
-    /Pass Workspace-root paths \(`docs\/x\.md`\); Tent stores them Node-relative/,
+    /`--resource` and `--source` take Workspace-root paths.*Tent stores them relative to the Node file/,
   );
-  assert.match(maintenance, /`docs\/x\.md#State`/);
+  assert.match(maintenance, /Paths are relative to the Node file/);
+  assert.match(maintenance, /docs\/login\.md#Codes/);
   const access = flat(await read("skill-resources/references/access.md"));
   assert.doesNotMatch(access, /relative to the Node's own file|Workspace-root path/);
   const cards = flat(await read("skill-resources/references/cards.md"));
@@ -85,10 +86,7 @@ test("PLUGIN.md points to SPEC for results and brief rules", async () => {
   const spec = flat(await read("docs/SPEC.md"));
   const plugin = await read("docs/PLUGIN.md");
   assert.match(spec, /## 4\. Results/);
-  assert.match(
-    spec,
-    /`node link-output <goal-id> --resource <address>` creates an output under a goal/,
-  );
+  assert.match(spec, /`node create --type output`/);
   assert.doesNotMatch(
     spec,
     /comparison bases|intent basis|changedSince|node confirm|node check|workspace drift|--confirm/,
@@ -102,55 +100,51 @@ test("PLUGIN.md points to SPEC for results and brief rules", async () => {
     /up to ten recently changed Nodes.*up to ten of the Role's unfinished Cards.*up to ten workspace problems/,
   );
   assert.match(spec, /titles can be shortened, ids never are/);
-  assert.match(plugin, /SPEC\.md#Brief/);
-  assert.match(plugin, /SPEC\.md#5\.%20What%20the%20Agent%20is%20told/);
-  assert.match(plugin, /SPEC\.md#6\.%20What%20a%20reader%20gets/);
+  assert.match(plugin, /SPEC\.md#brief/);
+  assert.match(plugin, /SPEC\.md#5-what-the-agent-is-told/);
   assert.doesNotMatch(plugin, /最近的 goal 祖先提供隐式来源/);
   assert.doesNotMatch(plugin, /四种同步状态计数/);
   assert.doesNotMatch(plugin, /按 4 KiB 预算裁剪|待收回结果不省略/);
 });
 
-test("type guidance names exactly three types and the preset tags", async () => {
-  const formerTypes =
-    /\b(goal|prompt|output)-(direction|requirement|decision|spec|reference|procedure|asset|evidence|analysis|issue)\b|NODE_TYPE_PRESETS|implementing it/;
+test("Node guidance keeps the required type names and ordinary metadata without type behavior", async () => {
   const spec = flat(await read("docs/SPEC.md"));
-  assert.match(spec, /`type` is exactly `goal`, `prompt` or `output`/);
-  assert.doesNotMatch(spec, formerTypes);
-  const types = await read("skill-resources/references/node-types.md");
-  for (const type of ["goal", "prompt", "output"])
-    assert.match(types, new RegExp(`^\\| \`${type}\` \\|`, "m"), type);
-  // The suggested tag vocabulary, NODE_TAG_PRESETS in Core.
-  for (const tag of [
-    "direction",
-    "requirement",
-    "decision",
-    "spec",
-    "reference",
-    "procedure",
-    "asset",
-    "evidence",
-    "analysis",
-    "issue",
-  ])
-    assert.match(types, new RegExp(`^\\| \`${tag}\` \\|`, "m"), tag);
-  assert.match(flat(types), /Keep the goal's open questions in `prompt` Nodes/);
-  assert.match(flat(types), /from `tent node tags`/);
-  assert.doesNotMatch(types, formerTypes);
-  assert.doesNotMatch(types, /an `output` counts as implementing it/);
-  const skill = flat(await read("skills/tent-node/SKILL.md"));
-  assert.doesNotMatch(skill, formerTypes);
-  assert.doesNotMatch(skill, /only results that implement it are `output`/);
-  for (const file of await agentFacingFiles())
-    assert.doesNotMatch(await read(file), /\b(?:goal|prompt|output)-(?!id\b)[a-z]+/, file);
+  const skill = await read("skills/tent-node/SKILL.md");
+  assert.match(spec, /`type` is required and is exactly `goal`, `prompt` or `output`/);
+  assert.match(spec, /same coverage, reading and writing behavior/);
+  assert.match(skill, /`goal`, `prompt` or `output`, as the word says/);
+  for (const field of ["id", "type", "description", "tags", "resource", "sources", "status"])
+    assert.ok(skill.includes(`| \`${field}\` |`), field);
+  const { NODE_TAG_PRESETS } = await import("../src/core/base/tags.js");
+  for (const tag of NODE_TAG_PRESETS) assert.ok(spec.includes(`\`${tag}\``), tag);
+  for (const file of await agentFacingFiles()) {
+    const text = await read(file);
+    assert.doesNotMatch(text, /\b(?:goal|prompt|output)-(?!id\b)[a-z]+/, file);
+    assert.doesNotMatch(
+      text,
+      /tent node (?:get|list|read-many|search|relations|tags|append|write|write-many|link-output)(?:[ \`]|$)/,
+      file,
+    );
+  }
 });
 
-test("goal material guidance distinguishes intent grounds from implementation coverage", async () => {
-  const text = flat(await read("skill-resources/references/node-maintenance.md"));
-  assert.match(text, /A `goal` or `prompt` takes its grounds as material, not code/);
-  assert.match(text, /a `goal` may still own the code that carries it out\./);
+test("Stop and host guidance use file pointers without rule inheritance or ownership", async () => {
+  const spec = await read("docs/SPEC.md");
+  const notice =
+    "Files changed this turn are covered by these Tent Nodes:\n- <name>: <absolute path>\nIf the change made a sentence in them wrong, fix it; if it settled something lasting, record it; otherwise say nothing about Tent.";
+  assert.ok(spec.includes(notice));
+  assert.ok(spec.includes("These Tent Node files have problems:\n- <absolute path>: <problem>"));
+  for (const host of ["codex", "claude-code"])
+    assert.ok(
+      (await read(`plugins/${host}/tent/host-hooks.md`)).includes(
+        "Files changed this turn are covered by these Tent Nodes:",
+      ),
+    );
+  const hooks = spec.slice(spec.indexOf("### Hooks"), spec.indexOf("## 6."));
+  assert.match(hooks, /Both plugins register only Stop/);
+  assert.doesNotMatch(hooks, /SessionStart|UserPromptSubmit|PostToolUse|1600|8 KiB/);
   const plugin = flat(await read("docs/PLUGIN.md"));
-  assert.match(plugin, /`goal` 与 `prompt` 用材料指明意图和规则的依据/);
-  assert.doesNotMatch(plugin, /不以 `src\/` 下代码为材料/);
+  assert.match(plugin, /没有 `track` 或代码所有权，也不按 type 继承规则/);
   assert.match(plugin, /\[Codex Hooks\]\(https:\/\/learn\.chatgpt\.com\/docs\/hooks\)/);
 });
 

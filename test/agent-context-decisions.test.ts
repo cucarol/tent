@@ -114,7 +114,7 @@ test("decisions scope: only sources expand work; body citations, code examples a
     .items.filter((item) => item.nodeId)
     .map((item) => item.nodeId)
     .sort();
-  assert.deepEqual(goals, ["node-child", "node-draft", "node-task"]);
+  assert.deepEqual(goals, []);
   assert.deepEqual(
     section(value, "open")
       .items.filter((item) => item.cardId)
@@ -122,7 +122,7 @@ test("decisions scope: only sources expand work; body citations, code examples a
       .sort(),
     ["card-legacysource", "card-work"],
   );
-  assert.ok(section(value, "rules").items.some((item) => item.nodeId === "node-project"));
+  assert.ok(!section(value, "rules").items.some((item) => item.nodeId === "node-project"));
 });
 
 test("prose missing IDs leave unknown room for established selector errors in Card and Node starts", async () => {
@@ -805,7 +805,7 @@ test("competing literal source selectors keep the source whole and retain their 
   assert.ok(section(value, "unknown").items.some((item) => /Ambiguous literal/.test(item.why)));
 });
 
-test("one shared ancestor occupies one list place and combines both source reasons deterministically", async () => {
+test("many explicit sources page deterministically without adding shared ancestor rules", async () => {
   const { fs, node, save, card } = await fixture();
   await node("Project", "node-project", "goal", "Shared rule.");
   const names = Array.from({ length: 12 }, (_, index) => String.fromCharCode(97 + index));
@@ -823,11 +823,7 @@ test("one shared ancestor occupies one list place and combines both source reaso
   const start = { kind: "card", cardId: "card-shared" } as const;
   const value = await assembleAgentContext(fs, root, start);
   const rules = section(value, "rules");
-  assert.equal(rules.total, 1);
-  assert.equal(rules.items[0]!.nodeId, "node-project");
-  assert.match(rules.items[0]!.why, /node-a/);
-  assert.match(rules.items[0]!.why, /node-b/);
-  assert.match(rules.items[0]!.why, /node-l/);
+  assert.equal(rules.total, 0);
   assert.equal(section(value, "references").total, 13);
   assert.equal(section(value, "references").items.length, 10);
   assert.deepEqual(await assembleAgentContext(fs, root, start), value);
@@ -838,8 +834,7 @@ test("one shared ancestor occupies one list place and combines both source reaso
     (page) => Buffer.byteLength(JSON.stringify(page)) + 1,
   );
   const displayedRules = page.sections.find((section) => section.kind === "rules")!.items;
-  assert.equal(displayedRules.length, 1);
-  assert.equal(displayedRules[0]!.truncated, true);
+  assert.equal(displayedRules.length, 0);
   assert.ok(
     page.sections.every(
       (section) =>

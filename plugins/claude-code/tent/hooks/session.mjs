@@ -1,38 +1,19 @@
-import { fileURLToPath } from "node:url";
 const action = process.argv[1];
-if (process.argv.length !== 2 || !["start", "tool", "prompt", "stop"].includes(action))
-  throw new Error("Invalid Tent hook action.");
-if (action === "prompt" || action === "stop") {
-  const { runTurnHook } = await import(new URL("../turn-hook.mjs", import.meta.url).href);
-  let raw = "";
-  for await (const chunk of process.stdin) raw += chunk.toString();
-  try {
-    const input = JSON.parse(raw);
-    process.stdout.write(
-      await runTurnHook(
-        "claude-code",
-        {
-          eventName: input.hook_event_name,
-          cwd: input.cwd,
-          sessionId: input.session_id,
-          turnId: input.prompt_id,
-          prompt: input.prompt,
-          stopHookActive: input.stop_hook_active,
-        },
-        (reason) => JSON.stringify({ decision: "block", reason }) + "\n",
-      ),
-    );
-  } catch {
-    process.stdout.write("{}\n");
-  }
-} else if (action === "tool") {
-  const runtime = new URL("../tool-hook.mjs", import.meta.url);
-  process.argv = [process.execPath, fileURLToPath(runtime), "--host", "claude-code"];
-  await import(runtime.href);
-} else {
-  const { runHookCommand } = await import(new URL("../start-hook.mjs", import.meta.url).href);
-  const result = await runHookCommand("start", ["--host", "claude-code"], {
-    packageRoot: fileURLToPath(new URL("../", import.meta.url)),
-  });
-  process.stdout.write(result.stdout);
+if (process.argv.length !== 2 || action !== "stop") throw new Error("Invalid Tent hook action.");
+const { runTurnHook } = await import(new URL("../turn-hook.mjs", import.meta.url).href);
+let raw = "";
+for await (const chunk of process.stdin) raw += chunk.toString();
+try {
+  const input = JSON.parse(raw);
+  process.stdout.write(
+    await runTurnHook(
+      "claude-code",
+      { eventName: input.hook_event_name, cwd: input.cwd, stopHookActive: input.stop_hook_active },
+      (reason) => JSON.stringify({ decision: "block", reason }) + "\n",
+    ),
+  );
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.stdout.write("{}\n");
+  process.exitCode = 1;
 }

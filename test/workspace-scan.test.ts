@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
 import { scanWorkspace, formatWorkspaceScan } from "../src/core/check/workspace-scan.js";
+import { formatWorkspaceModules } from "../src/core/check/workspace-module-map.js";
 import { readWorkspaceScanRepository, scanFileKind } from "../src/fs/workspace-scan.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
@@ -99,7 +100,7 @@ test("scan text bounds retained fact groups and escapes path control characters"
 test("scan removes .tent files and diagnostics even when repository input contains them", async (t) => {
   const { root, adapter, write, node } = await fixture(t);
   await write("src/main.ts", "export const value = 1;");
-  await node("Root", { sources: [{ resource: "../../", track: "structure" }] });
+  await node("Root", { sources: [{ resource: "../../" }] });
   const baseline = {
     head: null,
     trackedFiles: ["src/main.ts"],
@@ -196,10 +197,7 @@ test("scan prefix coverage uses shared membership, including nested suffixes, wi
   for (const file of ["src/card-a.ts", "src/card-nested/b.ts", "src/cardinal.ts", "docs/card-a.md"])
     await write(file, file.endsWith(".md") ? "# Card" : "export {};");
   await node("cardmap", {
-    sources: [
-      { resource: "../../src/card-*", track: "structure" },
-      { resource: "../../docs/card-*" },
-    ],
+    sources: [{ resource: "../../src/card-*" }, { resource: "../../docs/card-*" }],
   });
   await git(root, "add", "src", "docs");
   await git(root, "commit", "-m", "prefix fixture");
@@ -215,7 +213,7 @@ test("scan prefix coverage uses shared membership, including nested suffixes, wi
   assert.deepEqual(await snapshot(root), before);
 });
 
-test("CLI scan summarizes facts without changing Git/Tent bytes and limits text only", async (t) => {
+test("CLI scan reports existing parts deterministically without changing project or Node bytes", async (t) => {
   const { root, write, node } = await fixture(t);
   for (let i = 0; i < 28; i++) await write(`dir${String(i).padStart(2, "0")}/doc.md`);
   await node("pointer", { resource: "../../dir00/" });
@@ -226,38 +224,26 @@ test("CLI scan summarizes facts without changing Git/Tent bytes and limits text 
   await git(root, "commit", "-m", "one directory");
   await write("new.markdown");
   await write("dir02/doc.md", "uncommitted edit");
-  const before = await snapshot(root);
+  const currentBytes = async () =>
+    Object.fromEntries(
+      Object.entries(await snapshot(root)).filter(
+        ([file]) => !file.startsWith(".tent/.git/") && !file.startsWith(".tent/temp/"),
+      ),
+    );
+  const before = await currentBytes();
   const first = await runWorkspaceCommand("scan", [], { workspace: root });
   const second = await runWorkspaceCommand("scan", [], { workspace: root });
-  assert.equal(first.exitCode, 0, first.stderr);
+  assert.equal(first.exitCode, 1, first.stderr);
   assert.equal(first.stdout, second.stdout);
-  const lines = first.stdout.trimEnd().split("\n");
-  assert.ok(lines.length <= 24);
-  assert.equal(lines.filter((line) => line.startsWith("uncovered ")).length, 3);
-  assert.match(first.stdout, /all-facts tent workspace scan --json\n$/);
   const json = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
-  assert.equal(json.exitCode, 0, json.stderr);
+  assert.equal(json.exitCode, 1, json.stderr);
   const report = JSON.parse(json.stdout);
-  assert.equal(report.coverage.directories.length, 27);
-  assert.ok(!report.coverage.uncoveredFiles.includes("new.markdown"));
-  assert.deepEqual(Object.keys(report).sort(), [
-    "coverage",
-    "dependencies",
-    "flatDirectories",
-    "generatedDirectories",
-    "guidanceFiles",
-    "head",
-    "imports",
-    "inspectionErrors",
-    "productMaterials",
+  assert.ok(report.issues.length > 0);
+  assert.deepEqual(report.parts, [
+    { nodeId: "node-pointer", name: "pointer", path: ".tent/pointer", files: 1, children: [] },
   ]);
-  assert.ok(
-    report.dependencies.every(
-      (graph: object) => !Object.prototype.hasOwnProperty.call(graph, "layers"),
-    ),
-  );
-  assert.equal(first.stdout, formatWorkspaceScan(report) + "\n");
-  assert.deepEqual(await snapshot(root), before);
+  assert.equal(first.stdout, formatWorkspaceModules(report));
+  assert.deepEqual(await currentBytes(), before);
 });
 
 test("material coverage preserves section addresses independently of body links and deprecated Nodes", async (t) => {
@@ -468,7 +454,14 @@ test("scan fails explicitly without Workspace Git and reports invalid Node inspe
   await node("directoryfile", { resource: "../../doc.md/" });
   const mismatch = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
   assert.equal(mismatch.exitCode, 1);
-  assert.equal(JSON.parse(mismatch.stdout).inspectionErrors.length, 2);
+  assert.equal(JSON.parse(mismatch.stdout).inspectionErrors.length, 1);
+  const checked = await runWorkspaceCommand("check", ["--json"], { workspace: root });
+  assert.equal(checked.exitCode, 1);
+  assert.ok(
+    JSON.parse(checked.stdout).issues.some(
+      (issue: { path: string }) => issue.path === ".tent/directoryfile/directoryfile.md",
+    ),
+  );
   await openTestFs(path.join(root, ".tent")).writeFile("order.json", "{");
   const before = await snapshot(root);
   const brokenOrder = await runWorkspaceCommand("scan", [], { workspace: root });

@@ -134,7 +134,7 @@ test("module testedBy credits the unique definition and ancestors while retainin
           name: "API",
           path: "API",
           body: "",
-          materials: [{ path: "src", kind: "directory", track: "structure" }],
+          materials: [{ path: "src", kind: "directory" }],
         },
         {
           id: "a",
@@ -142,7 +142,7 @@ test("module testedBy credits the unique definition and ancestors while retainin
           path: "API/A",
           parentId: "root",
           body: "",
-          materials: [{ path: "src/a", kind: "prefix", track: "structure" }],
+          materials: [{ path: "src/a", kind: "prefix" }],
         },
         {
           id: "b",
@@ -150,7 +150,7 @@ test("module testedBy credits the unique definition and ancestors while retainin
           path: "API/B",
           parentId: "root",
           body: "",
-          materials: [{ path: "src/b", kind: "prefix", track: "structure" }],
+          materials: [{ path: "src/b", kind: "prefix" }],
         },
       ],
     });

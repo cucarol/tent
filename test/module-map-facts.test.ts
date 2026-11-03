@@ -13,7 +13,7 @@ const node = (id: string, overrides: Partial<ModuleMapNode> = {}): ModuleMapNode
   path: id,
   name: id,
   body: "",
-  materials: [{ path: id, kind: "directory", track: "structure" }],
+  materials: [{ path: id, kind: "directory" }],
   ...overrides,
 });
 const input = (overrides: Partial<ModuleMapInput> = {}): ModuleMapInput => ({
@@ -84,7 +84,7 @@ test("testedBy uses direct production ownership, including barrels, and deduplic
         node("b"),
         node("child", {
           parentId: "a",
-          materials: [{ path: "a/child", kind: "directory", track: "structure" }],
+          materials: [{ path: "a/child", kind: "directory" }],
         }),
       ],
       imports,
@@ -113,7 +113,7 @@ test("testedBy resolves Go directory imports through each production file owner"
     nodes: [
       node("a", {
         materials: [
-          { path: "a", kind: "directory", track: "structure" },
+          { path: "a", kind: "directory" },
           { path: "pkg/one.go", kind: "file" },
           { path: "pkg/two.go", kind: "file" },
         ],
@@ -138,7 +138,7 @@ test("testedBy resolves Go directory imports through each production file owner"
     if (split)
       nodes.push(
         node("split", {
-          materials: [{ path: "pkg/two", kind: "prefix", track: "structure" }],
+          materials: [{ path: "pkg/two", kind: "prefix" }],
         }),
       );
     const result = checkModuleMap({ ...source, nodes });
@@ -153,23 +153,23 @@ test("Go package test imports cover an empty directory parent and its children w
       trackedFiles: ["pkg/alpha.go", "pkg/beta.go", "pkg/sub/nested.go", "tests/package_test.go"],
       nodes: [
         node("project", {
-          materials: [{ path: ".", kind: "directory", track: "structure" }],
+          materials: [{ path: ".", kind: "directory" }],
         }),
         node("package", {
           parentId: "project",
-          materials: [{ path: "pkg", kind: "directory", track: "structure" }],
+          materials: [{ path: "pkg", kind: "directory" }],
         }),
         node("alpha", {
           parentId: "package",
-          materials: [{ path: "pkg/alpha", kind: "prefix", track: "structure" }],
+          materials: [{ path: "pkg/alpha", kind: "prefix" }],
         }),
         node("beta", {
           parentId: "package",
-          materials: [{ path: "pkg/beta", kind: "prefix", track: "structure" }],
+          materials: [{ path: "pkg/beta", kind: "prefix" }],
         }),
         node("subpackage", {
           parentId: "package",
-          materials: [{ path: "pkg/sub", kind: "directory", track: "structure" }],
+          materials: [{ path: "pkg/sub", kind: "directory" }],
         }),
       ],
       imports: [edge("tests/package_test.go", "pkg", "directory")],
@@ -189,15 +189,15 @@ test("direct file test imports roll up through nested ancestors without sibling 
         node("app"),
         node("middle", {
           parentId: "app",
-          materials: [{ path: "app/middle", kind: "directory", track: "structure" }],
+          materials: [{ path: "app/middle", kind: "directory" }],
         }),
         node("leaf", {
           parentId: "middle",
-          materials: [{ path: "app/middle/leaf", kind: "directory", track: "structure" }],
+          materials: [{ path: "app/middle/leaf", kind: "directory" }],
         }),
         node("sibling", {
           parentId: "app",
-          materials: [{ path: "app/sibling", kind: "directory", track: "structure" }],
+          materials: [{ path: "app/sibling", kind: "directory" }],
         }),
       ],
       imports: [edge("tests/leaf.test.ts", "app/middle/leaf/file.ts")],
@@ -279,7 +279,7 @@ test("ancestor and descendant history is internal, and repeated files cannot for
         node("a"),
         node("child", {
           parentId: "a",
-          materials: [{ path: "a/child", kind: "directory", track: "structure" }],
+          materials: [{ path: "a/child", kind: "directory" }],
         }),
         node("other"),
       ],

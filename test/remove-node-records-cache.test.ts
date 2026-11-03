@@ -5,12 +5,11 @@ import test, { type TestContext } from "node:test";
 import { SqliteDocumentHistory } from "../src/core/store/sqlite-history.js";
 import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
 import { NodeFs } from "../src/fs/node-fs.js";
-import { loadStopMaterialIndex } from "../src/fs/stop-material-index.js";
+import { loadStopCoverage } from "../src/fs/stop-coverage.js";
 import { sectionFingerprints, sectionKey } from "../src/core/return/section-fingerprint.js";
 import { changedSections, replaceRecord } from "../src/fs/section-fingerprints.js";
-import { saveTurnDirty, saveTurnRecord, readTurnRecord } from "../src/fs/turn-review-state.js";
+
 import { initializeFixtureRepository, testScratchRoot } from "./scratch.js";
-import { initializeGitIgnoreContext } from "../src/fs/git-ignore-context.js";
 
 const { removeNodeRecordsHistory } = await import(
   new URL("../scripts/one-off/remove-node-records-history.mjs", import.meta.url).href
@@ -39,16 +38,17 @@ async function fixture(t: TestContext) {
   const history = new SqliteDocumentHistory(root);
   await history.initialize();
   const raw =
-    "---\nid: node-alpha\ntype: prompt\nverified: {by: human:cuca}\nsources: [{resource: '../../guide.md#Rules'}]\n---\nDurable rules\n";
+    "---\nid: node-alpha\ntype: prompt\nprovenance: {by: human:cuca}\nsources: [{resource: '../../guide.md#Rules'}]\n---\nDurable rules\n";
   const captured = await history.captureUnlocked([{ path: "Alpha/Alpha.md", raw }]);
   await history.close();
-  await initializeGitIgnoreContext(root);
+  await fs.mkdir(path.join(root, ".git/unrelated-data"));
+  await fs.writeFile(path.join(root, ".git/unrelated-data/keep.bin"), "opaque sibling data");
   await fs.mkdir(path.join(root, "Alpha"));
   await fs.writeFile(path.join(root, "Alpha/Alpha.md"), raw);
   await fs.writeFile(path.join(root, "index.md"), '---\nokf_version: "0.2"\n---\n');
   const guide = "# Rules\nOriginal section\n";
   await fs.writeFile(path.join(workspace, "guide.md"), guide);
-  await replaceRecord(root, "guide.md", [
+  await replaceRecord(root, path.join(workspace, "guide.md"), [
     { heading: "Rules", ...sectionFingerprints(guide, [{ heading: "Rules" }]).get("Rules")! },
   ]);
   const turn = {
@@ -56,8 +56,12 @@ async function fixture(t: TestContext) {
     checkout: workspace,
     baseline: { startedAt: 123, head: null },
   };
-  await saveTurnRecord(root, "codex", "session", "turn-before", turn);
-  await saveTurnDirty(root, "codex", "session", workspace, ["guide.md"]);
+  await fs.mkdir(path.join(root, "temp/turn-reviews"), { recursive: true });
+  await fs.writeFile(path.join(root, "temp/turn-reviews/old-turn.json"), JSON.stringify(turn));
+  await fs.writeFile(
+    path.join(root, "temp/turn-reviews/old-turn.dirty.json"),
+    JSON.stringify({ checkout: workspace, paths: ["guide.md"] }),
+  );
   await fs.writeFile(path.join(root, ".git/keep.txt"), "unrelated sibling bytes");
   const filename = path.join(root, ".git/history.sqlite");
   const db = new DatabaseSync(filename);
@@ -102,10 +106,10 @@ async function fixture(t: TestContext) {
   return { workspace, root, raw, version: captured.versions[0]!, filename, cache, marker, turn };
 }
 
-test("record migration clears the managed observation cache, preserves Hook baselines and cold rebuilds the current graph", async (t) => {
+test("record migration clears managed caches, preserves temp and immutable history, and rebuilds Stop coverage", async (t) => {
   const f = await fixture(t);
   const baseline = await files(path.join(f.root, "temp"));
-  const ignored = await files(path.join(f.root, ".git/ignore-context"));
+  const unrelated = await files(path.join(f.root, ".git/unrelated-data"));
   const live = await fs.readFile(path.join(f.root, "Alpha/Alpha.md"));
   const keep = await fs.readFile(path.join(f.root, ".git/keep.txt"));
   assert.deepEqual(await removeNodeRecordsHistory(f.workspace), {
@@ -117,35 +121,44 @@ test("record migration clears the managed observation cache, preserves Hook base
   });
   await assert.rejects(fs.access(f.cache), { code: "ENOENT" });
   assert.deepEqual(await files(path.join(f.root, "temp")), baseline);
-  assert.deepEqual(await files(path.join(f.root, ".git/ignore-context")), ignored);
+  assert.deepEqual(await files(path.join(f.root, ".git/unrelated-data")), unrelated);
   assert.deepEqual(await fs.readFile(path.join(f.root, "Alpha/Alpha.md")), live);
   assert.deepEqual(await fs.readFile(path.join(f.root, ".git/keep.txt")), keep);
-  assert.deepEqual(await readTurnRecord(f.root, "codex", "session", "turn-before"), f.turn);
+  assert.deepEqual(
+    JSON.parse(await fs.readFile(path.join(f.root, "temp/turn-reviews/old-turn.json"), "utf8")),
+    f.turn,
+  );
 
   const adapter = new NodeFs(f.root);
   try {
-    const index = await loadStopMaterialIndex(f.root, f.workspace, [], adapter);
+    const index = await loadStopCoverage(f.root, f.workspace, adapter);
     assert.deepEqual(
       index.nodes.map((node) => node.nodeId),
       ["node-alpha"],
     );
     assert.ok(
-      index.nodes[0].materialFiles.some(
-        (file) => file.path === "guide.md" && file.heading === "Rules",
+      index.nodes[0]!.materials.some(
+        (material) =>
+          material.kind === "file" && material.path === "guide.md" && material.heading === "Rules",
       ),
     );
+    assert.deepEqual(await loadStopCoverage(f.root, f.workspace, adapter), index);
+    assert.equal(await adapter.history.currentCommit(), f.version.commit);
     assert.equal(await adapter.history.read(f.version), f.raw);
-    assert.equal((await adapter.history.nodeVersions("node-alpha")).length, 1);
+    const versions = await adapter.history.nodeVersions("node-alpha");
+    assert.equal(versions.length, 1);
+    assert.equal(versions[0]!.commit, f.version.commit);
   } finally {
     await adapter.close();
   }
-  const prepared = JSON.parse(
-    await fs.readFile(path.join(f.cache, "stop-material-index.json"), "utf8"),
-  );
-  assert.equal(prepared.schema, 14);
-  assert.ok(prepared.repository, "cold rebuild retains current prepared repository facts");
-  assert.equal("materials" in prepared.repository.value, false);
-  assert.equal("structureTexts" in prepared.repository.value, false);
+  const rebuilt = JSON.parse(await fs.readFile(path.join(f.cache, "stop-coverage.json"), "utf8"));
+  assert.equal(rebuilt.schema, 1);
+  assert.equal(rebuilt.headers.length, 1);
+  assert.equal(rebuilt.headers[0][0], "Alpha/Alpha.md");
+  assert.equal("repository" in rebuilt, false);
+  await assert.rejects(fs.access(path.join(f.cache, "stop-material-index.json")), {
+    code: "ENOENT",
+  });
   for (const [name, { bytes }] of await files(f.cache)) {
     assert.equal(bytes.includes(Buffer.from(f.marker)), false, name);
     if (name === "file-state.json") {
@@ -168,7 +181,7 @@ test("record migration clears the managed observation cache, preserves Hook base
   });
   assert.deepEqual(await files(f.root), unchanged);
 
-  // The preserved SessionStart baseline still detects a later section edit.
+  // The preserved section baseline still detects a later Stop section edit.
   await fs.writeFile(path.join(f.workspace, "guide.md"), "# Rules\nChanged section\n");
   const section = { path: "guide.md", heading: "Rules" };
   assert.equal(
@@ -178,12 +191,12 @@ test("record migration clears the managed observation cache, preserves Hook base
         f.workspace,
         new Map([[sectionKey(section.path, section.heading), section]]),
       )
-    ).size,
+    ).changed.size,
     1,
   );
 });
 
-test("a failed copied-database migration preserves old observation caches and Hook baselines", async (t) => {
+test("a failed copied-database migration preserves every cache, temp record and immutable history byte", async (t) => {
   const f = await fixture(t);
   const db = new DatabaseSync(f.filename);
   db.exec("DROP TABLE unportable_records");

@@ -86,17 +86,6 @@ export async function workspaceMaterialFields(
   };
 }
 
-/**
- * Core link-output reads bare paths from the Workspace root and `/` from `.tent`.
- * Convert an address serialized for `.tent/index.md` into that convention.
- */
-export function linkOutputResource(address: string): string {
-  if (address === "../") return "./";
-  if (address.startsWith("../")) return address.slice(3);
-  if (address.startsWith("./")) return `/${address.slice(2)}`;
-  return address;
-}
-
 /** Explicit CLI path sources (`./`, `/`, `.tent/`) that name no existing file, Node or Role. */
 export async function missingExplicitSources(
   input: readonly MaterialSource[],

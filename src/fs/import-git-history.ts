@@ -10,7 +10,6 @@ import { SqliteDocumentHistory, sqliteContentFingerprint } from "../core/store/s
 import { isHistoryDocument } from "../core/store/document-history.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { isNodeId, isRoleId, isCardId } from "../core/base/id.js";
-import { initializeGitIgnoreContext } from "./git-ignore-context.js";
 import { materialLocator, isDirectoryMaterial, isPrefixMaterial } from "../core/base/material.js";
 import { systemMaterialPath } from "../core/graph/material-target.js";
 import { cardSourceIdentityError } from "../core/graph/card-context.js";
@@ -446,7 +445,6 @@ export async function importGitHistory(sourceRoot: string, targetRoot: string) {
   const history = new SqliteDocumentHistory(targetRoot);
   await history.initialize();
   await history.close();
-  await initializeGitIgnoreContext(targetRoot);
   const db = new DatabaseSync(path.join(targetRoot, ".git/history.sqlite"));
   db.exec(
     "PRAGMA synchronous=EXTRA;PRAGMA foreign_keys=ON;CREATE TABLE migration_events(event TEXT PRIMARY KEY,message TEXT NOT NULL) STRICT;CREATE TABLE migration_originals(event TEXT NOT NULL,path TEXT NOT NULL,raw BLOB NOT NULL,PRIMARY KEY(event,path)) STRICT;",

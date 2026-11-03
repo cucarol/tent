@@ -12,7 +12,7 @@ import { markdownMaterialHeading } from "../base/material-section.js";
 import { repositoryFacts } from "../base/repository-facts.js";
 import type { RepositorySource } from "../base/repository-imports.js";
 import {
-  structureMaterialCoverage,
+  materialCoverage,
   materialCoverageContains,
   type MaterialCoverage,
   isTentWorkspacePath,
@@ -73,7 +73,7 @@ export async function scanWorkspace(
         locator.kind === "path" && !/^(?:\.{1,2}\/|\/)/.test(resource.trim())
           ? "./" + resource.trim()
           : resource;
-      coverage = structureMaterialCoverage(address, owner, workspaceRoot);
+      coverage = materialCoverage(address, owner, workspaceRoot);
       if (!coverage)
         throw new Error(
           "Directory or prefix material requires a local Workspace address, one trailing * for a prefix, and no query or fragment",

@@ -265,7 +265,8 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
     false,
   );
   assert.ok(packedPaths.includes("skill-resources/scripts/tent.mjs"));
-  assert.ok(packedPaths.includes("skill-resources/references/input.md"));
+  for (const reference of ["access", "cards", "roles"])
+    assert.ok(packedPaths.includes(`skill-resources/references/${reference}.md`));
   assert.equal(
     packedPaths.some((entry: string) => /^(desktop|src|test|node_modules)\//.test(entry)),
     false,

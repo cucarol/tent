@@ -1,3 +1,4 @@
+import { assertNodeFields } from "../base/node-fields.js";
 import { materialFields } from "../base/material.js";
 import { documentLifecycle } from "../base/document-status.js";
 // 加载帐 → Node 树 → 文档生命周期与 identity validity。
@@ -186,10 +187,13 @@ export function canonicalIdentityError(data: Record<string, unknown>): string | 
     return `Invalid Node id: ${typeof data.id === "string" && data.id ? data.id : "<missing>"}; canonical Node ids must start with node-.`;
   }
   try {
+    assertNodeFields(data);
     normalizeOptionalNodeType(data.type);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
+  if (data.description !== undefined && typeof data.description !== "string")
+    return "Node description must be a string";
   try {
     materialFields(data);
   } catch (error) {

@@ -9,7 +9,7 @@ export function sectionKey(workspacePath: string, heading: string): string {
 }
 
 /**
- * A linked heading, with the heading line Core's parser found for it at SessionStart.
+ * A linked heading, with the heading line the previous Stop found for it.
  * When that line is unknown or gone, the scan falls back to the heading's plain text.
  */
 export type SectionTarget = { heading: string; line?: string };
@@ -24,7 +24,7 @@ const plainText = (text: string) =>
     .trim();
 
 /**
- * The tool hook cannot load the Markdown parser, so it compares a section with itself
+ * Stop compares a section with itself
  * over time using a line scan: ATX headings outside fenced code. It only detects change;
  * Core's parser stays the authority for what a section contains. One scan serves every
  * linked heading of the file.
@@ -83,7 +83,12 @@ export function sectionFingerprints(
     );
     return {
       fingerprint: createHash("sha256")
-        .update(lines.slice(selected.line, next?.line).join("\n"))
+        .update(
+          lines
+            .slice(selected.line, next?.line)
+            .map((line) => line.replace(/\r$/, ""))
+            .join("\n"),
+        )
         .digest("hex"),
       line: selected.raw,
     };

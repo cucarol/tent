@@ -4,14 +4,14 @@ import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
 import { nodeMaterialWarnings } from "../src/core/graph/node-material-warnings.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { git } from "./helpers.js";
-import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { readNodeForEdit } from "../src/core/read/node-query.js";
+import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { writeNodesBatch } from "../src/core/write/node-write-batch.js";
 
 test("whole Markdown advice uses real sibling sections and only newly added whole materials", async () => {
   const multi = "---\nlabel: ignored\n---\n# Guide\n## One\ntext\n## Two\ntext\n";
@@ -23,7 +23,8 @@ test("whole Markdown advice uses real sibling sections and only newly added whol
     },
   };
   const data = { id: "node-rule", type: "goal", sources: [{ resource: "../../guide.md" }] };
-  assert.equal((await nodeMaterialWarnings(adapter, data, "Rule/Rule.md")).length, 1);
+  const warnings = await nodeMaterialWarnings(adapter, data, "Rule/Rule.md");
+  assert.equal(warnings.length, 1);
   reads = 0;
   assert.deepEqual(await nodeMaterialWarnings(adapter, data, "Rule/Rule.md", data), []);
   assert.equal(reads, 0);
@@ -62,10 +63,11 @@ test("whole Markdown advice uses real sibling sections and only newly added whol
       [],
     );
   }
-  assert.deepEqual(
-    await nodeMaterialWarnings(adapter, { ...data, type: "output" }, "Rule/Rule.md"),
-    [],
-  );
+  for (const type of ["goal", "prompt", "output"])
+    assert.deepEqual(
+      await nodeMaterialWarnings(adapter, { ...data, type }, "Rule/Rule.md"),
+      warnings,
+    );
   assert.deepEqual(
     await nodeMaterialWarnings(
       {
@@ -80,38 +82,41 @@ test("whole Markdown advice uses real sibling sections and only newly added whol
   );
 });
 
-test("CLI write and batch receipts do not repeat whole-document advice", async (t) => {
-  const { root } = await fixture(t);
-  await fs.writeFile(path.join(root, "tracked.md"), "# Guide\n## One\nA\n## Two\nB\n");
-  const command = async (sub: string, args: string[], input?: unknown) => {
-    const r = await runNodeCommand(sub, args, {
-      workspace: root,
-      json: true,
-      ...(input === undefined ? {} : { stdin: JSON.stringify(input) }),
-    });
-    assert.equal(r.exitCode, 0, r.stderr || r.stdout);
-    return JSON.parse(r.stdout);
+test("create problems and Core document/batch writes keep whole-document advice tied to new materials", async (t) => {
+  const { root, adapter } = await fixture(t);
+  const env = {
+    fs: adapter,
+    clock: { now: () => new Date().toISOString() },
+    tentName: "Warnings",
+    tentRoot: path.join(root, ".tent"),
   };
-  const created = await command("create", ["Whole", "--type", "goal", "--resource", "tracked.md"]);
-  assert.match(created.warnings[0], /whole document with several sections/);
+  await fs.writeFile(path.join(root, "tracked.md"), "# Guide\n## One\nA\n## Two\nB\n");
+  const receipt = await runNodeCommand(
+    "create",
+    ["Whole", "--type", "goal", "--resource", "tracked.md"],
+    { workspace: root, json: true },
+  );
+  assert.equal(receipt.exitCode, 0, receipt.stderr || receipt.stdout);
+  const created = JSON.parse(receipt.stdout);
+  assert.deepEqual(created.problems, []);
   const id = created.node.nodeId;
   await fs.appendFile(path.join(root, "tracked.md"), "Changed\n");
-  const before = await command("get", [id, "--full"]);
-  const saved = await command("write", [id, "--input-json", "-"], {
+  const before = await readNodeForEdit(adapter, id);
+  const saved = await writeNodeDocument(adapter, id, {
     baseEtag: before.etag,
     body: "New wording",
   });
   assert.equal(saved.warnings, undefined);
-  const latest = await command("get", [id, "--full"]);
-  const batch = await command("write-many", ["--input-json", "-"], {
+  const latest = await readNodeForEdit(adapter, id);
+  const batch = await writeNodesBatch(env, {
     items: [
       { op: "update", nodeId: id, baseEtag: latest.etag, body: "Batch wording" },
-      { op: "create", ref: "new", name: "New", type: "prompt", resource: "tracked.md" },
+      { op: "create", ref: "new", name: "New", type: "prompt", resource: "../../tracked.md" },
     ],
   });
-  assert.equal(batch.warnings.length, 1);
-  assert.match(batch.warnings[0], /whole document with several sections/);
-  const forward = await command("write-many", ["--input-json", "-"], {
+  assert.equal(batch.warnings?.length, 1);
+  assert.match(batch.warnings![0]!, /whole document with several sections/);
+  const forward = await writeNodesBatch(env, {
     items: [
       {
         op: "create",
@@ -129,8 +134,8 @@ test("CLI write and batch receipts do not repeat whole-document advice", async (
       },
     ],
   });
-  assert.equal(forward.warnings.length, 1);
-  assert.match(forward.warnings[0], /whole document with several sections/);
+  assert.equal(forward.warnings?.length, 1);
+  assert.match(forward.warnings![0]!, /whole document with several sections/);
 });
 
 async function fixture(t: TestContext) {

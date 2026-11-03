@@ -116,8 +116,6 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
   const identity = buildIdentity(buildRoot);
   for (const [artifact, entry] of [
     ["cli", "src/cli/tent.ts"],
-    ["start-hook", "src/cli/start-hook-entry.ts"],
-    ["tool-hook", "src/cli/tool-hook-entry.ts"],
     ["turn-hook", "src/cli/turn-hook-entry.ts"],
     ["migrate-history", "src/cli/migrate-history.ts"],
   ]) {
@@ -143,23 +141,7 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
       },
     });
     assertCanonicalMetafile(`plugin-${artifact}`, result.metafile);
-    if (artifact === "start-hook") {
-      for (const output of Object.values(result.metafile.outputs))
-        if ((output.inputs["src/cli/tent.ts"]?.bytesInOutput ?? 0) > 0)
-          throw new Error("Start hook must not load the CLI entrypoint");
-    }
-    if (artifact === "tool-hook" || artifact === "turn-hook") {
-      for (const output of Object.values(result.metafile.outputs))
-        for (const [input, contribution] of Object.entries(output.inputs))
-          if (
-            contribution.bytesInOutput > 0 &&
-            (input.startsWith("node_modules/") ||
-              /src\/(?:cli\/tent|core\/base\/frontmatter|core\/store\/scaffold|core\/workspace\/status)\.ts$/.test(
-                input,
-              ))
-          )
-            throw new Error(`Tool hook must not load CLI/parser dependencies: ${input}`);
-    }
+
     for (const input of Object.keys(result.metafile.inputs)) inputs.add(input);
     for (const output of Object.values(result.metafile.outputs)) {
       const unbundled = output.imports.filter((item) => item.external && !isBuiltin(item.path));
@@ -167,12 +149,7 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
         throw new Error(`Plugin has external runtime imports: ${JSON.stringify(unbundled)}`);
     }
   }
-  await assertCanonicalRootArtifacts(outputRoot, [
-    "cli.mjs",
-    "start-hook.mjs",
-    "tool-hook.mjs",
-    "turn-hook.mjs",
-  ]);
+  await assertCanonicalRootArtifacts(outputRoot, ["cli.mjs", "turn-hook.mjs"]);
   return [...inputs].sort();
 }
 

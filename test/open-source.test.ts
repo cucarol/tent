@@ -50,10 +50,6 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   const readmeZh = await fs.readFile(path.join(repoRoot, "README.zh-CN.md"), "utf8");
   const spec = await fs.readFile(path.join(repoRoot, "docs", "SPEC.md"), "utf8");
   await fs.readFile(path.join(repoRoot, "skills", "tent-init", "SKILL.md"), "utf8");
-  const nodeMaintenance = await fs.readFile(
-    path.join(repoRoot, "skill-resources", "references", "node-maintenance.md"),
-    "utf8",
-  );
   const recipients = await fs.readFile(
     path.join(repoRoot, "skill-resources", "references", "roles.md"),
     "utf8",
@@ -151,7 +147,7 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   ]);
   assert.equal(
     await exists(path.join(repoRoot, "skill-resources", "references", "node-maintenance.md")),
-    true,
+    false,
   );
   assert.equal(await exists(path.join(repoRoot, "skills", "tent-init", "vendor")), false);
   assert.equal(await exists(path.join(repoRoot, "src", "tent-init-map")), false);
@@ -226,7 +222,7 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
       true,
     );
   }
-  assert.ok(nodeMaintenance.trim(), "Node maintenance resource must be included");
+  assert.ok(inputSkill.trim(), "Node guidance must be included in its Skill");
   assert.ok(recipients.trim(), "Role command resource must be included");
   const canonicalPublicContracts = [spec, inputSkill, recipients].join("\n");
   for (const retired of [
@@ -266,7 +262,7 @@ test("docs/skill drift: current Node/Role/Card protocol and canonical type", asy
   const spec = await fs.readFile(path.join(repoRoot, "docs", "SPEC.md"), "utf8");
 
   // SPEC: canonical Node type, immutable Card, and optional Role.
-  assert.match(spec, /`type` is exactly `goal`, `prompt` or `output`/);
+  assert.match(spec, /`type` is required and is exactly `goal`, `prompt` or `output`/);
   assert.doesNotMatch(spec, /NODE_TYPE_PRESETS|primary\[-secondary\]/);
   assert.match(spec, /Node, Role and Card are the only concepts/);
   assert.doesNotMatch(spec, /TaskResult|WorkspaceLane|currentResultId|acceptMode|task\.bindOutput/);

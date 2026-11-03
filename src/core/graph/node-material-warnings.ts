@@ -48,7 +48,6 @@ export async function nodeMaterialWarnings(
   documentPath: string,
   previous: Record<string, unknown> = {},
 ): Promise<string[]> {
-  if (data.type !== "goal" && data.type !== "prompt") return [];
   const retained = new Set(
     resolvedMaterialOccurrences(previous, documentPath).flatMap(({ locator }) => {
       try {
@@ -61,8 +60,8 @@ export async function nodeMaterialWarnings(
   );
   const whole: string[] = [];
   const seen = new Set<string>();
-  for (const { resource, locator, track } of resolvedMaterialOccurrences(data, documentPath)) {
-    if (!locator || track || !fs.readMaterialText) continue;
+  for (const { resource, locator } of resolvedMaterialOccurrences(data, documentPath)) {
+    if (!locator || !fs.readMaterialText) continue;
     try {
       const identity = wholeMarkdownIdentity(locator, fs.workspaceRoot);
       if (!identity || retained.has(identity) || seen.has(identity)) continue;

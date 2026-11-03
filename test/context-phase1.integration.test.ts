@@ -13,7 +13,7 @@ import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { git } from "./helpers.js";
-import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import {
   inspectCurrentContext,
   makeContextBrief,
@@ -221,40 +221,19 @@ test("brief ignores retained session logs and has no unrecorded-file section", a
 
 test("brief exposes root identities without another catalog scan", async (t) => {
   const f = await fixture(t);
-  const created = await f.node("write-many", ["--input-json", "-"], {
-    items: [
-      {
-        op: "create",
-        ref: "map",
-        name: "Map",
-        type: "prompt",
-        body: "Module map",
-      },
-      {
-        op: "create",
-        ref: "core",
-        parent: "@map",
-        name: "Core",
-        type: "prompt",
-        body: "Core module",
-      },
-      {
-        op: "create",
-        ref: "other",
-        name: "Other",
-        type: "prompt",
-        body: "Other entry",
-      },
-      {
-        op: "create",
-        ref: "archived",
-        name: "Archived",
-        type: "prompt",
-        body: "Old entry",
-      },
-    ],
-  });
-  await f.node("archive", [created.results[3].nodeId]);
+  const map = await f.node("create", ["Map", "--type", "prompt", "--body", "Module map"]);
+  await f.node("create", [
+    "Core",
+    "--parent",
+    map.node.nodeId,
+    "--type",
+    "prompt",
+    "--body",
+    "Core module",
+  ]);
+  const other = await f.node("create", ["Other", "--type", "prompt", "--body", "Other entry"]);
+  const archived = await f.node("create", ["Archived", "--type", "prompt", "--body", "Old entry"]);
+  await f.node("archive", [archived.node.nodeId]);
   const adapter = openTestFs(path.join(f.root, ".tent"));
   const catalog = await loadNodeCatalog(adapter);
   const observed = new Proxy(adapter, {
@@ -271,33 +250,20 @@ test("brief exposes root identities without another catalog scan", async (t) => 
     nodes: Promise.resolve({ catalog, invalidNodes: [] }),
   });
   const brief = makeContextBrief(context);
-  assert.deepEqual(
-    brief.roots,
-    [0, 2].map((index) => ({
-      nodeId: created.results[index].nodeId,
-      name: index === 0 ? "Map" : "Other",
-      type: "prompt",
-    })),
-  );
+  assert.deepEqual(brief.roots, [
+    { nodeId: map.node.nodeId, name: "Map", type: "prompt" },
+    { nodeId: other.node.nodeId, name: "Other", type: "prompt" },
+  ]);
   const cli = await f.workspace("brief");
   assert.equal("roots" in cli.value, false);
   assert.ok(
-    cli.value.agentContext.sourceReads.some((read: { command?: string }) =>
-      read.command?.includes("node list --full"),
+    cli.value.agentContext.sourceReads.every(
+      (read: { command?: string }) => !read.command?.includes("node list"),
     ),
-  );
-  const listed = await f.node("list", []);
-  assert.deepEqual(
-    listed.items.map(({ nodeId, name, type }: { nodeId: string; name: string; type: string }) => ({
-      nodeId,
-      name,
-      type,
-    })),
-    brief.roots,
   );
   const text = await runWorkspaceCommand("brief", [], { workspace: f.root });
   assert.equal(text.exitCode, 0, text.stderr);
-  assert.ok(text.stdout.includes(created.results[0].nodeId));
+  assert.ok(text.stdout.includes(map.node.nodeId));
   assert.doesNotMatch(text.stdout, /Archived|Core\/Core.md/);
 });
 
@@ -316,35 +282,55 @@ test("without Hooks requirements and outputs keep paths, content, and read-only 
   ]);
   const id = created.node.nodeId;
   await fs.writeFile(path.join(f.root, "result.html"), "<h1>Implemented</h1>");
-  const linked = await f.node("link-output", [
-    id,
-    "--resource",
-    "result.html",
-    "--name",
-    "Implementation",
-  ]);
+  const linked = (
+    await f.node("create", [
+      "Implementation",
+      "--type",
+      "output",
+      "--parent",
+      id,
+      "--resource",
+      "result.html",
+    ])
+  ).node;
   assert.ok(linked.etag);
   assert.equal("raw" in linked, false);
   assert.notEqual(linked.nodeId, id);
   assert.equal(linked.path, ".tent/Requirement/Implementation/Implementation.md");
+  const requirementFile = path.join(f.root, created.node.path);
+  const outputFile = path.join(f.root, linked.path);
+  const originalRaw = await fs.readFile(requirementFile, "utf8");
+  const originalVersion = JSON.stringify((await f.node("history", [id])).items[0].changes[0].after);
   await fs.writeFile(path.join(f.root, "requirement.md"), "Requirement version two");
   const headBefore = await historyHead(path.join(f.root, ".tent"));
   const brief = await f.workspace("brief");
   assert.ok(Buffer.byteLength(brief.stdout) <= 16384);
-  const read = await f.node("get", [id, "--full"]);
-  assert.equal(read.text, "Settled requirement\n");
+  assert.equal(
+    parseFrontmatter(await fs.readFile(requirementFile, "utf8")).body,
+    "Settled requirement",
+  );
   assert.equal(await historyHead(path.join(f.root, ".tent")), headBefore);
-  await f.node("write", [id, "--body", "Changed requirement", "--base-etag", read.etag]);
-  assert.equal((await f.node("get", [id, "--full"])).text, "Changed requirement");
-  const output = await f.node("get", [linked.nodeId, "--full"]);
-  await f.node("write", [
-    linked.nodeId,
-    "--body",
+  const requirement = parseFrontmatter(originalRaw);
+  await fs.writeFile(
+    requirementFile,
+    serializeFrontmatter(requirement.data, "Changed requirement", requirement.keyOrder),
+  );
+  const output = parseFrontmatter(await fs.readFile(outputFile, "utf8"));
+  await fs.writeFile(
+    outputFile,
+    serializeFrontmatter(output.data, "Updated implementation", output.keyOrder),
+  );
+  await f.workspace("brief");
+  assert.notEqual(await historyHead(path.join(f.root, ".tent")), headBefore);
+  assert.equal(
+    parseFrontmatter(await fs.readFile(requirementFile, "utf8")).body,
+    "Changed requirement",
+  );
+  assert.equal(
+    parseFrontmatter(await fs.readFile(outputFile, "utf8")).body,
     "Updated implementation",
-    "--base-etag",
-    output.etag,
-  ]);
-  assert.equal((await f.node("get", [linked.nodeId, "--full"])).text, "Updated implementation");
+  );
+  assert.equal((await f.node("history", [id, "--version", originalVersion])).text, originalRaw);
   const decision = await f.node("create", [
     "Conversation decision",
     "--type",
@@ -405,17 +391,21 @@ test("brief keeps Card delivery independent of outputs and retains changed sourc
   assert.equal(reception.receivedBy, "role-worker");
   assert.equal(reception.returnTo, "role-requester");
   await fs.writeFile(path.join(f.root, "result.html"), "<h1>result</h1>");
-  const output = await f.node("link-output", [
-    source.node.nodeId,
-    "--resource",
-    "result.html",
-    "--card",
-    published.cardId,
-  ]);
+  const output = (
+    await f.node("create", [
+      "Implementation",
+      "--type",
+      "output",
+      "--parent",
+      source.node.nodeId,
+      "--resource",
+      "result.html",
+    ])
+  ).node;
   const outputRaw = await fs.readFile(path.join(f.root, output.path), "utf8");
   assert.equal(
     JSON.stringify(parseFrontmatter(outputRaw).data.sources ?? []).includes(published.cardId),
-    true,
+    false,
   );
   const withOutput = (await f.workspace("brief")).value;
   assert.deepEqual(briefCards(withOutput), briefCards(received));
@@ -448,24 +438,28 @@ test("brief keeps Card delivery independent of outputs and retains changed sourc
     head,
     "brief records the preceding native source edit",
   );
-  await f.node("link-output", [
+  await f.node("create", [
+    "Updated implementation",
+    "--type",
+    "output",
+    "--parent",
     source.node.nodeId,
     "--resource",
     "result.html",
-    "--card",
-    published.cardId,
   ]);
   assert.deepEqual(
     briefIssues((await f.workspace("brief")).value, "changed-source"),
     [changedSource],
     "a later output does not erase the changed pinned Card source",
   );
-  await f.node("link-output", [
+  await f.node("create", [
+    "Second implementation",
+    "--type",
+    "output",
+    "--parent",
     second.node.nodeId,
     "--resource",
     "result.html",
-    "--card",
-    published.cardId,
   ]);
   const allOutputs = (await f.workspace("brief")).value;
   assert.deepEqual(
@@ -650,12 +644,6 @@ test("CLI discovery text and JSON stay byte-identical when the clock advances on
       const calls = [
         ["brief", () => runWorkspaceCommand("brief", [], options)],
         ["card list", () => runCardCommand("list", [], options)],
-        ["node get", () => runNodeCommand("get", [id, "--full"], options)],
-        ["node list", () => runNodeCommand("list", [], options)],
-        [
-          "node relations",
-          () => runNodeCommand("relations", [id, "--direction", "children"], options),
-        ],
       ] as const;
       for (const [name, read] of calls) {
         const result = await read();
@@ -670,7 +658,6 @@ test("CLI discovery text and JSON stay byte-identical when the clock advances on
   assert.equal("counts" in brief, false);
   assert.deepEqual(brief.workspaceIssues.items, []);
   assert.equal(JSON.parse(before["card list json"]).items.length, 1);
-  assert.equal(JSON.parse(before["node relations json"]).items.length, 1);
   t.mock.timers.tick(1000);
   const after = await readAll();
   for (const name of Object.keys(before)) assert.equal(after[name], before[name], name);

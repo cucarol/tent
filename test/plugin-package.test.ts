@@ -14,23 +14,43 @@ const run = promisify(execFile);
 let fixture: string;
 let distribution: string;
 const bundleFor = (host: string) => path.join(distribution, host, "plugins/tent");
+async function initializeProject(workspace: string): Promise<void> {
+  const options = { cwd: workspace, windowsHide: true };
+  await run("git", ["init"], options);
+  await fs.writeFile(path.join(workspace, "product.txt"), "before");
+  await run("git", ["add", "product.txt"], options);
+  await run(
+    "git",
+    [
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-m",
+      "Add product baseline",
+    ],
+    options,
+  );
+}
 before(
   async () => {
     await fs.mkdir(scratch, { recursive: true });
     fixture = await fs.mkdtemp(path.join(scratch, "plugin-packages-"));
     distribution = path.join(fixture, "distribution with spaces");
-    await run(
-      process.execPath,
-      [
-        "scripts/build-plugin.mjs",
-        path.join(root, ".scratch", path.relative(scratch, distribution)),
-      ],
-      {
+    if (process.env.TENT_TEST_PLUGIN_DISTRIBUTION) {
+      await fs.cp(path.resolve(process.env.TENT_TEST_PLUGIN_DISTRIBUTION), distribution, {
+        recursive: true,
+      });
+    } else {
+      await run(process.execPath, ["scripts/build-plugin.mjs", distribution], {
         cwd: root,
         windowsHide: true,
         timeout: 60_000,
-      },
-    );
+      });
+    }
   },
   { timeout: 70_000 },
 );
@@ -103,9 +123,8 @@ test("both host packages carry the same common payload and separate native shell
   await assert.rejects(fs.access(path.join(claude, "wake.mjs")), { code: "ENOENT" });
   const commonFiles = [
     "cli.mjs",
-    "start-hook.mjs",
-    "tool-hook.mjs",
     "turn-hook.mjs",
+    "migrate-history.mjs",
     "package.json",
     "THIRD_PARTY_NOTICES.txt",
     "LICENSE",
@@ -143,20 +162,10 @@ test("both host packages carry the same common payload and separate native shell
   );
   assert.equal(catalogue.owner.name, "cucarol");
   assert.equal(catalogue.plugins[0].source, "./plugins/tent");
-  await assert.rejects(
-    run(
-      process.execPath,
-      [
-        "scripts/build-plugin.mjs",
-        path.join(root, ".scratch", path.relative(scratch, distribution)),
-      ],
-      {
-        cwd: root,
-        windowsHide: true,
-      },
-    ),
-    /EEXIST/,
+  const { buildPlugin } = await import(
+    new URL("../scripts/build-plugin.mjs", import.meta.url).href
   );
+  await assert.rejects(buildPlugin(distribution), /EEXIST/);
 });
 
 test(
@@ -225,13 +234,27 @@ test(
   },
 );
 
-test("Claude Code Hook commands use their own bundle even when PLUGIN_ROOT points elsewhere", async () => {
+test("Claude Code Stop uses its own bundle even when PLUGIN_ROOT points elsewhere", async () => {
   const bundle = bundleFor("claude-code"),
     workspace = path.join(fixture, "claude user project");
   await fs.mkdir(workspace);
+  await initializeProject(workspace);
+  const launcher = path.join(bundle, "skill-resources/scripts/tent.mjs");
+  await run(process.execPath, [launcher, "new", workspace], { cwd: workspace, windowsHide: true });
   await run(
     process.execPath,
-    [path.join(bundle, "skill-resources/scripts/tent.mjs"), "new", workspace],
+    [
+      launcher,
+      "node",
+      "create",
+      "Context",
+      "--type",
+      "prompt",
+      "--resource",
+      "product.txt",
+      "--body",
+      "private Node body",
+    ],
     { cwd: workspace, windowsHide: true },
   );
   const env = {
@@ -240,31 +263,34 @@ test("Claude Code Hook commands use their own bundle even when PLUGIN_ROOT point
     PLUGIN_ROOT: path.join(fixture, "wrong plugin"),
   };
   const hooks = JSON.parse(await fs.readFile(path.join(bundle, "hooks/hooks.json"), "utf8")).hooks;
-  const invoke = (event: string) =>
+  assert.deepEqual(Object.keys(hooks), ["Stop"]);
+  const invoke = (extra: Record<string, unknown> = {}) =>
     new Promise<string>((resolve, reject) => {
       const child = exec(
-        hooks[event][0].hooks[0].command,
+        hooks.Stop[0].hooks[0].command,
         { cwd: workspace, env, windowsHide: true, timeout: 30_000 },
         (error, stdout, stderr) =>
           error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve(stdout),
       );
-      child.stdin!.end(
-        JSON.stringify({ hook_event_name: event, session_id: "claude-fixture", cwd: workspace }),
-      );
+      child.stdin!.end(JSON.stringify({ hook_event_name: "Stop", cwd: workspace, ...extra }));
     });
-  const start = JSON.parse(await invoke("SessionStart")).hookSpecificOutput.additionalContext;
-  assert.ok(start.includes(JSON.stringify(path.join(bundle, "cli.mjs"))));
-  assert.ok(hooks.Stop);
-  assert.ok(hooks.UserPromptSubmit);
+  assert.deepEqual(JSON.parse(await invoke()), {});
+  await fs.writeFile(path.join(workspace, "product.txt"), "after a native file edit");
+  const notice = JSON.parse(await invoke());
+  assert.equal(notice.decision, "block");
+  assert.match(notice.reason, /^Files changed this turn are covered by these Tent Nodes:\n/);
+  assert.ok(notice.reason.includes(path.join(workspace, ".tent/Context/Context.md")));
+  assert.doesNotMatch(notice.reason, /private Node body/);
+  assert.deepEqual(JSON.parse(await invoke({ stop_hook_active: true })), {});
   const { validateHostPackage } = await import(
     new URL("../scripts/validate-plugin.mjs", import.meta.url).href
   );
-  const launcher = path.join(bundle, "hooks/session.mjs");
-  await fs.rename(launcher, `${launcher}.saved`);
+  const hookLauncher = path.join(bundle, "hooks/session.mjs");
+  await fs.rename(hookLauncher, `${hookLauncher}.saved`);
   try {
     await assert.rejects(validateHostPackage(bundle, "claude-code"), /ENOENT/);
   } finally {
-    await fs.rename(`${launcher}.saved`, launcher);
+    await fs.rename(`${hookLauncher}.saved`, hookLauncher);
   }
 });
 
@@ -276,6 +302,7 @@ test(
     const workspace = path.join(fixture, "user project"),
       dataDir = path.join(fixture, "absent service state");
     await fs.mkdir(workspace);
+    await initializeProject(workspace);
     const expectedSkills = ["tent-card", "tent-init", "tent-node", "tent-role"];
     assert.deepEqual((await fs.readdir(path.join(bundle, "skills"))).sort(), expectedSkills);
     for (const skill of expectedSkills) {
@@ -318,7 +345,17 @@ test(
       JSON.parse((await cli([...args, "--json"], stdin)).stdout);
     await cli(["new", workspace]);
     const node = (
-      await json(["node", "create", "context", "--type", "prompt", "--body", "Original input"])
+      await json([
+        "node",
+        "create",
+        "context",
+        "--type",
+        "prompt",
+        "--resource",
+        "product.txt",
+        "--body",
+        "Original input",
+      ])
     ).node;
     const role = await json(["role", "create", "--title", "Reviewer", "--body", "Review only"]);
     const card = await json([
@@ -333,24 +370,23 @@ test(
     ]);
     const input = await json(["card", "show", card.cardId]);
     assert.equal(input.sources[0].version.path, "context/context.md");
-    const before = await json(["node", "get", node.nodeId, "--full"]);
-    await json([
+    const nodeFile = path.join(workspace, ".tent/context/context.md");
+    const before = await fs.readFile(nodeFile, "utf8");
+    const versions = await json(["node", "history", node.nodeId]);
+    const version = versions.items.flatMap(
+      (event: { changes: { after?: { commit: string; path: string } }[] }) =>
+        event.changes.flatMap((change) => (change.after ? [change.after] : [])),
+    )[0];
+    assert.ok(version);
+    await fs.writeFile(nodeFile, before.replace("Original input", "Live changed"));
+    const historical = await cli([
       "node",
-      "write",
+      "history",
       node.nodeId,
-      "--body",
-      "Live changed",
-      "--base-etag",
-      before.etag,
+      "--version",
+      JSON.stringify(version),
     ]);
-    const historical = await json([
-      "node",
-      "get",
-      node.nodeId,
-      "--version-json",
-      JSON.stringify(input.sources[0].version),
-    ]);
-    assert.equal(historical.text, "Original input\n");
+    assert.equal(historical.stdout, before);
     const taken = await json(["card", "take", card.cardId, "--role", role.roleId]);
     assert.equal(taken.state, "consumed");
     assert.equal("progress" in taken, false);
@@ -359,21 +395,12 @@ test(
       cli(["card", "interrupt", card.cardId]),
       /Unknown command: tent card interrupt/,
     );
-    await assert.rejects(
-      cli(["node", "write", node.nodeId, "--body", "Lost", "--base-etag", before.etag]),
-      /conflict|etag/i,
-    );
     const hooks = JSON.parse(
       await fs.readFile(path.join(bundle, "hooks/hooks.json"), "utf8"),
     ).hooks;
-    assert.deepEqual(Object.keys(hooks).sort(), [
-      "PostToolUse",
-      "SessionStart",
-      "Stop",
-      "UserPromptSubmit",
-    ]);
-    assert.ok(hooks.Stop);
-    assert.ok(hooks.UserPromptSubmit);
+    assert.deepEqual(Object.keys(hooks), ["Stop"]);
+    for (const retired of ["start-hook.mjs", "tool-hook.mjs"])
+      await assert.rejects(fs.access(path.join(bundle, retired)), { code: "ENOENT" });
     const hook = (event: string, extra: Record<string, unknown> = {}) =>
       new Promise<string>((resolve, reject) => {
         const child = exec(
@@ -391,23 +418,17 @@ test(
           }),
         );
       });
-    const start = JSON.parse(await hook("SessionStart")).hookSpecificOutput.additionalContext;
-    assert.ok(start.includes(workspace));
-    assert.ok(start.includes(JSON.stringify(path.join(bundle, "cli.mjs"))));
-    assert.equal(start.split("\n").length, 4);
-    assert.match(start, /\nBuild: Tent /);
-    assert.ok(
-      start.endsWith(
-        "Tent shows you the Nodes that cover each file you change, right after the change. No Tent command is needed before working.",
-      ),
-    );
-    assert.doesNotMatch(start, /workspace brief|SKILL\.md|\$tent-|reconcile|baseline|sessionToken/);
-    assert.ok(hooks.Stop);
-    assert.ok(hooks.UserPromptSubmit);
+    assert.deepEqual(JSON.parse(await hook("Stop")), {});
+    await fs.writeFile(path.join(workspace, "product.txt"), "after a native shell edit");
+    const notice = JSON.parse(await hook("Stop"));
+    assert.equal(notice.decision, "block");
+    assert.ok(notice.reason.includes(`- context: ${nodeFile}`));
+    assert.doesNotMatch(notice.reason, /Original input|Live changed|Rules over it:|cut; the rest/);
+    assert.deepEqual(JSON.parse(await hook("Stop", { stop_hook_active: true })), {});
     await assert.rejects(fs.access(dataDir), { code: "ENOENT" });
     await assert.rejects(fs.access(trap), { code: "ENOENT" });
     // A broken CLI is not repaired with a cwd/global runtime.
     await fs.rename(path.join(bundle, "cli.mjs"), path.join(bundle, "cli.saved.mjs"));
-    await assert.rejects(cli(["node", "list"]), /ENOENT/);
+    await assert.rejects(cli(["node", "history", node.nodeId]), /ENOENT/);
   },
 );

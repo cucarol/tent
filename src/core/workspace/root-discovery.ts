@@ -14,7 +14,8 @@ export async function discoverTentSystemRoot(
   probe: TentRootProbe,
   stopAt?: string,
 ): Promise<string | undefined> {
-  let dir = path.resolve(cwd);
+  const start = path.resolve(cwd);
+  let dir = start;
   const boundary = stopAt ? path.resolve(stopAt) : undefined;
   for (;;) {
     const direct = await probe(dir);
@@ -22,11 +23,17 @@ export async function discoverTentSystemRoot(
     const nested = path.join(dir, ".tent");
     const child = await probe(nested);
     if (child) return nested;
-    if (await fs.lstat(path.join(dir, ".git")).catch(() => undefined)) {
+    if (
+      await fs.lstat(path.join(dir, ".git")).catch((error) => {
+        if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+        return undefined;
+      })
+    ) {
       const checkout = await readGitCheckout(dir);
       const main = checkout ? await linkedMainCheckout(checkout) : undefined;
-      const shared = main ? path.join(main, ".tent") : undefined;
-      return shared && (await probe(shared)) === true ? shared : undefined;
+      return main
+        ? discoverTentSystemRoot(path.join(main, path.relative(dir, start)), probe, main)
+        : undefined;
     }
     if (boundary && dir === boundary) return;
     const parent = path.dirname(dir);

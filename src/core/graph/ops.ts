@@ -37,6 +37,7 @@ export type NewNodeInput = MaterialFields & {
   /** Validated as goal, prompt or output. */
   type: string;
   body?: string;
+  description?: string;
   tags?: string[];
 } & ({ parentPath: string; parentId?: never } | { parentId: string | null; parentPath?: never });
 
@@ -48,6 +49,8 @@ export async function createNode(env: OpsEnv, input: NewNodeInput): Promise<stri
 
 export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Promise<string> {
   const materials = materialFields(input as unknown as Record<string, unknown>);
+  if (input.description !== undefined && typeof input.description !== "string")
+    throw new Error("Node description must be a string");
   const tent = await loadTent(env.fs);
   // Resolve an identity under the same mutation lock as the creation, after any earlier writer.
   const parentPath =
@@ -72,7 +75,13 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
   assertNotTempPath(path);
   // V0.1: every user Node writes an exact canonical type marker.
   const tags = input.tags === undefined ? [] : normalizeTagList(input.tags);
-  const fm = { id, type, ...(tags.length === 0 ? {} : { tags }), ...materials };
+  const fm = {
+    id,
+    type,
+    ...(input.description === undefined ? {} : { description: input.description }),
+    ...(tags.length === 0 ? {} : { tags }),
+    ...materials,
+  };
   const notePath = nodeNotePath(path);
   validateMaterialAddresses(fm, notePath);
   const body = await canonicalDocumentReferences(env.fs, notePath, fm, input.body ?? "");

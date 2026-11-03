@@ -1,4 +1,3 @@
-import { readGoalOpenStates } from "./open-goals.js";
 import path from "node:path";
 import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
 import type { DocumentVersion } from "../store/history-port.js";
@@ -15,7 +14,7 @@ import {
 import { markdownMaterialHeading } from "../base/material-section.js";
 import { selectSection } from "../base/markdown-section.js";
 import {
-  structureMaterialCoverage,
+  materialCoverage,
   materialCoverageContains,
   isTentWorkspacePath,
 } from "../base/material-coverage.js";
@@ -92,11 +91,10 @@ const quote = (value: string) =>
 function command(start: AgentContextStart, workspaceRoot: string) {
   const workspace = ` --workspace ${quote(workspaceRoot)}`;
   if (start.kind === "card") return `tent card show ${start.cardId}${workspace}`;
-  if (start.kind === "resource")
-    return `tent node search --resource ${quote(localMaterialPath(materialLocator(start.resource, "index.md", true), workspaceRoot) ?? start.resource)}${workspace}`;
+  if (start.kind === "resource") return `tent workspace check${workspace}`;
   if (start.kind === "brief")
     return `tent workspace brief${start.roleId ? ` --role ${start.roleId}` : ""}${workspace}`;
-  return `tent node get ${start.nodeId}${start.version ? ` --version-json ${quote(JSON.stringify(start.version))}` : ""}${workspace}`;
+  return `tent node history ${start.nodeId}${start.version ? ` --version ${quote(JSON.stringify(start.version))}` : ""}${workspace}`;
 }
 function excerpt(text: string, maximum = 1600) {
   const characters = Array.from(text);
@@ -245,13 +243,14 @@ export async function assembleAgentContext(
             });
             continue;
           }
-          const coverage = structureMaterialCoverage(
+          const coverage = materialCoverage(
             occurrence.resource,
             nodeNotePath(node.path),
             workspaceRoot,
+            occurrence.field === "sources",
           );
           const why = `${node.nodeId} ${occurrence.field}${node.version ? " in retained version" : ""}: ${occurrence.resource}`;
-          if (coverage && repository) {
+          if (coverage && coverage.kind !== "file" && repository) {
             const members = repository.trackedFiles.filter((file) =>
               materialCoverageContains(coverage, file),
             );
@@ -295,11 +294,11 @@ export async function assembleAgentContext(
         ...(node.version ? { version: node.version } : {}),
         ...(heading ? { heading } : {}),
         ...excerpt(text),
-        command:
-          `tent node get ${node.nodeId} --full${node.version ? ` --version-json ${quote(JSON.stringify(node.version))}` : ""} --workspace ${quote(workspaceRoot)}`.replace(
-            " --full --version-json",
-            " --version-json",
-          ),
+        ...(node.version
+          ? {
+              command: `tent node history ${node.nodeId} --version ${quote(JSON.stringify(node.version))} --workspace ${quote(workspaceRoot)}`,
+            }
+          : {}),
       });
       addMaterials(node, expandFiles);
     };
@@ -330,15 +329,8 @@ export async function assembleAgentContext(
       // specific structure modules and exact-file materials expand file evidence.
       const moduleMatches = local
         ? live.filter(active).flatMap((node) => {
-            const sources = node.data.sources;
             const coverage = materialOccurrences(node.data).flatMap((occurrence) => {
-              if (
-                occurrence.field !== "sources" ||
-                !Array.isArray(sources) ||
-                sources[occurrence.index!]?.track !== "structure"
-              )
-                return [];
-              const member = structureMaterialCoverage(
+              const member = materialCoverage(
                 occurrence.resource,
                 nodeNotePath(node.path),
                 workspaceRoot,
@@ -365,7 +357,7 @@ export async function assembleAgentContext(
         for (const node of live.filter(active)) {
           if (
             materialOccurrences(node.data).some((occurrence) => {
-              const coverage = structureMaterialCoverage(
+              const coverage = materialCoverage(
                 occurrence.resource,
                 nodeNotePath(node.path),
                 workspaceRoot,
@@ -387,13 +379,7 @@ export async function assembleAgentContext(
               undefined,
               modules.has(node.nodeId) ||
                 materialOccurrences(node.data).some((occurrence) => {
-                  if (
-                    structureMaterialCoverage(
-                      occurrence.resource,
-                      nodeNotePath(node.path),
-                      workspaceRoot,
-                    )
-                  )
+                  if (materialCoverage(occurrence.resource, nodeNotePath(node.path), workspaceRoot))
                     return false;
                   try {
                     return (
@@ -543,7 +529,7 @@ export async function assembleAgentContext(
               ...sentence(text),
               ...(ref.heading ? { heading: ref.heading } : {}),
               version: ref.version,
-              command: `tent node get ${node.nodeId} --version-json ${quote(JSON.stringify(ref.version))} --workspace ${quote(workspaceRoot)}`,
+              command: undefined,
             });
             const current = liveById.get(ref.nodeId);
             if (current)
@@ -610,7 +596,7 @@ export async function assembleAgentContext(
           path: `.tent/${nodeNotePath(node.path)}`,
           at: time.contentChangedAt!,
           why: "Latest retained body/material change; no session attribution",
-          command: `tent node get ${node.nodeId} --workspace ${quote(workspaceRoot)}`,
+          command: undefined,
         });
       }
       unknown(
@@ -627,7 +613,7 @@ export async function assembleAgentContext(
       ...sentence(heading ? selectSection(node.body, heading).text : node.body),
       ...(heading ? { heading } : {}),
       ...(node.version ? { version: node.version } : {}),
-      command: `tent node get ${node.nodeId}${node.version ? ` --version-json ${quote(JSON.stringify(node.version))}` : " --full"} --workspace ${quote(workspaceRoot)}`,
+      command: undefined,
     });
     for (const root of roots) {
       const selectedBody = root.heading
@@ -642,31 +628,6 @@ export async function assembleAgentContext(
             why: `Literal file reference in selected prose of ${root.node.nodeId}`,
           });
       }
-      const governing = [root.node];
-      const parents = root.node.path.split("/");
-      parents.pop();
-      while (parents.length) {
-        const parent = root.universe.find((node) => node.path === parents.join("/"));
-        if (parent?.data.type === "goal") {
-          governing.push(parent);
-          if (active(parent))
-            items.rules.push(
-              summarize(parent, `Ancestor goal of ${root.node.nodeId} in the same source`),
-            );
-        }
-        parents.pop();
-      }
-      for (const owner of governing)
-        for (const rule of root.universe.filter(
-          (node) =>
-            active(node) &&
-            node.data.type === "prompt" &&
-            node.nodeId !== root.node.nodeId &&
-            path.posix.dirname(node.path) === owner.path,
-        ))
-          items.rules.push(
-            summarize(rule, `Rule directly under ${owner.nodeId} in the same source`),
-          );
       for (const candidate of root.universe) {
         const outgoing = candidate.nodeId === root.node.nodeId;
         const refs = resolveBodyNodeReferences(
@@ -731,7 +692,7 @@ export async function assembleAgentContext(
                 command: [root.node.version, latest]
                   .map(
                     (version) =>
-                      `tent node get ${root.node.nodeId} --version-json ${quote(JSON.stringify(version))} --view raw --json --workspace ${quote(workspaceRoot)}`,
+                      `tent node history ${root.node.nodeId} --version ${quote(JSON.stringify(version))} --json --workspace ${quote(workspaceRoot)}`,
                   )
                   .join("\n"),
               });
@@ -749,12 +710,13 @@ export async function assembleAgentContext(
     if (!historicalOnly) {
       for (const [file] of files) {
         const owners: ContextNode[] = [];
-        for (const node of live.filter((node) => active(node) && node.data.type === "goal")) {
+        for (const node of live.filter((node) => active(node))) {
           for (const occurrence of materialOccurrences(node.data)) {
-            const coverage = structureMaterialCoverage(
+            const coverage = materialCoverage(
               occurrence.resource,
               nodeNotePath(node.path),
               workspaceRoot,
+              occurrence.field === "sources",
             );
             if (coverage && materialCoverageContains(coverage, file)) {
               owners.push(node);
@@ -765,15 +727,6 @@ export async function assembleAgentContext(
         if (!owners.length) unknown(`No module covers ${file}`, { path: file });
         for (const owner of owners) {
           items.rules.push(summarize(owner, `Module material covers ${file}`));
-          for (const rule of live.filter(
-            (node) =>
-              active(node) &&
-              node.data.type === "prompt" &&
-              path.posix.dirname(node.path) === owner.path,
-          ))
-            items.rules.push(
-              summarize(rule, `Rule directly under module ${owner.nodeId}, which covers ${file}`),
-            );
         }
       }
       if (repository) {
@@ -882,47 +835,6 @@ export async function assembleAgentContext(
             why: `Current unfinished Card state: ${String(card.state)}`,
             command: `tent card show ${card.cardId} --workspace ${quote(workspaceRoot)}`,
           });
-      }
-    }
-    if (start.kind !== "brief") {
-      const selectedGoals = new Map<string, ContextNode>();
-      for (const root of roots) {
-        const currentRoot = historicalOnly ? root.node : liveById.get(root.node.nodeId);
-        if (!currentRoot) continue;
-        for (const goal of (historicalOnly ? root.universe : live).filter(
-          (node) =>
-            node.data.type === "goal" &&
-            active(node) &&
-            (node.nodeId === currentRoot.nodeId ||
-              path.posix.dirname(node.path) === currentRoot.path),
-        ))
-          selectedGoals.set(goal.nodeId, goal);
-      }
-      if (historicalOnly) {
-        for (const goal of selectedGoals.values())
-          unknown("Current goal result state is unavailable in a historical-only read", {
-            nodeId: goal.nodeId,
-          });
-      } else {
-        const goalStates = await readGoalOpenStates(fs, workspaceRoot, live, [
-          ...selectedGoals.keys(),
-        ]);
-        observedEffects.push(goalStates);
-        for (const state of goalStates) {
-          const goal = selectedGoals.get(state.nodeId)!;
-          if (state.state === "open")
-            items.open.push(
-              summarize(
-                goal,
-                "No current output has been placed in this goal's subtree since its latest body change",
-              ),
-            );
-          else if (state.state === "unknown")
-            unknown(
-              "Retained history cannot establish this goal's latest body change or current output placement",
-              { nodeId: goal.nodeId },
-            );
-        }
       }
     }
     const complete = categories.map((kind) => {

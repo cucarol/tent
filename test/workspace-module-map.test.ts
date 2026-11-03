@@ -18,7 +18,7 @@ import {
 import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
 
-const structure = (resource: string) => ({ sources: [{ resource, track: "structure" }] });
+const materials = (resource: string) => ({ sources: [{ resource }] });
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "module-map-"));
@@ -57,31 +57,30 @@ async function snapshot(root: string, prefix = ""): Promise<Record<string, strin
   return result;
 }
 
-test("module command is silent for a good map, deterministic and byte-for-byte read-only before native capture", async (t) => {
-  const { root, write, node } = await fixture(t);
+test("module facts are deterministic and byte-for-byte read-only before native capture", async (t) => {
+  const { root, adapter, write, node } = await fixture(t);
   await write("src/alpha-one.ts", "export const one = 1;");
   await write("src/alpha-two.ts", "export const two = 2;");
   await write("README.md", "# Readme");
   await git(root, "add", "src", "README.md");
   await git(root, "commit", "-m", "files");
-  await node("alpha1", structure("../../src/alpha-*"));
+  await node("alpha1", materials("../../src/alpha-*"));
   await node("setup1", { resource: "../../README.md" });
   const before = await snapshot(root);
-  const text = await runWorkspaceCommand("check-modules", [], { workspace: root });
-  assert.deepEqual(text, { exitCode: 0, stdout: "", stderr: "" });
-  const first = await runWorkspaceCommand("check-modules", ["--json"], { workspace: root });
-  const second = await runWorkspaceCommand("check-modules", ["--json"], { workspace: root });
-  assert.equal(first.exitCode, 0);
-  assert.deepEqual(first, second);
-  const result = JSON.parse(first.stdout);
+  const repository = await readModuleMapRepository(root);
+  const result = await checkWorkspaceModules(adapter, root, repository);
+  assert.deepEqual(await checkWorkspaceModules(adapter, root, repository), result);
   assert.deepEqual(result.issues, []);
-  assert.equal(result.modules.length, 1);
-  assert.deepEqual(result.modules[0].files, ["src/alpha-one.ts", "src/alpha-two.ts"]);
+  assert.equal(result.modules.length, 2);
+  assert.deepEqual(result.modules.find(({ name }) => name === "alpha1")?.files, [
+    "src/alpha-one.ts",
+    "src/alpha-two.ts",
+  ]);
   assert.deepEqual(await snapshot(root), before);
 });
 
 test("coverage excludes deprecated and invalid Nodes, keeps file-only Nodes, and reports invalid prefix declarations without writes", async (t) => {
-  const { root, write, node } = await fixture(t);
+  const { root, adapter, write, node } = await fixture(t);
   for (const file of ["a.ts", "b.ts", "c.ts", "d.ts"]) await write(file, "export {};");
   await git(root, "add", "a.ts", "b.ts", "c.ts", "d.ts");
   await node("active", { resource: "../../a.ts" });
@@ -89,10 +88,8 @@ test("coverage excludes deprecated and invalid Nodes, keeps file-only Nodes, and
   await node("badbad", { resource: "../../c.ts", type: "unknown" });
   await node("prefix", { resource: "../../d**" });
   const before = await snapshot(root);
-  const result = await runWorkspaceCommand("check-modules", ["--json"], { workspace: root });
-  assert.equal(result.exitCode, 1);
-  const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.modules.length, 0);
+  const parsed = await checkWorkspaceModules(adapter, root, await readModuleMapRepository(root));
+  assert.equal(parsed.modules.length, 1);
   assert.equal(parsed.inspectionErrors.length, 2);
   const uncovered = parsed.issues.filter(
     (issue: { code: string }) => issue.code === "map.uncovered",
@@ -101,19 +98,13 @@ test("coverage excludes deprecated and invalid Nodes, keeps file-only Nodes, and
   assert.match(JSON.stringify(uncovered), /c\.ts/);
   assert.match(JSON.stringify(uncovered), /d\.ts/);
   assert.doesNotMatch(JSON.stringify(uncovered), /a\.ts/);
-  assert.deepEqual(
-    parsed.issues
-      .filter((issue: { code: string }) => issue.code === "map.unowned")
-      .map((issue: { facts: { files: string[] } }) => issue.facts.files),
-    [["a.ts"]],
-  );
   assert.deepEqual(await snapshot(root), before);
 });
 
 test("pair exceptions resolve real Markdown links on the same line, from either side", async (t) => {
   const { root, adapter, node } = await fixture(t);
-  await node("aaaaaa", structure("../../a/"));
-  await node("bbbbbb", structure("../../b/"));
+  await node("aaaaaa", materials("../../a/"));
+  await node("bbbbbb", materials("../../b/"));
   const files = Array.from({ length: 3 }, (_, i) => [`a/${i}.ts`, `b/${i}.ts`]).flat();
   const sources = files.map((file) => ({
     path: file,
@@ -139,31 +130,30 @@ test("pair exceptions resolve real Markdown links on the same line, from either 
     "allow:deps.cycle [wrong](../missing/missing.md)",
     "deps.cycleness [B](../bbbbbb/bbbbbb.md)",
   ]) {
-    await node("aaaaaa", structure("../../a/"), body);
+    await node("aaaaaa", materials("../../a/"), body);
     assert.equal((await inspect()).issues.filter((issue) => issue.code === "deps.cycle").length, 1);
   }
   await node(
     "aaaaaa",
-    structure("../../a/"),
+    materials("../../a/"),
     "allow:deps.cycle [B](../bbbbbb/bbbbbb.md) 共用链接解析",
   );
   assert.equal((await inspect()).issues.filter((issue) => issue.code === "deps.cycle").length, 0);
-  await node("aaaaaa", structure("../../a/"));
-  await node("bbbbbb", structure("../../b/"), "allow:deps.cycle [A](../aaaaaa/aaaaaa.md)");
+  await node("aaaaaa", materials("../../a/"));
+  await node("bbbbbb", materials("../../b/"), "allow:deps.cycle [A](../aaaaaa/aaaaaa.md)");
   assert.equal((await inspect()).issues.filter((issue) => issue.code === "deps.cycle").length, 0);
 });
 
-test("ordinary directories and files cover without becoming modules, structure tracks opt in and invalid structure files are diagnosed", async (t) => {
+test("ordinary directories, prefixes and files establish module coverage across types", async (t) => {
   const { root, adapter, node } = await fixture(t);
-  await node("legacy", { resource: "../../legacy/" });
-  await node("normal", { sources: [{ resource: "../../normal/" }] });
-  await node("single", { resource: "../../single.ts" });
-  await node("module", structure("../../module/*"));
-  await node("badfile", structure("../../bad.ts"));
-  await node("oldmap", { ...structure("../../old/"), status: "deprecated" });
+  await node("legacy", { type: "goal", resource: "../../legacy/" });
+  await node("normal", { type: "prompt", ...materials("../../normal/") });
+  await node("single", { type: "output", resource: "../../single.ts#Part" });
+  await node("module", materials("../../module/*"));
+  await node("oldmap", { ...materials("../../old/"), status: "deprecated" });
   const repository = {
     head: null,
-    trackedFiles: ["legacy/a.ts", "normal/a.ts", "single.ts", "module/a.ts", "bad.ts", "old/a.ts"],
+    trackedFiles: ["legacy/a.ts", "normal/a.ts", "single.ts", "module/a.ts", "old/a.ts"],
     commits: [],
     sources: { files: [], errors: [] },
   };
@@ -171,33 +161,22 @@ test("ordinary directories and files cover without becoming modules, structure t
   const result = await checkWorkspaceModules(adapter, root, repository);
   assert.deepEqual(
     result.modules.map(({ name }) => name),
-    ["module"],
+    ["legacy", "module", "normal", "single"],
   );
-  assert.equal(result.inspectionErrors.length, 1);
-  assert.equal(result.inspectionErrors[0]!.node, "badfile");
+  assert.deepEqual(result.inspectionErrors, []);
   assert.deepEqual(
     result.issues
-      .filter((issue) => issue.code === "map.uncovered")
-      .flatMap((issue) => issue.facts.files ?? []),
-    ["bad.ts", "old/a.ts"],
-  );
-  assert.deepEqual(
-    result.issues
-      .filter((issue) => issue.code === "map.unowned")
-      .map((issue) => ({ directory: issue.object, files: issue.facts.files })),
-    [
-      { directory: ".", files: ["single.ts"] },
-      { directory: "legacy", files: ["legacy/a.ts"] },
-      { directory: "normal", files: ["normal/a.ts"] },
-    ],
+      .filter(({ code }) => code === "map.uncovered")
+      .flatMap(({ facts }) => facts.files ?? []),
+    ["old/a.ts"],
   );
   assert.deepEqual(await snapshot(root), before);
 });
 
-test("module goals retain exceptions in child prompts, scoped to the nearest module", async (t) => {
+test("module exceptions remain in the declaring Node regardless of child type", async (t) => {
   const { root, adapter, node } = await fixture(t);
-  await node("aaaaaa", { type: "goal", ...structure("../../a/") });
-  await node("bbbbbb", { type: "goal", ...structure("../../b/") });
+  await node("aaaaaa", { type: "goal", ...materials("../../a/") });
+  await node("bbbbbb", { type: "goal", ...materials("../../b/") });
   const writeRule = (folder: string, type: string, body: string) =>
     adapter.writeFile(
       `${folder}/Rules/Rules.md`,
@@ -232,8 +211,8 @@ test("module goals retain exceptions in child prompts, scoped to the nearest mod
   assert.ok((await codes()).includes("deps.cycle"));
   await writeRule("aaaaaa", "prompt", rules);
   const before = await snapshot(root);
-  assert.ok(!(await codes()).includes("module.oversized"));
-  assert.ok(!(await codes()).includes("deps.cycle"));
+  assert.ok((await codes()).includes("module.oversized"));
+  assert.ok((await codes()).includes("deps.cycle"));
   assert.deepEqual(await snapshot(root), before);
   await adapter.writeFile(
     "aaaaaa/Nested/Nested.md",
@@ -241,7 +220,7 @@ test("module goals retain exceptions in child prompts, scoped to the nearest mod
       {
         id: "node-nested",
         type: "goal",
-        ...structure("../../../nested/"),
+        ...materials("../../../nested/"),
       },
       "",
     ),
@@ -253,8 +232,8 @@ test("module goals retain exceptions in child prompts, scoped to the nearest mod
 
 test("draft rules, pair exceptions and directory declarations have the same module effect as stable", async (t) => {
   const { root, adapter, node } = await fixture(t);
-  await node("aaaaaa", { type: "goal", ...structure("../../a/") });
-  await node("bbbbbb", { type: "goal", ...structure("../../b/") });
+  await node("aaaaaa", { type: "goal", ...materials("../../a/") });
+  await node("bbbbbb", { type: "goal", ...materials("../../b/") });
   const files = Array.from({ length: 30 }, (_, i) => `a/${i}.ts`).concat(
     Array.from({ length: 3 }, (_, i) => `b/${i}.ts`),
   );
@@ -289,10 +268,10 @@ test("draft rules, pair exceptions and directory declarations have the same modu
     ruleRaw.replace("status: draft", "status: stable"),
   );
   assert.deepEqual(await inspect(), draftRules);
-  assert.notDeepEqual(draftRules, baseline);
+  assert.deepEqual(draftRules, baseline);
   await node(
     "drafts",
-    { type: "goal", status: "draft", ...structure("../../c/") },
+    { type: "goal", status: "draft", ...materials("../../c/") },
     "allow:map.empty",
   );
   const draftModule = await inspect();
@@ -306,7 +285,7 @@ test("draft rules, pair exceptions and directory declarations have the same modu
       {
         id: "node-decided",
         type: "goal",
-        ...structure("../../../c/"),
+        ...materials("../../../c/"),
       },
       "",
     ),
@@ -314,55 +293,26 @@ test("draft rules, pair exceptions and directory declarations have the same modu
   assert.ok((await inspect()).modules.some((module) => module.id === "node-decided"));
 });
 
-test("module command reports covered root code without ownership and clears it only after module attachment", async (t) => {
-  const { root, write, node } = await fixture(t);
-  // A root build script still needs a valid Cargo context; this test isolates ownership.
-  await write("Cargo.toml", '[package]\nname = "fixture"\nversion = "0.1.0"\nedition = "2021"\n');
-  await write("build.rs", "fn main() {}\n");
-  await write("src/lib.rs", "pub fn fixture() {}\n");
-  await write("src/entry.ts", "export {};\n");
-  await write("package.json", "{}\n");
-  await git(root, "add", "build.rs", "src", "package.json", "Cargo.toml");
-  await node(
-    "setup1",
-    {
-      sources: [
-        { resource: "../../build.rs" },
-        { resource: "../../package.json" },
-        { resource: "../../Cargo.toml" },
-      ],
-    },
-    "allow:map.unowned",
-  );
-  await node("source", structure("../../src/"));
+test("file materials assign root build code without a separate ownership declaration", async (t) => {
+  const { root, adapter, node } = await fixture(t);
+  await node("setup1", { resource: "../../build.rs" });
+  await node("source", materials("../../src/"));
   const before = await snapshot(root);
-  const result = await runWorkspaceCommand("check-modules", ["--json"], { workspace: root });
-  assert.equal(result.exitCode, 1);
-  const findings = JSON.parse(result.stdout);
-  assert.equal(findings.modules.length, 1);
+  const result = await checkWorkspaceModules(adapter, root, {
+    head: null,
+    trackedFiles: ["build.rs", "src/lib.rs"],
+    commits: [],
+    sources: { files: [], errors: [] },
+  });
+  assert.deepEqual(result.issues, []);
   assert.deepEqual(
-    findings.issues.map((issue: { code: string; facts: { files: string[] } }) => ({
-      code: issue.code,
-      files: issue.facts.files,
-    })),
-    [{ code: "map.unowned", files: ["build.rs"] }],
+    result.modules.map(({ name, files }) => ({ name, files })),
+    [
+      { name: "setup1", files: ["build.rs"] },
+      { name: "source", files: ["src/lib.rs"] },
+    ],
   );
-  const text = await runWorkspaceCommand("check-modules", [], { workspace: root });
-  assert.equal(text.exitCode, 1);
-  assert.match(text.stdout, /map\.unowned/);
-  assert.match(text.stdout, /build\.rs/);
-  assert.match(text.stdout, /structure source/);
   assert.deepEqual(await snapshot(root), before);
-  await node("source", {
-    sources: [{ resource: "../../src/", track: "structure" }, { resource: "../../build.rs" }],
-  });
-  const repaired = await snapshot(root);
-  assert.deepEqual(await runWorkspaceCommand("check-modules", [], { workspace: root }), {
-    exitCode: 0,
-    stdout: "",
-    stderr: "",
-  });
-  assert.deepEqual(await snapshot(root), repaired);
 });
 
 test("module history follows first-parent while scan collects current facts only", async (t) => {

@@ -93,9 +93,7 @@ test("package bin/main/conditional exports select existing literal local directo
   assert.equal(result.owner("packages/tool/settings/local.json").name, "Setup");
   assert.equal(result.owner("wild/literal.json").name, "Setup");
   assert.ok(
-    result.nodes
-      .filter((node) => node.name !== "Setup")
-      .every((node) => node.materials.every((item) => item.track === "structure")),
+    result.nodes.filter((node) => node.name !== "Setup").every((node) => node.materials.length > 0),
   );
   assert.equal(result.facts.imports.scannedFiles, 0);
   assert.deepEqual(result.facts.imports.edges, []);
@@ -250,7 +248,7 @@ test("Docs owns tracked guidance and screenshots together; fixed names remain gu
   assert.equal(docs.name, "Docs module 2");
   assert.equal(result.owner("docs/shots/one.png").id, docs.id);
   assert.deepEqual(result.nodes.find((node) => node.id === docs.id)?.materials, [
-    { path: "docs", kind: "directory", track: "structure" },
+    { path: "docs", kind: "directory" },
   ]);
   assert.ok(!result.nodes.some((node) => node.name === "Assets" || node.name === "Tests"));
   assert.equal(result.owner("nested/docs/other.md").name, "Setup");
@@ -287,14 +285,9 @@ for (const count of [1, 11])
       { path: "plugin/skills/a", kind: "directory" },
     ]);
     const product = result.nodes.find((node) =>
-      node.materials.some(
-        (item) =>
-          item.kind === "directory" &&
-          item.path === "plugin/skills/a" &&
-          item.track === "structure",
-      ),
+      node.materials.some((item) => item.kind === "directory" && item.path === "plugin/skills/a"),
     );
-    assert.ok(product, "the explicit product directory needs its own structure draft");
+    assert.ok(product, "the explicit product directory needs its own material draft");
     const ancestors: string[] = [];
     let parent = product.parentId;
     while (parent) {
@@ -341,10 +334,7 @@ for (const entry of ["plugin/main.ts", "plugin/run", "plugin/run.sh"])
     assert.deepEqual(result.facts.productMaterials, expected);
     const directoryNode = (value: ReturnType<typeof draft>, directory: string) =>
       value.nodes.find((node) =>
-        node.materials.some(
-          (item) =>
-            item.kind === "directory" && item.path === directory && item.track === "structure",
-        ),
+        node.materials.some((item) => item.kind === "directory" && item.path === directory),
       )!;
     const parent = directoryNode(result, "plugin");
     const intermediate = directoryNode(result, "plugin/skills");

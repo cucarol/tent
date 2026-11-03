@@ -1,5 +1,5 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
-import { initializeFixtureHistory } from "./scratch.js";
+import { initializeFixtureHistory, initializeFixtureRepository } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -22,51 +22,53 @@ import { ContextReader } from "../src/core/graph/context-reader.js";
 import { contentEtag } from "../src/core/base/etag.js";
 import { serializeFrontmatter, parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { createCardDocument, verifyCardSourceVersion } from "../src/core/graph/card-document.js";
-import { workspaceMaterialFields, linkOutputResource } from "../src/cli/material-input.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { runNodeCommand } from "../src/cli/node-commands.js";
-import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 
-for (const repository of [false, true])
-  test(`directory and prefix coverage only inspect their address (${repository ? "Git" : "non-Git"})`, async (t) => {
-    const workspace = await fixture(t, repository);
-    await fs.writeFile(path.join(workspace, ".gitignore"), "uninterpreted rules/**\n");
-    const originalOpen = fs.open,
-      originalReaddir = fs.readdir;
-    const opened = t.mock.method(fs, "open", (..._args: Parameters<typeof originalOpen>) => {
-      throw new Error("coverage must not open members");
-    });
-    const listed = t.mock.method(fs, "readdir", (..._args: Parameters<typeof originalReaddir>) => {
-      throw new Error("coverage must not enumerate members");
-    });
-    syncBuiltinESMExports();
-    try {
-      const adapter = openTestFs(path.join(workspace, ".tent"));
-      for (const resource of [
-        "../src/",
-        "../src/no-current-match-*",
-        pathToFileURL(path.join(workspace, "src")).href + "/",
-        pathToFileURL(path.join(workspace, "src", "a*")).href,
-      ]) {
-        const observation = await adapter.observeMaterial(resource, "index.md");
-        assert.equal(observation.coverage, true);
-
-        assert.equal("directoryFiles" in observation, false);
-      }
-      await assert.rejects(adapter.observeMaterial("../missing/", "index.md"), /ENOENT/);
-      await assert.rejects(adapter.observeMaterial("../missing/a-*", "index.md"), /ENOENT/);
-      assert.equal(opened.mock.callCount(), 0);
-      assert.equal(listed.mock.callCount(), 0);
-    } finally {
-      opened.mock.restore();
-      listed.mock.restore();
-      syncBuiltinESMExports();
-    }
+test("directory and prefix declarations inspect local and external addresses without reading members", async (t) => {
+  const workspace = await fixture(t);
+  const external = await fs.mkdtemp(path.join(testScratchRoot(), "external-directory-"));
+  t.after(() => removeTestFixture(external, { recursive: true, force: true }));
+  initializeFixtureRepository(external);
+  await fs.writeFile(path.join(external, "member.txt"), "never read this member");
+  await fs.writeFile(path.join(workspace, ".gitignore"), "uninterpreted rules/**\n");
+  const originalOpen = fs.open,
+    originalReaddir = fs.readdir;
+  const opened = t.mock.method(fs, "open", (..._args: Parameters<typeof originalOpen>) => {
+    throw new Error("coverage must not open members");
   });
+  const listed = t.mock.method(fs, "readdir", (..._args: Parameters<typeof originalReaddir>) => {
+    throw new Error("coverage must not enumerate members");
+  });
+  syncBuiltinESMExports();
+  try {
+    const adapter = openTestFs(path.join(workspace, ".tent"));
+    for (const resource of [
+      "../src/",
+      "../src/no-current-match-*",
+      pathToFileURL(path.join(workspace, "src")).href + "/",
+      pathToFileURL(path.join(workspace, "src", "a*")).href,
+      pathToFileURL(external).href + "/",
+      pathToFileURL(path.join(external, "member*")).href,
+    ]) {
+      const observation = await adapter.observeMaterial(resource, "index.md");
+      assert.equal(observation.coverage, true);
+
+      assert.equal("directoryFiles" in observation, false);
+    }
+    await assert.rejects(adapter.observeMaterial("../missing/", "index.md"), /ENOENT/);
+    await assert.rejects(adapter.observeMaterial("../missing/a-*", "index.md"), /ENOENT/);
+    assert.equal(opened.mock.callCount(), 0);
+    assert.equal(listed.mock.callCount(), 0);
+  } finally {
+    opened.mock.restore();
+    listed.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
 
 test("coverage address checks preserve missing directory and prefix-parent diagnostics", async (t) => {
-  const workspace = await fixture(t, true);
+  const workspace = await fixture(t);
   await scaffoldInWorkspace(openTestFs(workspace), {
     name: "Checks",
     nodes: [
@@ -93,7 +95,7 @@ test("coverage address checks preserve missing directory and prefix-parent diagn
 });
 
 test("material text reads live bytes despite clean filters, ident and assume-unchanged", async (t) => {
-  const workspace = await fixture(t, true);
+  const workspace = await fixture(t);
   await fs.writeFile(
     path.join(workspace, ".gitattributes"),
     "src/data.filter filter=ignore\nsrc/ident.txt ident\n",
@@ -120,7 +122,7 @@ async function observeMaterialResource(workspace: string, owner: string, resourc
   return observeResource(workspace, owner, resource);
 }
 
-async function fixture(t: TestContext, repository = false) {
+async function fixture(t: TestContext) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "directory-material-"));
   t.after(() =>
     removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
@@ -129,32 +131,10 @@ async function fixture(t: TestContext, repository = false) {
   await fs.writeFile(path.join(workspace, "src/a.txt"), "first\n");
   await fs.writeFile(path.join(workspace, "src/nested/b.txt"), "second\n");
   await fs.writeFile(path.join(workspace, ".gitignore"), ".tent/\n*.tmp\nignored/\n");
-  if (repository) {
-    await git(workspace, "init", "--quiet", "--initial-branch=main");
-    await git(workspace, "config", "core.autocrlf", "false");
-    await git(workspace, "add", ".");
-    await git(workspace, "commit", "--quiet", "-m", "test: directory fixture");
-  } else {
-    await fs.mkdir(path.join(workspace, ".tent"));
-    await initializeFixtureHistory(path.join(workspace, ".tent"));
-    // Fixtures must stay in project .scratch, which itself belongs to the outer
-    // Git worktree. Hide only that ancestor's Git marker to exercise a genuinely
-    // absent discovery boundary; fixture-local repositories remain discoverable.
-    const original = fs.lstat;
-    const mocked = t.mock.method(fs, "lstat", (...args: Parameters<typeof original>) => {
-      const filename = String(args[0]);
-      if (path.basename(filename) === ".git" && !filename.startsWith(workspace + path.sep))
-        return Promise.reject(
-          Object.assign(new Error("No ancestor Git in this fixture"), { code: "ENOENT" }),
-        );
-      return original(...args);
-    });
-    syncBuiltinESMExports();
-    t.after(() => {
-      mocked.mock.restore();
-      syncBuiltinESMExports();
-    });
-  }
+  initializeFixtureRepository(workspace);
+  await git(workspace, "config", "core.autocrlf", "false");
+  await git(workspace, "add", ".");
+  await git(workspace, "commit", "--quiet", "-m", "test: directory fixture");
   return workspace;
 }
 
@@ -193,7 +173,7 @@ test("directory declarations preserve slash, reject fragments and enforce safe s
 });
 
 test("directory markers cannot select pinned Card files or response evidence", async (t) => {
-  const workspace = await fixture(t, true);
+  const workspace = await fixture(t);
   await scaffoldInWorkspace(openTestFs(workspace), {
     name: "Directory boundaries",
     nodes: [{ id: "node-main", name: "Main", type: "prompt", body: "fact" }],
@@ -247,56 +227,4 @@ test("directory markers cannot select pinned Card files or response evidence", a
     reader.relations({ nodeId: "node-main", direction: "outgoing" }).items[0]!.target,
     undefined,
   );
-});
-
-test("CLI Workspace-root directory declarations and link-output retain the root address", async (t) => {
-  const workspace = await fixture(t, true);
-  await scaffoldInWorkspace(openTestFs(workspace), {
-    name: "Root",
-    nodes: [{ id: "node-goal", name: "Goal", type: "goal", body: "Root output" }],
-  });
-  const adapter = openTestFs(path.join(workspace, ".tent"));
-  await initializeFixtureHistory(path.join(workspace, ".tent"));
-  assert.equal(
-    (await workspaceMaterialFields({ resource: "/" }, "index.md", workspace)).resource,
-    "../",
-  );
-  assert.equal(linkOutputResource("../"), "./");
-  assert.equal(
-    (await workspaceMaterialFields({ resource: ".tent/" }, "index.md", workspace)).resource,
-    "./",
-  );
-  const result = await runNodeCommand("link-output", ["node-goal", "--resource", "/"], {
-    cwd: workspace,
-    json: true,
-  });
-  assert.equal(result.exitCode, 0, result.stderr);
-  const node = await readNodeForEdit(adapter, JSON.parse(result.stdout).nodeId);
-  assert.equal(node.name, "Output");
-  assert.equal(
-    localMaterialPath(
-      materialLocator(node.frontmatter.resource as string, `${node.path}/${node.name}.md`),
-      workspace,
-    ),
-    workspace,
-  );
-  const prefix = await runNodeCommand(
-    "link-output",
-    ["node-goal", "--resource", "src/no-current-match-*", "--name", "Prefix"],
-    {
-      cwd: workspace,
-      json: true,
-    },
-  );
-  assert.equal(prefix.exitCode, 0, prefix.stderr);
-  const missing = await runNodeCommand(
-    "link-output",
-    ["node-goal", "--resource", "missing/a-*", "--name", "Missing"],
-    {
-      cwd: workspace,
-      json: true,
-    },
-  );
-  assert.equal(missing.exitCode, 1);
-  assert.match(missing.stderr, /not found/);
 });

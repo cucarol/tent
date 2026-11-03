@@ -11,8 +11,7 @@ import { test } from "node:test";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { git } from "./helpers.js";
-import { NodeFs } from "../src/fs/node-fs.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 
 const scratch = testScratchRoot();
 
@@ -93,18 +92,36 @@ test("full CLI preserves text, stdin, repeated options and terminators through d
       "--",
       "--named-node",
     ]);
-    const nodeId = created.node.nodeId;
-    const read = await success("node", "get", [nodeId, "--full"]);
-    assert.equal(created.node.name, "--named-node");
-    assert.equal(read.text, text);
-    await success(
+    const filename = path.join(workspace, created.node.path);
+    assert.equal(created.node.path, ".tent/--named-node/--named-node.md");
+    assert.equal(parseFrontmatter(await fs.readFile(filename, "utf8")).body, text);
+    const stdinNode = await success(
       "node",
-      "write",
-      [nodeId, "--body", "-", `--base-etag=${read.etag}`],
+      "create",
+      [
+        "Stdin",
+        "--type",
+        "prompt",
+        "--body",
+        "-",
+        "--description=discard",
+        "--description=Input facts",
+        "--source",
+        "docs/SPEC.md",
+        "--source",
+        "customer discussion",
+      ],
       text + "stdin\n",
     );
-    const written = await success("node", "get", [nodeId, "--full", "--json"]);
-    assert.equal(written.text, text + "stdin\n");
+    const written = parseFrontmatter(
+      await fs.readFile(path.join(workspace, stdinNode.node.path), "utf8"),
+    );
+    assert.equal(written.body, text + "stdin\n");
+    assert.equal(written.data.description, "Input facts");
+    assert.deepEqual(written.data.sources, [
+      { resource: "docs/SPEC.md" },
+      { resource: "customer discussion" },
+    ]);
 
     const card = await success("card", "create", [
       "--prompt=discard",
@@ -124,14 +141,14 @@ test("full CLI preserves text, stdin, repeated options and terminators through d
     const stdinCard = await success("card", "create", ["--prompt", "-"], text);
     assert.equal((await success("card", "get", ["--", stdinCard.cardId])).text, text);
     for (const [command, sub, args] of [
-      ["node", "write", [nodeId, "--body", "--retain-version"]],
+      ["node", "create", ["Rejected", "--type=prompt", "--body", "--retain-version"]],
       ["card", "create", ["--prompt=valid", "--unknown"]],
     ] as const) {
       const rejected = await cli(command, sub, [...args]);
       assert.equal(rejected.code, 1);
       assert.match(rejected.stderr, /argument|Unknown option/);
     }
-    assert.equal((await success("node", "get", [nodeId, "--full"])).text, text + "stdin\n");
+    assert.equal(parseFrontmatter(await fs.readFile(filename, "utf8")).body, text);
   } finally {
     await assert.rejects(fs.stat(dataDir), { code: "ENOENT" });
   }

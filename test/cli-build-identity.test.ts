@@ -1,5 +1,4 @@
 import { removeTestFixture } from "./node-fs.js";
-import { openTestFs } from "./node-fs.js";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -10,9 +9,6 @@ import { promisify } from "node:util";
 import * as esbuild from "esbuild";
 import { readBuildIdentity, sourceBuildMismatch } from "../src/cli/build-identity.js";
 import { testScratchRoot } from "./scratch.js";
-import { runHookCommand } from "../src/cli/hook.js";
-import { scaffoldInWorkspace } from "./scaffold.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 
 const run = promisify(execFile);
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
@@ -143,16 +139,22 @@ test("source identity has no build time; mismatch is limited to Tent source chec
     (await sourceBuildMismatch(root, identity))!,
     /runtime build differs.*runtime [a-f0-9]{12}, source [a-f0-9]{12}/,
   );
-  await scaffoldInWorkspace(openTestFs(root), { name: "identity" });
-  const start = await runHookCommand("start", ["--host", "codex"], {
-    packageRoot: repoRoot,
-    stdin: JSON.stringify({ hook_event_name: "SessionStart", cwd: root }),
+  const version = async (args: string[]) =>
+    JSON.parse(
+      (
+        await run(
+          process.execPath,
+          ["--import", "tsx", "src/cli/tent.ts", "version", "--json", ...args],
+          { cwd: repoRoot, windowsHide: true, timeout: 10_000 },
+        )
+      ).stdout,
+    );
+  const localVersion = await version([]);
+  assert.deepEqual(localVersion, {
+    ...(await readBuildIdentity(repoRoot)),
+    runtimePath: path.join(repoRoot, "src/cli/tent.ts"),
   });
-  const context = JSON.parse(start.stdout).hookSpecificOutput.additionalContext;
-  assert.match(context, /Build: Tent .*; source/);
-  assert.match(context, /No Tent command is needed before working\.$/);
-  assert.doesNotMatch(context, /Current context:|workspace brief|runtime build differs/);
-  assert.ok(Buffer.byteLength(context) < 2048);
+  assert.deepEqual(await version(["--workspace", root]), localVersion);
   await fs.writeFile(
     path.join(root, "package.json"),
     JSON.stringify({ name: "unrelated-project", version: "2.0.0" }),

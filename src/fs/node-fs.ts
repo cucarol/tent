@@ -17,18 +17,12 @@ import {
   currentSourceFileIdentity,
 } from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { PreparedGraphSnapshot } from "./prepared-graph.js";
-import { withPreparedWorkspace } from "./prepared-workspace.js";
 import type { CaptureMetadata } from "../core/store/history-port.js";
 import { SqliteDocumentHistory, sqliteContentFingerprint } from "../core/store/sqlite-history.js";
 import { isHistoryDocument } from "../core/store/document-history.js";
 import { durableMkdir, durableReplace, syncDirectory } from "./durable-file.js";
 import { observeMaterialResource, readStructureSource } from "./source-observation.js";
-import {
-  isHookGraphFile,
-  isNodeNotePath,
-  workspaceRootFromSystemRoot,
-} from "../core/base/paths.js";
+import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { loadNodeCatalog } from "../core/graph/node-catalog.js";
 import { materialLocator, localMaterialPath, type MaterialLocator } from "../core/base/material.js";
@@ -46,7 +40,6 @@ import {
   cachedFileValue,
   fileState,
   sameFileState,
-  stateCacheHit,
   withFileReadScope,
   withoutFileReadScope,
   scopedRead,
@@ -75,8 +68,6 @@ export class NodeFs implements FsAdapter {
   private readonly transactionScope = new AsyncLocalStorage<FileTransaction>();
   private readonly transactionBypass = new AsyncLocalStorage<boolean>();
   private readonly boundaryReady = new AsyncLocalStorage<boolean>();
-  private readonly graphWrites = new AsyncLocalStorage<{ changed: boolean }>();
-  private readonly preparedGraph = new AsyncLocalStorage<PreparedGraphSnapshot | null>();
   private opening?: Promise<void>;
   private readonly readyScope = `node-fs-ready:${nextReadyScope++}`;
   private readonly materialNodesScope = `${this.readyScope}:material-nodes`;
@@ -251,16 +242,7 @@ export class NodeFs implements FsAdapter {
             invalidNodeEdits: this.invalidNodeEdits,
           }));
         }
-        if (options?.forceContent)
-          return withPreparedWorkspace(null, () => this.preparedGraph.run(null, action));
-        if (this.preparedGraph.getStore() !== undefined || !this.workspaceRoot) return action();
-        const { preparedGraphSnapshot } = await import("./prepared-graph.js");
-        const prepared = await scopedRead(`prepared-graph:${this.root}`, () =>
-          preparedGraphSnapshot(this.root, this.workspaceRoot!),
-        );
-        return withPreparedWorkspace(prepared?.repository ?? null, () =>
-          this.preparedGraph.run(prepared ?? null, action),
-        );
+        return action();
       }, options),
     );
   }
@@ -337,8 +319,6 @@ export class NodeFs implements FsAdapter {
   async listDir(dir: string): Promise<{ name: string; isDir: boolean }[]> {
     await this.ready();
     return scopedRead(`directory:${this.abs(dir)}`, async () => {
-      const record = this.preparedGraph.getStore()?.directories.get(dir);
-      if (record) return record.entries;
       const entries = await fs.readdir(this.abs(dir), { withFileTypes: true });
       return entries
         .filter((e) => !e.name.startsWith(".git"))
@@ -348,17 +328,7 @@ export class NodeFs implements FsAdapter {
 
   async readFile(path: string): Promise<string> {
     await this.ready();
-    const prepared = await this.preparedDocument(path);
-    if (prepared?.raw !== undefined) return prepared.raw;
     return (await this.readBytes(path, false)).bytes.toString("utf8");
-  }
-
-  private async preparedDocument(path: string) {
-    const snapshot = this.preparedGraph.getStore(),
-      record = snapshot?.headers.get(path);
-    if (!snapshot || !record) return;
-    const state = fileState(await fs.lstat(this.abs(path), { bigint: true }));
-    return stateCacheHit(state, record.state, snapshot.writtenAtNs) ? record : undefined;
   }
 
   async readFrontmatter(path: string): Promise<string> {
@@ -367,9 +337,6 @@ export class NodeFs implements FsAdapter {
 
   async readFrontmatterWithFingerprint(path: string): Promise<DocumentHeaderObservation> {
     await this.ready();
-    const prepared = await this.preparedDocument(path);
-    if (prepared?.raw !== undefined)
-      return { content: prepared.content, fingerprint: sqliteContentFingerprint(prepared.raw) };
     return withFileReadScope(async () => {
       const filename = this.abs(path);
       const state = fileState(await fs.stat(filename, { bigint: true }));
@@ -418,8 +385,6 @@ export class NodeFs implements FsAdapter {
   /** A derived cache must retain the identity of the observation that supplied its content. */
   async readFrontmatterObservation(path: string): Promise<{ content: string; state: FileState }> {
     await this.ready();
-    const prepared = await this.preparedDocument(path);
-    if (prepared) return { content: prepared.content, state: prepared.state };
     return withFileReadScope(() =>
       scopedRead(`header:${this.abs(path)}`, async () => {
         const full = peekScopedRead<ObservedBytes>(`bytes:${this.abs(path)}`);
@@ -542,8 +507,6 @@ export class NodeFs implements FsAdapter {
       ]);
     await durableMkdir(nodePath.dirname(abs));
     await durableReplace(abs, content, "utf8");
-    if (isHookGraphFile(path) && this.graphWrites.getStore())
-      this.graphWrites.getStore()!.changed = true;
     if (tracked && isHistoryDocument(path)) tracked.set(path, content);
   }
 
@@ -646,8 +609,6 @@ export class NodeFs implements FsAdapter {
         { path, after: { bytes: payload.toString("base64") } },
       ]);
     await durableReplace(abs, payload);
-    if (isHookGraphFile(path) && this.graphWrites.getStore())
-      this.graphWrites.getStore()!.changed = true;
     if (tracked && isHistoryDocument(path))
       tracked.set(path, new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(payload));
   }
@@ -683,8 +644,6 @@ export class NodeFs implements FsAdapter {
     }
     await durableMkdir(nodePath.dirname(this.abs(to)));
     await fs.rename(this.abs(from), this.abs(to));
-    if ([...files, ...targets].some(isNodeNotePath) && this.graphWrites.getStore())
-      this.graphWrites.getStore()!.changed = true;
     for (const parent of new Set([from, to].map((file) => nodePath.dirname(this.abs(file)))))
       await syncDirectory(parent);
     if (tracked)
@@ -705,8 +664,6 @@ export class NodeFs implements FsAdapter {
       );
     const present = await this.exists(path);
     await fs.rm(this.abs(path), { recursive: true, force: true });
-    if ((isHookGraphFile(path) || files.some(isNodeNotePath)) && this.graphWrites.getStore())
-      this.graphWrites.getStore()!.changed = true;
     if (present) await syncDirectory(nodePath.dirname(this.abs(path)));
     if (tracked) for (const file of files) if (isHistoryDocument(file)) tracked.set(file, null);
   }
@@ -816,7 +773,7 @@ export class NodeFs implements FsAdapter {
   }
 
   async withLock<T>(path: string, action: () => Promise<T>): Promise<T> {
-    return this.graphWrites.run({ changed: false }, () => this.withGraphWriteLock(path, action));
+    return this.withGraphWriteLock(path, action);
   }
 
   private async withGraphWriteLock<T>(path: string, action: () => Promise<T>): Promise<T> {
@@ -868,19 +825,7 @@ export class NodeFs implements FsAdapter {
         );
       // Reuse exact-header parses during mutation and capture. The lock callback
       // still discards file/structure observations before inspecting live state.
-      const result = await withPreparedWorkspace(null, () =>
-        this.preparedGraph.run(null, () => withDocumentHeaderCache(this.root, locked)),
-      );
-      if (this.graphWrites.getStore()!.changed && this.workspaceRoot) {
-        // Core adapters also support document stores without a scaffolded Tent.
-        const { observeTentSystemRoot } = await import("../core/workspace/status.js");
-        const discovery = await observeTentSystemRoot(this.root, this.root);
-        if (discovery.systemRoot === this.root) {
-          const { loadStopMaterialIndex } = await import("./stop-material-index.js");
-          await loadStopMaterialIndex(this.root, this.workspaceRoot, discovery.rejectedRootMarkers);
-        }
-      }
-      return result;
+      return await withDocumentHeaderCache(this.root, locked);
     } finally {
       forgetScopedReads();
     }

@@ -32,7 +32,6 @@ import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { git } from "./helpers.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
-import { linkNodeOutput } from "../src/core/graph/node-output.js";
 import { ReaderError } from "../src/core/graph/context-reader.js";
 import { cliErrorText } from "../src/cli/error-text.js";
 
@@ -431,8 +430,11 @@ test("take rolls back an unpublished transaction and still recovers legacy consu
     );
     assert.equal(await adapter.history.currentCommit(), head);
   }
-  // The fixture contains two uncaptured source Nodes; retained Cards have no staged deletion.
-  assert.equal((await git(root, "diff", "--cached", "--name-only")).trim(), "");
+  // History is SQLite; this fixture does not own a project Git index.
+  assert.equal(
+    (await adapter.history!.retainedPaths()).filter((file) => file.startsWith("cards/")).length,
+    2,
+  );
 });
 
 test("interrupted reception recovery rejects simultaneous status, target and input changes", async (t) => {
@@ -461,166 +463,6 @@ test("interrupted reception recovery rejects simultaneous status, target and inp
   );
   await assert.rejects(takeCardDocument(adapter, card.cardId, "role-a"), code("INPUT_CHANGED"));
   assert.equal((await adapter.history.pathVersions(card.path)).latest!.commit, card.version.commit);
-});
-
-test("Card delivery stays independent of output attribution and goal edits", async (t) => {
-  const { adapter } = await fixture(t);
-  await adapter.writeFile(
-    "Main/Main.md",
-    serializeFrontmatter({ id: "node-main", type: "goal" }, "Goal"),
-  );
-  const card = await createCardDocument(adapter, {
-    prompt: "Implement",
-    target: "role-a",
-    returnTo: "role-b",
-    sources: [{ resource: "/Main/Main.md" }],
-  });
-  await takeCardDocument(adapter, card.cardId, "role-a");
-  const raw = await adapter.readFile(card.path);
-  const output = await linkNodeOutput(adapter, "node-main", {
-    resource: "https://example.org/result",
-    cardId: card.cardId,
-  });
-  const outputPath = output.path + "/" + output.path.split("/").at(-1) + ".md";
-  assert.deepEqual(parseFrontmatter(await adapter.readFile(outputPath)).data.sources, [
-    { resource: "/cards/" + card.cardId + ".md" },
-  ]);
-  await writeNodeDocument(adapter, "node-main", {
-    baseEtag: contentEtag(await adapter.readFile("Main/Main.md")),
-    body: "Changed goal",
-  });
-  const read = await readCardDocument(adapter, card.cardId);
-  const list = (await listCardDocuments(adapter)).items[0];
-  for (const view of [read, list]) {
-    assert.equal(view.state, "consumed");
-    for (const key of [
-      "progress",
-      "goalCount",
-      "totalGoalCount",
-      "outputNodeIds",
-      "reviewGoalCount",
-      "reviewOutputNodeIds",
-    ])
-      assert.equal(Object.prototype.hasOwnProperty.call(view, key), false);
-  }
-  assert.equal(await adapter.readFile(card.path), raw);
-  await returnCardDocument(adapter, card.cardId, {
-    roleId: "role-a",
-    result: "done " + output.nodeId,
-  });
-  await writeNodeDocument(adapter, "node-main", {
-    baseEtag: contentEtag(await adapter.readFile("Main/Main.md")),
-    body: "Another goal",
-  });
-  assert.equal((await readCardDocument(adapter, card.cardId)).state, "returned");
-});
-
-test("automatic output attribution requires the receiving Role and returns the selected Card", async (t) => {
-  const { adapter, root } = await fixture(t);
-  await adapter.writeFile(
-    "Main/Main.md",
-    serializeFrontmatter({ id: "node-main", type: "goal" }, "Goal"),
-  );
-  const card = await createCardDocument(adapter, {
-    cardId: "card-roleoutput",
-    prompt: "Implement the goal",
-    sources: [{ resource: "/Main/Main.md" }],
-    target: "role-a",
-    returnTo: "role-b",
-  });
-  await takeCardDocument(adapter, card.cardId, "role-a");
-  const input = { resource: "https://example.org/result" };
-  for (const options of [{}, { roleId: "role-b" }])
-    await assert.rejects(linkNodeOutput(adapter, "node-main", { ...input, ...options }), /--card/);
-  assert.equal((await adapter.listDir("Main")).filter((entry) => entry.isDir).length, 0);
-  const linked = await linkNodeOutput(adapter, "node-main", { ...input, roleId: "role-a" });
-  assert.equal(linked.cardId, card.cardId);
-  assert.equal((await readCardDocument(adapter, card.cardId)).state, "consumed");
-  await returnCardDocument(adapter, card.cardId, { roleId: "role-a", result: "done" });
-  const next = await createCardDocument(adapter, {
-    cardId: "card-roleoutputnext",
-    prompt: "Implement the next response",
-    sources: [{ resource: "/Main/Main.md" }],
-    target: "role-a",
-    returnTo: "role-b",
-  });
-  await takeCardDocument(adapter, next.cardId, "role-a");
-  const last = await createCardDocument(adapter, {
-    cardId: "card-roleoutputlast",
-    prompt: "Implement another response",
-    sources: [{ resource: "/Main/Main.md" }],
-    target: "role-a",
-    returnTo: "role-b",
-  });
-  await takeCardDocument(adapter, last.cardId, "role-a");
-  await assert.rejects(
-    linkNodeOutput(adapter, "node-main", { ...input, roleId: "role-a" }),
-    /Multiple incomplete Cards.*--card/,
-  );
-  const explicit = await linkNodeOutput(adapter, "node-main", {
-    ...input,
-    roleId: "role-b",
-    cardId: next.cardId,
-  });
-  assert.equal(explicit.cardId, next.cardId, "explicit Card choice can cross Role boundaries");
-  const head = await adapter.history.currentCommit();
-  assert.ok(head);
-  assert.equal((await git(root, "diff", "--cached", "--name-only")).trim(), "");
-});
-
-test("goal and output material changes preserve explicit Card delivery", async (t) => {
-  const scratch = path.resolve(testScratchRoot());
-  await fs.mkdir(scratch, { recursive: true });
-  const root = await fs.mkdtemp(path.join(scratch, "card-review-"));
-  t.after(() =>
-    removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
-  );
-  const workspace = path.join(root, "workspace");
-  await initializeFixtureWorkspace(workspace);
-  const adapter = openTestFs(path.join(workspace, ".tent"));
-  await adapter.writeFile(
-    "Goal/Goal.md",
-    serializeFrontmatter({ id: "node-goal", type: "goal" }, "Goal"),
-  );
-  await createRoleContext(adapter, { roleId: "role-a", title: "A", body: "direction" });
-  await createRoleContext(adapter, { roleId: "role-b", title: "B", body: "owner" });
-  const card = await createCardDocument(adapter, {
-    cardId: "card-review",
-    prompt: "Implement and review the goal",
-    sources: [{ resource: "/Goal/Goal.md" }],
-    target: "role-a",
-    returnTo: "role-b",
-  });
-  await takeCardDocument(adapter, card.cardId, "role-a");
-  await fs.writeFile(path.join(workspace, "result.txt"), "first");
-  const cli = await runNodeCommand(
-    "link-output",
-    ["node-goal", "--resource", "result.txt", "--role", "role-a"],
-    { workspace, json: true },
-  );
-  assert.equal(cli.exitCode, 0, cli.stderr);
-  const output = JSON.parse(cli.stdout);
-  assert.equal(output.cardId, card.cardId);
-
-  const cardRaw = await adapter.readFile(card.path);
-  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).state, "consumed");
-  await fs.writeFile(path.join(workspace, "result.txt"), "changed");
-  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).state, "consumed");
-  await writeNodeDocument(adapter, "node-goal", {
-    baseEtag: contentEtag(await adapter.readFile("Goal/Goal.md")),
-    body: "Changed requirement",
-  });
-  const head = await adapter.history.currentCommit();
-  const behind = (await readCardDocument(adapter, card.cardId)) as any;
-  assert.equal(behind.state, "consumed");
-  assert.equal(Object.prototype.hasOwnProperty.call(behind, "progress"), false);
-  assert.equal(await adapter.history.currentCommit(), head);
-  assert.equal(await adapter.readFile(card.path), cardRaw);
-  await assert.rejects(
-    linkNodeOutput(adapter, "node-goal", { resource: "result.txt", roleId: "role-b" }),
-    /--card/,
-  );
-  assert.equal(((await readCardDocument(adapter, card.cardId)) as any).state, "consumed");
 });
 
 test("Card source inspection needs no Git when no published Card was received", async (t) => {

@@ -18,7 +18,7 @@ import {
 import {
   isTentWorkspacePath,
   materialCoverageContains,
-  structureMaterialCoverage,
+  materialCoverage,
 } from "../base/material-coverage.js";
 
 export const nodeResourceSearchSchema = z.strictObject({ resource: resourceSchema });
@@ -60,10 +60,11 @@ export async function searchNodeResources(
       const matches = occurrences.flatMap((occurrence) => {
         if (!occurrence.locator) return [];
         const exact = materialIdentity(occurrence.locator) === identity;
-        const coverage = structureMaterialCoverage(
+        const coverage = materialCoverage(
           occurrence.resource,
           nodeNotePath(node.path),
           workspaceRoot,
+          occurrence.field === "sources",
         );
         if (
           !exact &&

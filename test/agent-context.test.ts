@@ -66,7 +66,7 @@ async function fixture() {
   return { fs, node, save };
 }
 
-test("resource file evidence expands only specific structure modules and exact-file material Nodes", async () => {
+test("resource file evidence uses the most specific declarations without inherited type rules", async () => {
   const { fs, node } = await fixture();
   await node("Aggregate", "node-aggregate", "goal", "Keep the project rules.", {
     sources: [{ resource: "../../src/" }],
@@ -118,17 +118,15 @@ test("resource file evidence expands only specific structure modules and exact-f
     section(result, "paths")
       .items.map((item) => item.path)
       .sort(),
-    ["docs/policy.md", "src/a.ts", "src/a2.ts"],
+    ["docs/policy.md", "src/a.ts"],
   );
-  assert.equal(section(result, "paths").total, 3);
+  assert.equal(section(result, "paths").total, 2);
   assert.deepEqual(
     section(result, "tests").items.map((item) => item.path),
     ["test/a.test.ts"],
   );
-  assert.ok(section(result, "references").items.some((item) => item.nodeId === "node-aggregate"));
-  assert.ok(section(result, "references").items.some((item) => item.nodeId === "node-broadmodule"));
-  assert.ok(section(result, "references").items.some((item) => item.nodeId === "node-tie"));
-  assert.ok(section(result, "rules").items.some((item) => item.nodeId === "node-narrowrule"));
+  assert.ok(section(result, "references").items.some((item) => item.nodeId === "node-material"));
+  assert.ok(!section(result, "rules").items.some((item) => item.nodeId === "node-narrowrule"));
   const explicit = await assembleAgentContext(
     fs,
     root,
@@ -138,7 +136,7 @@ test("resource file evidence expands only specific structure modules and exact-f
   assert.ok(section(explicit, "paths").items.some((item) => item.path === "src/b.ts"));
 });
 
-test("node and file starts assemble direct rules, real re-export test evidence, decisions and open goals deterministically", async () => {
+test("node and file starts retain direct evidence and decisions without goal or inherited prompt behavior", async () => {
   const { fs, node } = await fixture();
   await node("Module", "node-module", "goal", "Module invariant.", {
     sources: [{ resource: "../../src/", track: "structure" }],
@@ -170,7 +168,7 @@ test("node and file starts assemble direct rules, real re-export test evidence, 
     first.sections.map((section) => section.kind),
     ["references", "rules", "paths", "tests", "changes", "decisions", "open", "unknown"],
   );
-  assert.ok(section(first, "rules").items.some((item) => item.nodeId === "node-rulelong"));
+  assert.ok(!section(first, "rules").items.some((item) => item.nodeId === "node-rulelong"));
   assert.deepEqual(
     section(first, "tests").items.map((item) => item.path),
     ["test/a.test.ts"],
@@ -180,7 +178,7 @@ test("node and file starts assemble direct rules, real re-export test evidence, 
       (item) => item.nodeId === "node-rejectedlong" && item.text?.startsWith("Abandoned option"),
     ),
   );
-  assert.ok(section(first, "unknown").items.some((item) => item.nodeId === "node-tasklong"));
+  assert.equal(section(first, "open").total, 0);
   assert.ok(first.sections.every((section) => section.items.every((item) => item.why)));
   const byFile = await assembleAgentContext(
     fs,
@@ -189,7 +187,7 @@ test("node and file starts assemble direct rules, real re-export test evidence, 
     { repository },
   );
   assert.ok(section(byFile, "references").items.some((item) => item.nodeId === "node-tasklong"));
-  assert.ok(section(byFile, "rules").items.some((item) => item.nodeId === "node-rulelong"));
+  assert.ok(!section(byFile, "rules").items.some((item) => item.nodeId === "node-rulelong"));
 });
 
 test("Card references preserve publication identity, exact old section and current path after move/path reuse", async () => {
@@ -670,7 +668,7 @@ test("measurement repair: unique test files share all static witnesses before bo
   );
 });
 
-test("measurement repair: rule excerpts skip syntactic metadata and thematic breaks without inventing text for empty bodies", async () => {
+test("material rule excerpts skip syntactic metadata and thematic breaks for every Node type", async () => {
   const { fs, node } = await fixture();
   const bodies = [
     "---\nstatus: draft\n---\n# Heading\n\n---\nKeep current evidence. More detail.",
@@ -682,11 +680,16 @@ test("measurement repair: rule excerpts skip syntactic metadata and thematic bre
     "---\nstatus: draft\n---\n",
   ];
   for (const [i, body] of bodies.entries()) {
-    await node(`Scope${i}`, `node-scope${i}`, "goal", body, {
+    await node(`Scope${i}`, `node-scope${i}`, ["goal", "prompt", "output"][i % 3]!, body, {
       description: "This metadata must never become a body excerpt",
+      resource: "../../src/a.ts",
     });
-    await node(`Scope${i}/Task`, `node-task${i}`, "goal", "Do the task.");
-    const result = await assembleAgentContext(fs, root, { kind: "node", nodeId: `node-task${i}` });
+    const result = await assembleAgentContext(
+      fs,
+      root,
+      { kind: "node", nodeId: `node-scope${i}` },
+      { repository },
+    );
     const item = section(result, "rules").items.find((item) => item.nodeId === `node-scope${i}`)!;
     assert.equal(item.text?.trim(), i < 4 ? "Keep current evidence." : "");
     assert.ok(!item.text || body.includes(item.text));
@@ -756,7 +759,7 @@ test("measurement repair: explicit pinned and Markdown fragments select exact la
   assert.ok(section(missing, "unknown").items.some((item) => item.why.includes("section")));
 });
 
-test("ancestor rules use local lifecycle: draft is active, deprecated and unknown are excluded", async () => {
+test("ancestor and sibling type names never grant inherited rules", async () => {
   const { fs, node } = await fixture();
   await node("Outer", "node-outer", "goal", "Retired goal body.", { status: "deprecated" });
   await node("Outer/Keep", "node-keep", "prompt", "Current sibling rule.");
@@ -774,7 +777,7 @@ test("ancestor rules use local lifecycle: draft is active, deprecated and unknow
     section(result, "rules")
       .items.map((item) => item.nodeId)
       .sort(),
-    ["node-draft", "node-keep", "node-middle"],
+    [],
   );
   assert.doesNotMatch(
     JSON.stringify(section(result, "rules")),

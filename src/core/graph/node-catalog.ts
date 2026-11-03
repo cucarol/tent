@@ -110,10 +110,7 @@ async function loadCatalogInScope(fs: FsAdapter) {
   };
 }
 
-export type NodeCatalog = Awaited<ReturnType<typeof loadNodeCatalog>> & {
-  /** Full bytes already read at the native boundary; sync must still recheck them. */
-  observedDocuments?: ReadonlyMap<string, ReaderDocument>;
-};
+export type NodeCatalog = Awaited<ReturnType<typeof loadNodeCatalog>>;
 function requireCatalogNode(catalog: NodeCatalog, nodeId: string) {
   const node = catalog.byId.get(nodeId);
   if (!node) throw new ReaderError("NOT_FOUND", `Node is not readable in this source: ${nodeId}`);
@@ -125,7 +122,7 @@ function summarize(node: CatalogNode) {
     ...nodeSummary({
       ...node,
       type: typeof data.type === "string" ? data.type : node.type,
-      // The same tag set that `node tags` counts, so every counted tag can be filtered.
+      // Normalize the same tags that reader filters use.
       tags: normalizeNodeTags(data.tags),
     }),
     ...documentLifecycle(data),

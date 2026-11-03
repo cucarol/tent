@@ -48,6 +48,7 @@ const createItem = z.strictObject({
   name: requiredString("name"),
   type: requiredString("type"),
   body: z.string().optional(),
+  description: z.string().optional(),
   tags: z.array(z.string()).optional(),
   resource: resourceSchema.optional(),
   sources: sourcesSchema.optional(),
@@ -168,7 +169,7 @@ export async function writeNodesBatchUnlocked(
       if (isIncompleteNodeReadEtag(item.baseEtag))
         throw new NodeWriteError(
           "INCOMPLETE_READ",
-          "Batch update requires a complete Node read ETag; use tent node get <nodeId> --full before writing",
+          "Batch update requires a complete Node read ETag",
         );
     }
   }
@@ -242,6 +243,7 @@ export async function writeNodesBatchUnlocked(
       const data = {
         id: entry.nodeId,
         type: normalizeOptionalNodeType(item.type),
+        ...(item.description === undefined ? {} : { description: item.description }),
         ...(tags.length ? { tags } : {}),
         ...materialFields(item),
       };

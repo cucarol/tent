@@ -312,27 +312,27 @@ test("Core create and ordinary writes leave unknown metadata untouched without a
   assert.deepEqual(parseFrontmatter(raw.raw).data.stale_after, metadata.stale_after);
 });
 
-test("ordinary writes preserve opaque verified values and failed saves retain error identity and bytes", async (t) => {
+test("ordinary writes preserve opaque provenance values and failed saves retain error identity and bytes", async (t) => {
   const { adapter, create } = await fixture(t);
-  const id = await create("Verified", "original");
+  const id = await create("Provenance", "original");
   const initial = await readNodeForEdit(adapter, id);
-  const verified = { custom: [false, "not a provenance record"] };
-  const input = { baseEtag: initial.etag, body: "next", frontmatter: { verified } };
+  const provenance = { custom: [false, "not a provenance record"] };
+  const input = { baseEtag: initial.etag, body: "next", frontmatter: { provenance } };
   assert.equal(nodeWriteInputSchema.safeParse(input).success, true);
   const failure = Object.assign(new Error("write storage failure"), { code: "EIO" });
   const write = adapter.writeFile.bind(adapter);
   adapter.writeFile = async (file, raw) => {
-    if (file === "Verified/Verified.md") throw failure;
+    if (file === "Provenance/Provenance.md") throw failure;
     await write(file, raw);
   };
   await assert.rejects(writeNodeDocument(adapter, id, input), (error) => error === failure);
-  assert.equal(await adapter.readFile("Verified/Verified.md"), initial.raw);
+  assert.equal(await adapter.readFile("Provenance/Provenance.md"), initial.raw);
   adapter.writeFile = write;
   const saved = await writeNodeDocument(adapter, id, input);
   const data = parseFrontmatter(saved.raw).data;
   assert.equal("generated" in data, false);
-  assert.deepEqual(data.verified, verified);
+  assert.deepEqual(data.provenance, provenance);
   assert.equal(parseFrontmatter(saved.raw).body, "next");
   const next = await writeNodeDocument(adapter, id, { baseEtag: saved.etag, body: "later" });
-  assert.deepEqual(parseFrontmatter(next.raw).data.verified, verified);
+  assert.deepEqual(parseFrontmatter(next.raw).data.provenance, provenance);
 });

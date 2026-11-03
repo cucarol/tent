@@ -7,10 +7,9 @@ import { extractOutLinksDetailed, resolveOutLink } from "../base/links.js";
 import {
   isDirectoryMaterial,
   localMaterialPath,
-  materialFields,
   resolvedMaterialOccurrences,
 } from "../base/material.js";
-import { structureMaterialCoverage } from "../base/material-coverage.js";
+import { materialCoverage } from "../base/material-coverage.js";
 import {
   checkModuleMap,
   MODULE_MAP_THRESHOLDS,
@@ -58,31 +57,23 @@ export async function checkWorkspaceModules(
     .map((node) => {
       const owner = nodeNotePath(node.path);
       const materials: ModuleMapNode["materials"][number][] = [];
-      const sources = materialFields(node.fm).sources;
       for (const occurrence of resolvedMaterialOccurrences(node.fm, owner)) {
         try {
           if (occurrence.error) throw new Error(occurrence.error);
-          const structure =
-            occurrence.field === "sources" && sources?.[occurrence.index!]?.track === "structure";
           const locator = occurrence.locator!;
           const filename = localMaterialPath(locator, workspaceRoot);
-          if (filename === undefined) {
-            if (structure)
-              throw new Error("Structure material must name a local Workspace directory or prefix");
-            continue;
-          }
+          if (filename === undefined) continue;
           const relative = path.relative(workspaceRoot, filename).split(path.sep).join("/") || ".";
           if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
-            if (structure) throw new Error("Structure material must be inside the Workspace");
             continue;
           }
-          if (relative.includes("*") || isDirectoryMaterial(locator) || structure) {
+          if (relative.includes("*") || isDirectoryMaterial(locator)) {
             // Legacy resource paths may be bare; sources and the shared authority require an explicit address.
             const address =
               locator.kind === "path" && !/^(?:\.{1,2}\/|\/)/.test(occurrence.resource.trim())
                 ? "./" + occurrence.resource.trim()
                 : occurrence.resource;
-            const coverage = structureMaterialCoverage(address, owner, workspaceRoot);
+            const coverage = materialCoverage(address, owner, workspaceRoot);
             if (!coverage)
               throw new Error(
                 "Directory or prefix material requires a local Workspace address, one trailing * for a prefix, and no query or fragment",
@@ -93,7 +84,6 @@ export async function checkWorkspaceModules(
                   ? coverage.prefix.slice(0, -1) || "."
                   : coverage.prefix,
               kind: coverage.kind,
-              ...(structure ? { track: "structure" as const } : {}),
             });
           } else
             materials.push({
@@ -136,15 +126,6 @@ export async function checkWorkspaceModules(
     let parent = tent.byId.get(node.id)?.parent;
     while (parent && !modules.has(parent.id)) parent = parent.parent;
     if (parent) node.parentId = parent.id;
-  }
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  for (const node of nodes) {
-    if (modules.has(node.id) || tent.byId.get(node.id)?.fm.type !== "prompt") continue;
-    const owner = node.parentId && byId.get(node.parentId);
-    if (!owner) continue;
-    // Rules can live below the module goal; links were resolved at the rule's own path.
-    owner.body += "\n\n" + node.body;
-    owner.exceptions = [...(owner.exceptions ?? []), ...(node.exceptions ?? [])];
   }
   const imports = extractRepositoryImports(repository.sources.files);
   const testImports = extractRepositoryTestImports(repository.sources.files);

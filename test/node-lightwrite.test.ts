@@ -15,13 +15,13 @@ import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { contentEtag } from "../src/core/base/etag.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
+import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
 import { appendNodeBody } from "../src/core/write/node-lightwrite.js";
 import { NodeSectionError, selectSection } from "../src/core/base/markdown-section.js";
-import { runNodeCommand, nodeHelpText } from "../src/cli/node-commands.js";
 import { cli, extendTestLockWait } from "./helpers.js";
 
 const lockTimeoutMessage =
-  /^Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying\.\nNext: tent node get node-note --full\n$/;
+  /^Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying\.\nNext: tent workspace brief(?: --workspace .+)?\n$/;
 
 async function fixture(t: TestContext, body = "") {
   const scratch = path.resolve(testScratchRoot());
@@ -230,8 +230,9 @@ test("lightweight ordinary saves preserve material declarations and standard mat
   );
 });
 
-test("real CLI append times out without changing bytes or history, then one caller retry writes once", async (t) => {
+test("real CLI create times out without changing bytes or history, then one caller retry creates once", async (t) => {
   const { root, tentRoot, adapter } = await fixture(t, "start");
+  await captureNativeNodeEdits(adapter);
   const before = await readNodeForEdit(adapter, "node-note", { capture: true });
   const history = JSON.stringify(await adapter.history.changesInRange());
   const head = (await historyHead(tentRoot)).trim();
@@ -242,114 +243,96 @@ test("real CLI append times out without changing bytes or history, then one call
     acquired();
     await held;
   });
-  const payload = "caller retry payload";
+  const args = [
+    "node",
+    "create",
+    "Retry",
+    "--id",
+    "node-retry",
+    "--type",
+    "prompt",
+    "--body",
+    "caller retry payload",
+    "--json",
+  ];
   try {
     await ready;
     const start = performance.now();
-    const rejected = await cli(root, "node", "append", "node-note", "--body", payload, "--json");
+    const rejected = await cli(root, ...args);
     assert.equal(rejected.code, 1, rejected.stderr);
     assert.match(rejected.stderr, lockTimeoutMessage);
     assert.equal(rejected.stdout, "");
     assert.ok(performance.now() - start >= 8_000, "the real CLI keeps its eight-second wait");
     assert.equal(await adapter.readFile("Note/Note.md"), before.raw);
+    assert.equal(await adapter.exists("Retry/Retry.md"), false);
     assert.equal((await historyHead(tentRoot)).trim(), head);
     assert.equal(JSON.stringify(await adapter.history.changesInRange()), history);
   } finally {
     release();
     await holder;
   }
-  assert.equal(await adapter.readFile("Note/Note.md"), before.raw);
-  assert.equal(JSON.stringify(await adapter.history.changesInRange()), history);
-
-  // A new caller invocation, after the holder releases; the failed action is never retried inside Tent.
-  const retried = await cli(root, "node", "append", "node-note", "--body", payload, "--json");
+  // Only a new caller invocation retries the failed action after the lock is released.
+  const retried = await cli(root, ...args);
   assert.equal(retried.code, 0, retried.stderr);
-  const saved = JSON.parse(retried.stdout);
-  const current = await readNodeForEdit(adapter, "node-note");
-  assert.equal(current.body, `start\n\n${payload}\n`);
+  const saved = JSON.parse(retried.stdout).node;
+  const current = await readNodeForEdit(adapter, "node-retry");
+  assert.equal(current.body, "caller retry payload");
   assert.equal(saved.etag, contentEtag(current.raw));
-  assert.ok(saved.version);
-  assert.equal(await adapter.history.read(saved.version), current.raw);
-  assert.equal(saved.version.commit, (await historyHead(tentRoot)).trim());
+  const version = (await adapter.history.pathVersions("Retry/Retry.md")).latest!;
+  assert.ok(version);
+  assert.equal(await adapter.history.read(version), current.raw);
+  assert.equal(version.commit, (await historyHead(tentRoot)).trim());
   assert.equal((await adapter.history.changesInRange({ from: head })).length, 1);
+  assert.equal(await adapter.readFile("Note/Note.md"), before.raw);
 });
 
-test("real CLI processes queue concurrent append and stdin writes report captured versions", async (t) => {
+test("real CLI processes queue concurrent creates without losing either document or captured version", async (t) => {
   const { root, tentRoot, adapter } = await fixture(t, "start");
+  await captureNativeNodeEdits(adapter);
   await readNodeForEdit(adapter, "node-note", { capture: true });
   const head = (await historyHead(tentRoot)).trim();
-  const payloads = ["process one", "process two"];
-  const results = await Promise.all(
-    payloads.map((body) => cli(root, "node", "append", "node-note", "--body", body, "--json")),
-  );
+  const names = ["One", "Two"];
+  const args = (name: string) => [
+    "node",
+    "create",
+    name,
+    "--id",
+    `node-${name.toLowerCase()}`,
+    "--type",
+    "prompt",
+    "--body",
+    `process ${name}`,
+    "--json",
+  ];
+  const results = await Promise.all(names.map((name) => cli(root, ...args(name))));
   t.diagnostic(
     `Concurrent CLI initial exit codes: ${results.map((result) => result.code).join(", ")}`,
   );
-  assert.ok(results.some((result) => result.code === 0));
+  assert.ok(
+    results.some((result) => result.code === 0),
+    JSON.stringify(results),
+  );
   for (let i = 0; i < results.length; i++) {
+    const name = names[i]!;
     let result = results[i]!;
     if (result.code !== 0) {
       assert.equal(result.code, 1, result.stderr);
       assert.match(result.stderr, lockTimeoutMessage);
-      assert.ok(!(await readNodeForEdit(adapter, "node-note")).body.includes(payloads[i]!));
-      // The acquisition deadline can expire on a loaded host. Both contenders have
-      // settled, so one caller retry must append the previously rejected input once.
-      result = await cli(root, "node", "append", "node-note", "--body", payloads[i]!, "--json");
+      assert.equal(await adapter.exists(`${name}/${name}.md`), false);
+      // Both contenders have settled; a caller can retry a timed-out create once.
+      result = await cli(root, ...args(name));
     }
     assert.equal(result.code, 0, result.stderr);
-    const saved = JSON.parse(result.stdout);
-    assert.match(saved.etag, /^[a-f0-9]{24}$/);
-    assert.ok(saved.version);
-    const captured = await adapter.history.read(saved.version);
-    assert.equal(saved.etag, contentEtag(captured));
-    assert.equal(parseFrontmatter(captured).body.split(payloads[i]!).length, 2);
+    const saved = JSON.parse(result.stdout).node;
+    const current = await readNodeForEdit(adapter, `node-${name.toLowerCase()}`);
+    assert.equal(current.body, `process ${name}`);
+    assert.equal(saved.etag, contentEtag(current.raw));
+    const version = (await adapter.history.pathVersions(`${name}/${name}.md`)).latest!;
+    assert.ok(version);
+    assert.equal(await adapter.history.read(version), current.raw);
+    assert.deepEqual((await adapter.history.pathVersions(`${name}/${name}.md`)).first, version);
   }
-  const body = (await readNodeForEdit(adapter, "node-note")).body;
-  for (const payload of payloads) assert.equal(body.split(payload).length, 2);
   assert.equal((await adapter.history.changesInRange({ from: head })).length, 2);
-  const appended = await runNodeCommand(
-    "append",
-    ["node-note", "--heading", "Summary", "--body", "-"],
-    { workspace: root, json: true, stdin: "from stdin\n" },
-  );
-  assert.equal(appended.exitCode, 0, appended.stderr);
-  const selected = await cli(root, "node", "get", "node-note", "--full", "--json");
-  assert.equal(selected.code, 0, selected.stderr);
-  const observed = JSON.parse(selected.stdout);
-  const changed = await runNodeCommand(
-    "write",
-    ["node-note", "--base-etag", observed.etag, "--body", "-"],
-    { workspace: root, json: true, stdin: observed.text.replace("## Summary", "## New summary") },
-  );
-  assert.equal(changed.exitCode, 0, changed.stderr);
-  assert.ok(JSON.parse(changed.stdout).version);
-  const stale = await cli(
-    root,
-    "node",
-    "write",
-    "node-note",
-    "--base-etag",
-    observed.etag,
-    "--body",
-    "overwrite",
-    "--json",
-  );
-  assert.equal(stale.code, 1);
-  assert.match(stale.stderr, /etag conflict/i);
-  assert.match(nodeHelpText("append"), /tent node append/);
-  const invalid = await runNodeCommand(
-    "append",
-    ["node-note", "--body", "x", "--base-etag", "irrelevant"],
-    { workspace: root },
-  );
-  assert.equal(invalid.exitCode, 1);
-  for (const sub of ["create", "write", "get"]) {
-    const scoped = await runNodeCommand(sub, ["node-note", "--heading", "invalid"], {
-      workspace: root,
-    });
-    assert.equal(scoped.exitCode, 1);
-    assert.match(scoped.stderr, /--heading is only valid/);
-  }
 });
 
 test("append reuses a unique section after its nested content and preserves following sections", async (t) => {
@@ -442,18 +425,12 @@ test("new reference uses preserve definitions outside the append range", async (
   );
 });
 
-test("plain appended heading text round-trips named and numeric entity spellings through CLI", async (t) => {
-  const { root, adapter } = await fixture(t);
+test("Core appended headings round-trip named and numeric entity spellings", async (t) => {
+  const { adapter } = await fixture(t);
   const heading = "A &amp; B &#35; C &#x26; D & E";
-  const result = await runNodeCommand(
-    "append",
-    ["node-note", "--heading", heading, "--body", "plain", "--json"],
-    { workspace: root },
-  );
-  assert.equal(result.exitCode, 0, result.stderr);
-  const page = await runNodeCommand("get", ["node-note", "--full", "--json"], { workspace: root });
-  assert.equal(page.exitCode, 0, page.stderr);
-  assert.equal(JSON.parse(page.stdout).text, (await readNodeForEdit(adapter, "node-note")).body);
+  const saved = await appendNodeBody(adapter, "node-note", { heading, body: "plain" });
+  assert.equal((await readNodeForEdit(adapter, "node-note")).raw, saved.raw);
+  assert.equal(await adapter.history.read(saved.version!), saved.raw);
   const read = await readSection(adapter, "node-note", heading);
   assert.match(read.text, /A \\&amp; B \\&\\#35; C \\&\\#x26; D \\& E/);
   await assert.rejects(readSection(adapter, "node-note", "A & B # C & D & E"), /not found/);

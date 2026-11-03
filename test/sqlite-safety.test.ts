@@ -177,35 +177,37 @@ test("SQLite safety 3: Card pins read historical bytes, ABA stays changed and st
   assert.match(reactivated.raw, /status: stable/);
 });
 
-test("SQLite safety 4: two independent CLI writers share the same ETag conflict boundary", async (t) => {
-  const { adapter, workspace } = await fixture(t),
-    base = await readNodeForEdit(adapter, "node-n000"),
-    entry = fileURLToPath(new URL("../src/cli/tent.ts", import.meta.url));
-  const workers = ["one", "two"].map((name) =>
-    child([
-      "--import",
-      "tsx",
-      entry,
-      "node",
-      "write",
-      "node-n000",
-      "--base-etag",
-      base.etag,
-      "--body",
-      `writer ${name}`,
-      "--workspace",
-      workspace,
-      "--json",
-    ]),
-  );
+test("SQLite safety 4: two independent Core writers share the same ETag conflict boundary", async (t) => {
+  const { adapter, root } = await fixture(t);
+  const base = await readNodeForEdit(adapter, "node-n000");
+  const workers = ["one", "two"].map((name) => {
+    const program = `
+      import { NodeFs } from ${JSON.stringify(new URL("../src/fs/node-fs.ts", import.meta.url).href)};
+      import { writeNodeDocument } from ${JSON.stringify(new URL("../src/core/graph/node-document-write.ts", import.meta.url).href)};
+      const adapter = new NodeFs(${JSON.stringify(root)}, "cli");
+      try {
+        const saved = await writeNodeDocument(adapter, "node-n000", ${JSON.stringify({ baseEtag: base.etag, body: `writer ${name}` })});
+        console.log(JSON.stringify(saved));
+      } catch (error) {
+        console.error(error);
+        process.exitCode = 1;
+      } finally {
+        await adapter.close();
+      }
+    `;
+    return child(["--import", "tsx", "--input-type=module", "--eval", program]);
+  });
   const results = await Promise.all(workers.map((w) => w.done));
   assert.equal(results.filter((r) => r.code === 0).length, 1, JSON.stringify(results));
   assert.equal(results.filter((r) => r.code === 1).length, 1, JSON.stringify(results));
   assert.match(results.find((r) => r.code === 1)!.stderr, /etag conflict/i);
   for (const result of results)
     assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
+  const saved = JSON.parse(results.find((r) => r.code === 0)!.stdout);
   const latest = await readNodeForEdit(adapter, "node-n000", { capture: true });
   assert.match(latest.body, /writer (one|two)/);
+  assert.equal(saved.raw, latest.raw);
+  assert.equal(await adapter.history.read(saved.version), latest.raw);
   assert.equal(await adapter.history.read(latest.version!), latest.raw);
 });
 

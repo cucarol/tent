@@ -158,7 +158,7 @@ test("legacy addresses survive body/raw/metadata edits, source reorder and remov
   await edit({ frontmatter: { resource: "../../../spec/x.md", sources: [] } });
 });
 
-test("CLI writes retain legacy addresses and workspace check reports their repair", async (t) => {
+test("Core edits retain legacy addresses and workspace check reports their repair", async (t) => {
   const { root, adapter, id, note } = await fixture(t);
   await adapter.writeFile(
     note,
@@ -169,15 +169,18 @@ test("CLI writes retain legacy addresses and workspace check reports their repai
   );
   const cli = (sub: string, args: string[]) =>
     runNodeCommand(sub, args, { workspace: root, json: true });
-  const read = JSON.parse((await cli("get", [id, "--full"])).stdout);
-  const written = await cli("write", [id, "--body", "CLI update", "--base-etag", read.etag]);
-  assert.equal(written.exitCode, 0, written.stderr);
+  const read = await readNodeForEdit(adapter, id);
+  await writeNodeDocument(adapter, id, { baseEtag: read.etag, body: "Core update" });
   const live = await readNodeForEdit(adapter, id);
-  assert.equal(live.body, "CLI update");
+  assert.equal(live.body, "Core update");
   const input = { baseEtag: live.etag, frontmatter: { sources: [{ resource: "/../new.md" }] } };
-  const rejected = await cli("write", [id, "--input-json", JSON.stringify(input)]);
-  assert.equal(rejected.exitCode, 1);
-  assert.match(rejected.stderr, /Material outside the Workspace requires an absolute URI/);
+  await assert.rejects(
+    writeNodeDocument(adapter, id, input),
+    (error) =>
+      error instanceof NodeWriteError &&
+      error.code === "INVALID_EDIT" &&
+      /escapes/.test(error.message),
+  );
   const checked = await runWorkspaceCommand("check", [], { workspace: root, json: true });
   assert.equal(checked.exitCode, 1, checked.stderr);
   assert.match(checked.stdout, /escapes|outside|invalid-material/i);
@@ -189,7 +192,7 @@ test("CLI writes retain legacy addresses and workspace check reports their repai
     const args =
       "resource" in fields
         ? ["--resource", fields.resource!]
-        : ["--sources-json", JSON.stringify(fields.sources)];
+        : ["--source", fields.sources![0]!.resource];
     const created = await cli("create", ["Rejected", "--type", "output", "--parent", id, ...args]);
     assert.equal(created.exitCode, 1);
     assert.match(created.stderr, /Material outside the Workspace requires an absolute URI/);

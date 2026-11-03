@@ -173,7 +173,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
       const collect = (dir: string, below: string[]) => {
         if (directories.some((item) => item.path === dir)) return;
         if (!directories.some((item) => item.path.startsWith(dir + "/"))) {
-          ordinary.push(material(dir + "/", false));
+          ordinary.push(material(dir + "/"));
           return;
         }
         for (const file of below.filter((file) => directory(file) === dir))
@@ -198,7 +198,7 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
           item.kind === "directory" && (item.path === top || item.path.startsWith(top + "/")),
       )
     ) {
-      tests.push(material(top + "/", false));
+      tests.push(material(top + "/"));
       continue;
     }
     let dir = top;
@@ -359,13 +359,22 @@ export function draftWorkspaceModules(scan: WorkspaceScanResult) {
       name: node.name,
       type: "goal",
       body: "",
-      sources: node.materials.map((m) => ({
-        resource:
-          "./" +
-          m.path.split("/").map(encodeURIComponent).join("/") +
-          (m.kind === "directory" ? "/" : m.kind === "prefix" ? "*" : ""),
-        ...(m.track ? { track: m.track } : {}),
-      })),
+      ...(() => {
+        const resources = node.materials.map(
+          (m) =>
+            "./" +
+            m.path.split("/").map(encodeURIComponent).join("/") +
+            (m.kind === "directory" ? "/" : m.kind === "prefix" ? "*" : ""),
+        );
+        return resources.length
+          ? {
+              resource: resources[0],
+              ...(resources.length > 1
+                ? { sources: resources.slice(1).map((resource) => ({ resource })) }
+                : {}),
+            }
+          : {};
+      })(),
     })),
   };
   return { batch, nodes, warnings };

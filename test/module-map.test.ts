@@ -14,15 +14,8 @@ const node = (id: string, overrides: Partial<ModuleMapNode> = {}): ModuleMapNode
   path: id,
   name: id,
   body: "",
-  materials: [{ path: id, kind: "directory", track: "structure" }],
+  materials: [{ path: id, kind: "directory" }],
   ...overrides,
-  ...(overrides.materials
-    ? {
-        materials: overrides.materials.map((material) =>
-          material.kind === "file" ? material : { ...material, track: "structure" as const },
-        ),
-      }
-    : {}),
 });
 const files = (directory: string, count: number, prefix = "file-") =>
   Array.from({ length: count }, (_, i) => `${directory}/${prefix}${i}.ts`);
@@ -113,6 +106,7 @@ test("coverage includes file-only Nodes, while module membership uses the most s
     [
       { id: "cards", files: ["src/card-nested/a.ts", "src/card-one.ts", "src/special.ts"] },
       { id: "root", files: ["src/cardinality.ts", "src/main.ts"] },
+      { id: "setup", files: ["package.json"] },
     ],
   );
   assert.deepEqual(result.issues, [
@@ -167,91 +161,22 @@ test("internal .tent files never enter broad module coverage, imports or history
     assert.equal(materialCoverageContains(coverage, internal), false);
 });
 
-test("only structure-tracked directories or prefixes define modules; ordinary and file materials still cover", () => {
-  const tracked = ["old/a.ts", "tracked/a.ts", "single.ts"];
+test("ordinary directory, prefix and file materials all define coverage owners", () => {
   const result = checkModuleMap(
-    input(tracked, [
-      { ...node("old"), materials: [{ path: "old", kind: "directory" }] },
-      {
-        ...node("tracked"),
-        materials: [{ path: "tracked", kind: "directory", track: "structure" }],
-      },
-      { ...node("single"), materials: [{ path: "single.ts", kind: "file" }] },
-    ]),
+    input(
+      ["dir/a.ts", "prefix-a.ts", "single.ts"],
+      [
+        node("dir"),
+        node("prefix", { materials: [{ path: "prefix-", kind: "prefix" }] }),
+        node("single", { materials: [{ path: "single.ts", kind: "file" }] }),
+      ],
+    ),
   );
-  assert.deepEqual(
-    result.issues.map(({ code, object, facts }) => ({ code, object, files: facts.files })),
-    [
-      { code: "map.unowned", object: ".", files: ["single.ts"] },
-      { code: "map.unowned", object: "old", files: ["old/a.ts"] },
-    ],
-  );
+  assert.deepEqual(result.issues, []);
   assert.deepEqual(
     result.modules.map(({ id }) => id),
-    ["tracked"],
+    ["dir", "prefix", "single"],
   );
-});
-
-test("covered production code without a module is grouped, cannot be excepted, and excludes size-rule nonproduction files", () => {
-  const productionFiles = [
-    "build.rs",
-    "index.ts",
-    "index.d.ts",
-    "scripts/build.py",
-    "src/api.ts",
-    "src/api.h",
-  ];
-  const excluded = [
-    "package.json",
-    "README.md",
-    "tests/a.ts",
-    "src/a.test.ts",
-    "src/test_a.py",
-    "src/a_test.go",
-    "src/generated/a.ts",
-    "src/a.pb.go",
-    "vendor/a.ts",
-    "third_party/a.ts",
-    "node_modules/a.ts",
-  ];
-  const tracked = [...productionFiles, ...excluded, "uncovered.ts"];
-  const coverage = {
-    ...coverageOnly([...productionFiles, ...excluded]),
-    body: "allow:map.unowned",
-    exceptions: [{ code: "map.unowned" as const }],
-  };
-  const result = checkModuleMap(input(tracked, [coverage]));
-  assert.deepEqual(
-    result.issues.map(({ code, object, facts }) => ({
-      code,
-      object,
-      count: facts.count,
-      files: facts.files,
-    })),
-    [
-      { code: "map.uncovered", object: ".", count: 1, files: ["uncovered.ts"] },
-      { code: "map.unowned", object: ".", count: 3, files: ["build.rs", "index.d.ts", "index.ts"] },
-      { code: "map.unowned", object: "scripts", count: 1, files: ["scripts/build.py"] },
-      { code: "map.unowned", object: "src", count: 2, files: ["src/api.h", "src/api.ts"] },
-    ],
-  );
-  assert.deepEqual(result.modules, []);
-  const repaired = checkModuleMap(
-    input(tracked, [
-      coverage,
-      node("api", { materials: [{ path: "src/api", kind: "prefix" }] }),
-      node("tools", {
-        materials: [
-          { path: "scripts", kind: "directory" },
-          ...productionFiles
-            .filter((file) => !file.includes("/"))
-            .map((path) => ({ path, kind: "file" as const })),
-        ],
-      }),
-    ]),
-  );
-  assert.deepEqual(codes(repaired), ["map.uncovered"]);
-  assert.equal(repaired.modules.length, 2);
 });
 
 test("directory and prefix membership use the shared coverage authority", () => {
@@ -268,7 +193,6 @@ test("directory and prefix membership use the shared coverage authority", () => 
     const material = {
       path: kind === "directory" ? "src" : "src/",
       kind,
-      track: "structure" as const,
     };
     const result = checkModuleMap(input(candidates, [{ ...node("src"), materials: [material] }]));
     assert.deepEqual(
@@ -321,9 +245,7 @@ test("shared platform comparison matches file, prefix and package-directory mate
     n.id === "b"
       ? {
           ...n,
-          materials: [
-            { path: "LIB/B/file-", kind: "prefix" as const, track: "structure" as const },
-          ],
+          materials: [{ path: "LIB/B/file-", kind: "prefix" as const }],
         }
       : n,
   );
@@ -363,20 +285,24 @@ test("size excludes generated, tests and vendor code and requires two groups of 
 test("size uses strict share and mathematical sibling median, with oversized taking precedence", () => {
   const big = [...files("a", 11, "alpha-"), ...files("a", 10, "beta-")];
   const others = [...files("b", 6), ...files("c", 8), ...files("filler", 165)];
-  const nodes = [node("a"), node("b"), node("c"), coverageOnly(files("filler", 165))];
-  assert.deepEqual(codes(checkModuleMap(input([...big, ...others], nodes))), ["map.unowned"]);
+  const nodes = [
+    node("a"),
+    node("b"),
+    node("c"),
+    { ...coverageOnly(files("filler", 165)), parentId: "other" },
+  ];
+  assert.deepEqual(codes(checkModuleMap(input([...big, ...others], nodes))), []);
   const skewed = checkModuleMap(input([...big, "a/beta-extra.ts", ...others], nodes));
-  assert.deepEqual(codes(skewed), ["map.unowned", "module.skewed"]);
-  assert.equal(skewed.issues[1]!.facts.siblingMedian, 7);
+  assert.deepEqual(codes(skewed), ["module.skewed"]);
+  assert.equal(skewed.issues[0]!.facts.siblingMedian, 7);
   const total100 = [
     ...files("a", 10, "alpha-"),
     ...files("a", 10, "beta-"),
     ...files("filler", 80),
   ];
   const shareNodes = [node("a"), coverageOnly(files("filler", 80))];
-  assert.deepEqual(codes(checkModuleMap(input(total100, shareNodes))), ["map.unowned"]);
+  assert.deepEqual(codes(checkModuleMap(input(total100, shareNodes))), []);
   assert.deepEqual(codes(checkModuleMap(input([...total100, "a/beta-extra.ts"], shareNodes))), [
-    "map.unowned",
     "module.oversized",
   ]);
   assert.deepEqual(codes(checkModuleMap(input(big, [node("a"), node("b")]))), ["module.oversized"]);
@@ -510,9 +436,7 @@ test("package directory targets retain their directory and diagnose ambiguous me
   assert.deepEqual(result.unassignedImports, []);
   const prefixes = nodes.map((n) => ({
     ...n,
-    materials: [
-      { path: `pkg/${n.id}/file-`, kind: "prefix" as const, track: "structure" as const },
-    ],
+    materials: [{ path: `pkg/${n.id}/file-`, kind: "prefix" as const }],
   }));
   const unassigned = checkModuleMap(input(tracked, prefixes, { imports: edges }));
   assert.deepEqual(unassigned.issues, []);
@@ -521,9 +445,8 @@ test("package directory targets retain their directory and diagnose ambiguous me
   const filesOnlyTarget = checkModuleMap(
     input(tracked, [nodes[0]!, coverageOnly(files("pkg/b", 3))], { imports: edges }),
   );
-  assert.deepEqual(codes(filesOnlyTarget), ["map.unowned"]);
-  assert.deepEqual(filesOnlyTarget.issues[0]!.facts.files, files("pkg/b", 3));
-  assert.deepEqual(filesOnlyTarget.unassignedImports, []);
+  assert.deepEqual(codes(filesOnlyTarget), []);
+  assert.equal(filesOnlyTarget.unassignedImports.length, 3);
 });
 
 test("a Go package whose production files share one module has that owner even through attached files", () => {

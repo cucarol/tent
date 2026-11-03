@@ -35,7 +35,7 @@ if (cut === "captured") {
   };
 }
 const { runNodeCommand } = await import("../../src/cli/node-commands.js");
-const result = await runNodeCommand("write-many", ["--draft", "draft.json", "--json"], {
+const result = await runNodeCommand("create", ["--draft", "draft.json", "--json"], {
   workspace,
 });
 process.stdout.write(result.stdout);

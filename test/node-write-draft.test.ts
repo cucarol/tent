@@ -49,8 +49,9 @@ test("CLI saves two independent draft batches, carries real identities and mater
       parent: "@parent",
       name: "Alpha",
       type: "goal",
+      description: "Alpha facts.",
       body: "Alpha responsibility",
-      sources: [{ resource: "src/alpha/", track: "structure" }],
+      sources: [{ resource: "src/alpha/" }],
     },
     {
       op: "create",
@@ -59,10 +60,7 @@ test("CLI saves two independent draft batches, carries real identities and mater
       name: "Beta",
       type: "goal",
       body: "",
-      sources: [
-        { resource: "src/beta/", track: "structure" },
-        { resource: "@alpha", label: "@alpha" },
-      ],
+      sources: [{ resource: "src/beta/" }, { resource: "@alpha", label: "@alpha" }],
     },
     {
       op: "create",
@@ -85,13 +83,17 @@ test("CLI saves two independent draft batches, carries real identities and mater
     commits: [],
     sources: { files: [], errors: [] },
   };
-  const first = await runNodeCommand("write-many", ["--draft", "draft.json", "--json"], {
+  const first = await runNodeCommand("create", ["--draft", "draft.json", "--json"], {
     workspace: f.workspace,
   });
   assert.equal(first.exitCode, 0, first.stderr);
   const firstResults = JSON.parse(first.stdout).results;
   assert.equal(firstResults.length, 2);
   const [parent, alpha] = firstResults;
+  assert.equal(
+    parseFrontmatter(await f.adapter.readFile("Project/Alpha/Alpha.md")).data.description,
+    "Alpha facts.",
+  );
   const remaining = JSON.parse(await fs.readFile(f.filename, "utf8"));
   assert.equal(remaining.items.length, 2);
   assert.equal(remaining.items[0].parent, parent.nodeId);
@@ -109,7 +111,7 @@ test("CLI saves two independent draft batches, carries real identities and mater
         issue.facts.files.includes("src/beta/index.ts"),
     ),
   );
-  const idle = await runNodeCommand("write-many", ["--draft", "draft.json", "--json"], {
+  const idle = await runNodeCommand("create", ["--draft", "draft.json", "--json"], {
     workspace: f.workspace,
   });
   assert.equal(idle.exitCode, 0, idle.stderr);
@@ -120,7 +122,7 @@ test("CLI saves two independent draft batches, carries real identities and mater
   await fs.writeFile(f.filename, JSON.stringify(remaining));
   const failedInput = await fs.readFile(f.filename, "utf8");
   const firstHead = await f.adapter.history.currentCommit();
-  const failed = await runNodeCommand("write-many", ["--draft", "draft.json", "--json"], {
+  const failed = await runNodeCommand("create", ["--draft", "draft.json", "--json"], {
     workspace: f.workspace,
   });
   assert.equal(failed.exitCode, 1);
@@ -137,7 +139,7 @@ test("CLI saves two independent draft batches, carries real identities and mater
   remaining.items = failedDraft.items;
   remaining.items[1].sources.pop();
   await fs.writeFile(f.filename, JSON.stringify(remaining));
-  const second = await runNodeCommand("write-many", ["--draft", "draft.json", "--json"], {
+  const second = await runNodeCommand("create", ["--draft", "draft.json", "--json"], {
     workspace: f.workspace,
   });
   assert.equal(second.exitCode, 0, second.stderr);
@@ -165,7 +167,7 @@ test("CLI saves two independent draft batches, carries real identities and mater
     false,
   );
   assert.deepEqual((await checkWorkspaceModules(f.adapter, f.workspace, repository)).issues, []);
-  const third = await runNodeCommand("write-many", ["--draft", "draft.json", "--json"], {
+  const third = await runNodeCommand("create", ["--draft", "draft.json", "--json"], {
     workspace: f.workspace,
   });
   assert.equal(third.exitCode, 1);
@@ -222,11 +224,11 @@ test("written child with blank parent names the prerequisite and saves nothing",
   ]);
   const before = await fs.readFile(f.filename, "utf8"),
     head = await f.adapter.history.currentCommit();
-  const result = await runNodeCommand("write-many", ["--draft", "draft.json"], {
+  const result = await runNodeCommand("create", ["--draft", "draft.json"], {
     workspace: f.workspace,
   });
   assert.equal(result.exitCode, 1);
-  assert.match(result.stderr, /@parent.*fill its body.*same tent node write-many --draft/);
+  assert.match(result.stderr, /@parent.*fill its body.*same tent node create --draft/);
   assert.equal(await f.adapter.exists("Independent"), false);
   assert.equal(await f.adapter.exists("Parent"), false);
   assert.equal(await fs.readFile(f.filename, "utf8"), before);
@@ -240,7 +242,7 @@ test("draft mode rejects updates before assigning IDs or mutating either artifac
   ]);
   const before = await fs.readFile(f.filename, "utf8"),
     head = await f.adapter.history.currentCommit();
-  await assert.rejects(f.save(), /create entries only.*--input-json for updates/);
+  await assert.rejects(f.save(), /create entries only/);
   assert.equal(await fs.readFile(f.filename, "utf8"), before);
   assert.equal(await f.adapter.history.currentCommit(), head);
   assert.equal(await f.adapter.exists("Ready"), false);
@@ -443,34 +445,6 @@ for (const mode of [
   });
 }
 
-test("ordinary input-json batches honor explicit canonical create IDs", async (t) => {
-  const f = await fixture(t, [
-    { op: "create", ref: "unused", name: "Unused", type: "goal", body: "" },
-  ]);
-  const response = await runNodeCommand(
-    "write-many",
-    [
-      "--input-json",
-      JSON.stringify({
-        items: [
-          {
-            op: "create",
-            ref: "fixed",
-            id: "node-fixed1",
-            name: "Fixed",
-            type: "goal",
-            body: "Fixed",
-          },
-        ],
-      }),
-      "--json",
-    ],
-    { workspace: f.workspace },
-  );
-  assert.equal(response.exitCode, 0, response.stderr);
-  assert.equal(JSON.parse(response.stdout).results[0].nodeId, "node-fixed1");
-});
-
 function childProcess(args: string[], ipc = false) {
   const worker = spawn(process.execPath, args, {
     windowsHide: true,
@@ -582,7 +556,7 @@ for (const cut of ["ids-checkpointed", "node-written", "captured"] as const) {
       "tsx",
       cli,
       "node",
-      "write-many",
+      "create",
       "--draft",
       "draft.json",
       "--json",
@@ -626,3 +600,27 @@ for (const cut of ["ids-checkpointed", "node-written", "captured"] as const) {
     );
   });
 }
+
+test("draft CLI rejects direct-create options and the retired input-json entry without consuming artifacts", async (t) => {
+  const f = await fixture(t, [
+    { op: "create", ref: "ready", name: "Ready", type: "prompt", body: "Ready facts" },
+  ]);
+  const before = await fs.readFile(f.filename, "utf8");
+  const report = await fs.readFile(f.report, "utf8");
+  const head = await f.adapter.history.currentCommit();
+  for (const [command, args] of [
+    ["create", ["Name", "--draft", "draft.json"]],
+    ["create", ["--draft", "draft.json", "--description", "Wrong mode"]],
+    ["create", ["--draft", "draft.json", "--source", "src/"]],
+    ["create", ["--input-json", before]],
+    ["write-many", ["--input-json", before]],
+  ] as Array<[string, string[]]>) {
+    const result = await runNodeCommand(command, args, { workspace: f.workspace });
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(await fs.readFile(f.filename, "utf8"), before);
+    assert.equal(await fs.readFile(f.report, "utf8"), report);
+    assert.equal(await f.adapter.history.currentCommit(), head);
+    assert.equal(await f.adapter.exists("Ready"), false);
+  }
+});

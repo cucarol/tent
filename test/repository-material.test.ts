@@ -10,9 +10,27 @@ import { testScratchRoot } from "./scratch.js";
 import { git } from "./helpers.js";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import { createNode } from "../src/core/graph/ops.js";
-import { linkNodeOutput } from "../src/core/graph/node-output.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
+import type { FsAdapter } from "../src/core/store/adapter.js";
+async function recordMaterial(
+  adapter: FsAdapter,
+  parentId: string,
+  { resource }: { resource: string },
+) {
+  const parent = (await loadNodeCatalog(adapter)).byId.get(parentId)!;
+  const nodeId = await createNode(
+    { fs: adapter, clock: { now: () => "2026-01-01T00:00:00Z" }, tentName: "Material" },
+    {
+      name: "Output",
+      type: "output",
+      parentPath: parent.path,
+      resource: resource.includes(":") ? resource : "../../../" + resource,
+      body: "Result",
+    },
+  );
+  return { nodeId, warnings: [] as string[] };
+}
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
-import { runNodeCommand } from "../src/cli/node-commands.js";
 import { readNodeForEdit } from "../src/core/read/node-query.js";
 import { writeNodeDocument } from "../src/core/graph/node-document-write.js";
 
@@ -47,7 +65,7 @@ test("missing declared worktree remains unavailable even after merging its mater
     { name: "Goal", parentPath: "", type: "goal", body: "Requirement" },
   );
   const resource = pathToFileURL(filename).href;
-  const output = await linkNodeOutput(adapter, goal, { resource });
+  const output = await recordMaterial(adapter, goal, { resource });
   await git(main, "merge", "--quiet", "topic");
   await git(main, "worktree", "remove", "--force", worktree);
   assert.equal(await fs.readFile(path.join(main, "assets/result.txt"), "utf8"), "completed\n");
@@ -134,7 +152,7 @@ test("committed main deletion stays unavailable with a retained or reused worktr
     { fs: adapter, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Deletion" },
     { name: "Goal", parentPath: "", type: "goal", body: "Requirement" },
   );
-  await linkNodeOutput(adapter, goal, { resource: "assets/result.txt" });
+  await recordMaterial(adapter, goal, { resource: "assets/result.txt" });
   await git(main, "rm", "assets/result.txt");
   await git(main, "commit", "--quiet", "-m", "test: delete material in main");
   const unavailable = async () => {
@@ -168,7 +186,7 @@ test("committed main deletion stays unavailable with a retained or reused worktr
   await unavailable();
 });
 
-test("worktree path warnings preserve creation and the declared live-path observation contract", async (t) => {
+test("declared worktree materials observe that exact live path, including when reused", async (t) => {
   const { main, worktree } = await fixture(t, true);
   await initializeTentWorkspace(main);
   const adapter = openTestFs(path.join(main, ".tent"));
@@ -176,24 +194,8 @@ test("worktree path warnings preserve creation and the declared live-path observ
     { fs: adapter, clock: { now: () => "2026-10-06T00:00:00Z" }, tentName: "Live checkout" },
     { name: "Goal", parentPath: "", type: "goal", body: "Requirement" },
   );
-  const relative = ".worktrees/topic/assets/result.txt";
-  const linked = await runNodeCommand("link-output", [goal, "--resource", relative], {
-    workspace: main,
-    json: true,
-  });
-  assert.equal(linked.exitCode, 0, linked.stderr);
-  const receipt = JSON.parse(linked.stdout);
-  assert.ok(receipt.nodeId);
-  assert.match(receipt.warnings[0], /先合并到主检出，再挂产出/);
-  const text = await runNodeCommand("link-output", [goal, "--resource", "/" + relative], {
-    workspace: main,
-  });
-  assert.equal(text.exitCode, 0, text.stderr);
-  assert.match(text.stdout, /先合并到主检出，再挂产出/);
   const resource = pathToFileURL(path.join(worktree, "assets/result.txt")).href;
-  const uri = await linkNodeOutput(adapter, goal, { resource });
-  assert.ok(uri.warnings);
-  assert.match(uri.warnings[0], /先合并到主检出，再挂产出/);
+  await recordMaterial(adapter, goal, { resource });
   await fs.writeFile(path.join(main, "assets/result.txt"), "main changed\n");
   assert.equal(await adapter.readMaterialText(resource, "Output/Output.md"), "initial\n");
   await git(main, "worktree", "remove", worktree);

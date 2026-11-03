@@ -23,64 +23,47 @@ test("removed Node ledger commands, flags and JSON fields reject without changin
     options,
   );
   assert.equal(created.exitCode, 0, created.stderr);
-  const initial = await runNodeCommand("get", ["node-goal", "--full"], options);
-  assert.equal(initial.exitCode, 0, initial.stderr);
-  const etag = JSON.parse(initial.stdout).etag as string;
   const adapter = openTestFs(path.join(root, ".tent"));
   const before = await adapter.readFile("Goal/Goal.md");
   const head = await adapter.history.currentCommit();
-  for (const sub of ["check", "confirm"]) {
+  for (const sub of ["check", "confirm", "write", "append", "link-output", "write-many"]) {
     const rejected = await runNodeCommand(sub, ["node-goal"], options);
     assert.equal(rejected.exitCode, 1);
     assert.match(rejected.stderr, new RegExp(`Unknown command: tent node ${sub}`));
-    assert.doesNotMatch(nodeHelpText(), new RegExp(`\b${sub}\b`));
+    assert.doesNotMatch(nodeHelpText(), new RegExp(`\\b${sub}\\b`));
   }
   const drift = await runWorkspaceCommand("drift", [], options);
   assert.equal(drift.exitCode, 1);
   assert.match(drift.stderr, /Unknown command: tent workspace drift/);
   assert.doesNotMatch(workspaceHelpText, /\bdrift\b/);
-  for (const [sub, args] of [
-    ["create", ["Other", "--type", "prompt", "--confirm"]],
-    ["write", ["node-goal", "--base-etag", etag, "--body", "Lost", "--confirm"]],
-    ["write", ["node-goal", "--base-etag", etag, "--body", "Lost", "--by", "human:cuca"]],
-    ["append", ["node-goal", "--body", "Lost", "--by", "human:cuca"]],
-    ["link-output", ["node-goal", "--resource", "./proof.txt", "--by", "human:cuca"]],
-  ] as const) {
-    const rejected = await runNodeCommand(sub, [...args], options);
+  for (const flags of [["--confirm"], ["--by", "human:cuca"]]) {
+    const rejected = await runNodeCommand(
+      "create",
+      ["Other", "--type", "prompt", ...flags],
+      options,
+    );
     assert.equal(rejected.exitCode, 1);
     assert.match(rejected.stderr, /unknown option/i);
   }
+  const draftFile = path.join(root, "rejected-draft.json");
   for (const fields of [{ confirm: true }, { confirm: false }, { by: "human:cuca" }]) {
-    const write = await runNodeCommand(
-      "write",
-      ["node-goal", "--input-json", JSON.stringify({ baseEtag: etag, body: "Lost", ...fields })],
-      options,
-    );
-    assert.equal(write.exitCode, 1, JSON.stringify(fields));
-    for (const item of [
-      {
-        op: "create",
-        ref: "new",
-        name: "Other",
-        type: "prompt",
-        body: "Lost",
-        ...fields,
-      },
-      {
-        op: "update",
-        nodeId: "node-goal",
-        baseEtag: etag,
-        body: "Lost",
-        ...fields,
-      },
-    ]) {
-      const batch = await runNodeCommand(
-        "write-many",
-        ["--input-json", JSON.stringify({ items: [item] })],
-        options,
-      );
-      assert.equal(batch.exitCode, 1, JSON.stringify(item));
-    }
+    const draft = JSON.stringify({
+      items: [
+        {
+          op: "create",
+          ref: "new",
+          name: "Other",
+          type: "prompt",
+          body: "Lost",
+          ...fields,
+        },
+      ],
+    });
+    await fs.writeFile(draftFile, draft);
+    const rejected = await runNodeCommand("create", ["--draft", draftFile], options);
+    assert.equal(rejected.exitCode, 1, JSON.stringify(fields));
+    assert.match(rejected.stderr, new RegExp(Object.keys(fields)[0]));
+    assert.equal(await fs.readFile(draftFile, "utf8"), draft);
   }
   assert.equal(await adapter.readFile("Goal/Goal.md"), before);
   assert.equal(await adapter.exists("Other"), false);

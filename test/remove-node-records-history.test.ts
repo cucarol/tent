@@ -241,7 +241,10 @@ test("product reads and initialize refuse format 1 without upgrading or rewritin
   for (const action of ["currentCommit", "initialize"] as const) {
     const history = new SqliteDocumentHistory(f.root);
     try {
-      await assert.rejects(history[action](), /format 1 requires offline conversion/);
+      await assert.rejects(history[action](), {
+        message:
+          "Tent history format 1 must be converted offline: from a Tent checkout, run node scripts/one-off/remove-node-records-history.mjs <workspaceRoot>",
+      });
     } finally {
       await history.close();
     }

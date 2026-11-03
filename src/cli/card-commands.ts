@@ -189,7 +189,7 @@ async function runCardCommandOpened(
         stderr: "",
       };
     }
-    if (mutation) await captureNativeNodeEdits(fs);
+    await captureNativeNodeEdits(fs);
     if (sub === "create") {
       let prompt = value("prompt") ?? "";
       if (prompt === "-") {

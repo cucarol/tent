@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isHistoryDocument } from "../src/core/store/document-history.js";
@@ -6,7 +6,6 @@ import { execFileSync } from "node:child_process";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import { fileURLToPath } from "node:url";
 import { SqliteDocumentHistory } from "../src/core/store/sqlite-history.js";
-import { initializeGitIgnoreContext } from "../src/fs/git-ignore-context.js";
 import type { DocumentVersion } from "../src/core/store/history-port.js";
 
 export async function historyHead(root: string): Promise<string> {
@@ -71,19 +70,26 @@ export async function initializeFixtureHistory(root: string): Promise<void> {
   const history = new SqliteDocumentHistory(root);
   try {
     await history.initialize();
-    await initializeGitIgnoreContext(root);
   } finally {
     await history.close();
   }
+  const workspace = path.basename(root) === ".tent" ? path.dirname(root) : root;
+  initializeFixtureRepository(workspace);
 }
 
 /** Fixture initialization must never modify the checkout's shared Git exclude file. */
 export function initializeFixtureRepository(root: string): void {
   mkdirSync(root, { recursive: true });
+  const marker = lstatSync(path.join(root, ".git"), { throwIfNoEntry: false });
+  if (marker?.isFile() || (marker?.isDirectory() && existsSync(path.join(root, ".git/HEAD"))))
+    return;
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
   );
-  execFileSync("git", ["-C", root, "init", "--quiet"], { env, windowsHide: true });
+  execFileSync("git", ["-C", root, "init", "--quiet", "--initial-branch=main", "--template="], {
+    env,
+    windowsHide: true,
+  });
 }
 
 export async function initializeFixtureWorkspace(root: string): Promise<void> {

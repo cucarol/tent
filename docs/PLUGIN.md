@@ -1,10 +1,10 @@
 # Tent Agent 插件
 
-插件提供四个 Skill、SessionStart、UserPromptSubmit、PostToolUse 和 Stop Hook，以及同包 CLI、独立会话启动、工具与轮末 Hook 运行时。Node、Role、Card 的读写规则在 Core；Skill 按工作需要提供操作指引。
+插件提供四个 Skill、Stop Hook 与同包 CLI。Node、Role、Card 的规则在 Core；Node 文件由宿主自带工具读取和编辑，Skill 按工作需要提供操作指引。
 
 ## 构建与安装
 
-需要 Node.js 22.19+ 和 Git。一次构建生成 Codex 与 Claude Code 两个完整插件包，共享同一份 CLI、四个 Skill、references 与 SPEC；宿主壳只提供清单、Hook 定义和启动脚本、界面描述与该宿主的 Hook 说明。插件运行时只使用 JavaScript 与 Node 内置模块，可在支持的 Windows、macOS 和 Linux 环境运行，无需 npm install。
+需要 Node.js 22.19+ 和 Git，Tent 只支持 Git 项目。`tent new <root>` 在 root 不属于任何 Git 仓库时先运行 `git init`；已有仓库和 worktree 不变。一次构建生成 Codex 与 Claude Code 两个完整插件包，共享同一份 CLI、四个 Skill、references 与 SPEC；宿主壳只提供清单、Hook 定义和启动脚本、插件描述与该宿主的 Hook 说明。插件运行时只使用 JavaScript 与 Node 内置模块，可在支持的 Windows、macOS 和 Linux 环境运行，无需 npm install。
 
 从源码构建时执行：
 
@@ -29,8 +29,6 @@ release/
       skills/tent-role/references/host-role.md
       skill-resources/
       cli.mjs
-      tool-hook.mjs
-      turn-hook.mjs
       wake.mjs
       docs/
   claude-code/
@@ -43,8 +41,6 @@ release/
       skills/tent-role/references/host-role.md
       skill-resources/
       cli.mjs
-      tool-hook.mjs
-      turn-hook.mjs
       docs/
 ```
 
@@ -88,12 +84,12 @@ npm 包 `vibe-tent` 是单独的 CLI 包，用 `npm install -g vibe-tent` 安装
 
 | 工作                         | Skill     | CLI  |
 | ---------------------------- | --------- | ---- |
-| 新建空 Tent 和独立本地 Git   | tent-init | new  |
+| 新建空 Tent 和本地历史       | tent-init | new  |
 | 查找、读取、维护有用事实     | tent-node | node |
 | 创建、读取、维护持久工作方向 | tent-role | role |
 | 记录、预览、接收一次输入     | tent-card | card |
 
-普通工作不要求创建 Role 或 Card。Role 可以独立建立；没有 Role 的 Session 也可接收无 target 的 Card，有 target 时必须指定对应 Role。`new` 只建立空工作区；init Skill 随后用 `workspace scan --draft <新文件>` 准备模块批量草稿，由 Agent 一轮修订名字、边界、正文和出处，再通过现有 write-many 一次写入并检查。草稿生成不创建 Node，不调用模型；已有图谱进入维护流程。草稿材料地址遵循 CLI 的工作区根目录输入规则，Node 改名或重排后仍由写入入口归一。预检问题随摘要返回，exit 1 时已经创建的草稿仍可编辑。
+普通工作不要求创建 Role 或 Card。Role 可以独立建立；没有 Role 的 Session 也可接收无 target 的 Card，有 target 时必须指定对应 Role。`new` 只建立空工作区；空图用 `workspace scan --draft <新文件>` 准备部分草稿，Agent 调整名字、边界并写正文，再用 `node create --draft <文件>` 保存。草稿保留 ref、父子关系和中断后的重试，未写正文的条目不进图谱。已有任何 Node 时，scan 只报告地图问题，不再出草稿；干净文本静默，有问题退出码 1。`--json` 直接返回 report 和 parts 树，树节点为 name、path、files、children。详见 [SPEC §7](SPEC.md#7-mapping-a-project)。
 
 Skill 与 references 只给 Agent 一张清单：何时行动、运行哪条命令带哪些参数、读回执的哪个字段；机制、理由和概念写在本文与 SPEC。遵循[官方 Skill 编写建议](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices)：每个 SKILL.md 正文少于 500 行；name 不超过 64 个字符，只用小写字母、数字和连字符；description 不超过 1024 个字符，用第三人称说明做什么、何时使用。reference 只从需要它的 SKILL.md 直接链接，不互相链接，也不链接本文；超过 100 行的 reference 开头提供目录。共用 Agent 文字不含宿主名。每次构建和 `test/contract-docs.test.ts` 按两个宿主分别检查这些规则，构建还检查 Hook 指向的包内文件。Skill 不要求每轮固定执行某条命令。
 
@@ -101,7 +97,7 @@ Agent 从 Skill 的实际安装位置调用同包入口：
 
 ```sh
 node "<插件目录>/skill-resources/scripts/tent.mjs" new "<工作区目录>"
-node "<插件目录>/skill-resources/scripts/tent.mjs" node list --workspace "<工作区目录>" --json
+node "<插件目录>/skill-resources/scripts/tent.mjs" workspace scan --workspace "<工作区目录>" --json
 ```
 
 Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.tent/` 的目录是工作区。CLI 与 Hook 从同仓 linked worktree 通过 Git 指针文件找到主检出的 `.tent/`，不启动 Git；子模块、独立仓库及没有主检出的 bare 仓库不继承外层工作区。其他 cwd 通过 `--workspace` 明确指定。路径从声明它的 Markdown 解析。真实文件、图片、网页等由宿主已有工具读取，Tent 不提供应用或格式适配。
@@ -110,33 +106,37 @@ Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.ten
 
 ## Node 的维护者说明
 
-Skill 按 `goal`、`prompt`、`output` 三种类型介绍 Node，类型名就是它的含义，Skill 只写每种类型怎么对待；形态与主题由 tags 表达，Skill 列出的预设与 Core 的 `NODE_TAG_PRESETS` 一致，`node tags` 列出在用标签。Agent 自己的结论在用户同意前是 `output`。goal 的开放问题、调研和待决事项放在 `prompt`。`goal` 与 `prompt` 不写提交号、测试数和交付状态，这些由 Git 与 Card 记录；有用的验证写成带日期的 output。
+Node 是 `.tent` 下的 Markdown。`type` 仍必填 `goal`、`prompt` 或 `output`，三者只保留名称，不决定覆盖、祖先规则、目标完成或读写行为。`description` 是可选的一句话字符串，不参与覆盖；非字符串由 `workspace check` 报为文档问题。tags 表达形态和主题，与覆盖无关。
 
-正文面向没有本次对话的读者：首句说明这是什么、如何使用；直接陈述事实，标注未验证内容；output 写明检查了什么、何时检查。省略一次性细节、原始工具输出和 Git 已记录的内容；已知时保留谁在何时确认了决定，不编造。能被单独读取或修改的事实各占一个 Node，同时变化的事实放在一起，父 Node 设定范围；链接材料和其他 Node 而不复述，正文中的 `[主题](node-ID)` 在保存时转换为相对路径。先更新拥有该事实的 Node，再考虑新建；新建结果不明确时，先确认 Node 是否已存在再重试。
+`verified` 已退休，`workspace check` 会报告，不能用来确认 Node 或改变覆盖。一次性[元数据清理](MIGRATION.md#remove-retired-node-metadata)与 source 的 `track` 一并删除它。
+
+正文面向没有本次对话的读者，记录已确认且以后有用的事实、约束、决定及依据。每个可独立维护的事实各占一个 Node；同时变化的事实可以放在一起。链接材料和其他 Node，避免复述。先读现有文件再编辑，需要查找时用宿主的搜索工具。
 
 Node 名称在所有平台按 Windows 文件名校验：不得含 `< > : " / \ | ? *`、C0 控制字符（含 tab、CR、LF）、DEL、U+2028、U+2029 或结尾的点，也不得是任何大小写、带或不带扩展名的 `CON`、`PRN`、`AUX`、`NUL`、`COM1`–`COM9`、`LPT1`–`LPT9`、`COM¹`–`COM³`、`LPT¹`–`LPT³`；首尾空白会被去除。CLI 拒绝时给出原因，Skill 不重复这些规则。
 
-`resource` 是主要材料，`sources` 按顺序列出相关材料。CLI 参数（`--resource`、`--sources-json`、`link-output --resource`、`card create --source`，以及 `node write --input-json` 与 write-many 中的 frontmatter）从 Workspace 根目录解析：`docs/x.md`、`./docs/x.md` 与 `/docs/x.md` 指同一文件，`.tent/Area/Topic/Topic.md` 指 Node 文件，也可写 Node id。没有匹配文件的裸 source 保留为描述；尚不存在的文件用 `./`；Workspace 以外用 `file:` URI。保存后的地址相对声明它的文件，由 Tent 在保存时改写；存储形式中单个前导 `/` 从 `.tent/` 开始，只有原始 Markdown 编辑和正文链接需要手写这种形式。Markdown 材料可加 `#标题` 只跟踪该节（含标题与子节），按标题文本匹配，百分号编码亦可；标题缺失或重复时材料不可用，由 `workspace check` 报告；无片段或非 Markdown 文件跟踪整个文件。Card 来源仍钉住完整 Node 版本。指向能支持该事实的最窄材料。`goal` 与 `prompt` 用材料指明意图和规则的依据；具体实现也可在正文链接，或作为 output 的 `resource` 跟踪。
+`node create` 用 `--description`、`--resource` 和重复的 `--source` 一起创建文档，也保留 type、body、tags 与 parent；`--draft` 保存 scan 草稿中已写正文的条目，逐条移出并将剩余引用改指新 id，全部保存后删除草稿和报告。后续正文和 frontmatter 直接编辑文件；结构调整使用 `node rename|move|archive|delete`，版本列表使用 `node history <id>`，读取某版全文使用 `node history <id> --version <v>`，其中 `<v>` 是 `{commit,path}` JSON 对象。除 help、version 和 new 外，Tent CLI 命令及 Stop 收进有效的文件改动，格式问题保留原文件并报告。中间尚未被收进历史的版本不能恢复。
 
-`node append` 不需要先读或 ETag；`--heading` 与现有同名节匹配时追加到该节末尾。正文编辑交给 Agent 自带的文件工具或 `node write`。替换整个正文前须完整读取（`--full`）；分页或部分读取得到的 `read:` ETag 只允许元数据修改，不能替换正文。保存后保留回执中的 ETag 与 version，无需回读。ETag 冲突时重新读取、合并后用新 ETag 保存。Card 钉住的来源版本不能作为编辑基础。`node write-many` 的每个 create 条目需要本批唯一的 `ref`，`@ref` 可用于 parent、链接与材料地址。批次先校验并准备全部最终文档，在一个 Workspace 锁下写入，并把改动的文档记入一个 Tent 提交；失败的批次回滚它自己的文档、目录和顺序改动，回滚失败时报告受影响的路径与冲突并保留外部编辑。锁只串行化 Tent 写入者，不让文件写入与 Git 对外部编辑器或进程终止具有原子性。
+`resource` 是主要材料，`sources` 按顺序列出相关材料。CLI 的材料路径从 Workspace 根目录解析并保存为相对声明文档的地址；手写 Markdown 中 `./` 和 `../` 从声明文件解析，单个前导 `/` 从 `.tent` 开始，Workspace 外使用 `file:` URI。裸 source 是描述文本；尚不存在的路径用 `./`。Markdown 材料可加 `#标题` 选择该节（含标题与子节），按标题文本匹配；标题缺失或重复时材料不可用。材料读取交给宿主的工具。
 
-`node link-output` 在 goal 下新建 output，名称默认取文件名，只带 `--tags` 给出的标签；文件须已在 Workspace checkout 中，候选分支或 worktree 应先集成。从 linked worktree 调用仍写入主检出的 `.tent/`；材料读取主检出文件。本地材料按声明的地址读取，缺失时不从其他检出回退。`status` 为 `draft`、`stable`（默认）或 `deprecated`，只作用于本文档；`node archive` 弃用子树，要重新启用 Node，删去它的 `status: deprecated`；`node delete` 永久删除子树，只在用户要求时使用。`node rename` 与 `node move` 保持 id 并更新指向它的链接。
+目录成员只按项目自己的 Git 判断，不建立私有 Git ignore 环境，也不无规则遍历。仓库外的 `file:` 目录只保留为地址、检查存在，不列成员；Stop 只看本 Workspace Git 的改动。
 
-显式 `--context` 的首页与 `--full` 实时读取附带独立于 `text` 的 `context`（不超过 1 KiB）：祖先、按类型分组的子 Node、入链与出链（正文中 Markdown 链接以外的已知 Node id 记为 `mention`）、钉住该 Node 的 Card 及其投递状态、接收者、返回地址和结果；output 另列 goal 链，goal 保留范围内的 prompt 与子树 output。省略的计数可用 `node relations` 展开；历史读取保留钉住的内容，但没有 `context`。`node history` 跨移动列出已捕获的版本；用其中的 `version: {commit, path}` 和 `node get --version-json` 读取历史字节，再由 Agent 自己比较。Tent 只保存材料地址，材料由宿主已有工具读取。
+文件、目录和末尾一个 `*` 的文件名前缀都能通过 `resource` 或 `sources` 提供普通覆盖。对每个改动文件，精确文件及实际改动的章节优先，否则取最近的目录或前缀，同等具体的都给。没有 `track` 或代码所有权，也不按 type 继承规则。linked worktree 的改动按 checkout 内相对路径匹配；Stop 给出的 Node 路径始终在主 checkout 的 `.tent` 下。
+
+`status` 为 `draft`、`stable`（默认）或 `deprecated`，只作用于本文档；`node archive` 弃用子树，要重新启用 Node，改回其 status。`node delete` 删除子树；`node rename` 与 `node move` 保持 id 并更新指向它的链接。Card 来源仍钉住所选版本，Node 创建不会自动选择或回答某张 Card。
 
 ## Role 与 Card 的维护者说明
 
 Role 在 `.tent/roles/<role-id>.md` 中保存持续方向的目的、边界、方法和 Node 入口。它提供上下文，不占用锁，也不登记或绑定宿主 Session；多个会话可以按同一 Role 工作。共享事实由 Node 保存，Role 只链接事实入口。
 
-Card 保存一次固定输入：短指令、可选接收 Role、可选返回地址 returnTo，以及按顺序排列的来源。Node 和 Role 来源钉住所选版本，其他来源保留地址。CLI 将从 Workspace 根目录传入的路径转换为相对 Card 文档的地址。发布后的 prompt、title、sources 和 returnTo 不可修改，手工修改会报告为 `INPUT_CHANGED`。接收者开始时没有发送方的对话；prompt 写明目标，来源承载其余内容。需求变化写回来源 Node，接收者在 brief 中获知变化后读取当前 Node；尚未决定的要求留在 draft Node。
+Card 保存一次固定输入：短指令、可选接收 Role、可选返回地址 returnTo，以及按顺序排列的来源。Node 和 Role 来源钉住所选版本，其他来源保留地址。CLI 将从 Workspace 根目录传入的路径转换为相对 Card 文档的地址。发布后的 prompt、title、sources 和 returnTo 不可修改，手工修改会报告为 `INPUT_CHANGED`。接收者开始时没有发送方的对话；prompt 写明目标，来源承载其余内容。需求变化写回来源 Node，接收者在 brief 中获知变化后读取当前 Node。
 
-brief 和界面常规刷新跳过 Tent Git 中已 closed、没有 returnTo 的 consumed、以及 deprecated 的 Card。完成名单保存在 `.tent/.git/tent-material-cache/`，随 Tent Git HEAD 增量更新；未完成和新发现的 Card 仍读取当前文件头。手改已完成 Card 由 `workspace check` 报告，brief 不再检查它们。显式 show、take、按状态列出及 `--include-deprecated` 仍读真实文件；界面的 Node 详情和历史按需加载已完成 Card。
+brief 常规刷新跳过已 closed、没有 returnTo 的 consumed、以及 deprecated 的 Card。完成名单保存在 `.tent/.git/tent-material-cache/`，随保留历史增量更新；未完成和新发现的 Card 仍读取当前文件头。手改已完成 Card 由 `workspace check` 报告，brief 不再检查它们。显式 show、take、按状态列出及 `--include-deprecated` 仍读真实文件。
 
 Card 只记录四种投递状态：`pending`、`consumed`、`returned`、`closed`。`show` 只预览，`take` 记录接收；相同 Role 重试返回 `replayed: true`，应继续已有工作。没有 returnTo 的 Card 收下即完成；有 returnTo 的 Card 已接未交回时才算在做。target 与 returnTo 都是投递地址，不记录发送者，不能指向同一 Role。有 target 的 Card 必须带对应 Role 接收；带 returnTo 的公开 Card 也必须由一个不同的 Role 接收，只有不带 returnTo 的公开 Card 可以匿名接收。仅 pending Card 可以改派，不能改派给 returnTo；取消使用 `deprecate`，保留原输入与接收记录，默认列表隐藏它。旧 Card 没有 returnTo，按相同规则解释，无需转换。
 
-`card return <id> --role <role-id> --result TEXT` 由接收 Role 交回，必须先 take；结果非空、单行、不超过 200 个 Unicode 字符（code points），细节写进 Node，结果可带 Node id，界面显示为链接。交回记录 returned 和 result，returnTo Role 再次 take 收下结果后变成 closed，原 receivedBy 不变。相同结果交回是重放，收回后也一样；换结果会拒绝，修正写进 Node，有新的工作再发 Card。不另存发送者、交回人或结果 Node 列表。Card 完成不由 goal 或 output 推导；后续变化不会撤回 Card 的交回结果。
+`card return <id> --role <role-id> --result TEXT` 由接收 Role 交回，必须先 take；结果非空、单行、不超过 200 个 Unicode 字符（code points），细节写进 Node，结果可带 Node id。交回记录 returned 和 result，returnTo Role 再次 take 收下结果后变成 closed，原 receivedBy 不变。相同结果交回是重放，收回后也一样；换结果会拒绝，修正写进 Node，有新的工作再发 Card。不另存发送者、交回人或结果 Node 列表。Card 完成不由 goal 或 output 推导；后续变化不会撤回 Card 的交回结果。
 
-产出通过 `node link-output --card <id>` 标明回答哪张 Card。显式 Card 可以跨 Role，但必须是未作废的 consumed Card，并在产出的 goal 祖先链上有来源目标；returned 和 closed 不接受新的产出关联。省略 Card 时，`--role` 必须匹配该目标唯一 consumed 且带 returnTo 的 Card 的接收 Role。没有相关 Card 时仍可直接建立 output。文件在 Workspace checkout 落地后才关联，候选分支应先集成。结果通知使用原 Card 的交回；需要对方继续做事或拍板才发新 Card。
+Node 的普通 `sources` 可以保留与 Card 的来源关系，但 Node 的 type 和父子位置不决定 Card 是否完成。接收、交回与收回仍由 Card 命令显式表达；需要对方继续做事或拍板才发新 Card。
 
 未完成的 Card 投递会阻断 Role 删除：它是 pending Card 的 target、pending/consumed/returned Card 的 returnTo，或带 returnTo 的 consumed Card 的 receivedBy。报错列出全部阻断 Card；可以撤销 Card，pending 的目标也可转交。作废 Card 一律不挡；交回后释放接收 Role，收回后释放返回 Role。删除不改写历史投递事实。
 
@@ -144,22 +144,20 @@ Card 只记录四种投递状态：`pending`、`consumed`、`returned`、`closed
 
 ## Hook 边界
 
-四种 Hook 的行为、预算和提示原文以 [SPEC §5](SPEC.md#5.%20What%20the%20Agent%20is%20told) 为准；普通改代码不需要 Agent 先跑 Tent。显式读取与 Card 接收的上下文协议见 [SPEC §6](SPEC.md#6.%20What%20a%20reader%20gets)。
+两个宿主只注册 Stop，其 1–5 流程、预算和两段提示原文以 [SPEC §5](SPEC.md#5-what-the-agent-is-told) 为准。普通改代码不需要 Agent 先跑 Tent；读和改 Node 使用宿主自带工具。
 
-两个宿主的入口分别在 `plugins/codex/tent/hooks/session.mjs` 和 `plugins/claude-code/tent/hooks/session.mjs`。SessionStart 加载同包 `start-hook.mjs`，复用公共 CLI 的 `hook start` 实现；PostToolUse 运行独立 `tool-hook.mjs`，UserPromptSubmit 和 Stop 使用独立 `turn-hook.mjs`。宿主字段和 Stop 的 JSON 外壳由各包转译，Core 负责选择、原文和检查规则。公共 CLI 的 `hook stop` 仍是空操作。
+两个宿主入口仍在 `plugins/codex/tent/hooks/session.mjs` 和 `plugins/claude-code/tent/hooks/session.mjs`。宿主壳只转译 Stop 输入与 JSON 外壳，复用 `tent hook stop` 的 Core 流程。Stop 比较本 checkout 与上次 Stop 的 HEAD 及未提交文件内容快照，现读 Node frontmatter 覆盖，收进本轮 Node 文件改动，然后给绝对文件指针和格式问题。每个 checkout 在共用 `.tent` 临时目录下有自己的快照；首次比较当前未提交文件。Workspace 不在 Git 仓库时 Stop 静默。Node 正文不进入通知，也没有条数、字节或截断预算。
 
-预备材料索引在 `.tent/.git/tent-material-cache/stop-material-index.json`，由既有 Core 目录与 frontmatter 规则准备，记录覆盖、规则关系、header 字节身份及找根证明；Node 正文在通知时读取，不另存一套图谱或内容索引。普通工具路径只消费已有准备结果；显式 Node 写的问题检查与索引刷新才动态加载同包 CLI。初始化、图写入和 SessionStart 的准备边界见 SPEC。
+章节的旧指纹和旧正文都不可用时不算已变，仍可回退到明确整篇文件或目录覆盖。首次从 HEAD 取旧正文比较。
 
-验收两个真实宿主要分开看：包的内容正确不等于已安装或已信任，也不等于原生事件已经进入模型请求。分别确认 Hook 信任、成功文件写入、Node 原文与规则进入已有下一请求、Node 写后问题，以及最后可见工作总结。手工 JSON 只证明处理器；不拿它冒充原生触发、模型推理或桌面延迟达标。宿主事件契约见 [Codex Hooks](https://learn.chatgpt.com/docs/hooks) 和 [Claude Code Hooks](https://code.claude.com/docs/en/hooks)。
+验收两个真实宿主要分开看：包的内容正确不等于已安装或已信任，也不等于原生 Stop 已经进入模型请求。分别确认 Hook 信任、原生 Stop、改动文件覆盖指针、Node 格式问题和再次 Stop 静默，以及最后可见工作总结。手工 JSON 只证明处理器；不拿它冒充原生触发、模型推理或桌面延迟达标。宿主事件契约见 [Codex Hooks](https://learn.chatgpt.com/docs/hooks) 和 [Claude Code Hooks](https://code.claude.com/docs/en/hooks)。
 
-速度测量每个宿主、每种路径各取11对相邻交替的 Hook 命令与裸 `node -e 0`，使用每对墙钟差的中位数，不减两组中位数；保留全部原始配对和离群值，不筛快样本。两边都含 Node 启动，Tent 不额外套命令 shell；宿主自带 shell 不计为 Tent 开销。普通工具路径仍分别覆盖普通写、未覆盖、已提醒、链接章节变化和无模块代码。正式门槛见 SPEC，需准备索引的场景单列；未测新候选就不沿用旧数字声称通过。
+速度测量每个宿主各取 11 对相邻交替的 Stop 命令与裸 `node -e 0`，使用每对墙钟差的中位数，不减两组中位数；保留全部原始配对和离群值，不筛快样本。两边都含 Node 启动，Tent 不额外套命令 shell；宿主自带 shell 不计为 Tent 开销。7,570 文件仓库的小改动护栏为额外 600 ms，全脏为两秒；在 `.scratch` 的项目与真实图谱副本上分别测量。未测新候选就不沿用旧数字声称通过，超时先报告，不为速度改覆盖或捕获语义。
 
-`workspace brief` 的规则见 [SPEC](SPEC.md#Brief)。
+`workspace brief` 的规则见 [SPEC](SPEC.md#brief)。
 
-提示可能显示在界面或后续轮次，不能证明本次交付已维护上下文。Card 的接收、交回与收回由投递状态表达；产出通过 Node 的 sources 关联 Card。Role 通过命令参数明确选择，没有隐式 Session 绑定。
+提示可能显示在界面或后续轮次，不能证明本次交付已维护上下文。Card 的接收、交回与收回由投递状态表达；Node 的 sources 可保留与 Card 的来源关系。Role 通过命令参数明确选择，没有隐式 Session 绑定。
 
 更新插件时保留项目 `.tent/`、真实材料及无关宿主设置。
 
-`tent --version` 显示版本、提交与构建会话开始时间；`tent version --json` 同时提供 dirty 状态和实际 runtime 路径。身份嵌入 CLI，移动安装位置或修改旁边的 package.json 不会改变它；源码入口的 `builtAt` 为 null，watch 重建沿用会话开始时的身份。SessionStart 会展示身份。提交不同不代表哪份更旧，外部安装也不会联网检查更新。
-
-按文件反查用 `node search --resource <工作区路径>`：返回精确关联及目录/前缀覆盖的有效 Node，最具体的在前，并指出匹配字段和材料地址。它只读头部，不返回正文 ETag；继续读正文或编辑时使用文件工具或 `node get`。关键词搜索交给 Agent 的 grep/rg 等工具；不维护单独的 description 摘要。
+`tent --version` 显示版本、提交与构建会话开始时间；`tent version --json` 同时提供 dirty 状态和实际 runtime 路径。身份嵌入 CLI，移动安装位置或修改旁边的 package.json 不会改变它；源码入口的 `builtAt` 为 null，watch 重建沿用会话开始时的身份。提交不同不代表哪份更旧，外部安装也不会联网检查更新。

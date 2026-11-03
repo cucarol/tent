@@ -4,18 +4,34 @@ import * as path from "node:path";
 type GitCheckout = { root: string; gitDir: string; commonDir: string; linked: boolean };
 // node:path follows the host's path comparison semantics (including Windows case).
 const samePath = (left: string, right: string) => path.relative(left, right) === "";
+const optional = async (filename: string) =>
+  fs.readFile(filename, "utf8").catch((error) => {
+    if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+    return undefined;
+  });
 
 /** Read Git's checkout pointers without starting Git or reading working files. */
 export async function readGitCheckout(root: string): Promise<GitCheckout | undefined> {
   const marker = path.join(root, ".git");
-  const stat = await fs.stat(marker).catch(() => undefined);
+  const stat = await fs.stat(marker).catch((error) => {
+    if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+    return undefined;
+  });
   if (stat?.isDirectory()) return { root, gitDir: marker, commonDir: marker, linked: false };
-  if (!stat?.isFile()) return undefined;
-  const pointer = await fs.readFile(marker, "utf8").catch(() => "");
+  if (!stat) {
+    const markerExists = await fs.lstat(marker).catch((error) => {
+      if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+      return undefined;
+    });
+    if (markerExists) throw new Error(`Invalid Git checkout marker: ${marker}`);
+    return undefined;
+  }
+  if (!stat.isFile()) throw new Error(`Invalid Git checkout marker: ${marker}`);
+  const pointer = await fs.readFile(marker, "utf8");
   const match = /^gitdir: (.+)\r?$/m.exec(pointer);
-  if (!match) return undefined;
+  if (!match) throw new Error(`Invalid Git checkout marker: ${marker}`);
   const gitDir = path.resolve(root, match[1]!.trim());
-  const common = await fs.readFile(path.join(gitDir, "commondir"), "utf8").catch(() => "");
+  const common = (await optional(path.join(gitDir, "commondir"))) ?? "";
   return {
     root,
     gitDir,
@@ -45,8 +61,6 @@ export async function createTurnPathResolver(
       pending = (async () => {
         const checkout = await readGitCheckout(dir);
         if (checkout) return checkout;
-        // A malformed marker still owns the repository boundary.
-        if (await fs.lstat(path.join(dir, ".git")).catch(() => undefined)) return undefined;
         const parent = path.dirname(dir);
         return parent === dir ? undefined : find(parent);
       })();
@@ -54,39 +68,17 @@ export async function createTurnPathResolver(
     }
     return pending;
   };
-  const workspace = workspaceRoot ? await readGitCheckout(path.resolve(workspaceRoot)) : undefined;
+  const workspace = workspaceRoot ? await find(path.resolve(workspaceRoot)) : undefined;
   const session = cwd ? await find(path.resolve(cwd)) : undefined;
+  const checkout =
+    session && workspace && samePath(session.commonDir, workspace.commonDir) ? session : undefined;
+  const workspacePrefix =
+    workspace && workspaceRoot
+      ? path.relative(workspace.root, workspaceRoot).split(path.sep).join("/")
+      : "";
   return {
-    checkoutRoot:
-      session && workspace && samePath(session.commonDir, workspace.commonDir)
-        ? session.root
-        : (cwd ?? workspaceRoot),
-    async relative(filename: string): Promise<string | undefined> {
-      if (!workspaceRoot) return undefined;
-      const local = path.relative(workspaceRoot, filename).split(path.sep).join("/");
-      // Tent owns this operational directory; these writes still identify Node/Card edits.
-      if ((process.platform === "win32" ? local.toLowerCase() : local).startsWith(".tent/"))
-        return local;
-      const owner = await find(path.dirname(filename));
-      if (owner && workspace && !samePath(owner.commonDir, workspace.commonDir)) return undefined;
-      if (owner && !workspace) {
-        const ownerPath = path.relative(workspaceRoot, owner.root);
-        if (
-          ownerPath &&
-          ownerPath !== ".." &&
-          !ownerPath.startsWith(`..${path.sep}`) &&
-          !path.isAbsolute(ownerPath)
-        )
-          return undefined;
-      }
-      const root =
-        owner && workspace && samePath(owner.commonDir, workspace.commonDir)
-          ? owner.root
-          : workspaceRoot;
-      const relative = path.relative(root, filename).split(path.sep).join("/");
-      return relative !== ".." && !relative.startsWith("../") && !path.isAbsolute(relative)
-        ? relative
-        : undefined;
-    },
+    checkoutRoot: checkout?.root,
+    workspacePrefix,
+    checkoutWorkspaceRoot: checkout ? path.join(checkout.root, workspacePrefix) : undefined,
   };
 }

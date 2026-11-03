@@ -83,10 +83,7 @@ test("new's local ignore file is neither a Node nor a workspace check issue", as
       )
     ).stdout,
   );
-  const shown = JSON.parse(
-    (await run("node", "get", created.node.nodeId, "--workspace", workspace, "--json")).stdout,
-  );
-  assert.equal(shown.text.trim(), "Kept");
+  assert.match(await fs.readFile(path.join(workspace, created.node.path), "utf8"), /\nKept\s*$/);
   assert.equal((await loadTent(openTestFs(path.join(workspace, ".tent")))).byId.size, 1);
   const checked = JSON.parse(
     (await run("workspace", "check", "--workspace", workspace, "--json")).stdout,
@@ -145,4 +142,28 @@ test("version accepts workspace without requiring or changing a Tent", async (t)
   const { stdout } = await run("version", "--json", "--workspace", workspace);
   assert.equal(JSON.parse(stdout).runtimePath, cli);
   assert.deepEqual(await fs.readdir(root), []);
+});
+
+test("new reuses a parent Git repository and reports a missing Git executable", async (t) => {
+  const root = await fs.mkdtemp(path.join(testScratchRoot(), "new-project-git-"));
+  t.after(() => removeTestFixture(root, { recursive: true, force: true }));
+  const existing = path.join(root, "existing");
+  const result = await run("new", existing);
+  assert.doesNotMatch(result.stdout, /Initialized a Git repository/);
+  await assert.rejects(fs.stat(path.join(existing, ".git")), { code: "ENOENT" });
+  const missing = path.join(root, "missing");
+  await assert.rejects(
+    execute(process.execPath, ["--import", import.meta.resolve("tsx"), cli, "new", missing], {
+      windowsHide: true,
+      env: { ...process.env, PATH: "" },
+    }),
+    (error: unknown) => {
+      assert.equal(
+        (error as { stderr: string }).stderr.trim(),
+        `Tent needs Git; install Git, then run tent new ${missing}`,
+      );
+      return true;
+    },
+  );
+  await assert.rejects(fs.stat(path.join(missing, ".tent")), { code: "ENOENT" });
 });

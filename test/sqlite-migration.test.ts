@@ -15,7 +15,6 @@ import type { DocumentVersion } from "../src/core/store/history-port.js";
 import { cardSourceIdentityError } from "../src/core/graph/card-context.js";
 import { createHash } from "node:crypto";
 import { readNodeTimes } from "../src/core/read/node-times.js";
-import { readGoalOpenStates } from "../src/core/read/open-goals.js";
 import { indexValue } from "../src/core/store/sqlite-history-index.js";
 
 async function fixture(t: TestContext) {
@@ -65,12 +64,10 @@ for (const editMetadata of [false, true])
       const nodes = [{ nodeId: "node-goal", name: "Z", path: "Z", raw: current, data, body }];
       return {
         times: await readNodeTimes(adapter, ["node-goal"]),
-        open: await readGoalOpenStates(adapter, path.dirname(f.target), nodes, ["node-goal"]),
       };
     };
     const unknown = {
       times: [{ nodeId: "node-goal", contentChangedAt: null }],
-      open: [{ nodeId: "node-goal", state: "unknown", basis: "history" }],
     };
     assert.deepEqual(await read(), unknown);
     const events = await adapter.history.changesInRange();
@@ -100,7 +97,6 @@ for (const editMetadata of [false, true])
     );
     const known = await read();
     assert.ok(known.times[0]!.contentChangedAt);
-    assert.deepEqual(known.open, [{ nodeId: "node-goal", state: "open", basis: "no-output" }]);
     await adapter.withDocumentHistory(() => adapter.move("Z/Z.md", "Moved/Moved.md"));
     assert.equal(
       (await readNodeTimes(adapter, ["node-goal"]))[0]!.contentChangedAt,

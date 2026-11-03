@@ -66,7 +66,7 @@ export function nodeDeclaredContent(
       ({ resource, field }) =>
         field !== "sources" || !isCardResponseSource(resource, documentPath, workspaceRoot),
     )
-    .map(({ resource, track }) => {
+    .map(({ resource }) => {
       let address = resource;
       try {
         const locator = materialLocator(resource, documentPath, false);
@@ -81,7 +81,7 @@ export function nodeDeclaredContent(
       } catch {
         /* Invalid addresses keep their original declaration bytes. */
       }
-      return track ? [address, track] : address;
+      return address;
     });
   return JSON.stringify({ addresses, body: nodeBodyContent(body, documentPath, nodes) });
 }

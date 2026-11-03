@@ -72,13 +72,10 @@ export function projectAgentContext(
         title: `${state} Cards${state === "consumed" ? "; includes completed Cards" : ""}`,
         command: `tent card list --state ${state}${role} --json${workspace}`,
       });
-    sourceReads.push(
-      {
-        title: "All Nodes; broader than recent changes",
-        command: `tent node list --full --json${workspace}`,
-      },
-      { title: "Workspace problems", command: `tent workspace check --json${workspace}` },
-    );
+    sourceReads.push({
+      title: "Workspace problems",
+      command: `tent workspace check --json${workspace}`,
+    });
   }
   const sections = context.sections.map((section) => ({
     kind: section.kind,
@@ -121,11 +118,7 @@ export function projectAgentContext(
         ...(why.truncated || title?.truncated ? { truncated: true } : {}),
       };
       if (section.kind === "references") {
-        if (item.nodeId) {
-          output.command = `tent node get ${item.nodeId} --full${workspace}`;
-          if (!sourceReads.some((read) => read.command === output.command))
-            sourceReads.push({ title: item.nodeId, command: output.command });
-        }
+        if (item.nodeId) delete output.command;
         if (
           (primary.nodeId && item.nodeId === primary.nodeId) ||
           (primary.cardId && item.cardId === primary.cardId)

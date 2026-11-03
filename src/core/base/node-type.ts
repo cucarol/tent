@@ -1,4 +1,4 @@
-/** A Node's type says what its content rests on; form and topic belong in tags. */
+/** The three persisted Node type names; they do not select runtime behavior. */
 export const NODE_TYPES = ["goal", "prompt", "output"] as const;
 
 export type NodeType = (typeof NODE_TYPES)[number];

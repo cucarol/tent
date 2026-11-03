@@ -7,17 +7,15 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { contentEtag } from "../src/core/base/etag.js";
 import { readNode, listNodes, relatedNodes } from "../src/core/read/node-query.js";
 import { readWorkspaceSettings } from "../src/core/workspace/workspace-settings.js";
-import { runNodeCommand } from "../src/cli/node-commands.js";
 
 const raw = (id: string, body: string, extra = "") =>
   `\uFEFF---\r\nid: ${id}\r\ntype: prompt\r\n${extra}---\r\n${body}`;
 
-test("public discovery uses only headers, omits edit tokens and keeps metadata paging separate from body versions", async (t) => {
+test("Core discovery uses only headers, omits edit tokens and keeps metadata paging separate from body versions", async (t) => {
   const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "node-discovery-"));
@@ -54,11 +52,9 @@ test("public discovery uses only headers, omits edit tokens and keeps metadata p
     assert.equal(first.items[0]!.nodeId, "node-alpha");
     assert.equal("etag" in first.items[0]!, false);
     assert.ok(first.items.length > 30);
-    const globals = { workspace, json: true };
-    const summary = await runNodeCommand("get", ["node-alpha", "--view", "summary"], globals);
-    assert.equal(summary.exitCode, 0, summary.stderr);
-    assert.deepEqual(JSON.parse(summary.stdout).tags, ["offline", "PDF"]);
-    assert.equal("etag" in JSON.parse(summary.stdout), false);
+    const summary = await readNode(adapter, workspaceId, { nodeId: "node-alpha", view: "summary" });
+    assert.deepEqual(summary.node.tags, ["offline", "PDF"]);
+    assert.equal("etag" in summary.node, false);
     const children = await relatedNodes(adapter, workspaceId, {
       nodeId: "node-alpha",
       direction: "children",

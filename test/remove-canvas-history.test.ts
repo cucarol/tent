@@ -99,7 +99,10 @@ test("one-off removal preserves Node times, shared blobs and event identities, t
   }
   await fs.writeFile(path.join(system, "canvas.json"), alpha);
   const before = openTestFs(system);
-  await assert.rejects(before.history.changesInRange(), /format 1 requires offline conversion/);
+  await assert.rejects(before.history.changesInRange(), {
+    message:
+      "Tent history format 1 must be converted offline: from a Tent checkout, run node scripts/one-off/remove-node-records-history.mjs <workspaceRoot>",
+  });
   await before.close();
   const index = path.join(system, ".git/tent-material-cache/history-index.sqlite");
   assert.ok((await fs.stat(index)).isFile());

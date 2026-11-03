@@ -27,7 +27,6 @@ export const MODULE_MAP_THRESHOLDS = {
 
 export type ModuleMapCode =
   | "map.uncovered"
-  | "map.unowned"
   | "module.oversized"
   | "module.skewed"
   | "deps.cycle"
@@ -36,7 +35,6 @@ export type ModuleMapCode =
 export type ModuleMapMaterial = {
   path: string;
   kind: "file" | "directory" | "prefix";
-  track?: "structure";
 };
 /** Valid, active Nodes; parentId names the nearest module ancestor, if any. */
 export type ModuleMapNode = {
@@ -103,8 +101,7 @@ function matches(material: ModuleMapMaterial, file: string): boolean {
   );
 }
 
-export const isModuleMapNode = (node: ModuleMapNode) =>
-  node.materials.some((material) => material.track === "structure" && material.kind !== "file");
+export const isModuleMapNode = (node: ModuleMapNode) => node.materials.length > 0;
 
 export const formatModuleImportIssues = (count: number) =>
   `imports ${count} references Tent could not resolve; they describe the code, not the map (importIssues in --json)`;
@@ -168,7 +165,6 @@ export function checkModuleMap(input: ModuleMapInput) {
   };
   const members = new Map(modules.map((node) => [node.id, [] as string[]]));
   const uncovered = new Map<string, string[]>();
-  const unowned = new Map<string, string[]>();
   for (const file of trackedFiles) {
     const module = owner(file)?.node;
     if (module) members.get(module.id)!.push(file);
@@ -177,11 +173,6 @@ export function checkModuleMap(input: ModuleMapInput) {
       const files = uncovered.get(directory) ?? [];
       files.push(file);
       uncovered.set(directory, files);
-    } else if (!module && production(file)) {
-      const directory = path.posix.dirname(file);
-      const files = unowned.get(directory) ?? [];
-      files.push(file);
-      unowned.set(directory, files);
     }
   }
   const moduleFacts: ModuleMapModuleFacts[] = modules.map((node) => {
@@ -219,13 +210,6 @@ export function checkModuleMap(input: ModuleMapInput) {
       object: directory,
       facts: { directory, count: files.length, files },
       fix: "Assign the listed files to a Node's file, directory or prefix materials.",
-    });
-  for (const [directory, files] of [...unowned].sort(([a], [b]) => comparePaths(a, b)))
-    issues.push({
-      code: "map.unowned",
-      object: directory,
-      facts: { directory, count: files.length, files },
-      fix: "Add a directory or filename-prefix structure source to the responsible Node, or attach these files to an existing module.",
     });
 
   const totalProduction = trackedFiles.filter(production).length;
@@ -441,7 +425,6 @@ export function checkModuleMap(input: ModuleMapInput) {
   }
   const codes: ModuleMapCode[] = [
     "map.uncovered",
-    "map.unowned",
     "module.oversized",
     "module.skewed",
     "deps.cycle",

@@ -4,20 +4,18 @@ import type { NodeFs } from "../fs/node-fs.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 import type { NodeCommandResult, NodeCommandOptions } from "./node-commands.js";
 
-const WORKSPACE_COMMANDS = ["export", "check", "check-modules", "brief", "scan"];
+const WORKSPACE_COMMANDS = ["export", "check", "brief", "scan"];
 
 export const workspaceHelpText = `tent workspace — the whole Workspace at once
 
   tent workspace brief [--role <role-id>] [--json]
   tent workspace check [--json]
   tent workspace scan [--draft <new-file>] [--json]
-  tent workspace check-modules [--json]
   tent workspace export --output <new-directory>
 
 brief: where to start. Invalid Nodes and waiting Cards. Every list shows up to 10 items, then its total and the command that lists the rest. --role keeps only that Role's Cards.
 check: broken links, invalid or missing materials, missing Markdown sections, and Node files whose disk and Tent history presence differ after valid native edits are collected. Exits 1 when it finds any; JSON still goes to stdout.
-scan: drafts a module map from the code; --draft saves an editable write-many batch and a sibling .report.json evidence snapshot. Both text and JSON print a receipt of at most 4 KiB.
-check-modules: checks the module map for coverage, size, imports and files that change together. Prints nothing when the map is clean.
+scan: drafts a module map when the Workspace has no Nodes; --draft saves it for node create --draft. Existing maps are checked for coverage and boundaries.
 export: copies the context graph and its SQLite history to a new directory.
 --workspace <path> picks the Workspace.`;
 
@@ -79,7 +77,7 @@ async function runWorkspaceCommandOpened(
     )
       throw new Error(workspaceHelpText);
     if (
-      ["check", "check-modules"].includes(sub) &&
+      sub === "check" &&
       [values.output, values.limit, values.cursor].some((value) => value !== undefined)
     )
       throw new Error(workspaceHelpText);
@@ -99,49 +97,58 @@ async function runWorkspaceCommandOpened(
       throw new Error(
         "Tent workspace identity is missing; explicitly initialize or convert this workspace",
       );
-    if (sub === "check-modules") {
-      const [
-        { checkWorkspaceModules, formatWorkspaceModules },
-        { readModuleMapRepository },
-        { formatModuleImportIssues },
-      ] = await Promise.all([
-        import("../core/check/workspace-module-map.js"),
-        import("../fs/workspace-scan.js"),
-        import("../core/check/module-map.js"),
-      ]);
-      const result = await checkWorkspaceModules(
-        fs,
-        roots.workspaceRoot,
-        await readModuleMapRepository(roots.workspaceRoot),
-      );
-      return {
-        exitCode:
+    if (sub === "scan") {
+      const { captureNativeNodeEdits } = await import("../core/graph/node-native-capture.js");
+      const captured = await captureNativeNodeEdits(fs);
+      const { loadNodeCatalog } = await import("../core/graph/node-catalog.js");
+      const catalog = captured.catalog ?? (await loadNodeCatalog(fs));
+      if (catalog.tree.byPath.size) {
+        const { checkWorkspaceModules, formatWorkspaceModules } =
+          await import("../core/check/workspace-module-map.js");
+        const { readModuleMapRepository } = await import("../fs/workspace-scan.js");
+        const result = await checkWorkspaceModules(
+          fs,
+          roots.workspaceRoot,
+          await readModuleMapRepository(roots.workspaceRoot),
+        );
+        const modules = result.modules.map((node) => ({
+          nodeId: node.id,
+          name: node.name,
+          path: `.tent/${node.path}`,
+          files: node.files.length,
+          children: [] as unknown[],
+        }));
+        const byPath = new Map(modules.map((node) => [node.path, node]));
+        const parts = modules.filter((node) => {
+          const paths = node.path.split("/");
+          paths.pop();
+          while (paths.length > 1) {
+            const parent = byPath.get(paths.join("/"));
+            if (parent) {
+              parent.children.push(node);
+              return false;
+            }
+            paths.pop();
+          }
+          return true;
+        });
+        const exitCode =
           result.issues.length || result.inspectionErrors.length || result.unassignedImports.length
             ? 1
-            : 0,
-        stdout:
-          values.json || globals.json
-            ? JSON.stringify(result) + "\n"
-            : formatWorkspaceModules(result),
-        stderr:
-          values.json || globals.json
-            ? ""
-            : [
-                ...result.inspectionErrors.map(
-                  (error) => `${error.node}: ${error.resource ?? "Node"}: ${error.reason}`,
-                ),
-                ...(result.importIssues.length
-                  ? [formatModuleImportIssues(result.importIssues.length)]
-                  : []),
-                ...result.unassignedImports.map(
-                  (error) => `${error.from} -> ${error.to}: ${error.reason}`,
-                ),
-              ]
-                .map((line) => line + "\n")
-                .join(""),
-      };
-    }
-    if (sub === "scan") {
+            : 0;
+        return {
+          exitCode,
+          stdout:
+            values.json || globals.json
+              ? JSON.stringify({ ...result, parts }) + "\n"
+              : formatWorkspaceModules(result),
+          stderr:
+            values.json || globals.json
+              ? ""
+              : result.inspectionErrors.map((error) => `${error.node}: ${error.reason}\n`).join(""),
+        };
+      }
+
       const [
         { scanWorkspace, formatWorkspaceScan },
         { readModuleMapRepository, readWorkspaceScanRepository, scanFileKind, writeWorkspaceDraft },

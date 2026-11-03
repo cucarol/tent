@@ -55,7 +55,7 @@ claude plugin install tent --marketplace "https://github.com/cucarol/tent.git#pl
 codex plugin marketplace add cucarol/tent --ref plugin-dist && codex plugin add tent@tent
 ```
 
-每个插件都自带四个 Skill、SessionStart、UserPromptSubmit、PostToolUse 和 Stop 四个 Hook 和 CLI，不需要 npm install。Claude Code 装上插件 Hook 就启用；Codex 会请你审查它们。不启用 Hook，所有命令照样能用。详见 [docs/PLUGIN.md](docs/PLUGIN.md)。
+每个插件都自带四个 Skill、Stop 四个 Hook 和 CLI，不需要 npm install。Claude Code 装上插件 Hook 就启用；Codex 会请你审查它们。不启用 Hook，所有命令照样能用。详见 [docs/PLUGIN.md](docs/PLUGIN.md)。
 
 也可以把下面这段发给你的 Agent：
 

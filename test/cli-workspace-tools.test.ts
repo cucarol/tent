@@ -4,15 +4,13 @@ import { initializeFixtureHistory } from "./scratch.js";
 import { testScratchRoot } from "./scratch.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { runCardCommand } from "../src/cli/card-commands.js";
 import { nodeHelpText, runNodeCommand } from "../src/cli/node-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
-import { git } from "./helpers.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 
 test("Node help is offline and does not parse or read requested content", async () => {
   const globals = {
@@ -22,19 +20,13 @@ test("Node help is offline and does not parse or read requested content", async 
     ["help", []],
     ["--help", []],
     ["-h", []],
-    ["write", ["--help", "--input-json", "-"]],
-    ["create", ["-h", "--sources-json", "unfinished"]],
-    ["get", ["--help"]],
+    ["create", ["-h", "--source", "unfinished"]],
+    ["history", ["--help"]],
   ] as Array<[string, string[]]>) {
     const result = await runNodeCommand(sub, args, globals);
     assert.equal(result.exitCode, 0, result.stderr);
     assert.equal(result.stdout, nodeHelpText(sub) + "\n");
     assert.ok(!result.stdout.endsWith("\n\n"), sub);
-    if (sub === "create") {
-      assert.match(result.stdout, /--sources-json/);
-      assert.doesNotMatch(result.stdout, /tent node (write|delete|get)/);
-    }
-    if (sub === "get") assert.doesNotMatch(result.stdout, /Write JSON|base-etag|tent node create/);
   }
   assert.equal((await runNodeCommand("fork", ["node-unused"], globals)).exitCode, 1);
 });
@@ -54,13 +46,6 @@ test("CLI validation errors name the command, argument and field instead of issu
   const workspace = path.join(root, "workspace");
   await scaffoldInWorkspace(openTestFs(workspace), { name: "Validation" });
   const globals = { workspace };
-  const search = await runNodeCommand("search", [], globals);
-  const batch = await runNodeCommand("write-many", ["--input-json", '{"items":[]}'], globals);
-  const create = await runNodeCommand(
-    "create",
-    ["Bad", "--type", "prompt", "--sources-json", '[{"resource":""}]'],
-    globals,
-  );
   const validItem = { op: "create", ref: "ok", name: "Valid", type: "prompt" };
   for (const [item, field, message] of [
     [{ op: "create", name: "Missing ref", type: "prompt" }, "ref", "ref is required"],
@@ -72,46 +57,20 @@ test("CLI validation errors name the command, argument and field instead of issu
     [{ op: "remove" }, "op", "op must be create or update"],
     [{ name: "Missing op" }, "op", "op must be create or update"],
   ] as const) {
-    const rejected = await runNodeCommand(
-      "write-many",
-      ["--input-json", JSON.stringify({ items: [validItem, item] })],
-      globals,
+    await writeFile(
+      path.join(workspace, "invalid.json"),
+      JSON.stringify({ items: [validItem, item] }),
     );
+    const rejected = await runNodeCommand("create", ["--draft", "invalid.json"], globals);
     assert.equal(rejected.exitCode, 1);
     assert.equal(rejected.stdout, "");
-    assert.ok(
-      rejected.stderr.startsWith(`tent node write-many --input-json: items[1].${field}: `),
-      rejected.stderr,
-    );
+    assert.ok(rejected.stderr.startsWith(`tent node create: items[1].${field}: `), rejected.stderr);
     assert.ok(rejected.stderr.includes(message), rejected.stderr);
     assert.equal(await openTestFs(path.join(workspace, ".tent")).exists("Valid"), false);
   }
-  for (const result of [search, batch, create]) {
-    assert.equal(result.exitCode, 1);
-    assert.equal(result.stdout, "");
-    assert.doesNotMatch(result.stderr, /^\[|"code"|"path"/);
-  }
-  assert.match(search.stderr.split("\n")[0]!, /^tent node search: resource:/);
-  assert.match(
-    batch.stderr.split("\n")[0]!,
-    /^tent node write-many --input-json: items: Too small: .+$/,
-  );
-  assert.equal(
-    create.stderr.split("\n")[0],
-    "tent node create: sources[0].resource: Resource must not be empty",
-  );
-  for (const [result, command] of [
-    [search, "search"],
-    [batch, "write-many"],
-    [create, "create"],
-  ] as const)
-    assert.match(
-      result.stderr.split("\n").slice(1).join("\n"),
-      new RegExp(`^Next: tent node ${command} --help --workspace .+\\n$`),
-    );
 });
 
-test("CLI manages Workspace objects directly and preserves CAS", async () => {
+test("CLI creates material Nodes and Cards and preserves Role CAS", async () => {
   const scratch = path.resolve(testScratchRoot());
   await mkdir(scratch, { recursive: true });
   const root = await mkdtemp(path.join(scratch, "cli-workspace-tools-"));
@@ -135,10 +94,6 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
       assert.equal(value.exitCode, 0, value.stderr);
       return JSON.parse(value.stdout);
     };
-    const refs = [
-      { resource: "/refs/example.pdf", title: "first" },
-      { resource: "/refs/example.pdf", custom: [2, 1] },
-    ];
     const note = result(
       await runNodeCommand(
         "create",
@@ -148,115 +103,27 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
           "prompt",
           "--body",
           "Independent Markdown",
-          "--sources-json",
-          JSON.stringify(refs),
+          "--source",
+          "/refs/example.pdf",
+          "--source",
+          "/refs/example.pdf",
         ],
         globals,
       ),
     ).node;
-    const saved = result(await runNodeCommand("get", [note.nodeId, "--full"], globals));
-    assert.equal(saved.text, "Independent Markdown\n");
-    assert.deepEqual(
-      parseFrontmatter(
-        result(await runNodeCommand("get", [note.nodeId, "--full", "--view", "raw"], globals)).text,
-      ).data.sources,
-      refs.map((source) => ({ ...source, resource: "../../refs/example.pdf" })),
+    const saved = parseFrontmatter(await readFile(path.join(workspace, note.path), "utf8"));
+    assert.equal(saved.body, "Independent Markdown");
+    assert.deepEqual(saved.data.sources, [
+      { resource: "../../refs/example.pdf" },
+      { resource: "../../refs/example.pdf" },
+    ]);
+    const invalidRefs = await runNodeCommand(
+      "create",
+      ["Invalid refs", "--type", "prompt", "--source", ""],
+      globals,
     );
-    assert.equal(
-      (
-        await runNodeCommand(
-          "create",
-          [
-            "Invalid refs",
-            "--type",
-            "prompt",
-            "--sources-json",
-            JSON.stringify([{ resource: "" }]),
-          ],
-          globals,
-        )
-      ).exitCode,
-      1,
-    );
+    assert.equal(invalidRefs.exitCode, 1);
     assert.equal(await openTestFs(path.join(workspace, ".tent")).exists("Invalid refs"), false);
-    assert.equal((await runNodeCommand("fork", ["node-fact"], globals)).exitCode, 1);
-    assert.equal(
-      result(await runNodeCommand("search", ["--resource", "refs/example.pdf"], globals)).items
-        .length,
-      1,
-    );
-    assert.deepEqual(
-      result(await runNodeCommand("relations", ["node-fact", "--direction", "incoming"], globals))
-        .items,
-      [],
-    );
-    const readFact = async () => {
-      const read = result(
-        await runNodeCommand("get", ["node-fact", "--full", "--view", "raw"], globals),
-      );
-      return { ...parseFrontmatter(read.text).data, ...read };
-    };
-    const observed = await readFact();
-    result(
-      await runNodeCommand(
-        "write",
-        ["node-fact", "--body", "Another writer's fact", "--base-etag", observed.etag],
-        globals,
-      ),
-    );
-    const concurrent = await readFact();
-    for (const frontmatter of [{ type: "output" }, { tags: ["new"] }]) {
-      const staleEdit = await runNodeCommand(
-        "write",
-        ["node-fact", "--input-json", JSON.stringify({ baseEtag: observed.etag, frontmatter })],
-        globals,
-      );
-      assert.equal(staleEdit.exitCode, 1, "metadata writes must reject a stale observation");
-      assert.match(staleEdit.stderr, /conflict|etag/i);
-      assert.deepEqual(await readFact(), concurrent);
-      assert.equal(
-        (
-          await runNodeCommand(
-            "write",
-            ["node-fact", "--input-json", JSON.stringify({ frontmatter })],
-            globals,
-          )
-        ).exitCode,
-        1,
-      );
-    }
-    result(
-      await runNodeCommand(
-        "write",
-        [
-          "node-fact",
-          "--input-json",
-          JSON.stringify({
-            baseEtag: concurrent.etag,
-            frontmatter: { type: "output" },
-          }),
-        ],
-        globals,
-      ),
-    );
-    assert.equal((await readFact()).type, "output");
-    for (const tags of [["alpha", "beta"], ["alpha", "beta", "gamma"], ["beta"], []]) {
-      result(
-        await runNodeCommand(
-          "write",
-          [
-            "node-fact",
-            "--input-json",
-            JSON.stringify({
-              baseEtag: (await readFact()).etag,
-              frontmatter: { tags },
-            }),
-          ],
-          globals,
-        ),
-      );
-      assert.deepEqual((await readFact()).tags ?? [], tags);
-    }
     await initializeFixtureHistory(path.join(workspace, ".tent"));
     const source = {
       resource: "./refs/example.pdf",
@@ -311,17 +178,11 @@ test("CLI manages Workspace objects directly and preserves CAS", async () => {
   }
 });
 
-test("Node help separates the overview from command notes and applicable footers", () => {
-  const overview = nodeHelpText();
-  assert.match(overview, /Read\n/);
-  assert.match(overview, /Record\n/);
-  assert.match(overview, /Organize\n/);
-  assert.match(overview, /tent node <command> --help/);
-  assert.doesNotMatch(overview, /partial page|JSON by|MSYS_NO_PATHCONV/);
-  assert.doesNotMatch(nodeHelpText("history"), /--body - reads stdin|--by records/);
-  assert.match(nodeHelpText("append"), /unique matching section/);
-  assert.doesNotMatch(nodeHelpText("write-many"), /JSON by records/);
-  assert.doesNotMatch(nodeHelpText("write-many"), /--by records/);
-  assert.match(nodeHelpText("create"), /preset \(direction,/);
-  assert.doesNotMatch(nodeHelpText("create"), /\$\{presets\}/);
+test("Node help exposes retained creation and history syntax without removed commands", () => {
+  assert.match(nodeHelpText("create"), /create --draft <file>/);
+  assert.match(nodeHelpText("history"), /--version <version>/);
+  assert.doesNotMatch(
+    nodeHelpText(),
+    /tent node (?:get|write|append|search|read-many|write-many|list|tags|link-output)\b/,
+  );
 });

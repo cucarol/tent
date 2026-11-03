@@ -47,9 +47,7 @@ export function writeNodesDraft(
   return withNodeBatchMutation(env, async () => {
     const parsed = nodeWriteBatchInputSchema.parse(supplied);
     if (parsed.items.some((item) => item.op !== "create"))
-      throw new Error(
-        "Draft mode accepts create entries only; use node write-many --input-json for updates.",
-      );
+      throw new Error("Draft mode accepts create entries only.");
     const items = parsed.items as DraftCreate[];
     const catalog = await loadNodeCatalog(env.fs);
     const refs = new Map<string, DraftCreate>();
@@ -81,7 +79,7 @@ export function writeNodesDraft(
       const parent = refs.get(item.parent.slice(1));
       if (parent && !selectedSet.has(parent))
         throw new Error(
-          `Draft parent ${item.parent} has an empty body; fill its body, then run the same tent node write-many --draft command again.`,
+          `Draft parent ${item.parent} has an empty body; fill its body, then run the same tent node create --draft command again.`,
         );
     }
     let allocated = false;

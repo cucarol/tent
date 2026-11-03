@@ -7,16 +7,18 @@ import {
   type SectionPrint,
   type SectionTarget,
 } from "../core/return/section-fingerprint.js";
-import type { StopMaterialFile } from "../core/return/stop-material-index.js";
+type StopMaterialFile = { path: string; heading?: string };
+import { readStructureSource } from "./source-observation.js";
 import { FileLockGuardBusyError, withFileLockGuard } from "./file-lock-guard.js";
 
 type Section = Required<StopMaterialFile>;
 /** One record entry: a linked section's fingerprint, with the heading line that selected it. */
 export type SectionEntry = { heading: string } & SectionPrint;
 type Changed = Map<string, Section & SectionPrint>;
+export type StopSections = { changed: Changed; observed: Changed };
 
 /**
- * One record per linked file. SessionStart replaces it whole; hooks only append, and the
+ * One record per linked file within a checkout-specific Stop scope. Stop appends, and the
  * last entry for a heading wins.
  */
 const recordPath = (systemRoot: string, workspacePath: string) =>
@@ -53,6 +55,15 @@ export async function withRecordLock<T>(
 export async function readText(filename: string): Promise<string | undefined> {
   try {
     return await fs.readFile(filename, "utf8");
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
+    throw error;
+  }
+}
+
+async function readSectionSource(root: string, filename: string): Promise<string | undefined> {
+  try {
+    return await readStructureSource(root, filename);
   } catch (error) {
     if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
     throw error;
@@ -139,35 +150,47 @@ export async function changedSections(
   systemRoot: string,
   workspaceRoot: string,
   sections: ReadonlyMap<string, Section>,
-): Promise<Changed> {
+  baseline?: (file: string) => Promise<string | undefined>,
+): Promise<StopSections> {
   const changed: Changed = new Map();
+  const observed: Changed = new Map();
   await Promise.all(
     [...byFile(sections.values()).values()].map(async (file) => {
       const workspacePath = file[0]!.path;
+      const recordKey = path.resolve(workspaceRoot, workspacePath);
       const observe = async (locked: boolean) => {
-        const record = await readRecord(systemRoot, workspacePath);
+        const record = await readRecord(systemRoot, recordKey);
         const prints = sectionFingerprints(
-          await readText(path.join(workspaceRoot, workspacePath)),
+          await readSectionSource(workspaceRoot, path.join(workspaceRoot, workspacePath)),
           file.map(({ heading }) => {
             const line = record.get(heading)?.line;
             return line === undefined ? { heading } : { heading, line };
           }),
         );
-        const unknown: SectionEntry[] = [];
+        const previousRaw =
+          baseline && file.some((section) => !record.has(section.heading))
+            ? await baseline(workspacePath)
+            : undefined;
+        const previous =
+          previousRaw === undefined ? undefined : sectionFingerprints(previousRaw, file);
         for (const section of file) {
           const print = prints.get(section.heading)!;
           const recorded = record.get(section.heading);
-          if (!recorded) unknown.push({ heading: section.heading, ...print });
-          else if (recorded.fingerprint !== print.fingerprint)
+          if (!recorded) {
+            observed.set(sectionKey(section.path, section.heading), { ...section, ...print });
+            const old = previous?.get(section.heading);
+            if (old && old.fingerprint !== print.fingerprint)
+              changed.set(sectionKey(section.path, section.heading), { ...section, ...print });
+          } else if (recorded.fingerprint !== print.fingerprint) {
             changed.set(sectionKey(section.path, section.heading), { ...section, ...print });
+            observed.set(sectionKey(section.path, section.heading), { ...section, ...print });
+          }
         }
-        if (locked && unknown.length) await appendRecord(systemRoot, workspacePath, unknown);
       };
-      if (!(await withRecordLock(systemRoot, workspacePath, () => observe(true))))
-        await observe(false);
+      if (!(await withRecordLock(systemRoot, recordKey, () => observe(true)))) await observe(false);
     }),
   );
-  return changed;
+  return { changed, observed };
 }
 
 /**
@@ -177,19 +200,20 @@ export async function changedSections(
 export async function settleSections(
   systemRoot: string,
   workspaceRoot: string,
-  changed: Changed,
+  sections: StopSections,
 ): Promise<void> {
   await Promise.all(
-    [...byFile(changed.values()).values()].map((file) =>
-      withRecordLock(systemRoot, file[0]!.path, async () => {
+    [...byFile(sections.observed.values()).values()].map((file) =>
+      withRecordLock(systemRoot, path.resolve(workspaceRoot, file[0]!.path), async () => {
         const now = sectionFingerprints(
-          await readText(path.join(workspaceRoot, file[0]!.path)),
+          await readSectionSource(workspaceRoot, path.join(workspaceRoot, file[0]!.path)),
           file,
         );
         const settled = file.filter(
           (section) => now.get(section.heading)!.fingerprint === section.fingerprint,
         );
-        if (settled.length) await appendRecord(systemRoot, file[0]!.path, settled);
+        if (settled.length)
+          await appendRecord(systemRoot, path.resolve(workspaceRoot, file[0]!.path), settled);
       }),
     ),
   );

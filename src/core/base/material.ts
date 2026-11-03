@@ -9,7 +9,6 @@ export const resourceSchema = z
   .refine((value) => value.trim().length > 0, "Resource must not be empty");
 export const sourceSchema = z.looseObject({
   resource: resourceSchema,
-  track: z.literal("structure").optional(),
 });
 export const sourcesSchema = z.array(sourceSchema);
 export type MaterialSource = z.infer<typeof sourceSchema>;
@@ -42,7 +41,6 @@ export function materialOccurrences(data: Record<string, unknown>) {
     field: "resource" | "sources";
     index?: number;
     resource: string;
-    track?: "structure";
   }> = [];
   if (fields.resource !== undefined)
     occurrences.push({ field: "resource", resource: fields.resource });
@@ -51,7 +49,6 @@ export function materialOccurrences(data: Record<string, unknown>) {
       field: "sources",
       index,
       resource: source.resource,
-      ...(source.track ? { track: source.track } : {}),
     }),
   );
   return occurrences;
@@ -92,11 +89,6 @@ export function validateMaterialAddresses(
   for (const source of materialFields(previous ?? {}).sources ?? [])
     retainedSources.set(source.resource, (retainedSources.get(source.resource) ?? 0) + 1);
   for (const occurrence of materialOccurrences(data)) {
-    if (occurrence.track) {
-      const locator = materialLocator(occurrence.resource, documentPath, true);
-      if (!isDirectoryMaterial(locator) && !isPrefixMaterial(locator))
-        throw new MaterialAddressError("track: structure requires a directory or prefix material");
-    }
     if (occurrence.field === "resource" && occurrence.resource === previous?.resource) continue;
     if (occurrence.field === "sources") {
       const retained = retainedSources.get(occurrence.resource) ?? 0;

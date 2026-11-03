@@ -1,3 +1,5 @@
+import { assertNodeFields } from "../base/node-fields.js";
+export { assertNodeFields } from "../base/node-fields.js";
 import { isDeepStrictEqual } from "node:util";
 import { contentEtag } from "../base/etag.js";
 import { parseFrontmatter, serializeFrontmatter, syncNodeTitle } from "../base/frontmatter.js";
@@ -184,11 +186,11 @@ export function prepareNodeDocumentWrite(
     });
   }
   if (isIncompleteNodeReadEtag(baseEtag) && (rawInput !== undefined || body !== undefined)) {
-    throw new NodeWriteError(
-      "INCOMPLETE_READ",
-      "Incomplete Node read cannot replace content; use tent node get <nodeId> --full before writing",
-      { code: "incomplete_read", nodeId: node.id, path: node.path },
-    );
+    throw new NodeWriteError("INCOMPLETE_READ", "Incomplete Node read cannot replace content", {
+      code: "incomplete_read",
+      nodeId: node.id,
+      path: node.path,
+    });
   }
   if (nodeReadRevisionEtag(baseEtag) !== currentEtag) {
     throw new NodeWriteError("ETAG_CONFLICT", "etag conflict", {
@@ -290,23 +292,4 @@ function assertRawDocsWriteReserved(
   throw new NodeWriteError("INVALID_EDIT", "node.write cannot change the Node id.", {
     fields: ["id"],
   });
-}
-
-const retiredNodeFields = [
-  "sync",
-  "planned",
-  "outputs",
-  "sha256",
-  "resource_sha256",
-  "supersedes",
-] as const;
-
-export function assertNodeFields(data: Record<string, unknown>): void {
-  for (const field of retiredNodeFields)
-    if (data[field] !== undefined)
-      throw new Error(`Node field ${field} is retired; remove it from the document`);
-  if (Array.isArray(data.sources))
-    for (const source of data.sources)
-      if (source.sha256 !== undefined || source.resource_sha256 !== undefined)
-        throw new Error("Material hashes are retired Node source fields");
 }

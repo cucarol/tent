@@ -1,43 +1,66 @@
 ---
 name: tent-node
-description: "Records what a change settled in Tent Nodes, and runs Tent reads or writes the user asks for. Tent's hooks already show the Nodes that cover each changed file; ordinary code work needs no Tent command."
+description: "Records what a change settled in Tent Nodes, and creates, moves or archives Nodes when the user asks. At the end of a turn Tent names the Nodes covering the files you changed; ordinary work needs no Tent command."
 ---
 
 # Tent Node
 
-Run `tent` as [access](../../skill-resources/references/access.md) shows.
+A Node is one Markdown file in `.tent/`, at `.tent/<Parent>/<Name>/<Name>.md`. Read, search and edit Node files with your own tools. Run `tent` as [access](../../skill-resources/references/access.md) shows, only for the commands below.
 
-## After a change
+## At the end of a turn
 
-Tent shows the Nodes that cover each file you change, with their text, right after the change. Work from that text. When the work is done, change Nodes only if it made a sentence wrong or settled something lasting; otherwise change nothing and say nothing about Tent.
+When this turn changed files that Nodes cover, Tent lists those Nodes with their paths. Read the ones the change touches.
 
 | When | Do |
 | --- | --- |
-| A sentence is now wrong | Edit it in the Node file with your own editor |
-| A rule and why, a rejected option and why, or a dead end that binds code outside this change | `tent node append <id> --heading <title> --body -` on the Node that governs that code |
+| A sentence is now wrong | Fix it in the Node file |
+| The work settled something lasting: a rule and why, a rejected option and why, a dead end that binds later work | Write it into the Node it belongs to |
+| No Node holds it | `tent node create`, as below |
 | A lesson about particular lines | A code comment or a test, not a Node |
-| A file implements a goal | `tent node link-output <goal-id> --resource <path> --tags asset` |
-| A new fact no Node holds | `tent node create <name> --type <type> [--parent <id>] --tags <tag> --body -` |
+| None of these | Change nothing and say nothing about Tent |
 
-Make the Node changes together, once, at the end. Tent reports a problem in a Node right after you write it; fix what it names. Process, hashes and acceptance logs go in your report or Card return; the Node links to the report when it rests on one. More: [saving](../../skill-resources/references/node-maintenance.md), [types](../../skill-resources/references/node-types.md).
+Tent also lists Node files it cannot read; fix what it names. Process, hashes and test logs go in your report.
 
-## When asked
+## A Node file
 
-| Asked for | Command |
+```markdown
+---
+id: node-abc123
+type: prompt
+description: How users sign in.
+tags: [decision, login]
+resource: ../../../src/auth/
+sources:
+  - resource: ../../../docs/login.md#Codes
+---
+Users sign in with email and a one-time code, agreed with the user on 2026-10-08 for [Login](node-k2m9qa).
+Unverified: whether SSO skips the code.
+```
+
+| Field | Holds |
 | --- | --- |
-| What changed and what waits | `tent workspace brief` |
-| A Node by id | `tent node get <id>` |
-| The rules for a file | `tent node search --resource <file>` |
+| `id` | Tent's id for the Node; never change it |
+| `type` | `goal`, `prompt` or `output`, as the word says |
+| `description` | One sentence on what the Node holds; optional |
+| `tags` | Words that help find it, none or several |
+| `resource` | What the Node is about: a file, a Markdown section (`#Heading`) or a directory |
+| `sources` | Where its facts come from, in the same forms |
+| `status` | `deprecated` once archived |
 
-More: [input](../../skill-resources/references/input.md).
+Paths are relative to the Node file. When a file under `resource` or `sources` changes, Tent names the Node; the most specific match wins. Link another Node by its id, as `[Login](node-k2m9qa)`.
+
+## Commands
+
+| When | Command |
+| --- | --- |
+| A new Node | `tent node create <name> --type <type> [--parent <id>] [--description <text>] [--tags a,b] [--resource <path>] [--source <path>]... --body -` |
+| Rename or move | `tent node rename <id> <name>`, `tent node move <id> --parent <id\|root>` |
+| Retire a subtree, or remove a Node | `tent node archive <id>`, `tent node delete <id>` |
+| Earlier versions | `tent node history <id>`; add `--version <v>` to print one |
+| Problems in the graph | `tent workspace check` |
+
+`--resource` and `--source` take Workspace-root paths such as `src/auth/`; Tent stores them relative to the Node file. To bring back an archived Node, delete its `status: deprecated` line.
 
 ## How to write
 
-One Node per separately used fact, under the Node it narrows; link instead of retelling. Name it for what it holds, in a few words the user would say; Tent's history already keeps when and who. Example:
-
-```markdown
-Sign-in rules; follow them when changing login.
-Users sign in with email and a one-time code.
-Agreed with the user on 2026-10-08 for [Login](node-abc123).
-Unverified: whether SSO skips the code.
-```
+Put one separately used fact in a Node, under the Node it narrows, and link instead of retelling. Name it for what it holds, in a few words the user would say; Tent's history already keeps when and who.

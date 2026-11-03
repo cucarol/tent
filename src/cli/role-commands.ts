@@ -99,7 +99,7 @@ async function runRoleCommandOpened(
     const mutation = ["create", "write", "delete"].includes(sub);
     const fs = new NodeFs(systemRoot, "cli");
     await opened(fs);
-    if (mutation) await captureNativeNodeEdits(fs);
+    await captureNativeNodeEdits(fs);
     let result: unknown;
     if (sub === "list")
       result = pageItems(

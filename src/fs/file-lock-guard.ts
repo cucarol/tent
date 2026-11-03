@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
+import { toNamespacedPath } from "node:path";
 import { setTimeout } from "node:timers/promises";
 
 type GuardOwner = { token: string; pid: number };
@@ -22,7 +23,7 @@ export async function withFileLockGuard<T>(
 
   for (;;) {
     // Publish a complete owner record atomically.
-    const pending = await fs.mkdtemp(`${guardPath}.pending-`);
+    const pending = await fs.mkdtemp(toNamespacedPath(`${guardPath}.pending-`));
     try {
       await fs.writeFile(`${pending}/owner.json`, JSON.stringify(owner), { flush });
       await fs.rename(pending, guardPath);

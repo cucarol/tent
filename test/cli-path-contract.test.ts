@@ -4,15 +4,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { nodeHelpText, runNodeCommand } from "../src/cli/node-commands.js";
+import { runNodeCommand } from "../src/cli/node-commands.js";
 import { cardHelpText, runCardCommand } from "../src/cli/card-commands.js";
 import { runRoleCommand } from "../src/cli/role-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { materialLocator } from "../src/core/base/material.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";
-import { git } from "./helpers.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "cli-path-contract-"));
@@ -54,7 +52,7 @@ async function fixture(t: TestContext) {
   return { root, globals, text, parse, stored };
 }
 
-test("link-output, node create and card create resolve the same Workspace-root addresses", async (t) => {
+test("node create and card create resolve the same Workspace-root addresses", async (t) => {
   const { globals, parse, stored } = await fixture(t);
   const cases = [
     [".tent/Goal/Goal.md", "Goal/Goal.md"],
@@ -65,13 +63,6 @@ test("link-output, node create and card create resolve the same Workspace-root a
     ["node-goal", "Goal/Goal.md"],
   ] as const;
   for (const [index, [input, target]] of cases.entries()) {
-    const linked = parse(
-      await runNodeCommand(
-        "link-output",
-        ["node-goal", "--resource", input, "--name", `Linked ${index}`],
-        globals,
-      ),
-    );
     const created = parse(
       await runNodeCommand(
         "create",
@@ -79,9 +70,8 @@ test("link-output, node create and card create resolve the same Workspace-root a
         globals,
       ),
     ).node;
-    const linkedResource = (await stored(linked.path)).resource as string;
-    assert.equal(linkedResource, (await stored(created.path)).resource, input);
-    assert.equal(pathTarget(linkedResource, linked.path.replace(/^\.tent\//, "")), target, input);
+    const resource = (await stored(created.path)).resource as string;
+    assert.equal(pathTarget(resource, created.path.replace(/^\.tent\//, "")), target, input);
   }
   const card = parse(
     await runCardCommand(
@@ -97,20 +87,6 @@ test("link-output, node create and card create resolve the same Workspace-root a
       cases[index]![1],
       cases[index]![0],
     );
-  for (const input of ["./attachments/missing.png", "./docs/missing.md"]) {
-    const missing = await runNodeCommand(
-      "link-output",
-      ["node-goal", "--resource", input],
-      globals,
-    );
-    assert.equal(missing.exitCode, 1);
-    assert.match(
-      missing.stderr,
-      new RegExp(
-        `^Output file not found: ${literal(input)} \\(local paths resolve from the Workspace root `,
-      ),
-    );
-  }
 });
 
 test("card create warns about explicit path sources that name nothing and stores them unchanged", async (t) => {
@@ -201,70 +177,12 @@ test("card show and take list sources in text while JSON output keeps its fields
   assert.deepEqual(shownAgain.sources, json.sources);
 });
 
-test("incoming and outgoing Node relations expose directly readable identity files", async (t) => {
-  const { root, globals, parse } = await fixture(t);
-  const result = parse(
-    await runNodeCommand(
-      "create",
-      ["Result.md", "--type", "output", "--parent", "node-goal", "--body", "Result evidence."],
-      globals,
-    ),
-  ).node;
-  parse(
-    await runNodeCommand("append", ["node-goal", "--body", `[Result](${result.nodeId})`], globals),
-  );
-  for (const [nodeId, direction] of [
-    ["node-goal", "outgoing"],
-    [result.nodeId, "incoming"],
-  ]) {
-    const relations = parse(
-      await runNodeCommand("relations", [nodeId, "--direction", direction], globals),
-    );
-    const relation = relations.items.find(
-      (item: { from: { nodeId?: string }; target: { nodeId?: string } }) =>
-        item.from.nodeId === "node-goal" && item.target.nodeId === result.nodeId,
-    );
-    assert.ok(relation, direction);
-    for (const [endpoint, expectedPath, expectedId] of [
-      [relation.from, ".tent/Goal/Goal.md", "node-goal"],
-      [relation.target, ".tent/Goal/Result.md/Result.md.md", result.nodeId],
-    ] as const) {
-      assert.equal(endpoint.kind, "node");
-      assert.equal(endpoint.path, expectedPath);
-      const raw = await fs.readFile(path.join(root, endpoint.path), "utf8");
-      assert.equal(parseFrontmatter(raw).data.id, expectedId);
-    }
-  }
-});
-
-test("help explains Git Bash path conversion where paths are described", () => {
+test("Card path help retains the Git Bash conversion guidance", () => {
   assert.match(cardHelpText(), /MSYS_NO_PATHCONV=1/);
-  assert.match(nodeHelpText(), /tent node <command> --help/);
-  for (const sub of ["create", "link-output", "search", "write", "write-many"])
-    assert.match(nodeHelpText(sub), /MSYS_NO_PATHCONV=1/, sub);
-  assert.doesNotMatch(nodeHelpText("history"), /MSYS_NO_PATHCONV/);
 });
 
-test("node get shows the ETag and role create prints one line", async (t) => {
+test("role create prints one line and exposes its stored identity", async (t) => {
   const { root, globals, text, parse } = await fixture(t);
-  const etag = parse(await runNodeCommand("get", ["node-goal"], globals)).etag as string;
-  const paged = await runNodeCommand("get", ["node-goal"], text);
-  assert.equal(paged.exitCode, 0, paged.stderr);
-  assert.deepEqual(paged.stdout.split("\n\nAgent context\n")[0]!.trimEnd().split("\n"), [
-    "node-goal",
-    `ETag: ${etag}`,
-    "有未收录的改动，下一次写命令、brief 或 hook 时收录。",
-    "Deliver evidence.",
-  ]);
-  assert.match(paged.stdout, /\n\nAgent context\nreferences/);
-  const full = await runNodeCommand("get", ["node-goal", "--full"], text);
-  assert.deepEqual(full.stdout.trimEnd().split("\n"), [
-    "node-goal",
-    `ETag: ${etag}`,
-    "有未收录的改动，下一次写命令、brief 或 hook 时收录。",
-    "Deliver evidence.",
-  ]);
-
   const role = await runRoleCommand("create", ["--title", "Release"], text);
   assert.equal(role.exitCode, 0, role.stderr);
   const lines = role.stdout.trimEnd().split("\n");

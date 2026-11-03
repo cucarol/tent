@@ -4,8 +4,9 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { checkGraph, checkSelectedNodes } from "../src/core/check/graph-check.js";
 import { formatNodeWriteProblems } from "../src/core/check/node-write-problems.js";
-import { serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import { checkNativeNodeWrites, checkNodeWriteProblems } from "../src/fs/node-write-problems.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { checkNodeWriteProblems } from "../src/fs/node-write-problems.js";
+import { writeNodeDocument, NodeWriteError } from "../src/core/graph/node-document-write.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
@@ -51,7 +52,7 @@ async function fixture(t: TestContext) {
 }
 
 test("advisory inspection failures preserve successful writes and skip zero-write receipts", async (t) => {
-  const { root, systemRoot, cli } = await fixture(t);
+  const { root, systemRoot, adapter, cli } = await fixture(t);
   await initializeFixtureHistory(systemRoot);
   await captureFixtureDocuments(systemRoot);
   const original = NodeFs.prototype.retainedDocumentPaths;
@@ -61,29 +62,30 @@ test("advisory inspection failures preserve successful writes and skip zero-writ
     throw new Error("Retained storage is unavailable");
   };
   try {
-    const saved = await cli("append", ["node-selected", "--body", "Saved content."]);
+    const saved = await cli("create", ["Saved", "--type", "prompt", "--body", "Saved content."]);
     assert.deepEqual(saved.problems, [
       {
         category: "error",
-        path: ".tent/Selected/Selected.md",
+        path: ".tent/Saved/Saved.md",
         reason: "Retained storage is unavailable",
       },
     ]);
     assert.match(
-      await fs.readFile(path.join(systemRoot, "Selected/Selected.md"), "utf8"),
+      await fs.readFile(path.join(systemRoot, "Saved/Saved.md"), "utf8"),
       /Saved content\./,
     );
     const noop = await cli("rename", ["node-other", "Other"]);
     assert.deepEqual(noop.problems, []);
     assert.equal(inspections, 1);
-    const failure = await runNodeCommand(
-      "write",
-      ["node-selected", "--base-etag", "bad-etag", "--body", "Not saved."],
-      { workspace: root, json: true },
+    await assert.rejects(
+      writeNodeDocument(adapter, "node-selected", { baseEtag: "bad-etag", body: "Not saved." }),
+      (error) => error instanceof NodeWriteError && error.code === "ETAG_CONFLICT",
     );
-    assert.equal(failure.exitCode, 1);
-    assert.match(failure.stderr, /ETAG_MISMATCH|changed|ETag/i);
-    assert.doesNotMatch(failure.stderr, /Retained storage/);
+    assert.equal(
+      parseFrontmatter(await fs.readFile(path.join(systemRoot, "Selected/Selected.md"), "utf8"))
+        .body,
+      "Clean.",
+    );
     assert.equal(inspections, 1);
   } finally {
     NodeFs.prototype.retainedDocumentPaths = original;
@@ -169,45 +171,11 @@ test("invalid selected YAML and type report the workspace check errors; clean wr
   assert.deepEqual(await checkNodeWriteProblems(adapter, root, ["Selected/Selected.md"]), []);
 });
 
-test("native inspection checks canonical written files, retained presence and never captures or recovers", async (t) => {
-  const { root, systemRoot, adapter, write } = await fixture(t);
+test("missing selected Nodes retain their presence diagnostic without capturing history", async (t) => {
+  const { root, systemRoot, adapter } = await fixture(t);
   await initializeFixtureHistory(systemRoot);
   await captureFixtureDocuments(systemRoot);
   const head = await historyHead(systemRoot);
-  await write("Fresh/Fresh.md", { id: "node-fresh" }, "[bad](node-missing)");
-  await write("Other/Other.md", { id: "node-other" }, "[bad](node-othermissing)");
-  const pending = "invalid pending transaction must remain untouched\n";
-  await adapter.writeFile("node-move.pending.json", pending);
-  const problems = await checkNativeNodeWrites("claude-code", root, [
-    ".tent/Fresh/Fresh.md",
-    ".tent/index.md",
-    ".tent/roles/role-nope.md",
-    ".tent/Fresh/attachment.md",
-  ]);
-  assert.equal(problems.length, 2);
-  assert.ok(problems.every((problem) => problem.path === ".tent/Fresh/Fresh.md"));
-  assert.ok(
-    problems.some(
-      (problem) => problem.category === "issue" && problem.kind === "node-git-mismatch",
-    ),
-  );
-  assert.equal(await historyHead(systemRoot), head);
-  assert.equal(await adapter.readFile("node-move.pending.json"), pending);
-  const rendered = formatNodeWriteProblems(problems);
-  assert.match(rendered, /^Tent: \.tent\/Fresh\/Fresh.md has problems:\n- /);
-  assert.ok(rendered.endsWith("\nFix them before you end this turn."));
-  assert.deepEqual(await checkNativeNodeWrites("codex", root, [".tent/Selected/Selected.md"]), []);
-  assert.deepEqual(
-    await checkNativeNodeWrites("claude-code", root, [".tent/index.md", "../outside/Outside.md"]),
-    [],
-  );
-  await fs.mkdir(path.join(root, "Outside"));
-  await fs.writeFile(path.join(root, "Outside/Outside.md"), "---\nid: [\n---\n");
-  await fs.symlink(path.join(root, "Outside"), path.join(systemRoot, "Outside"), "junction");
-  assert.deepEqual(
-    await checkNativeNodeWrites("claude-code", root, [".tent/Outside/Outside.md"]),
-    [],
-  );
   await fs.unlink(path.join(systemRoot, "Selected/Selected.md"));
   const missing = await checkNodeWriteProblems(adapter, root, ["Selected/Selected.md"]);
   assert.ok(
@@ -218,15 +186,15 @@ test("native inspection checks canonical written files, retained presence and ne
         problem.state === "git-only",
     ),
   );
+  assert.equal(await historyHead(systemRoot), head);
 });
 
-test("CLI create, write, append and batch receipts report only their written Nodes without failing saves", async (t) => {
+test("CLI create, draft and structure receipts report only written Nodes without failing saves", async (t) => {
   const { root, systemRoot, adapter, cli } = await fixture(t);
   await initializeFixtureHistory(systemRoot);
   await captureFixtureDocuments(systemRoot);
-  // This native edit is collected before the command, but is outside its receipt.
-  await adapter.writeFile(
-    "Other/Other.md",
+  await fs.writeFile(
+    path.join(systemRoot, "Other/Other.md"),
     serializeFrontmatter({ id: "node-other", type: "prompt" }, "[unrelated](node-unrelated)"),
   );
   const created = await cli("create", [
@@ -239,30 +207,23 @@ test("CLI create, write, append and batch receipts report only their written Nod
     "[broken](node-create-missing)",
   ]);
   assert.deepEqual(
-    created.problems.map((p: { path: string }) => p.path),
+    created.problems.map((problem: { path: string }) => problem.path),
     [".tent/New/New.md"],
   );
   assert.equal(created.problems[0].kind, "unresolved-link");
-  const read = await cli("get", ["node-new", "--full"]);
-  const written = await cli("write", [
-    "node-new",
-    "--base-etag",
-    read.etag,
-    "--body",
-    "[broken](node-write-missing)",
-  ]);
-  assert.equal(written.problems[0].target, "node-write-missing");
-  const appended = await cli("append", [
-    "node-selected",
-    "--body",
-    "[broken](node-append-missing)",
-  ]);
-  assert.deepEqual(
-    appended.problems.map((p: { path: string }) => p.path),
-    [".tent/Selected/Selected.md"],
+  await fs.writeFile(
+    path.join(systemRoot, "New/New.md"),
+    serializeFrontmatter({ id: "node-new", type: "prompt" }, "[broken](node-native-missing)"),
   );
-  const batch = await cli("write-many", [
-    "--input-json",
+  const renamed = await cli("rename", ["node-new", "Renamed"]);
+  assert.deepEqual(
+    renamed.problems.map((problem: { path: string }) => problem.path),
+    [".tent/Renamed/Renamed.md"],
+  );
+  assert.equal(renamed.problems[0].target, "node-native-missing");
+  const filename = path.join(root, "draft.json");
+  await fs.writeFile(
+    filename,
     JSON.stringify({
       items: [
         {
@@ -272,37 +233,44 @@ test("CLI create, write, append and batch receipts report only their written Nod
           type: "prompt",
           body: "[broken](node-batch-missing)",
         },
-        { op: "update", nodeId: "node-new", baseEtag: written.etag, body: "Fixed." },
+        { op: "create", ref: "clean", name: "Clean", type: "prompt", body: "Settled fact." },
       ],
     }),
-  ]);
+  );
+  const draft = await cli("create", ["--draft", "draft.json"]);
   assert.deepEqual(
-    batch.problems.map((p: { path: string }) => p.path),
+    draft.problems.map((problem: { path: string }) => problem.path),
     [".tent/Batch/Batch.md"],
   );
-  const human = await cli("append", ["node-new", "--body", "[broken](node-human-missing)"], false);
+  assert.equal(
+    parseFrontmatter(await fs.readFile(path.join(systemRoot, "Clean/Clean.md"), "utf8")).body,
+    "Settled fact.",
+  );
+  const human = await cli(
+    "create",
+    ["Human", "--type", "prompt", "--body", "[broken](node-human-missing)"],
+    false,
+  );
   assert.match(
     human,
-    /Tent: \.tent\/New\/New.md has problems:\n- unresolved-link: node-human-missing — Local link target does not exist as a file\nFix them before you end this turn\./,
+    /Tent: \.tent\/Human\/Human.md has problems:\n- unresolved-link: node-human-missing — Local link target does not exist as a file\nFix them before you end this turn\./,
   );
   const clean = await cli("rename", ["node-other", "Other"]);
   assert.deepEqual(clean.problems, []);
-  const renamed = await cli("rename", ["node-new", "Renamed"]);
-  assert.deepEqual(
-    renamed.problems.map((p: { path: string }) => p.path),
-    [".tent/Renamed/Renamed.md"],
-  );
   const moved = await cli("move", ["node-new", "--parent", "node-selected"]);
   assert.deepEqual(
-    moved.problems.map((p: { path: string }) => p.path),
+    moved.problems.map((problem: { path: string }) => problem.path),
     [".tent/Selected/Renamed/Renamed.md"],
   );
-  const failed = await runNodeCommand(
-    "write",
-    ["node-new", "--base-etag", "bad-etag", "--body", "must fail"],
-    { workspace: root, json: true },
-  );
+  const before = await fs.readFile(path.join(systemRoot, "Selected/Renamed/Renamed.md"), "utf8");
+  const failed = await runNodeCommand("rename", ["node-new", "../Invalid"], {
+    workspace: root,
+    json: true,
+  });
   assert.equal(failed.exitCode, 1);
   assert.equal(failed.stdout, "");
-  assert.match(failed.stderr, /ETAG_MISMATCH|changed|ETag/i);
+  assert.equal(
+    await fs.readFile(path.join(systemRoot, "Selected/Renamed/Renamed.md"), "utf8"),
+    before,
+  );
 });

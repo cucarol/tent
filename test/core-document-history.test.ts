@@ -166,7 +166,7 @@ test("public archive retains its event and deprecated document bytes", async (t)
   assert.equal(await adapter.history!.read({ commit: result.commit, path: "A/A.md" }), edit.raw);
 });
 
-test("public standard material edits retain exact history and reject invalid source shapes before saving", async (t) => {
+test("Core material edits retain exact history and reject invalid source shapes before saving", async (t) => {
   const h = await fixture(t),
     { workspaceId, adapter } = h;
   const original = await readNodeForEdit(adapter, "node-alpha");
@@ -175,40 +175,23 @@ test("public standard material edits retain exact history and reject invalid sou
     { resource: "user interviews" },
     { resource: "../B/B.md", title: "second" },
   ];
-  const result = await runNodeCommand(
-    "write",
-    [
-      "node-alpha",
-      "--input-json",
-      JSON.stringify({
-        baseEtag: original.etag,
-        frontmatter: {
-          resource: "src/main.ts",
-          sources: sources.map((source) =>
-            source.resource === "../B/B.md" ? { ...source, resource: "node-bravo" } : source,
-          ),
-        },
-        readBack: true,
-      }),
-    ],
-    { workspace: h.workspace, json: true },
-  );
-  assert.equal(result.exitCode, 0, result.stderr);
-  const saved = JSON.parse(result.stdout);
-  assert.deepEqual(
-    saved.readBack.sources,
-    sources.map((source) =>
-      source.resource === "../B/B.md" ? { ...source, path: ".tent/B/B.md" } : source,
-    ),
-  );
-  const search = await runNodeCommand("search", ["--resource", "src/main.ts"], {
-    workspace: h.workspace,
-    json: true,
+  const saved = await writeNodeDocument(adapter, "node-alpha", {
+    baseEtag: original.etag,
+    frontmatter: {
+      resource: "../../src/main.ts",
+      sources: sources.map((source) =>
+        source.resource === "../B/B.md" ? { ...source, resource: "node-bravo" } : source,
+      ),
+    },
   });
-  assert.equal(search.exitCode, 0, search.stderr);
-  assert.equal(JSON.parse(search.stdout).items[0].nodeId, "node-alpha");
-  assert.equal(saved.readBack.resource, "../../src/main.ts");
+  assert.deepEqual(parseFrontmatter(saved.raw).data.sources, sources);
+  const search = await searchNodes(adapter, workspaceId, h.workspace, {
+    resource: "../src/main.ts",
+  });
+  assert.equal(search.items[0].nodeId, "node-alpha");
+  assert.equal(parseFrontmatter(saved.raw).data.resource, "../../src/main.ts");
   const raw = await adapter.readFile("A/A.md");
+  assert.ok(saved.version);
   assert.equal(await adapter.history!.read(saved.version), raw);
   const head = await adapter.history.currentCommit();
   for (const frontmatter of [
@@ -296,8 +279,8 @@ test("explicit read capture and Core saves retain only selected documents; histo
   assert.match(await adapter.history.diff(original.version, renamed.version), /Core save/);
   await deleteNode(h.mount.env, original.nodeId);
   const history = await runNodeCommand(
-    "get",
-    [original.nodeId, "--version-json", JSON.stringify(original.version), "--view", "raw"],
+    "history",
+    [original.nodeId, "--version", JSON.stringify(original.version)],
     { workspace: h.workspace, json: true },
   );
   assert.equal(history.exitCode, 0, history.stderr);
@@ -374,7 +357,7 @@ test("material declarations and opaque metadata retain exact Node history withou
   const { adapter } = await fixture(t);
   const original = await readNodeForEdit(adapter, "node-alpha");
   const generated = { imported: ["opaque", false], by: "not an actor", at: "not a timestamp" };
-  const verified = { arbitrary: ["leave", 17, false] };
+  const provenance = { arbitrary: ["leave", 17, false] };
   const readFile = adapter.readFile.bind(adapter);
   const reads: string[] = [];
   adapter.readFile = async (file) => {
@@ -383,11 +366,11 @@ test("material declarations and opaque metadata retain exact Node history withou
   };
   const saved = await writeNodeDocument(adapter, original.nodeId, {
     baseEtag: original.etag,
-    frontmatter: { resource: "../../not-present.txt", generated, verified },
+    frontmatter: { resource: "../../not-present.txt", generated, provenance },
   });
   assert.equal(parseFrontmatter(saved.raw).body, original.body);
   assert.deepEqual(parseFrontmatter(saved.raw).data.generated, generated);
-  assert.deepEqual(parseFrontmatter(saved.raw).data.verified, verified);
+  assert.deepEqual(parseFrontmatter(saved.raw).data.provenance, provenance);
   assert.equal(reads.includes("B/B.md"), false);
   assert.ok(saved.version);
   assert.equal(await adapter.history.read(saved.version), saved.raw);
@@ -395,8 +378,18 @@ test("material declarations and opaque metadata retain exact Node history withou
     baseEtag: saved.etag,
     body: "Changed body",
   });
-  assert.deepEqual(parseFrontmatter(changed.raw).data.verified, verified);
+  assert.deepEqual(parseFrontmatter(changed.raw).data.provenance, provenance);
   assert.equal(parseFrontmatter(changed.raw).data.resource, "../../not-present.txt");
+  const head = await adapter.history.currentCommit();
+  await assert.rejects(
+    writeNodeDocument(adapter, original.nodeId, {
+      baseEtag: changed.etag,
+      frontmatter: { verified: provenance },
+    }),
+    /Node field verified is retired; remove it from the document/,
+  );
+  assert.equal(await adapter.readFile("A/A.md"), changed.raw);
+  assert.equal(await adapter.history.currentCommit(), head);
   await assert.rejects(
     writeNodeDocument(adapter, original.nodeId, { baseEtag: original.etag, body: "Stale" }),
     /etag conflict/i,

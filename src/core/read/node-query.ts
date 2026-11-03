@@ -24,10 +24,10 @@ import { parseFrontmatter } from "../base/frontmatter.js";
 import { contentEtag } from "../base/etag.js";
 import { documentLifecycle } from "../base/document-status.js";
 import { nodeNotePath } from "../base/paths.js";
-import { loadTent, canonicalIdentityError } from "../store/tree.js";
+import { loadTent } from "../store/tree.js";
 import { materialFields } from "../base/material.js";
 import { isNodeId } from "../base/id.js";
-import { NODE_TYPES } from "../base/node-type.js";
+import { NODE_TYPES, normalizeOptionalNodeType } from "../base/node-type.js";
 import { NODE_TAG_PRESETS, countNodeTags, normalizeTagName } from "../base/tags.js";
 import { uncapturedChecker } from "../graph/retained-read.js";
 
@@ -44,9 +44,10 @@ export async function readNode(
       throw new Error("Not a Tent history document");
     const raw = await fs.history.read(request.version);
     const data = parseFrontmatter(raw).data;
-    const invalid = canonicalIdentityError(data);
-    if (invalid) throw new Error(invalid);
-    const nodeId = String(data.id);
+    if (typeof data.id !== "string" || !isNodeId(data.id))
+      throw new Error("Historical document must have a canonical Node id");
+    normalizeOptionalNodeType(data.type);
+    const nodeId = data.id;
     const path = request.version.path.slice(0, request.version.path.lastIndexOf("/"));
     if (nodeId !== request.nodeId) throw new Error("Historical version belongs to another Node");
     const reader = new ContextReader(

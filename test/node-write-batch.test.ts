@@ -543,7 +543,7 @@ test("batch updates preserve opaque metadata and retain failed-save error identi
   const metadata = {
     generated: { arbitrary: [17, false] },
     stale_after: "custom timestamp",
-    verified: [false, { custom: "not provenance" }],
+    provenance: [false, { custom: "opaque metadata" }],
   };
   await writeNodesBatch(env, {
     items: [

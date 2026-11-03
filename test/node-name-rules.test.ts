@@ -1,6 +1,6 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { historyHead } from "./scratch.js";
-import { initializeFixtureHistory } from "./scratch.js";
+import { initializeFixtureHistory, initializeFixtureRepository } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 import { validateNodeName } from "../src/core/store/scaffold.js";
 import { createNode, renameNode } from "../src/core/graph/ops.js";
 import { checkGraph } from "../src/core/check/graph-check.js";
+import { readOnlyFs } from "../src/core/store/adapter.js";
 import { NODE_MOVE_PENDING_PATH } from "../src/core/store/node-move-recovery.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
@@ -19,14 +20,15 @@ import { git } from "./helpers.js";
 
 const RAW_FAILURE = /ENOENT|update-index|Path escapes|Invalid input|"code"|\[\s*\{/;
 
-async function fixture(t: TestContext, withGit = true) {
+async function fixture(t: TestContext, withHistory = true) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-name-rules-"));
   t.after(() =>
     removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
   await scaffoldInWorkspace(openTestFs(root), { name: "Name rules" });
+  initializeFixtureRepository(root);
   const systemRoot = path.join(root, ".tent");
-  if (withGit) await initializeFixtureHistory(systemRoot);
+  if (withHistory) await initializeFixtureHistory(systemRoot);
   const adapter = openTestFs(systemRoot);
   const env = { fs: adapter, clock: new SystemClock(), tentName: "test", tentRoot: systemRoot };
   const fileExists = async (filename: string) => {
@@ -53,6 +55,30 @@ async function snapshot(systemRoot: string) {
     files[file] = await fs.readFile(path.join(systemRoot, file), "utf8");
   }
   return files;
+}
+
+async function invalidNameDraft(root: string, name: string) {
+  const filename = path.join(root, "invalid-name.draft.json");
+  const raw = JSON.stringify({
+    items: [
+      {
+        op: "create",
+        ref: "x",
+        id: "node-preflight",
+        name,
+        type: "prompt",
+        body: "Validate this name before writing",
+      },
+    ],
+  });
+  await fs.writeFile(filename, raw);
+  const result = await runNodeCommand("create", ["--draft", filename], { workspace: root });
+  assert.equal(
+    await fs.readFile(filename, "utf8"),
+    raw,
+    "name preflight leaves the draft unchanged",
+  );
+  return result;
 }
 
 test("Node names follow Windows file-name rules on every platform", () => {
@@ -128,7 +154,7 @@ test("Node names follow Windows file-name rules on every platform", () => {
   assert.throws(() => validateNodeName(".."), /reserved or excluded/);
 });
 
-test("create, rename and write-many reject invalid names with one diagnostic and a Next command before writing", async (t) => {
+test("create, rename and create draft reject invalid names with one diagnostic and a Next command before writing", async (t) => {
   const { root, systemRoot } = await fixture(t);
   const globals = { workspace: root };
   const created = await runNodeCommand("create", ["Goal", "--type", "goal", "--json"], globals);
@@ -151,14 +177,7 @@ test("create, rename and write-many reject invalid names with one diagnostic and
     const results = [
       await runNodeCommand("create", [name, "--type", "prompt"], globals),
       await runNodeCommand("rename", [nodeId, name], globals),
-      await runNodeCommand(
-        "write-many",
-        [
-          "--input-json",
-          JSON.stringify({ items: [{ op: "create", ref: "x", name, type: "prompt" }] }),
-        ],
-        globals,
-      ),
+      await invalidNameDraft(root, name),
     ];
     assert.match(results[2]!.stderr, /^Batch item @x: /, name);
     for (const result of results) {
@@ -172,7 +191,7 @@ test("create, rename and write-many reject invalid names with one diagnostic and
   assert.deepEqual(await snapshot(systemRoot), before);
 });
 
-test("create, rename and write-many reject superscript COM and LPT device names without writing or committing", async (t) => {
+test("create, rename and create draft reject superscript COM and LPT device names without writing or committing", async (t) => {
   const { root, systemRoot } = await fixture(t);
   const globals = { workspace: root };
   const created = await runNodeCommand("create", ["Goal", "--type", "goal", "--json"], globals);
@@ -185,14 +204,7 @@ test("create, rename and write-many reject superscript COM and LPT device names 
     const results = [
       await runNodeCommand("create", [name, "--type", "prompt"], globals),
       await runNodeCommand("rename", [nodeId, name], globals),
-      await runNodeCommand(
-        "write-many",
-        [
-          "--input-json",
-          JSON.stringify({ items: [{ op: "create", ref: "x", name, type: "prompt" }] }),
-        ],
-        globals,
-      ),
+      await invalidNameDraft(root, name),
     ];
     assert.match(results[2]!.stderr, /^Batch item @x: /, name);
     for (const result of results) {
@@ -431,7 +443,7 @@ test("a failed legacy rename rollback does not claim its recovery record was abs
   }
 });
 
-test("workspace check reports Nodes whose disk and Tent Git presence differ", async (t) => {
+test("Core read-only check reports native path mismatches and workspace check captures the valid move", async (t) => {
   const { root, systemRoot, adapter, env, fileExists } = await fixture(t);
   await createNode(env, { parentPath: "", name: "Area", type: "goal" });
   await createNode(env, { parentPath: "Area", name: "Topic", type: "prompt" });
@@ -443,7 +455,8 @@ test("workspace check reports Nodes whose disk and Tent Git presence differ", as
     path.join(systemRoot, "Moved", "Area.md"),
     path.join(systemRoot, "Moved", "Moved.md"),
   );
-  const mismatches = (await checkGraph(adapter, root, fileExists)).issues
+  const before = await adapter.history.currentCommit();
+  const mismatches = (await checkGraph(readOnlyFs(adapter), root, fileExists)).issues
     .filter((issue) => issue.kind === "node-git-mismatch")
     .map((issue) => ({ path: issue.path, state: "state" in issue ? issue.state : undefined }));
   assert.deepEqual(mismatches, [
@@ -452,13 +465,19 @@ test("workspace check reports Nodes whose disk and Tent Git presence differ", as
     { path: "Moved/Moved.md", state: "disk-only" },
     { path: "Moved/Topic/Topic.md", state: "disk-only" },
   ]);
-  const text = await runWorkspaceCommand("check", [], { workspace: root });
-  assert.equal(text.exitCode, 1);
-  assert.match(text.stdout, /Moved\/Moved\.md: node-git-mismatch: disk-only — /);
-  assert.match(text.stdout, /Area\/Area\.md: node-git-mismatch: git-only — /);
+  assert.equal(
+    await adapter.history.currentCommit(),
+    before,
+    "read-only Core checks never capture the move",
+  );
+  const checked = await runWorkspaceCommand("check", [], { workspace: root, json: true });
+  assert.equal(checked.exitCode, 0, checked.stderr || checked.stdout);
+  assert.deepEqual(JSON.parse(checked.stdout).issues, []);
+  assert.notEqual(await adapter.history.currentCommit(), before);
+  assert.deepEqual((await checkGraph(readOnlyFs(adapter), root, fileExists)).issues, []);
 });
 
-test("workspace check skips the disk and Git comparison without Tent Git", async (t) => {
+test("Core graph check skips retained-presence comparison without SQLite history", async (t) => {
   const { root, adapter, env, fileExists } = await fixture(t, false);
   await createNode(env, { parentPath: "", name: "Plain", type: "prompt" });
   assert.deepEqual((await checkGraph(adapter, root, fileExists)).issues, []);

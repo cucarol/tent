@@ -1,15 +1,14 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import test from "node:test";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
-import { initializeFixtureWorkspace } from "./scratch.js";
+import { initializeFixtureWorkspace, initializeFixtureRepository } from "./scratch.js";
 import { loadTent } from "../src/core/store/tree.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 
@@ -25,68 +24,6 @@ async function directoryContents(root: string, prefix = ""): Promise<Record<stri
   }
   return contents;
 }
-
-test("direct CLI initializes and writes SQLite history when Git is absent from PATH", async (t) => {
-  const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "init-without-git-"));
-  t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
-  const env = {
-    ...Object.fromEntries(
-      Object.entries(process.env).filter(
-        ([key]) => key.toUpperCase() !== "PATH" && !key.toUpperCase().startsWith("GIT_"),
-      ),
-    ),
-    PATH: "",
-  };
-  assert.equal(
-    (spawnSync("git", ["--version"], { env, windowsHide: true }).error as NodeJS.ErrnoException)
-      ?.code,
-    "ENOENT",
-  );
-  const invoke = (args: string[]) => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        import.meta.resolve("tsx"),
-        fileURLToPath(new URL("../src/cli/tent.ts", import.meta.url)),
-        ...args,
-      ],
-      { env, encoding: "utf8", windowsHide: true },
-    );
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stderr, "");
-    return result.stdout;
-  };
-  invoke(["new", workspace]);
-  assert.equal(await fs.readFile(path.join(workspace, ".tent/.gitignore"), "utf8"), "*\n");
-  const receipt = JSON.parse(
-    invoke([
-      "node",
-      "create",
-      "NoGit",
-      "--type",
-      "prompt",
-      "--body",
-      "Retained without Git",
-      "--workspace",
-      workspace,
-      "--json",
-    ]),
-  );
-  const adapter = openTestFs(path.join(workspace, ".tent"));
-  const versions = await adapter.history.nodeVersions(receipt.node.nodeId);
-  assert.equal(versions.length, 1);
-  const version = versions[0]!.changes[0]!.after!;
-  assert.match(version.commit, /^[a-f0-9]{64}$/);
-  assert.match(await adapter.history.read(version), /Retained without Git/);
-  assert.equal(
-    await fs.access(path.join(workspace, ".tent/.git/HEAD")).then(
-      () => true,
-      () => false,
-    ),
-    false,
-  );
-});
 
 test("initialization preserves all outer Git bytes even when Git metadata writes are denied", async (t) => {
   const scratch = path.resolve(testScratchRoot());
@@ -168,9 +105,10 @@ test("initialization preserves all outer Git bytes even when Git metadata writes
   assert.equal(await fs.readFile(path.join(systemRoot, "settings.json"), "utf8"), settings);
 });
 
-test("SQLite initialization does not invoke private Git init or inherit its branch settings", async (t) => {
+test("SQLite setup creates no private Git repository and ignores unrelated global branch defaults", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "init-without-private-git-"));
   t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
+  initializeFixtureRepository(workspace);
   const previous = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
   const home = path.join(workspace, "home");
   await fs.mkdir(home);
@@ -369,7 +307,7 @@ test("initialization always writes its own ignore file and preserves the user's 
   assert.equal(await fs.readFile(path.join(root, ".tent/.gitignore"), "utf8"), "*\n");
 });
 
-test("ignore preparation failure publishes no Tent and remains retryable", async (t) => {
+test("Tent ignore-file failure publishes no Tent and remains retryable", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "init-ignore-failure-"));
   t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   await fs.writeFile(path.join(root, "user.txt"), "keep");

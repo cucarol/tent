@@ -8,9 +8,9 @@ The sections after the first follow the question each group of mechanisms answer
 
 Node, Role and Card are the only concepts. A Node keeps one reusable fact, a Role keeps a direction of work, and a Card hands one input to a Role. Normal work, answers, code edits, review and Git stay in the host conversation and the user's tools; ordinary tasks need no Role or Card. Tent has no managed Agent, session registry, task scheduler or background service.
 
-A workspace is the directory that contains `.tent/`. Its `workspaceId` in `.tent/settings.json` survives relocation; a missing or corrupt identity fails explicitly. Discovery walks up from the current directory and stops at a Git checkout boundary. From a linked worktree it follows the `.git` pointer to the main checkout's `.tent/`, so Node edits made in a worktree land in the main checkout and materials are read from the main checkout. Submodules, nested clones and bare repositories do not inherit a parent workspace. `--workspace` overrides discovery.
+A workspace is a directory inside a Git repository that contains `.tent/`. Git is required. Its `workspaceId` in `.tent/settings.json` survives relocation; a missing or corrupt identity fails explicitly. Discovery walks up from the current directory and stops at a Git checkout boundary. From a linked worktree it follows the `.git` pointer to the main checkout's `.tent/`, so Node edits land in the main checkout. Ordinary material reads use the main checkout; Stop compares the originating checkout and matches coverage by its workspace-relative paths (§5). Submodules, nested clones and bare repositories do not inherit a parent workspace. `--workspace` overrides discovery.
 
-`tent new <workspace>` publishes an empty `.tent/` with its own history. It never replaces an existing `.tent/`, edits project files or creates Nodes. It writes `.tent/.gitignore` containing `*`, so Git ignores the whole Tent without any change under the project's `.git`. Deleting `.tent/` leaves the project working: builds, tests and project documents never depend on it. Project instructions stay in the project's own files, such as `AGENTS.md`.
+`tent new <workspace>` first runs `git init` in that directory if it is not already inside a Git repository, then publishes an empty `.tent/` with its own history. An existing repository or linked worktree is left unchanged. When initialization is needed, it prints `Initialized a Git repository in <root>` before `Created Tent`, with the actual root path. If Git cannot be found, it fails with `Tent needs Git; install Git, then run tent new <root>`. It never replaces an existing `.tent/`, edits project files or creates Nodes. It writes `.tent/.gitignore` containing `*`, so Git ignores the whole Tent without changing the project's Git exclude configuration. Deleting `.tent/` leaves the project working: builds, tests and project documents never depend on it. Project instructions stay in the project's own files, such as `AGENTS.md`.
 
 ## 2. Keeping things
 
@@ -18,31 +18,33 @@ A workspace is the directory that contains `.tent/`. Its `workspaceId` in `.tent
 
 A Node is a directory holding `<name>/<name>.md`. A directory without that file is a plain grouping folder. Placement gives the parent and child tree; the `node-…` id is the stable handle across moves and renames. The file name is the display name; a `title` field, if present, is kept aligned with it. Names must be valid Windows file names on every platform: `< > : " / \ | ? *`, a trailing dot, C0 control characters (U+0000–U+001F), DEL (U+007F), U+2028, U+2029 and the reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, `COM¹`–`COM³` and `LPT¹`–`LPT³`, with or without an extension) are rejected, and surrounding whitespace is trimmed.
 
-`type` is exactly `goal`, `prompt` or `output`; any other value makes the document an invalid Node, in retained versions too. A goal is something that should become true, a prompt holds rules and context to follow, and an output records a result at one moment. Form and topic go in `tags`: free text without path separators or line breaks, any number, no behavior. Tent suggests ten presets: `direction`, `requirement`, `decision`, `spec`, `reference`, `procedure`, `asset`, `evidence`, `analysis` and `issue`. `node tags` lists the tags in use with their counts. Unknown YAML fields survive every edit. Invalid identity or type data and duplicate ids are reported, never silently repaired.
+`type` is required and is exactly `goal`, `prompt` or `output`; any other value makes the document an invalid Node, in retained versions too. These are names: Tent gives them the same coverage, reading and writing behavior. `description` is an optional one-sentence string; a non-string value is a document problem reported by `workspace check`. Form and topic go in `tags`: free text without path separators or line breaks, any number, no behavior. Tent suggests ten presets: `direction`, `requirement`, `decision`, `spec`, `reference`, `procedure`, `asset`, `evidence`, `analysis` and `issue`. Unknown YAML fields survive every edit. Invalid identity or type data and duplicate ids are reported, never silently repaired.
 
-Record what will help later work: confirmed goals and constraints, decisions with their reasons, reference pointers, observed findings and facts about real results. A goal can exist before the work; a result that did not happen cannot be recorded. Goals and prompts hold settled intent, not commit ids, test counts or delivery status; dated evidence goes in an output. Agents do not write drafts: an undecided matter is asked in conversation or sent as a Card to the Role that decides it, and the settled result is recorded.
+`verified` is a retired Node field, reported by `workspace check`; it does not confirm a Node or change coverage. The one-off [metadata cleanup](MIGRATION.md#remove-retired-node-metadata) removes it together with retired source tracking fields.
 
-`status` is `stable` or `deprecated` (OKF v0.2 §5.4); omitted means stable, and Tent never changes it on its own. OKF's `draft` counts as stable. An unknown value is kept and reported, and that Node supplies no rules or coverage until it is fixed. Status belongs to one Node: the children of a deprecated Node keep their own. A deprecated Node stays readable and editable but drops out of resource lookup, rules and coverage. `node archive <id>` marks a subtree deprecated in one event; to bring a Node back, set its `status` again. `node delete` removes a subtree; it leaves materials and inbound links alone.
+Record what will help later work: confirmed goals and constraints, decisions with their reasons, reference pointers, observed findings and facts about real results. A result that did not happen cannot be recorded. An undecided matter is asked in conversation or sent as a Card to the Role that decides it, and the settled result is recorded.
+
+`status` is `stable` or `deprecated` (OKF v0.2 §5.4); omitted means stable, and Tent never changes it on its own. OKF's `draft` counts as stable. An unknown value is kept and reported, and that Node supplies no coverage until it is fixed. Status belongs to one Node: the children of a deprecated Node keep their own. A deprecated Node stays readable and editable but drops out of current coverage. `node archive <id>` marks a subtree deprecated in one event; to bring a Node back, set its `status` again. `node delete` removes a subtree; it leaves materials and inbound links alone.
 
 ### Reading and writing
 
-CLI reads are bounded for Agents. A page fits 16 KiB of compact JSON; longer text continues by range, and cut values are marked. `node get <id>` returns body text, ordered materials and an ETag; `--full` returns the whole body and `--view raw` the whole document with frontmatter; `--context` adds a summary of related Nodes and Cards of at most 1 KiB. `node list` shows children; `--type` and repeated `--tag` select from a whole subtree. `node read-many` reads several Nodes in one page. `node search --resource <path>` returns the current Nodes whose materials name or cover a Workspace file, most specific first, from headers alone. `node relations` lists links, mentions and material references in either direction. Reads never record history or collect native edits; `node relations` and `--context` read the last collected documents, so a native edit shows there only after it is collected. A Node whose file differs from its retained version is marked `uncaptured`. Text search belongs to the Agent's own tools.
+Agents find, read and edit Node Markdown with the host's file tools. Text search belongs to those tools too. Tent's Node commands cover creation, structural changes and history: `node create`, `rename`, `move`, `archive`, `delete` and `history`.
 
-A write that replaces content presents the ETag of a complete read. The ETag of a partial read is marked `read:` and is rejected for replacement; a stale ETag is rejected, never refreshed. `node write` patches the body, the frontmatter or both, and omitted fields survive. `node append` adds to the end of the body, or of a named section, creating that section when absent, without a prior read; concurrent appends never overwrite each other. `node create` saves body, materials and tags together; `--id` fixes the new id, so a retry cannot create a duplicate. `node write-many --input-json` saves ordered creates and updates in one event, all or nothing; `@ref` names a Node created in the same batch in parents, links and material paths. Receipts carry each saved id, path and ETag, name the workspace root, and a failure ends with one copyable `Next: tent …` line.
+`node create` saves body, type, optional `--description`, `--resource`, repeated `--source` and tags together; `--id` fixes the new id, so a retry cannot create a duplicate. Later body and frontmatter edits happen directly in the file. Structural commands retain their conflict checks, and receipts identify the saved Node and workspace. Role and Card commands keep their own read and write contracts (§8).
 
-`node write-many --draft <file>` consumes a scan draft (§7). It saves only the entries whose body is written: it first fixes their ids in the draft, saves them, then removes them from the draft and points the remaining references at the new ids. An entry whose parent still has an empty body stops the batch and names that parent. Running the same command after an interruption creates the missing ids and skips those already saved, so it never duplicates a Node or loses a body. Saving the last entry deletes the draft and its report.
+`node create --draft <file>` consumes a scan draft (§7). Each create entry has a unique `ref`; `@ref` can name its parent or another entry in links and materials. The command saves only entries whose bodies have been written: it first fixes their ids in the draft, saves them, removes them from the draft and rewrites remaining references to the saved ids. An entry whose parent still has an empty body stops the batch and names that parent. Retrying after an interruption creates the missing ids and skips those already saved, so it never duplicates a Node or loses a body. Saving the last entry deletes the draft and its report. This draft flow does not provide a general JSON batch write command.
 
 Write receipts also give advice without changing anything stored. A newly declared whole Markdown file with several sections gets a hint to cite the sections the Node depends on.
 
-Node mutation receipts also list `problems` for the Node documents that command actually wrote, using the same address, document and material checks as `workspace check`. They do not inspect unrelated Node bodies. The findings are advisory: the write stays saved, and a failure to inspect it is reported as a problem of that Node rather than a failed write. A receipt lists every problem in full; its read-back text is paged to keep the receipt within 16 KiB, but problems alone can take it past that.
+Node mutation receipts also list `problems` for the Node documents that command actually wrote, using the same address, document and material checks as `workspace check`. They do not inspect unrelated Node bodies. The findings are advisory: the write stays saved, and a failure to inspect it is reported as a problem of that Node rather than a failed write.
 
 ### Native edits
 
-Agents read Node files with their own reader and edit them with their own tools; creation, material declarations and Card operations go through the CLI. Before any Node, Role or Card write, and in `workspace brief`, `check`, `export` and SessionStart, Tent compares the Node files with their latest retained versions and records valid changes byte for byte. A new Node file written by hand is not recorded; `workspace check` lists it. Invalid frontmatter is left untouched, not recorded, and listed by `workspace check`. Each of these points keeps the bytes it sees, so intermediate edits between two points are not recoverable. Pure reads and the per-tool and per-turn hooks do not collect edits.
+Every Tent command that accesses the graph collects valid native Node edits before carrying out its command, except help, version, `tent new` and `card watch`. Help and version require no Tent and do not read or write its graph. Stop also collects the Node files edited during the turn (§5). Collection compares current files with their latest retained versions and records valid changes byte for byte. Invalid frontmatter is left untouched and reported, not recorded. Each collection keeps the bytes it sees, so intermediate edits between two collection points are not recoverable. Host file tools need no Tent write command.
 
 ### History
 
-Each save records the exact bytes of the changed Node, Role and Card documents as one immutable event in `.tent/.git/history.sqlite`; the project's own Git is never written. An event has an opaque 64-hex id, a time, an operation name and the ids it touched. A version `{commit, path}` names one document in one event; `node get --version-json` reads it after later edits, moves or deletion, and `node history <id>` pages a Node's versions across moves. An edit and its revert are two events, so a change since a version stays a change after a revert. Diffs are line diffs with three lines of context. A save that changes nothing creates no event. A Node's `contentChangedAt` is the time of the last event that changed its body or material addresses; moves, tags and status do not count. When history cannot show that, or the file has uncollected changes, it is null rather than guessed.
+Each save records the exact bytes of the changed Node, Role and Card documents as one immutable event in `.tent/.git/history.sqlite`; the project's own Git is never written. An event has an opaque 64-hex id, a time, an operation name and the ids it touched. A version `{commit, path}` names one document in one event. `node history <id>` pages a Node's versions across moves; `node history <id> --version <v>` takes a JSON object `{commit, path}` and prints that document's complete raw bytes after checking its Node id and type, including after a later move or deletion. Historical raw documents may contain retired fields; current Node validation still rejects them. An edit and its revert are two events, so a change since a version stays a change after a revert. Diffs are line diffs with three lines of context. A save that changes nothing creates no event. A Node's `contentChangedAt` is the time of the last event that changed its body or material addresses; moves, tags and status do not count. When history cannot show that, or the file has uncollected changes, it is null rather than guessed.
 
 ### Safe writes and recovery
 
@@ -50,7 +52,7 @@ Tent writers share one on-disk mutation lock. A CLI write waits briefly for a bu
 
 Damaged or unsupported history fails explicitly. Workspaces still on the old private-Git history are not read; `migrate-history.mjs` converts an offline copy once, as [MIGRATION.md](MIGRATION.md) describes.
 
-Caches under `.tent/.git/tent-material-cache/` only make reads faster: deleting them changes no result, and a missing or broken cache falls back to reading files. A cached file observation is reused only while the file's size, times and identity match and the file is older than one second, so an edit that keeps all of those can be missed.
+Caches under `.tent/.git/` only make reads faster: deleting them changes no result, and a missing or broken cache falls back to reading files. A cached file observation is reused only while the file's size, times and identity match and the file is older than one second, so an edit that keeps all of those can be missed.
 
 ## 3. What a Node covers
 
@@ -58,17 +60,19 @@ Caches under `.tent/.git/tent-material-cache/` only make reads faster: deleting 
 
 In stored documents, `./` and `../` resolve from the declaring file, a leading `/` resolves from `.tent`, and `file:` URIs are absolute; separators are `/`. At the CLI, new material paths start at the Workspace root and are stored document-relative. A trailing `/` marks a directory, and `./` declares a path that does not exist yet. A stored bare source is a description, whether or not a file of that name exists; only at the CLI does a bare path to an existing file become a file address. Ordinary files inside `.tent/` cannot be materials. `path.md#Heading` selects one Markdown section by its heading text: its version covers that heading through the next heading of the same or higher level, so edits elsewhere in the file do not count. A missing or duplicate heading makes the material unavailable.
 
-A directory such as `src/api/`, or a file-name prefix such as `src/flask/views*`, declared with `track: structure` makes its Node a module that owns those files. Files Git ignores are left out. When several modules cover a file, the most specific one owns it; a parent module owns the files no child claims, new files included.
+Workspace directory members come only from the project's Git; Tent creates no private Git ignore context and uses no unfiltered directory walk. A `file:` directory outside that repository remains an address: Tent checks that it exists but never lists its members. Stop considers only changes in this Workspace's Git repository.
+
+A local file, directory such as `src/api/`, or file-name prefix such as `src/flask/views*` supplies ordinary coverage through `resource` or `sources`. The most specific matching declarations win for each changed file: exact file references and references to a Markdown section that actually changed take priority; otherwise the nearest matching directory or prefix wins. Equally specific matches all remain. Coverage does not establish ownership, inherit rules from ancestors or depend on `type`. There is no `track` behavior. Invalid, duplicate-id and deprecated Nodes supply no current coverage. `description` is ordinary metadata and supplies none.
 
 Markdown links, standard fields and bare `node-xxxxxx` tokens in a body relate Nodes to each other. Saves turn Node ids in links and materials into relative paths, and moves and renames rewrite the affected live links and materials, never historical Card input. A local body link must point to an existing file, or to an existing directory when it ends in `/`. `workspace check` reports unresolved links and missing materials.
 
 ## 4. Results
 
-`node link-output <goal-id> --resource <address>` creates an output under a goal for an existing local file or directory, a Node or a URI; `--name`, `--tags` and `--card` are optional. A path under `.worktrees/` gets a warning to merge into the main checkout first. The goal itself does not change.
+Create a Node with `node create --type output` and the relevant `--resource` or `--source` when a reusable result needs its own document. Later changes are direct file edits. Its type does not mark another Node complete or grant different coverage.
 
 ## 5. What the Agent is told
 
-Tent speaks to the Agent at the start of a session, after a file write, after the user answers a question, and at the end of a turn. Each notice says what to do, and notices about changed files copy the Nodes that cover them; none proves that a Node is right, and the Agent maintains Nodes through the ordinary operations. When nothing needs recording, the Agent says nothing about it.
+Tent reminds the Agent once at the end of a turn. The reminder points to the Nodes that cover changed files and reports problems in edited Node documents. The Agent reads and maintains those files with the host's tools. When nothing needs recording, it says nothing about Tent.
 
 ### Brief
 
@@ -76,101 +80,65 @@ Tent speaks to the Agent at the start of a session, after a file write, after th
 
 ### Hooks
 
-Both plugins register SessionStart, UserPromptSubmit, PostToolUse and Stop. Speed is held by acceptance guardrails, each the median of eleven alternating pairs of a hook run and a bare `node` start on each host: an ordinary tool hook adds at most 100 ms, loads no full CLI and starts no Git; on a repository of 7,570 files UserPromptSubmit adds at most 100 ms, and Stop at most 600 ms when few files changed and two seconds when all did. A write to a Node file refreshes the index through the full CLI under the workspace lock, a write to a linked Markdown section briefly locks that file's section record, and SessionStart can take longer when it prepares the index. Until the index is prepared for this workspace the hooks stay quiet; init, SessionStart and Tent's own graph writes prepare it, so Node edits made by shell or other tools reach it at the next SessionStart. No hook registers a session or reads a transcript.
+Both plugins register only Stop. The host shell translates its Stop input and output envelope; Core decides changed paths, coverage and the notice. A Stop explicitly marked by the host as following a previous Stop stays quiet, so a turn is continued at most once. Stop reads no transcript and registers no session.
 
-**SessionStart** collects native Node edits, prepares the index of which Node covers which file and its governing rules, and records a fingerprint of every linked Markdown section. It gives only the workspace, CLI, build and this instruction, without running or suggesting a brief:
+Stop performs these steps in order:
 
-```text
-Tent Workspace: <workspace>
-Tent CLI: <command>
-Build: <build>
-Tent shows you the Nodes that cover each file you change, right after the change. No Tent command is needed before working.
-```
-
-**PostToolUse** speaks after a supported file tool succeeds with a reliable write path: Claude Code's Write, Edit, MultiEdit and NotebookEdit, and Codex `apply_patch` with its published paths. Reads, errors, shell commands, and writes under `.git`, `.scratch`, `node_modules` and `.venv` produce nothing. A written project file selects its most specific covering modules and every Node that links it as a material, whole or as a section that actually changed, and copies their current bodies, then the direct prompts of those Nodes and of every goal above them, nearest first; a Node reached twice is copied once:
+1. **Compare the checkout with its previous Stop snapshot.** The snapshot keeps HEAD and content digests for uncommitted files. Comparison considers paths changed in commits between the previous and current HEAD, together with the current uncommitted paths, and compares their contents. With no previous snapshot, count current uncommitted files. Snapshots live in the shared `.tent` temporary directory, one per checkout, so linked worktrees have separate baselines. Files inside `.tent` never count as project-file changes. Before finishing, Stop saves the new checkout snapshot. A Workspace outside a Git repository produces no Stop notice.
+2. **Select covering Nodes.** Read `resource` and `sources` from current Node frontmatter using §3's most specific matching rule. Reuse cached metadata only while the Node file remains unchanged. A section comparison reads only files changed this turn that have a section reference; unrelated material bodies are not read for coverage.
+3. **Collect direct Node edits.** Record valid Node files edited during this turn in history, and retain the edited documents' concrete format problems for the notice. Compare problem-bearing documents with this checkout's previous Stop observation: unchanged invalid bytes do not produce another notice. A recursive Stop also advances that observation while staying quiet.
+4. **Emit the notice.** Use the exact text below. When both sections are present they appear in this order, separated by one blank line. When both are empty, emit nothing. Node paths are absolute paths under the main checkout's `.tent`, including for a linked-worktree session. The notice contains pointers, without Node bodies, count limits, byte limits or truncation. The same state produces identical bytes.
 
 ```text
-Tent: these Nodes cover the file you just changed.
-
-<name> (<nodeId>, <path>) covers <files>:
-<text>
-
-Rules over it:
-<name> (<nodeId>, <path>):
-<text>
-
-If one now says something the change made wrong, edit that sentence in its file. If the change settled a rule or a rejected option that also binds code it did not touch, or hit a dead end, add one short section: tent node append <nodeId> --heading <title> --body -. A lesson about these lines belongs in a code comment or a test. Otherwise say nothing about Tent.
+Files changed this turn are covered by these Tent Nodes:
+- <name>: <absolute path>
+If the change made a sentence in them wrong, fix it; if it settled something lasting, record it; otherwise say nothing about Tent.
 ```
-
-A successful native write to a Node file inside `.tent/` checks that Node with the same rules as `workspace check`, without collecting edits or checking unrelated Node bodies. If it has problems, it says:
 
 ```text
-Tent: <path> has problems:
-- <problem>
-Fix them before you end this turn.
+These Tent Node files have problems:
+- <absolute path>: <problem>
 ```
 
-A clean Node produces no notice. Other writes inside `.tent/` produce no covering-Node notice; explicit graph writes still refresh the prepared index. CLI Node mutations return the same problems in their receipts, so the Agent does not run a separate `workspace check` after saving.
+5. **Meet the speed guardrail.** On a repository of 7,570 files, Stop adds at most 600 ms when few files changed and two seconds when all did. Each host's acceptance figure is the median of eleven adjacent alternating pairs of a Hook command and a bare `node` start. Keep the raw pairs and outliers. Measure project and actual-graph copies under `.scratch`; an overrun is reported before changing semantics to reduce time.
 
-Hand-written product code that no module owns gets, once per session per file:
-
-```text
-Tent: no module Node owns these files: <paths>. Before you end this turn, add a directory or filename-prefix source with track: structure to the module Node that owns them, or create a module Node if they start a new area. If they are temporary, say nothing about them.
-```
-
-A question tool the user answered (Claude Code AskUserQuestion, Codex `request_user_input` or `request_user_input_async`) gets, unless the answer is empty or cancelled:
-
-```text
-Tent: the user just answered. If the answer settles a requirement or a decision, record it in the Node it belongs to before you end this turn; otherwise say nothing about it.
-```
-
-**UserPromptSubmit** records the time and HEAD at the start of the turn, without starting Git.
-
-**Stop** finds the files that changed during the turn, including shell and external edits, from one `git status` and file times since the turn started, plus the committed paths if HEAD moved. Committing older changes stays quiet; a deletion counts only if the file was not dirty at the end of the previous turn, as recorded by the last Stop or SessionStart, and stays quiet without that record; ignored files and submodules never count; Git runs the repository's own filters as usual; and a write that preserves file times can be missed. Nodes already delivered during the turn are left out. If any remain, Stop asks the Agent to continue once, with the PostToolUse list under this header:
-
-```text
-Tent: these Nodes cover files changed during this turn.
-```
-
-A turn already continued by Stop, a turn with no start record and a workspace outside Git stay quiet.
-
-A covering-Node notice is at most 8 KiB including its JSON envelope. Each Node's body is copied without summarizing, at most 1600 Unicode code points; a shorter excerpt ends with `… (cut; the rest is in <path>)`. Nodes that do not fit are counted as `<n> more Nodes: tent node search --resource <file>`. The first line and final action always remain; Node bodies take priority in selected order, then recovery lines in file order while they fit, with space reserved for the rest as `<n> more Nodes cover <m> other changed files: run tent node search --resource on each.`; recovery lines must not make the whole notice disappear. Only Nodes actually copied are marked as delivered, at most once per turn; a rule omitted after its owner was delivered can appear through another covering Node or in a later turn. A problem notice is held to the same 8 KiB: whole problems are listed in order while they fit, a first problem too long to fit is cut, and the rest are counted on a line before the last, `<n> more problems: tent workspace check --json`. Shell and external edits are seen only at Stop, never immediately.
+When neither an old section fingerprint nor old document text is available, a section is not counted as changed; whole-file and directory declarations can still supply coverage. Only changed files with section references are opened. Without a section record, use the previous checkout snapshot's HEAD text only when the file was clean in that snapshot; the first Stop uses the current HEAD. Previously dirty files without a section record remain unknown.
 
 ## 6. What a reader gets
 
-Ordinary code work needs no Tent read first: the Hooks copy the covering Nodes and their rules after a change (§5). When an Agent reads a Node or takes a Card, Tent hands it the related context from the graph. The first page of `card show`, `card take`, `node get` and `node search --resource` carries an `agentContext`, gathered from the Card's sources, the Node, or the Nodes whose materials cover the file. It has eight lists, each with at most ten entries and its complete total:
+Ordinary code work needs no Tent read first. Agents find and read Node files with the host's tools; Stop points to the Nodes that cover changed files (§5).
+
+The first page of `card show` and `card take` carries an `agentContext`, gathered from the Card's sources. Its related-context lists have at most ten entries each and their complete totals:
 
 - `references`: the source body or selected section, copied, up to 1600 code points;
-- `rules`: the goals whose materials cover those files, their direct prompts, and the goals above the Node or Card source being read, each with its first authored sentence;
-- `paths`: the files those Nodes cover;
+- `paths`: files covered by the source Nodes' materials;
 - `tests`: test files that statically import that code, each with the import that links it. A similar file name is no evidence, and an empty list means none were found, not that none exist;
 - `changes`: for a pinned source, bounded line diffs from its pinned version to its latest retained one;
 - `decisions`: Nodes and files the body links to or names, and Nodes that link to it;
-- `open`: unfinished Cards whose sources are these Nodes, and the read goal or its direct child goals without a result for their latest body change;
+- `open`: unfinished Cards whose sources are these Nodes;
 - `unknown`: what could not be determined, and why.
 
-A goal has a result when it or a current descendant goal has a `track: structure` source, or when a currently non-deprecated output was placed in its subtree after its latest body change. When the required time cannot be determined, the finding goes in `unknown`. These goal findings appear only in `agentContext`, not in brief or workspace problems.
+Node types do not select inherited rules or infer an open or completed goal. Material paths use ordinary coverage (§3).
 
-For file-start reads, `paths` and `tests` come only from the most specific covering structure modules and exact-file material Nodes, deduplicated before pagination; higher goals contribute rules without expanding their files.
-
-Every assembled entry states the relationship that selected it. Text is copied, never summarized, and gathering it records and repairs nothing. The whole response fits 16 KiB, with the primary body taking at most half; when room runs out, later lists shrink to titles and then drop out, each marked, and ids and addresses are never shortened. The source commands it prints recover the bodies and a raw Card read every source address and version; no command lists every omitted entry. A Card source keeps its pinned version. `node-xxxxxx#Heading` or a link ending in `#Heading` selects one section of a source; a missing or duplicate heading becomes an unknown, and the source's pinned opening stands in for the section, never today's text. Tent records no session boundary, so what the last session did is unknown. Raw views, `--full`, continuation pages and `read-many` carry no `agentContext`.
+Every assembled entry states the relationship that selected it. Text is copied, never summarized, and gathering it repairs nothing. The whole response fits 16 KiB, with the primary body taking at most half; when room runs out, later lists shrink to titles and then drop out, each marked, and ids and addresses are never shortened. A Card source keeps its pinned version. `node-xxxxxx#Heading` or a link ending in `#Heading` selects one section of a source; a missing or duplicate heading becomes an unknown, and the source's pinned opening stands in for the section, never today's text. Tent records no session boundary, so what the last session did is unknown. Raw views, `--full` and continuation pages carry no `agentContext`.
 
 ## 7. Mapping a project
 
-`workspace scan` reports the facts for planning modules from the current checkout: coverage, directory imports and cycles, generated directories, file-name groups and guidance files. It runs no model and writes nothing; a workspace that is not a Git checkout fails. Text output is a short overview with `+N more` counts; `--json` has every fact. Guidance files are the usual project documents (README, AGENTS, CLAUDE, CONTRIBUTING, ARCHITECTURE, DESIGN and the like, `.cursor/rules`) and Markdown or text under top-level `docs/` or `doc/`. `package.json` entry points and Claude Code and Codex plugin manifests mark product boundaries even where there is no parseable code.
+In an empty Workspace, `workspace scan` reports facts for planning parts from the current checkout: coverage, directory imports and cycles, generated directories, file-name groups and guidance files. It runs no model and changes no Node content; like other CLI invocations it first collects native edits. A workspace that is not a Git checkout fails. Text output is a short overview with `+N more` counts; `--json` has every fact. Guidance files are the usual project documents (README, AGENTS, CLAUDE, CONTRIBUTING, ARCHITECTURE, DESIGN and the like, `.cursor/rules`) and Markdown or text under top-level `docs/` or `doc/`. `package.json` entry points and Claude Code and Codex plugin manifests mark product boundaries even where there is no parseable code.
 
-`workspace scan --draft <file>` writes an editable module map in the `node write-many` format, plus a JSON Lines report beside it whose name ends `.report.json`. It needs a Workspace with no Nodes and refuses to overwrite either file. Each proposed part is a goal with an empty body that owns its directory or file-name prefix through a structure source; real directory layers become parents and children. Leaf parts aim at ten code files or fewer, tests excluded: large directories split along subdirectories, flat directories by load-time imports, then by file-name stems. Only `module-load` imports group files. Generated files stay with their source, tests beside code stay with it, a separate test tree becomes a plain Tests part, a root code file joins the one part it shares the most load-time imports with while that part is under the size target, and otherwise becomes its own part flagged for review, root tests go to Tests, other root files go to Setup, and each top-level `docs/` tree becomes one Docs part. The Agent names the parts, adjusts their boundaries, writes their bodies and adds the project's own goal beside them. The report has one line per part, findable by searching `"ref":"@<ref>"`, with its files, tests, co-changing parts, history and findings. The printed receipt fits 4 KiB. Exit 1 means there are findings to settle; imports Tent could not resolve are reported without changing it, and both files are written either way.
+`workspace scan --draft <file>` writes an editable map draft and a JSON Lines report beside it whose name ends `.report.json`. It refuses to overwrite either file. Each proposed part has an empty body and a `resource` pointing to its directory or file-name prefix, without a tracking field; real directory layers become parents and children. Leaf parts aim at ten code files or fewer, tests excluded: large directories split along subdirectories, flat directories by load-time imports, then by file-name stems. Only `module-load` imports group files. Generated files and adjacent tests stay with their source; a separate test tree becomes a Tests part, other root files become Setup, and each top-level `docs/` tree becomes one Docs part. The report records each part's files, tests, co-changing parts, history and findings. The Agent adjusts names and boundaries, writes useful bodies and saves them with `node create --draft <file>` (§2); empty-body Nodes never enter the graph.
 
-`workspace check-modules [--json]` checks a module map against the same import facts and the latest 300 first-parent commits, without writing anything. Each finding names a rule, the modules and one suggested fix; JSON also lists each module's files, `testedBy` (test files importing its code) and `coChanges` (modules changed in the same commits, with counts). Exit 0 means the map is clean; imports Tent could not resolve are reported without changing the exit code. The rules:
+When the Workspace already has any Node, `workspace scan` creates no draft and reports only map problems using ordinary file, directory and prefix coverage without ownership or type rules. Every Node that covers files is a part, and each file belongs to its most specific matching part. Findings name the involved Nodes and files, with import and co-change evidence and one suggested fix. Clean text output is silent with exit 0; findings produce exit 1. `--json` directly returns the report fields together with `parts`: the report includes the findings, each part's files, `testedBy` and `coChanges`; `parts` is a tree whose entries contain `name`, `path`, `files` and `children`. Tracked files with no coverage are reported as `map.uncovered`; there is no separate unowned-code finding. Import extraction uncertainty is reported rather than guessed.
+
+The report uses the latest 300 first-parent commits and these rules:
 
 - `map.uncovered`: tracked files no Node covers;
-- `map.unowned`: covered production code no module owns;
-- `module.oversized` and `module.skewed`: a leaf module with at least 20 production code files (tests, generated and vendored files do not count) that holds more than 20% of the project's, or more than three times the median of its other non-empty siblings, and has at least two groups of three or more files that could split;
-- `deps.cycle`: two modules, neither inside the other, load each other, with at least three imports in the smaller direction and at least 10% of the larger, not counting tests or `index` barrel files;
-- `history.always-together`: two modules share at least five commits, at least 90% of the less-changed one's, with lift of at least two; commits touching more than 50 files are left out;
-- `history.generated-apart`: the same, where one module is mostly generated files.
+- `module.oversized` and `module.skewed`: a leaf part with at least 20 production code files (tests, generated and vendored files do not count) that holds more than 20% of the project's, or more than three times the median of its other non-empty siblings, and has at least two groups of three or more files that could split;
+- `deps.cycle`: two parts, neither inside the other, load each other, with at least three imports in the smaller direction and at least 10% of the larger, not counting tests or `index` barrel files;
+- `history.always-together`: two parts share at least five commits, at least 90% of the less-changed one's, with lift of at least two; commits touching more than 50 files are left out;
+- `history.generated-apart`: the same, where one part is mostly generated files.
 
-A module keeps an intended exception with a line `allow:<rule>` in its body or in a prompt under it, short of any nested module; a pair rule also needs a link to the other module on that line. The two `map.` rules cannot be excepted.
+A Node keeps an intended exception with a line `allow:<rule>` in its own body. A pair rule also needs a link to the other Node on that line. `map.uncovered` cannot be excepted.
 
 Imports are read from TypeScript, JavaScript, Python, Go, Rust, Java, C#, C, C++ and PHP source as written, without running code, compilers or build tools. Each import is classed as `module-load` (loads when the file loads), `deferred` (inside a function), `type-only` or `compile-time` (Rust, Java, C#, C/C++ and PHP name dependencies). A name the extractor cannot resolve to one local target is reported, never guessed; a PHP include that depends on the runtime include path links each existing candidate, marked uncertain. What each language's extractor follows, and where it stops, is documented with its code and tests.
 
@@ -190,7 +158,7 @@ A Card is `pending`, then `consumed` when it is taken: by its target Role, or, f
 
 Each Role has an ordered queue of pending Cards, oldest first by default; the public area holds untargeted Cards and is shown only on request. `card move <id> [--to <role> | --public] [--before <id> | --after <id>] --base-etag <etag>` reorders a pending Card or sends it to another Role, writing only that Card. `card deprecate <id> --base-etag <etag>` cancels a Card, even after it was taken, keeping what was received; lists and brief leave deprecated Cards out unless asked, and an explicit `show` or `take` still works and warns. `card list` filters by Role and state. `card watch --role <role> [--include-open] [--timeout <seconds>]` waits until a pending Card for that Role, or a result returned to it, exists, then prints one line per Card: the command to take a pending Card, or the result of a returned Card; it exits 0 with input, 2 on timeout and 1 on error, and receives nothing itself. Taking a public Card claims it; of two concurrent claims one wins and the other is told who.
 
-While a Card is in progress, brief lists its pinned source goals that changed since pinning, so the receiver rereads them. `node link-output --card <id>` records an output as the response to a Card that is taken and not yet returned, whose pinned goal lies on the output's goal chain; with `--role` alone, Tent picks the one in-progress Card that fits, and asks for `--card` when several do.
+While a Card is in progress, brief lists its pinned sources that changed since pinning, so the receiver rereads them. Creating a Node does not choose a Card or return its result; Card delivery and return remain explicit operations.
 
 ## 9. Everything else
 

@@ -55,7 +55,7 @@ If your Claude Code has no `--marketplace` option, run `claude plugin marketplac
 codex plugin marketplace add cucarol/tent --ref plugin-dist && codex plugin add tent@tent
 ```
 
-Each plugin bundles four Skills, SessionStart, UserPromptSubmit, PostToolUse and Stop Hooks and the CLI; it needs no npm install. Claude Code turns the Hooks on with the plugin. Codex asks you to review them. Every command works without them. Details: [docs/PLUGIN.md](docs/PLUGIN.md).
+Each plugin bundles four Skills, Stop Hooks and the CLI; it needs no npm install. Claude Code turns the Hooks on with the plugin. Codex asks you to review them. Every command works without them. Details: [docs/PLUGIN.md](docs/PLUGIN.md).
 
 Or give your agent this:
 

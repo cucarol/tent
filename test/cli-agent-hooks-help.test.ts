@@ -7,10 +7,33 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { test } from "node:test";
+import { runHookCommand } from "../src/cli/hook.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const scratch = testScratchRoot();
 const run = promisify(execFile);
+
+test("both native packages register only Stop and the public CLI rejects retired Hook entry points", async () => {
+  for (const host of ["codex", "claude-code"]) {
+    const hooks = JSON.parse(
+      await fs.readFile(path.join(root, "plugins", host, "tent/hooks/hooks.json"), "utf8"),
+    ).hooks;
+    assert.deepEqual(Object.keys(hooks), ["Stop"]);
+    assert.equal(hooks.Stop[0].hooks[0].type, "command");
+    assert.match(hooks.Stop[0].hooks[0].command, /-- stop$/);
+    assert.doesNotMatch(hooks.Stop[0].hooks[0].command, /start|prompt|tool/);
+  }
+  const help = await runHookCommand("help", [], { packageRoot: root });
+  assert.equal(help.exitCode, 0);
+  assert.match(help.stdout, /tent hook stop --host codex\|claude-code/);
+  assert.doesNotMatch(help.stdout, /hook start/);
+  for (const sub of ["start", "tool", "prompt"]) {
+    const result = await runHookCommand(sub, [], { packageRoot: root, stdin: "{}" });
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout, "{}\n");
+    assert.match(result.stderr, new RegExp(`Unknown command: tent hook ${sub}`));
+  }
+});
 
 test("retired hook installer always rejects and leaves existing host configuration unchanged", async () => {
   await fs.mkdir(scratch, { recursive: true });

@@ -133,9 +133,8 @@ export async function validateHostPackage(root, host) {
   validateDocuments(await readAgentDocuments(root));
   const hooks = JSON.parse(await fs.readFile(path.join(root, "hooks/hooks.json"), "utf8")).hooks;
   check(
-    JSON.stringify(Object.keys(hooks).sort()) ===
-      JSON.stringify(["PostToolUse", "SessionStart", "Stop", "UserPromptSubmit"]),
-    `${host}: expected tool, start, prompt and stop hooks`,
+    JSON.stringify(Object.keys(hooks).sort()) === JSON.stringify(["Stop"]),
+    `${host}: expected the Stop hook`,
   );
   const variable = host === "codex" ? "PLUGIN_ROOT" : "CLAUDE_PLUGIN_ROOT";
   const realRoot = await fs.realpath(root);
@@ -163,7 +162,10 @@ export async function validateHostPackage(root, host) {
         }[event];
         check(command.endsWith(` -- ${action}`), `${host}: wrong Hook action`);
         const launcher = await fs.readFile(filename, "utf8");
-        check(launcher.includes(`"--host", "${host}"`), `${host}: launcher must fix its host`);
+        check(
+          new RegExp(`runTurnHook\\(\\s*"${host}"`).test(launcher),
+          `${host}: launcher must fix its host`,
+        );
         const runtime = launcher.match(/new URL\("([^"]+)", import\.meta\.url\)/)?.[1];
         check(runtime, `${host}: missing local CLI reference`);
         const runtimePath = await fs.realpath(path.resolve(path.dirname(filename), runtime));
