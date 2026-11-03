@@ -424,17 +424,21 @@ export function rustCargo(
         });
     };
     add(library, table(data.lib), lib.edition ?? edition);
-    // Binary roots accumulate by path: an explicit target with the same name
-    // does not currently replace an automatically inferred root.
+    // An explicit [[bin]] replaces the inferred binary of the same name, as in Cargo.
+    const explicitBins = new Set(
+      (Array.isArray(data.bin) ? data.bin : []).flatMap((bin) =>
+        table(bin) && typeof bin.name === "string" ? [bin.name] : [],
+      ),
+    );
     if (autoBins) {
-      add(path.posix.join(directory, "src/main.rs"));
+      if (!explicitBins.has(String(pkg.name))) add(path.posix.join(directory, "src/main.rs"));
       const prefix = path.posix.join(directory, "src/bin") + "/";
-      for (const file of paths)
-        if (
-          file.startsWith(prefix) &&
-          /^(?:[^/]+\.rs|[^/]+\/main\.rs)$/.test(file.slice(prefix.length))
-        )
-          add(file);
+      for (const file of paths) {
+        const name = /^([^/]+)(?:\.rs|\/main\.rs)$/.exec(
+          file.startsWith(prefix) ? file.slice(prefix.length) : "",
+        )?.[1];
+        if (name !== undefined && !explicitBins.has(name)) add(file);
+      }
     }
     if (Array.isArray(data.bin))
       for (const bin of data.bin) {

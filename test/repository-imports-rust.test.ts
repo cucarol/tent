@@ -497,6 +497,24 @@ test("Rust binary tables leave default libraries available and apply same-class 
     }
 });
 
+test("an explicit binary replaces the inferred binary of the same name", () => {
+  const result = extractRepositoryImports([
+    cargo('[[bin]]\nname="app"\npath="cli/main.rs"\n[[bin]]\nname="extra"\npath="tools/extra.rs"'),
+    source("cli/main.rs", "fn main() {}"),
+    source("tools/extra.rs", "fn main() {}"),
+    source("src/main.rs", "mod automatic; fn main() {}"),
+    source("src/automatic.rs"),
+    source("src/bin/extra/main.rs", "mod helper; fn main() {}"),
+    source("src/bin/extra/helper.rs"),
+    source("src/bin/other/main.rs", "mod shared; fn main() {}"),
+    source("src/bin/other/shared.rs"),
+  ]);
+  const from = (file: string) => result.edges.some((edge) => edge.from === file);
+  assert.equal(from("src/main.rs"), false);
+  assert.equal(from("src/bin/extra/main.rs"), false);
+  assert.equal(from("src/bin/other/main.rs"), true);
+});
+
 test("Rust explicit discovery switches affect only their target class", () => {
   const libraryOff = extractRepositoryImports([
     cargo('autolib=false\n[[bin]]\nname="tool"\npath="tool/main.rs"', "2015"),
