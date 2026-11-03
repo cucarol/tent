@@ -1,74 +1,75 @@
 #!/usr/bin/env node
-// Product-CLI scale probe. No default run, downloads, or cleanup operations.
+// Explicit, reusable product-CLI fixtures. No automatic run, cleanup, or history fabrication.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-const help = `Tent product-CLI scale probe
-
-generate --project-root ROOT --workspace NEW --cli FILE
-         (--scale 1|10 | --goals N --commits N --cards N) [--batch 90]
-measure  --project-root ROOT --fixture SOURCE --workspace NEW --cli FILE
-         [--label TEXT] [--repeats 2] [--output NEW.json]
-
-All fixture, measurement and output paths must be inside ROOT/.scratch.
-ROOT must be a Tent checkout. NEW must not exist; no overwrite or cleanup.
-The CLI must already be built. No command runs implicitly or selects a CLI.
-
-1x = 6 top goals, 54 Nodes, exactly 438 retained commits, 10 Cards.
-10x = 60 top goals, 540 Nodes, exactly 4380 retained commits, 100 Cards.
-Each top goal has 2 prompt decisions, 2 sub-goals and 4 outputs; every Node
-starts with 1024 ASCII body bytes. Half the outputs reference local material
-via file: URI, accepted by both e8165b20 and current CLI. Seed is fixed at 42.
-The real CLI creates Nodes in batches and records Core material/goal baselines.
-Synthetic Node edits and Card create/take history use Git fast-import; 80% of
-Cards are consumed. These fixtures are scale probes, not mutation correctness
-tests. The final commit budget counts the actual create/take operations.
-
-measure copies exactly one explicit generated fixture to a new workspace,
-excluding disposable history/derived caches. Source material file: URIs still
-point into SOURCE, which must remain present and unchanged. Both CLI versions
-therefore see identical retained history, source pins and material contents.
-Sequence: fresh-process brief (empty derived caches); prime card list; then
-each repeat appends the same body to the first top goal, measures the first
-brief after that write, two hot briefs and two card lists. Each command is a
-new Node subprocess. Cold means application caches, not flushed OS caches.
-No UI snapshot or in-process Core substitute is used for the three CLI gates.
-
-Examples (PowerShell; paths are explicit):
-  $root = '${path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..").replaceAll("\\", "/")}'
-  $bench = "$root/scripts/bench-scale.mjs"
-  $old = "$root/.scratch/scale-old-build/cli.mjs" # built from e8165b20
-  $new = "$root/cli.mjs" # build intended candidate before measuring
-  node $bench generate --project-root $root --workspace "$root/.scratch/scale-1" --cli $old --scale 1
-  node $bench generate --project-root $root --workspace "$root/.scratch/scale-10" --cli $old --scale 10
-  # Back-to-back, same fixture and sequence. Use fresh names for another run.
-  node $bench measure --project-root $root --fixture "$root/.scratch/scale-10" --workspace "$root/.scratch/scale-old-run" --cli $old --label e8165b20 --output "$root/.scratch/scale-old.json"
-  node $bench measure --project-root $root --fixture "$root/.scratch/scale-10" --workspace "$root/.scratch/scale-new-run" --cli $new --label candidate --output "$root/.scratch/scale-new.json"
-  # Small script smoke only (not the 10x performance gate):
-  node $bench generate --project-root $root --workspace "$root/.scratch/scale-smoke" --cli $new --goals 1 --commits 24 --cards 2
-
-JSON records CLI version/hash/source Git identity, machine/load/CPU observations,
-cache bytes, subprocess results and gate observations. The 10x limits from
-2026-10-06 are first brief <=13.5s, hot brief <=7.9s, card list <=2.2s.
-Only successful measured samples at exactly 10x receive gate observations.
-Compare old-build results to the published baseline to judge machine noise;
-the script neither corrects for noise nor declares independent acceptance.
-`;
 
 const marker = "bench-scale-fixture.json";
+const schemaVersion = 3;
+const metrics = ["load", "stopOne", "stopAll", "scan", "check", "cardList", "cardWatch"];
+const help = `Tent product-CLI scale probe
+
+generate --project-root ROOT --workspace NEW --cli FILE --scale 1|10 [--batch 90]
+measure  --project-root ROOT --fixture SOURCE --workspace NEW --cli FILE
+         [--label TEXT] [--repeats 5] [--output NEW.json]
+
+All fixture, measurement and output paths must be inside ROOT/.scratch.
+ROOT must be a Tent checkout. NEW must not exist. No overwrite or cleanup.
+The CLI must already be built and is always explicit. No default operation.
+Generation initializes an isolated project Git inside NEW before tent new;
+the material baseline commit must never fall back to ROOT's repository.
+
+1x = 6 top goals, 54 Nodes, 24 source files, 10 Cards and 5 Roles.
+10x = 60 top goals, 540 Nodes, 240 source files, 100 Cards and 5 Roles.
+Every top goal has 2 prompt children, 2 sub-goals and 4 output grandchildren.
+Goals cover directories; half the outputs also cover a file. The first top
+level goal covers the project root, including README/AGENTS/.gitignore.
+Layout and 1024-byte ASCII bodies use seed 42. Node/Role/Card ids are fixed;
+event times and event ids come from the actual CLI and are not fabricated.
+Nodes are created with batched node create --draft. Cards use create/take/
+return, with pending/consumed/returned/closed examples. History is produced
+only by these real CLI operations in .tent/.git/history.sqlite; no fast-import,
+old commit budget, direct database writes, or retired commands are used.
+
+Generate once; reuse the untouched SOURCE for both builds. Each metric gets
+its own fresh copy under NEW, preserving file times but excluding disposable
+Tent caches and Stop state. Local materials use relocatable relative paths.
+Each command is a fresh Node process: one cold sample then --repeats warm
+samples (minimum 2). Cold means empty application caches, not flushed OS caches.
+Stop changes one tracked source file or ALL tracked project files before EACH
+sample, without priming Stop; its first sample compares against project HEAD.
+Subsequent samples compare against the preceding successful Stop. Support
+files in the all-dirty case retain their ignore rules; only a comment is added.
+The load probe requests three explicit material paths. Other probes are
+workspace scan/check and card list/watch for one Role with a pending Card.
+
+Every invocation retains argv, stdin, full stdout/stderr, exit code, elapsed
+milliseconds and machine observations. Results report cold samples and warm
+medians, without the retired brief gates or automatic regression verdicts.
+Use equivalent build formats, the same fixture/repeats, and a serial machine
+window. SOURCE is fingerprinted before and after measurement; a failed sample
+or changed CLI/fixture makes the run fail while retaining collected samples.
+
+Examples (PowerShell; no implicit CLI selection):
+  $root = 'D:/cucarol/_code/Tent'
+  $bench = "$root/scripts/bench-scale.mjs"
+  $cli = "$root/.worktrees/judge-card-pointers/cli.mjs"
+  node $bench generate --project-root $root --workspace "$root/.scratch/scale-1" --cli $cli --scale 1
+  node $bench measure --project-root $root --fixture "$root/.scratch/scale-1" --workspace "$root/.scratch/scale-build-a" --cli $cli --label build-a --output "$root/.scratch/scale-build-a.json"
+  # Repeat measure with a second explicit CLI, fresh workspace/output, same fixture.
+`;
+
 const env = Object.fromEntries(
   Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
 );
-function fail(message) {
+const fail = (message) => {
   throw new Error(message);
-}
+};
 function inside(parent, child) {
   const rel = path.relative(parent, child);
-  return rel !== "" && !rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 function integer(value, name, min = 1) {
   const n = Number(value);
@@ -91,7 +92,6 @@ function scratchPath(root, value, name, fresh = false) {
   if (!value) fail(`--${name} is required`);
   const target = path.resolve(value);
   if (!inside(path.join(root, ".scratch"), target)) fail(`${name} must be inside ROOT/.scratch`);
-  // Check every existing component, including dangling links and junctions.
   let current = root;
   for (const part of path.relative(root, target).split(path.sep)) {
     current = path.join(current, part);
@@ -110,6 +110,7 @@ function scratchPath(root, value, name, fresh = false) {
   return target;
 }
 function run(command, args, cwd, input) {
+  const started = new Date().toISOString();
   const before = performance.now();
   const result = spawnSync(command, args, {
     cwd,
@@ -119,255 +120,57 @@ function run(command, args, cwd, input) {
     windowsHide: true,
     maxBuffer: 256 * 1024 * 1024,
   });
-  if (result.error) throw result.error;
   return {
-    seconds: (performance.now() - before) / 1000,
+    command,
+    args,
+    cwd,
+    stdin: input ?? null,
+    started,
+    milliseconds: performance.now() - before,
     code: result.status,
     signal: result.signal,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
+    error: result.error?.message ?? null,
   };
 }
 function checked(result, action) {
-  if (result.code !== 0)
-    fail(`${action} failed (${result.code}): ${result.stderr || result.stdout}`);
+  if (result.error || result.code !== 0)
+    fail(`${action} failed (${result.code}): ${result.error || result.stderr || result.stdout}`);
   return result.stdout.trim();
 }
-function git(ws, args, input) {
-  return checked(
-    run("git", ["-C", path.join(ws, ".tent"), "-c", "core.autocrlf=false", ...args], ws, input),
-    `git ${args[0]}`,
+function git(ws, args) {
+  const metadata = path.join(ws, ".git");
+  if (!fs.lstatSync(metadata).isDirectory()) fail("Fixture must own an ordinary .git directory");
+  return run(
+    "git",
+    [
+      "--no-optional-locks",
+      `--git-dir=${metadata}`,
+      `--work-tree=${ws}`,
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.untrackedCache=false",
+      "-c",
+      "core.hooksPath=.bench-scale/empty-hooks",
+      "-C",
+      ws,
+      ...args,
+    ],
+    ws,
   );
-}
-function identity(cli, root) {
-  const dir = path.dirname(cli);
-  const optionalGit = (args) => {
-    const value = run("git", ["-C", dir, ...args], root);
-    return value.code === 0 ? value.stdout.trim() : null;
-  };
-  return {
-    path: cli,
-    sha256: createHash("sha256").update(fs.readFileSync(cli)).digest("hex"),
-    version: checked(run(process.execPath, [cli, "--version"], root), "CLI --version"),
-    sourceHead: optionalGit(["rev-parse", "HEAD"]),
-    sourceStatus: optionalGit(["status", "--porcelain"]),
-  };
 }
 function tent(cli, ws, args, input) {
   return run(process.execPath, [cli, ...args, "--workspace", ws], ws, input);
 }
-function collectDocs(tentRoot) {
-  const docs = [];
-  function walk(dir) {
-    for (const e of fs
-      .readdirSync(dir, { withFileTypes: true })
-      .sort((a, b) => a.name.localeCompare(b.name))) {
-      if ([".git", "roles", "cards", "temp", "attachments"].includes(e.name)) continue;
-      const file = path.join(dir, e.name);
-      if (e.isDirectory()) walk(file);
-      else if (e.name === `${path.basename(dir)}.md`) {
-        const raw = fs.readFileSync(file, "utf8");
-        const id = /^id: (node-[a-z0-9]+)$/m.exec(raw)?.[1];
-        const type = /^type: (\S+)$/m.exec(raw)?.[1];
-        if (id)
-          docs.push({
-            id,
-            type,
-            rel: path.relative(tentRoot, file).split(path.sep).join("/"),
-            raw,
-          });
-      }
-    }
-  }
-  walk(tentRoot);
-  return docs;
-}
-function generate(root, ws, cli, opts, build) {
-  const hasScale = opts.scale !== undefined;
-  if (hasScale && ["goals", "commits", "cards"].some((key) => opts[key] !== undefined))
-    fail("Use --scale OR --goals/--commits/--cards");
-  const scale = hasScale ? integer(opts.scale, "scale") : null;
-  if (hasScale && ![1, 10].includes(scale)) fail("--scale must be 1 or 10");
-  const goals = hasScale ? 6 * scale : integer(opts.goals, "goals");
-  const totalCommits = hasScale ? 438 * scale : integer(opts.commits, "commits");
-  const cardCount = hasScale ? 10 * scale : integer(opts.cards, "cards", 0);
-  const batch = integer(opts.batch ?? "90", "batch");
-  if (batch % 9 !== 0)
-    fail("--batch must be a multiple of 9 so each goal's references share a batch");
-  let seed = 42;
-  const rand = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
-  const body = () => {
-    let text = "";
-    while (text.length < 1024)
-      text += `Agreed behaviour, reason and supporting evidence ${Math.floor(rand() * 1e6)}.\n`;
-    return text.slice(0, 1024);
+function identity(cli, root) {
+  const version = run(process.execPath, [cli, "version", "--json", "--workspace", root], root);
+  return {
+    path: cli,
+    sha256: createHash("sha256").update(fs.readFileSync(cli)).digest("hex"),
+    version: JSON.parse(checked(version, "CLI version")),
   };
-  fs.mkdirSync(path.dirname(ws), { recursive: true });
-  checked(run(process.execPath, [cli, "new", ws], root), "CLI new");
-  fs.mkdirSync(path.join(ws, "src"));
-  const items = [];
-  for (let g = 0; g < goals; g++) {
-    items.push({
-      op: "create",
-      ref: `g${g}`,
-      name: `Goal${g}`,
-      type: "goal",
-      tags: ["requirement"],
-      body: body(),
-    });
-    for (let p = 0; p < 2; p++)
-      items.push({
-        op: "create",
-        ref: `g${g}p${p}`,
-        name: `Decision${g}x${p}`,
-        type: "prompt",
-        tags: ["decision"],
-        parent: `@g${g}`,
-        body: body(),
-      });
-    for (let s = 0; s < 2; s++) {
-      items.push({
-        op: "create",
-        ref: `g${g}s${s}`,
-        name: `Sub${g}x${s}`,
-        type: "goal",
-        tags: ["todo"],
-        parent: `@g${g}`,
-        body: body(),
-      });
-      for (let o = 0; o < 2; o++) {
-        const item = {
-          op: "create",
-          ref: `g${g}s${s}o${o}`,
-          name: `Out${g}x${s}x${o}`,
-          type: "output",
-          tags: ["evidence"],
-          parent: `@g${g}s${s}`,
-          body: body(),
-        };
-        if (o === 0) {
-          const file = path.join(ws, "src", `f${g}_${s}_${o}.ts`);
-          fs.writeFileSync(file, `export const v${g}_${s}_${o} = ${g};\n`, { flag: "wx" });
-          item.resource = pathToFileURL(file).href;
-        }
-        items.push(item);
-      }
-    }
-  }
-  const batchTimes = [];
-  for (let start = 0; start < items.length; start += batch) {
-    const result = tent(
-      cli,
-      ws,
-      ["node", "write-many", "--input-json", "-", "--json"],
-      JSON.stringify({ items: items.slice(start, start + batch) }),
-    );
-    checked(result, "CLI node write-many");
-    batchTimes.push({ nodes: Math.min(batch, items.length - start), seconds: result.seconds });
-  }
-  const roles = [];
-  for (let r = 0; r < 5; r++)
-    roles.push(
-      JSON.parse(
-        checked(
-          tent(cli, ws, ["role", "create", "--title", `Role${r}`, "--body", body(), "--json"]),
-          "CLI role create",
-        ),
-      ).roleId,
-    );
-  const docs = collectDocs(path.join(ws, ".tent"));
-  if (docs.length !== goals * 9) fail(`Expected ${goals * 9} Nodes, found ${docs.length}`);
-  const head0 = git(ws, ["rev-parse", "HEAD"]);
-  const branch = git(ws, ["symbolic-ref", "HEAD"]);
-  const existing = Number(git(ws, ["rev-list", "--count", "HEAD"]));
-  const consumed = cardCount - Math.ceil(cardCount / 5);
-  const edits = totalCommits - existing - cardCount - consumed;
-  if (edits < 0) fail(`Commit budget too small: need at least ${existing + cardCount + consumed}`);
-  const goalsOnly = docs.filter((d) => d.type.startsWith("goal"));
-  const nonGoals = docs.filter((d) => !d.type.startsWith("goal"));
-  const blob = (s) => `data ${Buffer.byteLength(s)}\n${s}\n`;
-  const message = (op, id) =>
-    `Tent: ${op}\n\nTent-Operation: ${op}\nTent-Object: ${id}\nTent-Entry: cli`;
-  let stream = "";
-  let operations = 0;
-  function commit(op, id, rel, raw) {
-    stream += `commit ${branch}\ncommitter Tent <tent@local.invalid> ${1767225600 + operations * 600} +0000\n${blob(message(op, id))}`;
-    if (operations === 0) stream += `from ${head0}\n`;
-    stream += `M 100644 inline ${JSON.stringify(rel)}\n${blob(raw)}\n`;
-    operations++;
-  }
-  for (let i = 0; i < edits; i++) {
-    const pool = rand() < 0.03 ? goalsOnly : nonGoals;
-    const d = pool[Math.floor(rand() * pool.length)];
-    d.raw += `\nEdit ${i}: revised after review (${Math.floor(rand() * 1e6)}).\n`;
-    commit("node.write", d.id, d.rel, d.raw);
-  }
-  const topGoals = docs.filter((d) => d.type === "goal" && d.rel.split("/").length === 2);
-  for (let c = 0; c < cardCount; c++) {
-    const id = `card-${c.toString(36).padStart(8, "0")}`;
-    const goal = topGoals[c % topGoals.length];
-    const role = roles[c % roles.length];
-    const base = `---\ntype: card\nid: ${id}\nschemaVersion: 3\nsources:\n  - resource: ../${goal.rel}\n    version:\n      commit: ${head0}\n      path: ${goal.rel}\ntitle: Task ${c}\ntarget: ${role}\n`;
-    const prompt = `---\nImplement task ${c} against the referenced goal and attach evidence.\n`;
-    commit("card.create", id, `cards/${id}.md`, base + "state: pending\n" + prompt);
-    if (c % 5 !== 0)
-      commit(
-        "card.take",
-        id,
-        `cards/${id}.md`,
-        base + `state: consumed\nreceivedBy: ${role}\n` + prompt,
-      );
-  }
-  if (operations) {
-    git(ws, ["fast-import", "--quiet"], stream);
-    // Populate imported tracked files without reset/clean/deletion operations.
-    git(ws, ["read-tree", "HEAD"]);
-    git(ws, ["checkout-index", "--all", "--force"]);
-  }
-  const count = Number(git(ws, ["rev-list", "--count", "HEAD"]));
-  if (count !== totalCommits) fail(`Commit count mismatch: expected ${totalCommits}, got ${count}`);
-  const result = {
-    schemaVersion: 2, // 2: exact Node types with tags
-    kind: "tent-cli-scale-fixture",
-    workspace: ws,
-    seed: 42,
-    bodyBytes: 1024,
-    goals,
-    nodes: docs.length,
-    commits: count,
-    cards: cardCount,
-    consumedCards: consumed,
-    initialCommits: existing,
-    syntheticEdits: edits,
-    appendNodeId: topGoals.find((d) => d.rel === "Goal0/Goal0.md").id,
-    head: git(ws, ["rev-parse", "HEAD"]),
-    baselineHead: head0,
-    batchTimes,
-    cli: build,
-  };
-  fs.writeFileSync(path.join(ws, marker), JSON.stringify(result, null, 2) + "\n", { flag: "wx" });
-  return result;
-}
-function copyFixture(source, dest) {
-  fs.mkdirSync(dest, { recursive: true });
-  function copy(from, to) {
-    for (const e of fs.readdirSync(from, { withFileTypes: true })) {
-      if (e.isSymbolicLink()) fail("Fixture contains symbolic links/junctions");
-      if (
-        path.basename(from) === ".git" &&
-        (e.name === "tent-history-index.json" || /^tent-derived-.*\.json$/.test(e.name))
-      )
-        continue;
-      const target = path.join(to, e.name);
-      if (e.isDirectory()) {
-        fs.mkdirSync(target);
-        copy(path.join(from, e.name), target);
-      } else if (e.isFile())
-        fs.copyFileSync(path.join(from, e.name), target, fs.constants.COPYFILE_EXCL);
-      else fail("Fixture contains a non-regular file");
-    }
-  }
-  copy(source, dest);
 }
 function machine() {
   const cpus = os.cpus();
@@ -378,148 +181,470 @@ function machine() {
     release: os.release(),
     arch: os.arch(),
     node: process.version,
-    git: checked(run("git", ["--version"], process.cwd()), "git version"),
     cpuModel: cpus[0]?.model,
     cpuCount: cpus.length,
-    cpuTimes: cpus.map((cpu) => cpu.times),
+    cpuTimes: cpus.map((c) => c.times),
     totalMemory: os.totalmem(),
     freeMemory: os.freemem(),
     loadAverage: os.loadavg(),
-    loadAverageNote:
-      "Windows loadavg is always zero; CPU time deltas include every process on the machine",
+    note: "Windows loadavg is always zero; CPU counters include all machine activity",
   };
 }
-function cacheBytes(ws) {
-  const dir = path.join(ws, ".tent", ".git");
-  return Object.fromEntries(
-    fs
-      .readdirSync(dir)
-      .filter((name) => name.startsWith("tent-") && fs.statSync(path.join(dir, name)).isFile())
-      .map((name) => [name, fs.statSync(path.join(dir, name)).size]),
+function writeJson(filename, value) {
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.writeFileSync(filename, JSON.stringify(value, null, 2) + "\n", { flag: "wx" });
+}
+const disposable = (rel) =>
+  rel === ".bench-scale" ||
+  rel === marker ||
+  rel === ".tent/temp" ||
+  rel.startsWith(".tent/temp/") ||
+  /^\.tent\/\.git\/tent-/.test(rel) ||
+  rel === ".tent/.git/history.sqlite-shm";
+function entries(root) {
+  const found = [];
+  function walk(dir, rel = "") {
+    for (const entry of fs
+      .readdirSync(dir, { withFileTypes: true })
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const name = rel ? rel + "/" + entry.name : entry.name;
+      if (disposable(name)) continue;
+      if (entry.isSymbolicLink()) fail(`Fixture contains a symbolic link/junction: ${name}`);
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        found.push({ rel: name, directory: true });
+        walk(file, name);
+      } else if (entry.isFile()) found.push({ rel: name, directory: false });
+      else fail(`Fixture contains a non-regular entry: ${name}`);
+    }
+  }
+  walk(root);
+  return found;
+}
+function fingerprint(root) {
+  const h = createHash("sha256");
+  for (const e of entries(root)) {
+    h.update(JSON.stringify([e.rel, e.directory]) + "\n");
+    if (!e.directory) {
+      const b = fs.readFileSync(path.join(root, e.rel));
+      h.update(String(b.length) + ":");
+      h.update(b);
+    }
+  }
+  return h.digest("hex");
+}
+function copyFixture(source, dest) {
+  fs.mkdirSync(dest); // The caller already rejected every existing target.
+  for (const e of entries(source)) {
+    const from = path.join(source, e.rel),
+      to = path.join(dest, e.rel);
+    if (e.directory) fs.mkdirSync(to);
+    else {
+      fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
+      const stat = fs.statSync(from);
+      fs.utimesSync(to, stat.atime, stat.mtime);
+    }
+  }
+}
+function generate(root, ws, cli, opts, build) {
+  const scale = integer(opts.scale, "scale");
+  if (![1, 10].includes(scale)) fail("--scale must be 1 or 10");
+  const batch = integer(opts.batch ?? "90", "batch");
+  if (batch % 9 !== 0) fail("--batch must be a multiple of 9 to retain each subtree in one batch");
+  const goals = 6 * scale,
+    cards = 10 * scale;
+  let seed = 42;
+  const rand = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+  function body() {
+    let b = "";
+    while (b.length < 1024)
+      b += `Purpose, constraint and observed evidence ${Math.floor(rand() * 1e6)}.\n`;
+    return b.slice(0, 1024);
+  }
+  fs.mkdirSync(path.dirname(ws), { recursive: true });
+  fs.mkdirSync(ws);
+  // ROOT/.scratch is inside the outer project: `tent new` would reuse that Git.
+  // Create an isolated project repository before invoking any CLI or baseline write.
+  const repository = run("git", ["init", "--quiet", ws], ws);
+  checked(repository, "fixture git init");
+  const boundary = run(
+    "git",
+    ["--no-optional-locks", "-C", ws, "rev-parse", "--show-toplevel"],
+    ws,
   );
+  if (fs.realpathSync(checked(boundary, "fixture Git root")) !== fs.realpathSync(ws))
+    fail("Fixture Git root is not the requested workspace");
+  const creation = run(process.execPath, [cli, "new", ws, "--workspace", ws], root);
+  checked(creation, "CLI new");
+  fs.mkdirSync(path.join(ws, ".bench-scale/empty-hooks"), { recursive: true });
+  const log = path.join(ws, ".bench-scale/generation.jsonl");
+  const record = (phase, result) => {
+    fs.appendFileSync(log, JSON.stringify({ phase, ...result }) + "\n");
+    checked(result, phase);
+    return result;
+  };
+  record("project init", repository);
+  record("project boundary", boundary);
+  record("new", creation);
+  const projectFiles = [".gitignore", "AGENTS.md", "README.md"];
+  fs.writeFileSync(path.join(ws, ".gitignore"), "/bench-scale-fixture.json\n/.bench-scale/\n", {
+    flag: "wx",
+  });
+  fs.writeFileSync(
+    path.join(ws, "README.md"),
+    "# Scale fixture\n\nStatic material for product-CLI measurements.\n",
+    { flag: "wx" },
+  );
+  fs.writeFileSync(
+    path.join(ws, "AGENTS.md"),
+    "# Fixture conventions\n\nKeep public behaviour stable.\n",
+    { flag: "wx" },
+  );
+  const items = [],
+    goalIds = [];
+  const add = (ref, name, type, parent, resource) => {
+    const id = `node-${(items.length + 1).toString(36).padStart(6, "0")}`;
+    items.push({
+      op: "create",
+      ref,
+      id,
+      name,
+      type,
+      body: body(),
+      ...(parent ? { parent } : {}),
+      ...(resource ? { resource } : {}),
+      tags: [type === "goal" ? "requirement" : type === "prompt" ? "decision" : "evidence"],
+    });
+    return id;
+  };
+  for (let g = 0; g < goals; g++) {
+    goalIds.push(add(`g${g}`, `Goal${g}`, "goal", null, g === 0 ? "./" : `./src/g${g}/`));
+    for (let p = 0; p < 2; p++) add(`g${g}p${p}`, `Decision${p}`, "prompt", `@g${g}`);
+    for (let s = 0; s < 2; s++) {
+      add(`g${g}s${s}`, `Sub${s}`, "goal", `@g${g}`, `./src/g${g}/sub${s}/`);
+      for (let o = 0; o < 2; o++) {
+        const relative = `src/g${g}/sub${s}/f${o}.ts`;
+        fs.mkdirSync(path.dirname(path.join(ws, relative)), { recursive: true });
+        fs.writeFileSync(
+          path.join(ws, relative),
+          `export const value = ${Math.floor(rand() * 1e6)};\n`,
+          { flag: "wx" },
+        );
+        projectFiles.push(relative);
+        add(
+          `g${g}s${s}o${o}`,
+          `Result${o}`,
+          "output",
+          `@g${g}s${s}`,
+          o === 0 ? "./" + relative : undefined,
+        );
+      }
+    }
+  }
+  record("project add", git(ws, ["add", "--all"]));
+  record(
+    "project commit",
+    git(ws, [
+      "-c",
+      "user.name=Scale probe",
+      "-c",
+      "user.email=scale@local.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "--quiet",
+      "-m",
+      "Create static scale materials",
+    ]),
+  );
+  for (let start = 0; start < items.length; start += batch) {
+    const draft = path.join(ws, ".bench-scale", `batch-${start}.json`);
+    writeJson(draft, { items: items.slice(start, start + batch) });
+    record("node create --draft", tent(cli, ws, ["node", "create", "--draft", draft, "--json"]));
+    if (fs.existsSync(draft)) fail("CLI did not consume the completed draft");
+  }
+  const roles = [];
+  for (let r = 0; r < 5; r++) {
+    const id = `role-${r.toString(36).padStart(6, "0")}`;
+    record(
+      "role create",
+      tent(cli, ws, [
+        "role",
+        "create",
+        "--id",
+        id,
+        "--title",
+        `Role${r}`,
+        "--body",
+        body(),
+        "--json",
+      ]),
+    );
+    roles.push(id);
+  }
+  const states = { pending: 0, consumed: 0, returned: 0, closed: 0 };
+  for (let c = 0; c < cards; c++) {
+    const id = `card-${c.toString(36).padStart(8, "0")}`,
+      target = roles[1 + (c % 4)];
+    record(
+      "card create",
+      tent(
+        cli,
+        ws,
+        [
+          "card",
+          "create",
+          "--id",
+          id,
+          "--title",
+          `Task${c}`,
+          "--prompt",
+          "-",
+          "--source",
+          goalIds[c % goals],
+          "--target",
+          target,
+          "--return-to",
+          roles[0],
+          "--json",
+        ],
+        body(),
+      ),
+    );
+    if (c % 5 === 0) {
+      states.pending++;
+      continue;
+    }
+    record("card take", tent(cli, ws, ["card", "take", id, "--role", target, "--json"]));
+    if (c % 5 === 1 || c % 5 === 4) {
+      states.consumed++;
+      continue;
+    }
+    record(
+      "card return",
+      tent(cli, ws, [
+        "card",
+        "return",
+        id,
+        "--role",
+        target,
+        "--result",
+        `Observed result ${c}`,
+        "--json",
+      ]),
+    );
+    if (c % 5 === 2) {
+      states.returned++;
+      continue;
+    }
+    record("card close", tent(cli, ws, ["card", "take", id, "--role", roles[0], "--json"]));
+    states.closed++;
+  }
+  const status = checked(git(ws, ["status", "--porcelain"]), "project status");
+  if (status) fail(`Generated fixture is not clean: ${status}`);
+  if (!fs.existsSync(path.join(ws, ".tent/.git/history.sqlite")))
+    fail("CLI did not create SQLite history");
+  const fixture = {
+    schemaVersion,
+    kind: "tent-cli-scale-fixture",
+    workspace: ws,
+    seed: 42,
+    bodyBytes: 1024,
+    scale,
+    goals,
+    nodes: items.length,
+    cards,
+    cardStates: states,
+    roles,
+    benchmarkRole: roles[1],
+    batch,
+    projectFiles: projectFiles.sort(),
+    sourceFiles: projectFiles.filter((f) => f.endsWith(".ts")).sort(),
+    loadPaths: [
+      `src/g0/sub0/f0.ts`,
+      `src/g${Math.floor(goals / 2)}/sub1/f1.ts`,
+      `src/g${goals - 1}/sub0/f1.ts`,
+    ],
+    projectHead: checked(git(ws, ["rev-parse", "HEAD"]), "project HEAD"),
+    cli: build,
+    historyBytes: fs.statSync(path.join(ws, ".tent/.git/history.sqlite")).size,
+    mutationCounts: {
+      nodeBatches: Math.ceil(items.length / batch),
+      roles: 5,
+      cardCreates: cards,
+      cardTakes: cards - states.pending,
+      cardReturns: states.returned + states.closed,
+      cardCloses: states.closed,
+    },
+    fingerprint: fingerprint(ws),
+    generationLog: ".bench-scale/generation.jsonl",
+  };
+  writeJson(path.join(ws, marker), fixture);
+  return fixture;
+}
+function median(values) {
+  const a = [...values].sort((a, b) => a - b),
+    i = Math.floor(a.length / 2);
+  return a.length % 2 ? a[i] : (a[i - 1] + a[i]) / 2;
 }
 function measure(root, ws, cli, opts, build) {
+  const repeats = integer(opts.repeats ?? "5", "repeats", 2);
   const source = scratchPath(root, opts.fixture, "fixture");
-  if (inside(source, ws) || inside(ws, source))
-    fail("Fixture and measurement workspace must not contain each other");
-  const fixture = JSON.parse(fs.readFileSync(path.join(source, marker), "utf8"));
-  if (fixture.kind !== "tent-cli-scale-fixture" || fixture.schemaVersion !== 2)
-    fail("Unsupported fixture marker");
-  const materialRoot = scratchPath(root, fixture.workspace, "fixture-material-root");
-  if (!fs.statSync(materialRoot).isDirectory()) fail("Original fixture materials must still exist");
-  if (
-    git(source, ["rev-parse", "HEAD"]) !== fixture.head ||
-    Number(git(source, ["rev-list", "--count", "HEAD"])) !== fixture.commits
-  )
-    fail("Fixture retained history changed since generation");
-  const repeats = integer(opts.repeats ?? "2", "repeats");
+  if (source === ws || inside(source, ws) || inside(ws, source))
+    fail("Fixture and workspace must not contain each other");
   const output = opts.output ? scratchPath(root, opts.output, "output", true) : null;
-  if (output && (output === ws || inside(source, output)))
-    fail("Output must not replace the workspace or write into the source fixture");
-  copyFixture(source, ws);
-  const samples = [];
-  const before = machine();
-  function sample(metric, args) {
-    const observation = { freeMemory: os.freemem(), loadAverage: os.loadavg() };
-    const result = tent(cli, ws, [...args, "--json"]);
-    samples.push({
-      metric,
-      args,
-      seconds: result.seconds,
-      code: result.code,
-      signal: result.signal,
-      stdoutBytes: Buffer.byteLength(result.stdout),
-      stdoutSha256: createHash("sha256").update(result.stdout).digest("hex"),
-      stderr: result.stderr,
-      observation,
-    });
-    checked(result, metric);
-  }
-  let measurementError = null;
+  if (
+    output &&
+    (inside(source, output) || inside(ws, output) || output === ws || output === source)
+  )
+    fail("Output must be outside fixture and measurement workspace");
+  const fixture = JSON.parse(fs.readFileSync(path.join(source, marker), "utf8"));
+  if (fixture.kind !== "tent-cli-scale-fixture" || fixture.schemaVersion !== schemaVersion)
+    fail("Unsupported fixture marker; generate with this script");
+  if (fingerprint(source) !== fixture.fingerprint) fail("Source fixture changed since generation");
+  if (
+    !fs.lstatSync(path.join(source, ".git")).isDirectory() ||
+    fs.realpathSync(checked(git(source, ["rev-parse", "--show-toplevel"]), "fixture Git root")) !==
+      fs.realpathSync(source)
+  )
+    fail("Fixture must contain its own ordinary Git checkout");
+  if (![1, 10].includes(fixture.scale)) fail("Invalid fixture scale");
+  // All mutation targets are generated, fixed-format relative paths, never marker-supplied arbitrary paths.
+  const expectedFiles = [".gitignore", "AGENTS.md", "README.md"];
+  for (let g = 0; g < 6 * fixture.scale; g++)
+    for (let s = 0; s < 2; s++)
+      for (let o = 0; o < 2; o++) expectedFiles.push(`src/g${g}/sub${s}/f${o}.ts`);
+  expectedFiles.sort();
+  if (JSON.stringify(expectedFiles) !== JSON.stringify(fixture.projectFiles))
+    fail("Invalid fixture file layout");
+  const sourceFiles = expectedFiles.filter((f) => f.endsWith(".ts"));
+  const loadPaths = [
+    "src/g0/sub0/f0.ts",
+    `src/g${Math.floor((6 * fixture.scale) / 2)}/sub1/f1.ts`,
+    `src/g${6 * fixture.scale - 1}/sub0/f1.ts`,
+  ];
+  if (fixture.benchmarkRole !== "role-000001") fail("Invalid fixture benchmark Role");
+  fs.mkdirSync(path.dirname(ws), { recursive: true });
+  fs.mkdirSync(ws); // No cleanup or reuse of a previous run.
+  const samples = [],
+    before = machine();
+  const log = path.join(ws, "samples.jsonl");
+  let error = null;
   try {
-    sample("briefCold", ["workspace", "brief"]);
-    sample("cardListPrime", ["card", "list"]);
-    for (let i = 0; i < repeats; i++) {
-      sample("append", [
-        "node",
-        "append",
-        fixture.appendNodeId,
-        "--body",
-        `Scale probe iteration ${i}: requirement revised after review.`,
-      ]);
-      sample("briefAfterWrite", ["workspace", "brief"]);
-      sample("briefHot", ["workspace", "brief"]);
-      sample("briefHot", ["workspace", "brief"]);
-      sample("cardList", ["card", "list"]);
-      sample("cardList", ["card", "list"]);
+    for (const metric of metrics) {
+      const target = path.join(ws, metric);
+      copyFixture(source, target);
+      const originals = new Map(
+        expectedFiles.map((f) => [f, fs.readFileSync(path.join(target, f), "utf8")]),
+      );
+      for (let i = 0; i <= repeats; i++) {
+        const phase = i === 0 ? "cold" : "warm";
+        const dirty =
+          metric === "stopOne" ? [sourceFiles[0]] : metric === "stopAll" ? expectedFiles : [];
+        for (const f of dirty) {
+          const comment =
+            f === ".gitignore"
+              ? `# scale sample ${i}`
+              : f.endsWith(".md")
+                ? `<!-- scale sample ${i} -->`
+                : `// scale sample ${i}`;
+          fs.writeFileSync(path.join(target, f), originals.get(f) + "\n" + comment + "\n");
+        }
+        const args =
+          metric === "load"
+            ? ["load", ...loadPaths, "--json"]
+            : metric.startsWith("stop")
+              ? ["hook", "stop", "--host", "codex"]
+              : metric === "scan" || metric === "check"
+                ? ["workspace", metric, "--json"]
+                : metric === "cardList"
+                  ? ["card", "list", "--role", fixture.benchmarkRole, "--json"]
+                  : ["card", "watch", "--role", fixture.benchmarkRole, "--timeout", "0", "--json"];
+        const input = metric.startsWith("stop")
+          ? JSON.stringify({ hook_event_name: "Stop", cwd: target, stop_hook_active: false })
+          : undefined;
+        const observation = {
+          freeMemory: os.freemem(),
+          cpuTimes: os.cpus().map((c) => c.times),
+          loadAverage: os.loadavg(),
+        };
+        const sample = {
+          metric,
+          phase,
+          iteration: i,
+          dirtyFiles: dirty.length,
+          observation,
+          ...tent(cli, target, args, input),
+        };
+        sample.validationError = null;
+        try {
+          checked(sample, metric);
+          const value = JSON.parse(sample.stdout);
+          if (
+            metric.startsWith("stop") &&
+            (value.decision !== "block" || typeof value.reason !== "string")
+          )
+            fail(`${metric} did not deliver a changed-file reminder`);
+        } catch (e) {
+          sample.validationError = e.message;
+        }
+        samples.push(sample);
+        fs.appendFileSync(log, JSON.stringify(sample) + "\n"); // Preserve failed invocations too.
+        if (sample.validationError) fail(sample.validationError);
+      }
     }
-  } catch (error) {
-    measurementError = error.message;
+  } catch (e) {
+    error = e.message;
   }
-  const exact10x = fixture.nodes === 540 && fixture.commits === 4380 && fixture.cards === 100;
-  const limits = { briefAfterWrite: 13.5, briefHot: 7.9, cardList: 2.2 };
-  const finalCommits = Number(git(ws, ["rev-list", "--count", "HEAD"]));
-  if (!measurementError && finalCommits !== fixture.commits + repeats)
-    measurementError = "Measurement append sequence produced unexpected commit count";
   const cliHashAfter = createHash("sha256").update(fs.readFileSync(cli)).digest("hex");
-  if (cliHashAfter !== build.sha256)
-    measurementError = "CLI artifact changed during measurement; samples are not comparable";
+  if (cliHashAfter !== build.sha256) error = "CLI artifact changed during measurement";
+  if (fingerprint(source) !== fixture.fingerprint)
+    error = "Source fixture changed during measurement";
   const result = {
-    schemaVersion: 1,
+    schemaVersion,
     kind: "tent-cli-scale-measurement",
     label: opts.label ?? null,
     workspace: ws,
     sourceFixture: source,
     fixture,
     cli: build,
+    repeats,
     machineBefore: before,
     machineAfter: machine(),
-    repeats,
-    finalCommits,
-    error: measurementError,
+    error,
     cliHashAfter,
     samples,
-    cacheBytes: cacheBytes(ws),
-    gateObservations:
-      exact10x && !measurementError
-        ? Object.fromEntries(
-            Object.entries(limits).map(([metric, limitSeconds]) => {
-              const seconds = samples
-                .filter((sample) => sample.metric === metric)
-                .map((sample) => sample.seconds);
-              return [
-                metric,
-                {
-                  limitSeconds,
-                  seconds,
-                  allWithinLimit: seconds.every((seconds) => seconds <= limitSeconds),
-                },
-              ];
-            }),
-          )
-        : null,
+    summary: Object.fromEntries(
+      metrics.map((metric) => {
+        const rows = samples.filter((s) => s.metric === metric),
+          warm = rows
+            .filter((s) => s.phase === "warm" && s.code === 0 && !s.error && !s.validationError)
+            .map((s) => s.milliseconds);
+        return [
+          metric,
+          {
+            coldMilliseconds: rows.find((s) => s.phase === "cold")?.milliseconds ?? null,
+            warmSamples: warm.length,
+            warmMedianMilliseconds: warm.length ? median(warm) : null,
+            complete: warm.length === repeats,
+          },
+        ];
+      }),
+    ),
     interpretation:
-      "Observed subprocess timings only. Judge machine noise with the old CLI measured back-to-back; independent acceptance is external. No 10x gate conclusion for custom/1x fixtures.",
+      "Fresh product-CLI subprocess wall times; setup/copy/mutation excluded. Cold application caches, OS cache unchanged. No automatic gate or causal noise correction.",
   };
-  if (output) {
-    fs.mkdirSync(path.dirname(output), { recursive: true });
-    fs.writeFileSync(output, JSON.stringify(result, null, 2) + "\n", { flag: "wx" });
-  }
+  if (output) writeJson(output, result);
   return result;
 }
-
 try {
   const [command, ...args] = process.argv.slice(2);
-  if (command === "--help" || command === "help") {
-    process.stdout.write(help);
-  } else {
-    if (!["generate", "measure"].includes(command))
-      fail("Choose generate or measure; use --help for examples");
+  if (command === "--help" || command === "help") process.stdout.write(help);
+  else {
+    if (!["generate", "measure"].includes(command)) fail("Choose generate or measure; use --help");
     const opts = options(args);
     const allowed =
-      command === "generate"
-        ? ["scale", "goals", "commits", "cards", "batch"]
-        : ["fixture", "label", "repeats", "output"];
+      command === "generate" ? ["scale", "batch"] : ["fixture", "label", "repeats", "output"];
     for (const key of Object.keys(opts))
       if (!["project-root", "workspace", "cli", ...allowed].includes(key))
         fail(`Unknown option --${key}`);
