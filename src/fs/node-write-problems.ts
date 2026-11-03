@@ -4,12 +4,14 @@ import { checkSelectedNodes } from "../core/check/graph-check.js";
 import type { GraphCheckResult } from "../core/check/graph-check.js";
 import type { NodeWriteProblem } from "../core/check/node-write-problems.js";
 import { isNodeNotePath } from "../core/base/paths.js";
+import type { NodeCatalog } from "../core/graph/node-catalog.js";
 
-/** Read-only diagnostics of the documents this mutation actually wrote. */
+/** Read-only diagnostics of the documents this mutation actually wrote; `catalog` reuses one just loaded. */
 export async function checkNodeWriteProblems(
   fs: FsAdapter,
   workspaceRoot: string,
   paths: readonly string[],
+  catalog?: NodeCatalog,
 ): Promise<NodeWriteProblem[]> {
   const selected = [...new Set(paths.filter(isNodeNotePath))];
   if (!selected.length) return [];
@@ -29,6 +31,7 @@ export async function checkNodeWriteProblems(
         }
       },
       selected,
+      catalog,
     );
   } catch (cause) {
     // Diagnostics are advisory after the save has succeeded. Keep an observation

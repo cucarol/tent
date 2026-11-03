@@ -59,9 +59,20 @@ function quotedPath(file: string) {
   );
 }
 
-/** Git applies the checkout's normal clean/process filters to each regular candidate. */
-async function hashWorkingBatch(root: string, files: string[]) {
-  return new Promise<string[]>((resolve, reject) => {
+type HashWorker = {
+  hash(files: string[]): Promise<string[]>;
+  /** Ends an unused worker and waits for Git to exit. */
+  close(): Promise<void>;
+};
+
+/**
+ * Git applies the checkout's normal clean/process filters to each regular candidate.
+ * The process starts before its paths are known, so Git's startup can overlap other work.
+ */
+function hashWorker(root: string): HashWorker {
+  let send!: (input: string) => void;
+  let sent = false;
+  const output = new Promise<string[]>((resolve, reject) => {
     const child = execFile(
       "git",
       ["--no-optional-locks", "--no-lazy-fetch", "-C", root, "hash-object", "--stdin-paths"],
@@ -81,11 +92,37 @@ async function hashWorkingBatch(root: string, files: string[]) {
     child.stdin?.on("error", (error: NodeJS.ErrnoException) => {
       if (error.code !== "EPIPE") reject(error);
     });
-    child.stdin?.end(files.map(quotedPath).join("\n") + "\n");
+    send = (input) => child.stdin?.end(input);
   });
+  // Git may fail before its paths are known; the error still reaches the batch that uses it.
+  const settled = output.then(
+    () => undefined,
+    () => undefined,
+  );
+  const end = (input: string) => {
+    if (sent) return false;
+    sent = true;
+    send(input);
+    return true;
+  };
+  return {
+    hash(files) {
+      if (!end(files.map(quotedPath).join("\n") + "\n"))
+        throw new Error("Stop hash worker already used");
+      return output;
+    },
+    async close() {
+      if (end("")) await settled;
+    },
+  };
 }
 
-async function workingDigests(root: string, files: Set<string>, head: string | null) {
+async function workingDigests(
+  root: string,
+  files: Set<string>,
+  head: string | null,
+  early: HashWorker,
+) {
   const directories = new Map<string, Promise<boolean>>();
   const local = (directory: string): Promise<boolean> => {
     if (directory === ".") return Promise.resolve(true);
@@ -143,12 +180,16 @@ async function workingDigests(root: string, files: Set<string>, head: string | n
   }));
   const hashing: Array<Promise<void>> = [];
   const hashFailures: Array<{ error: unknown } | undefined> = new Array(batches.length);
+  let spare: HashWorker | undefined = early;
   const hashBatch = async (batch: (typeof batches)[number], index: number) => {
     try {
       if (batch.files.some((_, offset) => failures[batch.start + offset])) return;
       const regularFiles = batch.files.filter((file) => regular.has(file));
       if (!regularFiles.length) return;
-      const values = await hashWorkingBatch(root, regularFiles);
+      // The first batch ready to hash takes the worker started with status.
+      const worker = spare ?? hashWorker(root);
+      spare = undefined;
+      const values = await worker.hash(regularFiles);
       if (values.length !== regularFiles.length)
         throw new Error("Git did not hash every Stop candidate");
       regularFiles.forEach((file, offset) => digests.set(file, values[offset]!));
@@ -216,69 +257,93 @@ async function treeDigests(root: string, head: string | null) {
   return result;
 }
 
+/** The path after an entry's fixed space-separated fields. */
+const afterFields = (entry: string, count: number) => {
+  let at = 0;
+  for (let field = 0; field < count; field++) at = entry.indexOf(" ", at) + 1;
+  return entry.slice(at);
+};
+
+/** Porcelain v2 reports HEAD together with the changed paths, so Stop starts one Git process fewer. */
+function parseStatus(output: string) {
+  let head: string | null = null;
+  const dirty = new Set<string>();
+  const entries = output.split("\0");
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]!;
+    if (entry.startsWith("# branch.oid ")) {
+      const oid = entry.slice("# branch.oid ".length);
+      head = oid === "(initial)" ? null : oid;
+    } else if (entry.startsWith("1 ")) dirty.add(afterFields(entry, 8));
+    else if (entry.startsWith("2 ")) {
+      dirty.add(afterFields(entry, 9));
+      index++; // The original path follows as its own entry.
+    } else if (entry.startsWith("u ")) dirty.add(afterFields(entry, 10));
+    else if (entry.startsWith("? ")) dirty.add(entry.slice(2));
+  }
+  return { head, dirty: new Set([...dirty].filter(eligible)) };
+}
+
 async function observeGit(root: string, previous: GitSnapshot | undefined) {
-  const [headObservation, statusObservation] = await Promise.allSettled([
-    git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch((error) => {
-      if (error.code !== 1) throw error;
-      return "";
-    }),
-    git(root, [
-      "status",
-      "--porcelain=v1",
-      "-z",
-      "--untracked-files=all",
-      "--no-renames",
-      "--ignore-submodules=all",
-    ]),
+  const observation = git(root, [
+    "status",
+    "--porcelain=v2",
+    "--branch",
+    "--no-ahead-behind",
+    "-z",
+    "--untracked-files=all",
+    "--no-renames",
+    "--ignore-submodules=all",
   ]);
-  if (headObservation.status === "rejected") throw headObservation.reason;
-  if (statusObservation.status === "rejected") throw statusObservation.reason;
-  const head = headObservation.value.trim() || null;
-  const status = statusObservation.value;
-  const dirty = new Set(
-    status
-      .split("\0")
-      .filter(Boolean)
-      .map((entry) => entry.slice(3))
-      .filter(eligible),
-  );
-  const candidates = new Set([...dirty, ...Object.keys(previous?.dirty ?? {})].filter(eligible));
-  if (previous && previous.head !== head) {
-    const empty = createHash((head ?? previous.head)!.length === 64 ? "sha256" : "sha1")
-      .update("tree 0\0")
-      .digest("hex");
-    const changes = await git(root, [
-      "diff",
-      "--name-only",
-      "--no-renames",
-      "--no-ext-diff",
-      "--no-textconv",
-      "--ignore-submodules=all",
-      "-z",
-      previous.head ?? empty,
-      head ?? empty,
+  // Started after status so it does not delay it; Git starts up while status runs.
+  const early = hashWorker(root);
+  try {
+    const { head, dirty } = parseStatus(await observation);
+    const candidates = new Set([...dirty, ...Object.keys(previous?.dirty ?? {})].filter(eligible));
+    if (previous && previous.head !== head) {
+      const empty = createHash((head ?? previous.head)!.length === 64 ? "sha256" : "sha1")
+        .update("tree 0\0")
+        .digest("hex");
+      const changes = await git(root, [
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=all",
+        "-z",
+        previous.head ?? empty,
+        head ?? empty,
+      ]);
+      for (const file of changes.split("\0")) if (eligible(file)) candidates.add(file);
+    }
+    const needsTree = [...candidates].some(
+      (file) => !previous || !Object.prototype.hasOwnProperty.call(previous.dirty, file),
+    );
+    // Both settle first, so a failed tree read still waits for every started hash.
+    const [tree, working] = await Promise.allSettled([
+      needsTree ? treeDigests(root, previous ? previous.head : head) : new Map<string, string>(),
+      workingDigests(root, candidates, head, early),
     ]);
-    for (const file of changes.split("\0")) if (eligible(file)) candidates.add(file);
+    if (tree.status === "rejected") throw tree.reason;
+    if (working.status === "rejected") throw working.reason;
+    const before = tree.value;
+    const digests = working.value;
+    const current: GitSnapshot = { head, dirty: Object.create(null) };
+    const files: string[] = [];
+    for (const file of candidates) {
+      const value = digests.get(file)!;
+      const baseline =
+        previous && Object.prototype.hasOwnProperty.call(previous.dirty, file)
+          ? previous.dirty[file]
+          : (before.get(file) ?? null);
+      if (value !== baseline) files.push(file);
+      if (dirty.has(file)) current.dirty[file] = value;
+    }
+    return { current, files };
+  } finally {
+    await early.close();
   }
-  const needsTree = [...candidates].some(
-    (file) => !previous || !Object.prototype.hasOwnProperty.call(previous.dirty, file),
-  );
-  const before = needsTree
-    ? await treeDigests(root, previous ? previous.head : head)
-    : new Map<string, string>();
-  const digests = await workingDigests(root, candidates, head);
-  const current: GitSnapshot = { head, dirty: Object.create(null) };
-  const files: string[] = [];
-  for (const file of candidates) {
-    const value = digests.get(file)!;
-    const baseline =
-      previous && Object.prototype.hasOwnProperty.call(previous.dirty, file)
-        ? previous.dirty[file]
-        : (before.get(file) ?? null);
-    if (value !== baseline) files.push(file);
-    if (dirty.has(file)) current.dirty[file] = value;
-  }
-  return { current, files };
 }
 
 /** The caller verifies Git. Checkout observations become the baseline only when Stop settles. */

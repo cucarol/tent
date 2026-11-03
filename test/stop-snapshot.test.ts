@@ -370,6 +370,43 @@ process.stdout.write(raw);
   },
 );
 
+test("a hash worker that fails before status returns is reported only by the batch that uses it", async (t) => {
+  const f = await fixture(t);
+  await f.write("file.txt", "base");
+  await f.commit();
+  const unhandled: unknown[] = [];
+  const record = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", record);
+  const nativeExecFile = childProcess.execFile;
+  const mocked = t.mock.method(childProcess, "execFile", (...args: unknown[]) => {
+    const [file, argv, options, callback] = args as [
+      string,
+      string[],
+      object,
+      (...result: unknown[]) => void,
+    ];
+    if (argv.includes("hash-object"))
+      return nativeExecFile("tent-missing-git-for-test", argv, options, callback);
+    if (argv.includes("status"))
+      return nativeExecFile(file, argv, options, (...result: unknown[]) =>
+        setTimeout(() => callback(...result), 200),
+      );
+    return Reflect.apply(nativeExecFile, childProcess, args);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.deepEqual(await f.stop(), [], "an unused failed worker does not fail Stop");
+    await f.write("file.txt", "changed");
+    await assert.rejects(observeStopChanges(f.system, f.checkout), /ENOENT/);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", record);
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 test("Git deletion, restoration and untracked removal each compare the last settled bytes", async (t) => {
   const f = await fixture(t);
   await f.write("tracked.txt", "base");

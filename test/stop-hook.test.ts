@@ -8,6 +8,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { promisify } from "node:util";
 import { runTurnHook } from "../src/cli/turn-hook.js";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
+import type { ObservationOptions } from "../src/core/store/adapter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
@@ -616,6 +617,65 @@ test("a failed first Git Stop preserves the HEAD section difference for its succ
   assert.equal(await f.stop(), f.pointers(["Section"]));
   assert.equal(await f.stop(), undefined);
 });
+
+for (const late of ["coverage", "recovery"] as const) {
+  test(`an interrupted Node write settles before Stop reads coverage when ${late} reaches the graph last`, async (t) => {
+    const f = await fixture(t);
+    await f.write("file.txt", "before");
+    const node = await f.node("A", "resource: ../../file.txt");
+    await f.seal();
+    await f.commit();
+    await f.write("file.txt", "after");
+    const interrupted = node.raw.replace("../../file.txt", "../../other.txt");
+    await fs.writeFile(node.absolute, interrupted);
+    await fs.writeFile(
+      path.join(f.systemRoot, "node-move.pending.json"),
+      JSON.stringify({
+        version: 1,
+        nodeId: "node-a",
+        oldPath: "A",
+        newPath: "A",
+        writes: [
+          {
+            originalPath: "A/A.md",
+            writePath: "A/A.md",
+            originalContent: node.raw,
+            newContent: interrupted,
+          },
+        ],
+      }),
+    );
+    const { observationScope, withLock } = NodeFs.prototype;
+    const wait = () => new Promise((resolve) => setTimeout(resolve, 200));
+    NodeFs.prototype.observationScope = async function <T>(
+      this: NodeFs,
+      action: () => Promise<T>,
+      options?: ObservationOptions,
+    ) {
+      if (late === "coverage" && options?.forceContent) await wait();
+      return observationScope.call<NodeFs, [() => Promise<T>, ObservationOptions?], Promise<T>>(
+        this,
+        action,
+        options,
+      );
+    };
+    NodeFs.prototype.withLock = async function <T>(
+      this: NodeFs,
+      lock: string,
+      action: () => Promise<T>,
+    ) {
+      if (late === "recovery") await wait();
+      return withLock.call<NodeFs, [string, () => Promise<T>], Promise<T>>(this, lock, action);
+    };
+    try {
+      assert.equal(await f.stop(), f.pointers(["A"]));
+    } finally {
+      NodeFs.prototype.observationScope = observationScope;
+      NodeFs.prototype.withLock = withLock;
+    }
+    assert.equal(await fs.readFile(node.absolute, "utf8"), node.raw);
+  });
+}
 
 test("missing section files do not block first Stop coverage; later creation is listed and deletion is reported once", async (t) => {
   const f = await fixture(t);

@@ -24,7 +24,7 @@ import { assertSystemMaterial } from "../graph/material-target.js";
 import { readCardBodyReferences } from "../read/card-references.js";
 import { rolesHoldingCard } from "../graph/role-cards.js";
 import { documentLifecycle } from "../base/document-status.js";
-import { loadNodeCatalog } from "../graph/node-catalog.js";
+import { loadNodeCatalog, type NodeCatalog } from "../graph/node-catalog.js";
 
 export type GraphCheckIssue =
   | { kind: "unresolved-link"; path: string; target: string; reason: string }
@@ -74,10 +74,12 @@ export async function checkSelectedNodes(
   workspaceRoot: string,
   fileExists: GraphFileExists,
   paths: readonly string[],
+  observedCatalog?: NodeCatalog,
 ): Promise<GraphCheckResult> {
   const selected = new Set(paths);
   if (!selected.size) return { documents: 0, issues: [], notices: [], errors: [] };
-  const run = () => checkGraphInScope(fs, workspaceRoot, fileExists, undefined, selected);
+  const run = () =>
+    checkGraphInScope(fs, workspaceRoot, fileExists, undefined, selected, observedCatalog);
   return fs.observationScope ? fs.observationScope(run) : run();
 }
 
@@ -87,6 +89,7 @@ async function checkGraphInScope(
   fileExists: GraphFileExists,
   observedTree?: LoadedTent,
   selected?: ReadonlySet<string>,
+  observedCatalog?: NodeCatalog,
 ): Promise<GraphCheckResult> {
   const readonlyFs = readOnlyFs(fs);
   const result: GraphCheckResult = { documents: 0, issues: [], notices: [], errors: [] };
@@ -133,7 +136,9 @@ async function checkGraphInScope(
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  const catalog = selected ? await loadNodeCatalog(observationFs) : undefined;
+  const catalog = selected
+    ? (observedCatalog ?? (await loadNodeCatalog(observationFs)))
+    : undefined;
   const tent = observedTree ?? catalog?.tree ?? (await loadTent(observationFs));
   const nodePaths = new Set([...tent.byId.values()].map((node) => nodeNotePath(node.path)));
   const retainedPaths = await readonlyFs.retainedDocumentPaths?.();

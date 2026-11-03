@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod/v4";
 import type { FsAdapter } from "./adapter.js";
 import { isNodeId } from "../base/id.js";
 import {

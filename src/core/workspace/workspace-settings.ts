@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod/v4";
 import { type FsAdapter } from "../store/adapter.js";
 import { WORKSPACE_SETTINGS_PATH } from "../base/paths.js";
 

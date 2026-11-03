@@ -12,13 +12,17 @@ import {
   stopCoverageSections,
 } from "../core/return/stop-coverage.js";
 import { changedSections, settleSections } from "../fs/section-fingerprints.js";
-import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
+import {
+  captureNativeNodeEdits,
+  hasPendingNodeRecovery,
+} from "../core/graph/node-native-capture.js";
 import { changedGoals } from "../core/return/stop-goals.js";
 import { hasDocumentHistory } from "../core/store/history-port.js";
 import { checkNodeWriteProblems } from "../fs/node-write-problems.js";
 import { withFileLockGuard } from "../fs/file-lock-guard.js";
 import { NodeFs } from "../fs/node-fs.js";
 export type TurnHookInput = { eventName: unknown; cwd: unknown; stopHookActive?: unknown };
+const noop = () => undefined;
 /** The host owns only its native envelope. Adjacent Stops observe one checkout. */
 export async function runTurnHook(
   _host: string,
@@ -51,15 +55,26 @@ export async function runTurnHook(
     sectionRoot,
     async () => {
       const adapter = new NodeFs(systemRoot);
+      // Capture keeps its own adapter so its invalid-edit marks cannot reach the coverage read.
+      const captureFs = new NodeFs(systemRoot);
       try {
-        const [snapshotResult, coverageResult] = await Promise.allSettled([
+        const capturing = captureNativeNodeEdits(captureFs);
+        const [snapshotResult, coverageResult, captureResult] = await Promise.allSettled([
           observeStopChanges(systemRoot, checkout),
-          loadStopCoverage(systemRoot, workspaceRoot, adapter),
+          // An interrupted move or delete settles before coverage reads the graph.
+          hasPendingNodeRecovery(adapter).then(async (pending) => {
+            if (pending) await capturing.then(noop, noop);
+            return loadStopCoverage(systemRoot, workspaceRoot, adapter);
+          }),
+          capturing,
         ]);
         if (snapshotResult.status === "rejected") throw snapshotResult.reason;
         if (coverageResult.status === "rejected") throw coverageResult.reason;
+        if (captureResult.status === "rejected") throw captureResult.reason;
         const snapshot = snapshotResult.value;
         const index = coverageResult.value;
+        const captured = captureResult.value;
+        adapter.invalidNodeEdits = captureFs.invalidNodeEdits;
         const changedFiles = snapshot.files.flatMap((file) => {
           const relative = local(file);
           return relative === undefined ? [] : [relative];
@@ -70,7 +85,6 @@ export async function runTurnHook(
           stopCoverageSections(index, changedFiles),
           (file) => snapshot.readPreviousFile(prefix + file),
         );
-        const captured = await captureNativeNodeEdits(adapter);
         const invalid = new Set(
           captured.invalidNodes.map((node) => path.resolve(workspaceRoot, node.path)),
         );
@@ -91,6 +105,7 @@ export async function runTurnHook(
           captured.changedNodePaths.filter(
             (file) => present.has(file) && !invalidNativePaths.has(file),
           ),
+          captured.catalog,
         );
         const edited = new Set(captured.changedNodePaths.map((file) => `.tent/${file}`));
         const nodeProblems: Record<string, string> = Object.create(null);
@@ -112,7 +127,9 @@ export async function runTurnHook(
             (file) =>
               present.has(file) && !invalidNativePaths.has(file) && !edited.has(`.tent/${file}`),
           );
-        const references = (await checkNodeWriteProblems(adapter, workspaceRoot, listed))
+        const references = (
+          await checkNodeWriteProblems(adapter, workspaceRoot, listed, captured.catalog)
+        )
           .filter(
             (problem) =>
               problem.category === "issue" &&
@@ -165,7 +182,7 @@ export async function runTurnHook(
         });
         return input.stopHookActive === true || !output ? "{}\n" : serialize(output);
       } finally {
-        await adapter.close();
+        await Promise.all([adapter.close(), captureFs.close()]);
       }
     },
     { waitMs: 8000, flush: false },

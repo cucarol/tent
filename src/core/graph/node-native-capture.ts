@@ -17,6 +17,11 @@ import { recoverPendingDeleteUnlocked } from "../store/delete-recovery.js";
 
 export type InvalidNativeNode = { path: string; nodeId?: string; reason: string };
 
+/** An interrupted move or delete waits for the next capture to settle it. */
+export async function hasPendingNodeRecovery(fs: FsAdapter) {
+  return (await fs.exists(NODE_MOVE_PENDING_PATH)) || (await fs.exists(DELETE_PENDING_PATH));
+}
+
 /** Command/hook boundary. Native saves retain document versions just like CLI saves. */
 export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
   invalidNodes: InvalidNativeNode[];
@@ -33,7 +38,7 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
     catalog: NodeCatalog;
   }> => {
     fs.invalidNodeEdits = new Map();
-    if ((await fs.exists(NODE_MOVE_PENDING_PATH)) || (await fs.exists(DELETE_PENDING_PATH))) {
+    if (await hasPendingNodeRecovery(fs)) {
       if (!locked && fs.withLock) return fs.withLock(MUTATION_LOCK_PATH, () => capture(true));
       const recover = async () => {
         await recoverPendingNodeMoveUnlocked(fs);
