@@ -14,4 +14,4 @@ Run `tent` as [access](../../skill-resources/references/access.md) shows.
 | Enable Hooks | Follow [Hooks](references/host-hooks.md) | `/hooks` |
 | The project already has files | [Map it](references/map.md) | the part tree from `tent workspace scan --json` |
 
-A project with no files yet starts with no Nodes; add them with tent-node as work produces facts.
+A project with no files yet starts with no Nodes; add them with tent-save as work settles things.

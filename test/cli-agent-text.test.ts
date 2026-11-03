@@ -307,7 +307,7 @@ test("unknown top-level commands show one command list and runnable help", async
   assert.equal(error.stdout, "");
   assert.equal(
     error.stderr.trimEnd(),
-    "Unknown command: tent frob\nCommands: new node card role workspace hook\nNext: tent --help",
+    "Unknown command: tent frob\nCommands: new load node card role workspace hook\nNext: tent --help",
   );
   const help = await promisify(execFile)(
     process.execPath,
@@ -316,7 +316,7 @@ test("unknown top-level commands show one command list and runnable help", async
       windowsHide: true,
     },
   );
-  assert.match(help.stdout, /^Tent keeps a context graph/);
+  assert.match(help.stdout, /^Tent keeps the context of your project's agent sessions/);
 });
 
 test("missing Nodes have a short diagnosis and runnable graph inspection without writes", async (t) => {

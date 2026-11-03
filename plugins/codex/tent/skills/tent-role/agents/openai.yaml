@@ -1,4 +1,4 @@
 interface:
   display_name: "Tent Role"
-  short_description: "Maintain a persistent work direction"
-  default_prompt: "Use $tent:tent-role to create or maintain the requested work direction."
+  short_description: "Work as a Role and hand work over with Cards"
+  default_prompt: "Use $tent:tent-role to work as the requested Role or hand work to one."

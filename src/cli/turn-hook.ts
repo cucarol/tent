@@ -13,6 +13,8 @@ import {
 } from "../core/return/stop-coverage.js";
 import { changedSections, settleSections } from "../fs/section-fingerprints.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
+import { changedGoals } from "../core/return/stop-goals.js";
+import { hasDocumentHistory } from "../core/store/history-port.js";
 import { checkNodeWriteProblems } from "../fs/node-write-problems.js";
 import { withFileLockGuard } from "../fs/file-lock-guard.js";
 import { NodeFs } from "../fs/node-fs.js";
@@ -103,6 +105,31 @@ export async function runTurnHook(
               problem: node.reason,
             });
         }
+        // A listed Node whose file or section is gone: this turn's deletion or rename usually did it.
+        const listed = pointers
+          .map((node) => path.relative(systemRoot, node.path).split(path.sep).join("/"))
+          .filter(
+            (file) =>
+              present.has(file) && !invalidNativePaths.has(file) && !edited.has(`.tent/${file}`),
+          );
+        const references = (await checkNodeWriteProblems(adapter, workspaceRoot, listed))
+          .filter(
+            (problem) =>
+              problem.category === "issue" &&
+              (problem.kind === "missing-material-file" ||
+                problem.kind === "missing-material-section"),
+          )
+          .map((problem) => ({
+            key: `${problem.path}\n${problem.reason}`,
+            path: path.resolve(workspaceRoot, problem.path),
+            problem: problem.reason,
+          }));
+        // A Node this Stop did not check keeps its reported problems; one it checked keeps only today's.
+        const checkedPaths = new Set(listed.map((file) => `.tent/${file}`));
+        const remembered = [...snapshot.previousReferenceProblems].filter((key) => {
+          const node = key.slice(0, key.indexOf("\n"));
+          return !checkedPaths.has(node) && present.has(node.slice(6));
+        });
         const problems = [
           ...new Map(
             [
@@ -111,12 +138,31 @@ export async function runTurnHook(
                 path: path.resolve(workspaceRoot, problem.path),
                 problem: problem.reason,
               })),
+              ...references
+                .filter(({ key }) => !snapshot.previousReferenceProblems.has(key))
+                .map((reference) => ({ path: reference.path, problem: reference.problem })),
             ].map((problem) => [JSON.stringify(problem), problem]),
           ).values(),
         ];
-        const output = formatStopCoverage(pointers, problems);
+        const history = (await hasDocumentHistory(adapter))
+          ? await adapter.history.currentCommit()
+          : null;
+        // A baseline the history no longer holds (a rebuilt Tent) starts over from this Stop.
+        const goals =
+          snapshot.previousHistory &&
+          history &&
+          (await adapter.history.isPublished(snapshot.previousHistory))
+            ? await changedGoals(adapter.history, systemRoot, snapshot.previousHistory, history)
+            : [];
+        const uncovered =
+          changedFiles.length > 0 && !selectStopCoverage(index, changedFiles, "all").length;
+        const output = formatStopCoverage(pointers, problems, { uncovered, goals });
         await settleSections(systemRoot, checkoutWorkspace, sections);
-        await snapshot.settle(nodeProblems);
+        await snapshot.settle({
+          nodeProblems,
+          history,
+          referenceProblems: [...remembered, ...references.map(({ key }) => key)],
+        });
         return input.stopHookActive === true || !output ? "{}\n" : serialize(output);
       } finally {
         await adapter.close();

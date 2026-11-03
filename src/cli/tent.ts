@@ -124,6 +124,15 @@ async function main() {
     return;
   }
 
+  if (cmd === "load") {
+    const { runLoadCommand } = await import("./load-command.js");
+    const result = await runLoadCommand(args);
+    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+    if (result.exitCode !== 0) process.exitCode = result.exitCode;
+    return;
+  }
+
   // Direct Core Node reads and mutations.
   if (cmd === "node") {
     const { runNodeCommand } = await import("./node-commands.js");
@@ -137,7 +146,15 @@ async function main() {
 
   return fail(
     cliErrorText(
-      unknownCommandError("tent", cmd, ["new", "node", "card", "role", "workspace", "hook"]),
+      unknownCommandError("tent", cmd, [
+        "new",
+        "load",
+        "node",
+        "card",
+        "role",
+        "workspace",
+        "hook",
+      ]),
       "tent",
     ),
   );
@@ -157,7 +174,7 @@ function packageRoot(): string {
 }
 
 function helpText(): string {
-  return `Tent keeps a context graph of your project in .tent/, next to the code.
+  return `Tent keeps the context of your project's agent sessions as a graph in .tent/.
 
 Run it inside a Workspace, or name one with --workspace <path>.
 
@@ -165,6 +182,7 @@ Start
   tent new <path>                    Create an empty Tent in <path>/.tent with its own SQLite history; --workspace <path> also selects the new root.
 
 Read and record
+  tent load <path>...                Nodes for these files: those covering them, then the prompts above, nearest first.
   tent workspace brief               Where to start: what changed and which Cards wait.
   tent node history                  Saved Node versions.
   tent node create|rename|move|archive|delete

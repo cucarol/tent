@@ -55,7 +55,7 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
     "utf8",
   );
   const inputSkill = await fs.readFile(
-    path.join(repoRoot, "skills", "tent-node", "SKILL.md"),
+    path.join(repoRoot, "skills", "tent-save", "SKILL.md"),
     "utf8",
   );
   assert.equal(pkg.bin.tent, "./cli.mjs");
@@ -140,10 +140,10 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
     ),
   );
   assert.deepEqual(skillEntrypoints.filter((name) => name !== undefined).sort(), [
-    "tent-card",
     "tent-init",
-    "tent-node",
+    "tent-load",
     "tent-role",
+    "tent-save",
   ]);
   assert.equal(
     await exists(path.join(repoRoot, "skill-resources", "references", "node-maintenance.md")),

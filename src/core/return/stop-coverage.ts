@@ -12,7 +12,7 @@ import { markdownMaterialHeading } from "../base/material-section.js";
 import { isUsableNode } from "../store/tree.js";
 import { sectionKey } from "./section-fingerprint.js";
 
-export type StopNodePointer = { nodeId: string; name: string; path: string };
+export type StopNodePointer = { nodeId: string; name: string; path: string; type?: string };
 export type StopCoverageMaterial =
   | { kind: "file"; path: string; heading?: string }
   | { kind: "directory" | "prefix"; prefix: string };
@@ -67,6 +67,7 @@ export function buildStopCoverageIndex(
           nodeId: node.nodeId,
           name: node.name,
           path: path.resolve(systemRoot, owner),
+          ...(node.type ? { type: node.type } : {}),
           materials: [...materials.values()],
         };
       })
@@ -99,7 +100,7 @@ export function stopCoverageSections(
 export function selectStopCoverage(
   index: StopCoverageIndex,
   changedFiles: readonly string[],
-  changedSectionKeys: ReadonlySet<string> = new Set(),
+  changedSectionKeys: ReadonlySet<string> | "all" = new Set(),
 ): StopNodePointer[] {
   if (!changedFiles.length) return [];
   const prepared = index.nodes.map((node) => ({
@@ -108,6 +109,7 @@ export function selectStopCoverage(
       if (
         material.kind === "file" &&
         material.heading !== undefined &&
+        changedSectionKeys !== "all" &&
         !changedSectionKeys.has(sectionKey(material.path, material.heading))
       )
         return [];
@@ -139,16 +141,20 @@ export function selectStopCoverage(
       }
       matches.push(node);
     }
-    for (const { nodeId, name, path: filename } of matches)
-      selected.set(filename, { nodeId, name, path: filename });
+    for (const { nodeId, name, path: filename, type } of matches)
+      selected.set(filename, { nodeId, name, path: filename, ...(type ? { type } : {}) });
   }
   return [...selected.values()].sort((a, b) => compare(a.path, b.path));
 }
+
+const pointerLine = (node: StopNodePointer) =>
+  `- ${node.name}${node.type ? ` (${node.type})` : ""}: ${node.path}`;
 
 /** Stop emits pointers and concrete document problems, with no body or output budget. */
 export function formatStopCoverage(
   pointers: readonly StopNodePointer[],
   problems: readonly StopNodeProblem[] = [],
+  options: { uncovered?: boolean; goals?: readonly StopNodePointer[] } = {},
 ): string {
   const sections: string[] = [];
   if (pointers.length)
@@ -156,9 +162,22 @@ export function formatStopCoverage(
       "Files changed this turn are covered by these Tent Nodes:\n" +
         [...pointers]
           .sort((a, b) => compare(a.path, b.path))
+          .map(pointerLine)
+          .join("\n") +
+        "\n\nCorrect each against what it records: a goal against what the user wants now, a prompt against the decisions made, an output against the workspace. Record anything lasting the turn settled. Leave a Node that still matches as it is, and if nothing changed say nothing about Tent: a check that changed nothing is noise to the user.",
+    );
+  else if (options.uncovered)
+    sections.push(
+      "No Tent Node covers the files changed this turn. If the turn settled something a later session should start from — what the work is for, what was given to get there, or what came out — record it. Otherwise say nothing about Tent: a check that changed nothing is noise to the user.",
+    );
+  if (options.goals?.length)
+    sections.push(
+      "These goals changed this turn:\n" +
+        [...options.goals]
+          .sort((a, b) => compare(a.path, b.path))
           .map((node) => `- ${node.name}: ${node.path}`)
           .join("\n") +
-        "\nIf the change made a sentence in them wrong, fix it; if it settled something lasting, record it; otherwise say nothing about Tent.",
+        "\n\nA goal changes only when the user's will does. If the user has not been told, tell them what changed and why. If the edit only made the goal fit the work, undo it and tell the user the work differs from the goal.",
     );
   if (problems.length)
     sections.push(

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tent Save"
+  short_description: "Save what work settled into the project context"
+  default_prompt: "Use $tent:tent-save to save what this work settled."

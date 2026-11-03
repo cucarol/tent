@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tent Load"
+  short_description: "Load project context before a change"
+  default_prompt: "Use $tent:tent-load to load what Tent holds about the files this work changes."

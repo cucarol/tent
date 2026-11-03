@@ -44,7 +44,10 @@ test("version, top-level help and unknown commands do not initialize document or
   const launch = (args: string[]) => guarded([path.resolve("src/cli/tent.ts"), ...args]);
   const version = await launch(["version", "--json"]);
   assert.match(JSON.parse(version.stdout).version, /^\d+\.\d+\.\d+/);
-  assert.match((await launch(["--help"])).stdout, /Tent keeps a context graph/);
+  assert.match(
+    (await launch(["--help"])).stdout,
+    /^Tent keeps the context of your project's agent sessions/,
+  );
   await assert.rejects(launch(["not-a-command"]), (error: unknown) => {
     const result = error as { stderr?: string };
     assert.match(result.stderr ?? "", /Unknown command: tent not-a-command/);

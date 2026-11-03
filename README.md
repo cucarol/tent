@@ -33,7 +33,8 @@ Most work needs no Role and no Card.
 
 ## What Tent tells you
 
-- **At the end of a turn** that changed files, Tent names the Nodes covering them. The agent fixes any sentence the turn made wrong, records what is worth keeping, or says nothing needs recording.
+- **Before a change**, the agent can run `tent load <files>`. Tent lists the Nodes covering those files, then the prompts under them and under every goal above them, so the agent starts from what the work is for and what it has to follow.
+- **At the end of a turn** that changed files, Tent lists the Nodes covering them, with their types. The agent corrects each against what it records: a goal against what you want now, a prompt against the decisions made, an output against the workspace. It records what the turn settled, or says nothing. If no Node covers the changed files, Tent reminds it once to record what is worth keeping. When a goal changes, Tent names it, so the agent tells you.
 
 Dependencies between parts come from imports in TypeScript, JavaScript, Python, Go, Rust, Java, C#, C, C++ and PHP. Code in other languages is still mapped by directory and by what changes together in Git history.
 

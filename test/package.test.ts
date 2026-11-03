@@ -258,7 +258,7 @@ test("packed npm runtime installs current dependencies and only the direct CLI",
       `npm package excludes archived Desktop license ${license}`,
     );
   }
-  for (const skill of ["tent-init", "tent-node", "tent-role", "tent-card"])
+  for (const skill of ["tent-init", "tent-load", "tent-save", "tent-role"])
     assert.ok(packedPaths.includes(`skills/${skill}/SKILL.md`));
   assert.equal(
     packedPaths.some((entry: string) => /tent-init\/vendor\//.test(entry)),

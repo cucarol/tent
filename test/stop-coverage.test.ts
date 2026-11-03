@@ -270,12 +270,13 @@ test("warm Stop reuses unchanged exact header observations and rechecks changed 
   );
 });
 
-test("format emits the exact two sections, deterministic order, no truncation or body", () => {
+test("format emits the exact sections, deterministic order, no truncation or body", () => {
   assert.equal(formatStopCoverage([]), "");
   const pointers = Array.from({ length: 120 }, (_, i) => ({
     nodeId: `node-${i}`,
     name: `name-${i}-${"x".repeat(90)}`,
     path: path.resolve(`Node-${String(i).padStart(3, "0")}.md`),
+    type: ["goal", "prompt", "output"][i % 3]!,
   }));
   const problems = [
     { path: path.resolve("Z.md"), problem: "broken resource" },
@@ -285,8 +286,8 @@ test("format emits the exact two sections, deterministic order, no truncation or
   assert.equal(
     text,
     "Files changed this turn are covered by these Tent Nodes:\n" +
-      pointers.map((node) => `- ${node.name}: ${node.path}`).join("\n") +
-      "\nIf the change made a sentence in them wrong, fix it; if it settled something lasting, record it; otherwise say nothing about Tent.\n\nThese Tent Node files have problems:\n" +
+      pointers.map((node) => `- ${node.name} (${node.type}): ${node.path}`).join("\n") +
+      "\n\nCorrect each against what it records: a goal against what the user wants now, a prompt against the decisions made, an output against the workspace. Record anything lasting the turn settled. Leave a Node that still matches as it is, and if nothing changed say nothing about Tent: a check that changed nothing is noise to the user.\n\nThese Tent Node files have problems:\n" +
       [...problems]
         .reverse()
         .map((item) => `- ${item.path}: ${item.problem}`)

@@ -10,6 +10,15 @@ type GitSnapshot = {
   head: string | null;
   dirty: Record<string, string | null>;
   nodeProblems?: Record<string, string>;
+  /** The Tent history commit this checkout's last Stop saw. */
+  history?: string;
+  /** Reference problems of listed Nodes already reported, one key each. */
+  referenceProblems?: string[];
+};
+export type StopSettlement = {
+  nodeProblems?: Record<string, string>;
+  history?: string | null;
+  referenceProblems?: readonly string[];
 };
 const normalized = (value: string) => (process.platform === "win32" ? value.toLowerCase() : value);
 const eligible = (file: string) =>
@@ -279,8 +288,10 @@ export async function observeStopChanges(
 ): Promise<{
   files: string[];
   previousNodeProblems: Record<string, string>;
+  previousHistory?: string;
+  previousReferenceProblems: ReadonlySet<string>;
   readPreviousFile(file: string): Promise<string | undefined>;
-  settle(nodeProblems?: Record<string, string>): Promise<void>;
+  settle(settlement?: StopSettlement): Promise<void>;
 }> {
   const root = await fs.realpath(path.resolve(checkoutRoot));
   const key = createHash("sha256").update(normalized(root)).digest("hex");
@@ -292,6 +303,8 @@ export async function observeStopChanges(
   return {
     files: observed.files.sort(),
     previousNodeProblems: previous?.nodeProblems ?? {},
+    ...(previous?.history ? { previousHistory: previous.history } : {}),
+    previousReferenceProblems: new Set(previous?.referenceProblems ?? []),
     async readPreviousFile(file) {
       if (
         !eligible(file) ||
@@ -303,9 +316,22 @@ export async function observeStopChanges(
       if (!baselineFiles.has(file)) return;
       return git(root, ["show", `${baseline.head}:${file}`]);
     },
-    async settle(nodeProblems = previous?.nodeProblems ?? {}) {
+    async settle({
+      nodeProblems = previous?.nodeProblems ?? {},
+      history = previous?.history ?? null,
+      referenceProblems = previous?.referenceProblems ?? [],
+    }: StopSettlement = {}) {
       await fs.mkdir(path.dirname(filename), { recursive: true });
-      await durableReplace(filename, JSON.stringify({ ...observed.current, nodeProblems }), "utf8");
+      await durableReplace(
+        filename,
+        JSON.stringify({
+          ...observed.current,
+          nodeProblems,
+          ...(history ? { history } : {}),
+          referenceProblems: [...referenceProblems].sort(),
+        }),
+        "utf8",
+      );
     },
   };
 }

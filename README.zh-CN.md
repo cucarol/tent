@@ -33,7 +33,8 @@ Tent 是项目的上下文图谱：记下你定了什么、做出了什么。
 
 ## Tent 告诉你什么
 
-- **一轮结束时**，如果这一轮改了文件，Tent 会点出覆盖这些文件的 Node。Agent 改掉这一轮弄错的句子，记下值得留的东西，或者说一句不用记。
+- **动手之前**，Agent 可以运行 `tent load <文件>`。Tent 列出管这些文件的 Node，再列出它们自己和上方每个 goal 下的 prompt，让 Agent 从「为了什么」和「要照着做什么」开始。
+- **一轮结束时**，如果这一轮改了文件，Tent 会带着类型列出管这些文件的 Node。Agent 拿每个 Node 去对它记的东西：goal 对你现在要什么，prompt 对做过的决定，output 对工作区，对不上就改。这一轮定下了什么就记，什么都没变就不提。改的文件没有 Node 管时，Tent 提醒一次，把值得留的记下来。goal 改了，Tent 会点名，Agent 会告诉你。
 
 各块之间的依赖从 TypeScript、JavaScript、Python、Go、Rust、Java、C#、C、C++ 和 PHP 的 import 里分析出来。其他语言的代码照样按目录、按 Git 历史里哪些文件总一起改来画图。
 

@@ -85,9 +85,9 @@ npm 包 `vibe-tent` 是单独的 CLI 包，用 `npm install -g vibe-tent` 安装
 | 工作                         | Skill     | CLI  |
 | ---------------------------- | --------- | ---- |
 | 新建空 Tent 和本地历史       | tent-init | new  |
-| 查找、读取、维护有用事实     | tent-node | node |
-| 创建、读取、维护持久工作方向 | tent-role | role |
-| 记录、预览、接收一次输入     | tent-card | card |
+| 动手前取相关 Node            | tent-load | load |
+| 记下定下的东西、按来源校正 Node | tent-save | node |
+| 按 Role 工作、用 Card 交接   | tent-role | role、card |
 
 普通工作不要求创建 Role 或 Card。Role 可以独立建立；没有 Role 的 Session 也可接收无 target 的 Card，有 target 时必须指定对应 Role。`new` 只建立空工作区；空图用 `workspace scan --draft <新文件>` 准备部分草稿，Agent 调整名字、边界并写正文，再用 `node create --draft <文件>` 保存。草稿保留 ref、父子关系和中断后的重试，未写正文的条目不进图谱。已有任何 Node 时，scan 只报告地图问题，不再出草稿；干净文本静默，有问题退出码 1。`--json` 直接返回 report 和 parts 树，树节点为 name、path、files、children。详见 [SPEC §7](SPEC.md#7-mapping-a-project)。
 
@@ -106,7 +106,7 @@ Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.ten
 
 ## Node 的维护者说明
 
-Node 是 `.tent` 下的 Markdown。`type` 仍必填 `goal`、`prompt` 或 `output`，三者只保留名称，不决定覆盖、祖先规则、目标完成或读写行为。`description` 是可选的一句话字符串，不参与覆盖；非字符串由 `workspace check` 报为文档问题。tags 表达形态和主题，与覆盖无关。
+Node 是 `.tent` 下的 Markdown。`type` 必填 `goal`、`prompt` 或 `output`，各自记一种来源：goal 记用户现在要做成什么，prompt 记为此给的东西，output 记实际产出。三者覆盖、读写相同，不决定目标完成；区别只在 `tent load` 经 goal 取 prompt，以及 Stop 点名改过的 goal。`description` 是可选的一句话字符串，不参与覆盖；非字符串由 `workspace check` 报为文档问题。tags 表达形态和主题，与覆盖无关。
 
 `verified` 已退休，`workspace check` 会报告，不能用来确认 Node 或改变覆盖。一次性[元数据清理](MIGRATION.md#remove-retired-node-metadata)与 source 的 `track` 一并删除它。
 
@@ -120,7 +120,7 @@ Node 名称在所有平台按 Windows 文件名校验：不得含 `< > : " / \ |
 
 目录成员只按项目自己的 Git 判断，不建立私有 Git ignore 环境，也不无规则遍历。仓库外的 `file:` 目录只保留为地址、检查存在，不列成员；Stop 只看本 Workspace Git 的改动。
 
-文件、目录和末尾一个 `*` 的文件名前缀都能通过 `resource` 或 `sources` 提供普通覆盖。对每个改动文件，精确文件及实际改动的章节优先，否则取最近的目录或前缀，同等具体的都给。没有 `track` 或代码所有权，也不按 type 继承规则。linked worktree 的改动按 checkout 内相对路径匹配；Stop 给出的 Node 路径始终在主 checkout 的 `.tent` 下。
+文件、目录和末尾一个 `*` 的文件名前缀都能通过 `resource` 或 `sources` 提供普通覆盖。对每个改动文件，精确文件及实际改动的章节优先，否则取最近的目录或前缀，同等具体的都给。没有 `track` 或代码所有权，覆盖也不按 type 继承规则；按 type 取 prompt 只发生在 `tent load`（SPEC §5）。linked worktree 的改动按 checkout 内相对路径匹配；Stop 给出的 Node 路径始终在主 checkout 的 `.tent` 下。
 
 `status` 为 `draft`、`stable`（默认）或 `deprecated`，只作用于本文档；`node archive` 弃用子树，要重新启用 Node，改回其 status。`node delete` 删除子树；`node rename` 与 `node move` 保持 id 并更新指向它的链接。Card 来源仍钉住所选版本，Node 创建不会自动选择或回答某张 Card。
 
@@ -144,9 +144,9 @@ Node 的普通 `sources` 可以保留与 Card 的来源关系，但 Node 的 typ
 
 ## Hook 边界
 
-两个宿主只注册 Stop，其 1–5 流程、预算和两段提示原文以 [SPEC §5](SPEC.md#5-what-the-agent-is-told) 为准。普通改代码不需要 Agent 先跑 Tent；读和改 Node 使用宿主自带工具。
+两个宿主只注册 Stop，其 1–6 流程、预算和四段提示原文以 [SPEC §5](SPEC.md#5-what-the-agent-is-told) 为准。普通改代码不需要 Agent 先跑 Tent；读和改 Node 使用宿主自带工具。
 
-两个宿主入口仍在 `plugins/codex/tent/hooks/session.mjs` 和 `plugins/claude-code/tent/hooks/session.mjs`。宿主壳只转译 Stop 输入与 JSON 外壳，复用 `tent hook stop` 的 Core 流程。Stop 比较本 checkout 与上次 Stop 的 HEAD 及未提交文件内容快照，现读 Node frontmatter 覆盖，收进本轮 Node 文件改动，然后给绝对文件指针和格式问题。每个 checkout 在共用 `.tent` 临时目录下有自己的快照；首次比较当前未提交文件。Workspace 不在 Git 仓库时 Stop 静默。Node 正文不进入通知，也没有条数、字节或截断预算。
+两个宿主入口仍在 `plugins/codex/tent/hooks/session.mjs` 和 `plugins/claude-code/tent/hooks/session.mjs`。宿主壳只转译 Stop 输入与 JSON 外壳，复用 `tent hook stop` 的 Core 流程。Stop 比较本 checkout 与上次 Stop 的 HEAD 及未提交文件内容快照，现读 Node frontmatter 覆盖，收进本轮 Node 文件改动，然后给带类型的绝对文件指针（没有 Node 管时给一句提醒）、改过的 goal、格式问题和列出的 Node 里已失效的引用。快照另记 Tent 历史位置和已报过的引用问题。每个 checkout 在共用 `.tent` 临时目录下有自己的快照；首次比较当前未提交文件。Workspace 不在 Git 仓库时 Stop 静默。Node 正文不进入通知，也没有条数、字节或截断预算。
 
 章节的旧指纹和旧正文都不可用时不算已变，仍可回退到明确整篇文件或目录覆盖。首次从 HEAD 取旧正文比较。
 

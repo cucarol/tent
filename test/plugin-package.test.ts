@@ -144,7 +144,7 @@ test("both host packages carry the same common payload and separate native shell
       await fs.readFile(path.join(claude, file)),
       file,
     );
-  for (const skill of ["tent-card", "tent-init", "tent-node", "tent-role"])
+  for (const skill of ["tent-init", "tent-load", "tent-role", "tent-save"])
     await assert.rejects(fs.access(path.join(claude, "skills", skill, "agents")), {
       code: "ENOENT",
     });
@@ -303,7 +303,7 @@ test(
       dataDir = path.join(fixture, "absent service state");
     await fs.mkdir(workspace);
     await initializeProject(workspace);
-    const expectedSkills = ["tent-card", "tent-init", "tent-node", "tent-role"];
+    const expectedSkills = ["tent-init", "tent-load", "tent-role", "tent-save"];
     assert.deepEqual((await fs.readdir(path.join(bundle, "skills"))).sort(), expectedSkills);
     for (const skill of expectedSkills) {
       assert.equal(
@@ -418,11 +418,16 @@ test(
           }),
         );
       });
+    // The trap service.mjs is a new file no Node covers.
+    assert.match(
+      JSON.parse(await hook("Stop")).reason,
+      /^No Tent Node covers the files changed this turn\./,
+    );
     assert.deepEqual(JSON.parse(await hook("Stop")), {});
     await fs.writeFile(path.join(workspace, "product.txt"), "after a native shell edit");
     const notice = JSON.parse(await hook("Stop"));
     assert.equal(notice.decision, "block");
-    assert.ok(notice.reason.includes(`- context: ${nodeFile}`));
+    assert.ok(notice.reason.includes(`- context (prompt): ${nodeFile}`));
     assert.doesNotMatch(notice.reason, /Original input|Live changed|Rules over it:|cut; the rest/);
     assert.deepEqual(JSON.parse(await hook("Stop", { stop_hook_active: true })), {});
     await assert.rejects(fs.access(dataDir), { code: "ENOENT" });

@@ -65,7 +65,7 @@ test("Skill validation follows Markdown semantics and rejects actual nested refe
 });
 
 test("Node guidance distinguishes stored document paths from CLI Workspace paths", async () => {
-  const maintenance = flat(await read("skills/tent-node/SKILL.md"));
+  const maintenance = flat(await read("skills/tent-save/SKILL.md"));
   assert.match(
     maintenance,
     /`--resource` and `--source` take Workspace-root paths.*Tent stores them relative to the Node file/,
@@ -109,10 +109,13 @@ test("PLUGIN.md points to SPEC for results and brief rules", async () => {
 
 test("Node guidance keeps the required type names and ordinary metadata without type behavior", async () => {
   const spec = flat(await read("docs/SPEC.md"));
-  const skill = await read("skills/tent-node/SKILL.md");
+  const skill = await read("skills/tent-save/SKILL.md");
   assert.match(spec, /`type` is required and is exactly `goal`, `prompt` or `output`/);
-  assert.match(spec, /same coverage, reading and writing behavior/);
-  assert.match(skill, /`goal`, `prompt` or `output`, as the word says/);
+  assert.match(spec, /Coverage, reading and writing are the same for every type/);
+  for (const file of ["skills/tent-load/SKILL.md", "skills/tent-save/SKILL.md"])
+    for (const row of ["| `goal` |", "| `prompt` |", "| `output` |"])
+      assert.ok((await read(file)).includes(row), `${file} ${row}`);
+  assert.match(skill, /`goal`, `prompt` or `output`, as above/);
   for (const field of ["id", "type", "description", "tags", "resource", "sources", "status"])
     assert.ok(skill.includes(`| \`${field}\` |`), field);
   const { NODE_TAG_PRESETS } = await import("../src/core/base/tags.js");
@@ -131,7 +134,7 @@ test("Node guidance keeps the required type names and ordinary metadata without 
 test("Stop and host guidance use file pointers without rule inheritance or ownership", async () => {
   const spec = await read("docs/SPEC.md");
   const notice =
-    "Files changed this turn are covered by these Tent Nodes:\n- <name>: <absolute path>\nIf the change made a sentence in them wrong, fix it; if it settled something lasting, record it; otherwise say nothing about Tent.";
+    "Files changed this turn are covered by these Tent Nodes:\n- <name> (<type>): <absolute path>\n\nCorrect each against what it records: a goal against what the user wants now, a prompt against the decisions made, an output against the workspace. Record anything lasting the turn settled. Leave a Node that still matches as it is, and if nothing changed say nothing about Tent: a check that changed nothing is noise to the user.";
   assert.ok(spec.includes(notice));
   assert.ok(spec.includes("These Tent Node files have problems:\n- <absolute path>: <problem>"));
   for (const host of ["codex", "claude-code"])
@@ -144,7 +147,7 @@ test("Stop and host guidance use file pointers without rule inheritance or owner
   assert.match(hooks, /Both plugins register only Stop/);
   assert.doesNotMatch(hooks, /SessionStart|UserPromptSubmit|PostToolUse|1600|8 KiB/);
   const plugin = flat(await read("docs/PLUGIN.md"));
-  assert.match(plugin, /没有 `track` 或代码所有权，也不按 type 继承规则/);
+  assert.match(plugin, /没有 `track` 或代码所有权，覆盖也不按 type 继承规则/);
   assert.match(plugin, /\[Codex Hooks\]\(https:\/\/learn\.chatgpt\.com\/docs\/hooks\)/);
 });
 

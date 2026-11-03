@@ -6,7 +6,7 @@ The sections after the first follow the question each group of mechanisms answer
 
 ## 1. Purpose and workspace
 
-Node, Role and Card are the only concepts. A Node keeps one reusable fact, a Role keeps a direction of work, and a Card hands one input to a Role. Normal work, answers, code edits, review and Git stay in the host conversation and the user's tools; ordinary tasks need no Role or Card. Tent has no managed Agent, session registry, task scheduler or background service.
+Node, Role and Card are the only concepts. Tent keeps the context of a project's agent sessions as a graph: a Node records one thing in that context, a Role keeps a direction of work, and a Card hands one input to a Role. Normal work, answers, code edits, review and Git stay in the host conversation and the user's tools; ordinary tasks need no Role or Card. Tent has no managed Agent, session registry, task scheduler or background service.
 
 A workspace is a directory inside a Git repository that contains `.tent/`. Git is required. Its `workspaceId` in `.tent/settings.json` survives relocation; a missing or corrupt identity fails explicitly. Discovery walks up from the current directory and stops at a Git checkout boundary. From a linked worktree it follows the `.git` pointer to the main checkout's `.tent/`, so Node edits land in the main checkout. Ordinary material reads use the main checkout; Stop compares the originating checkout and matches coverage by its workspace-relative paths (§5). Submodules, nested clones and bare repositories do not inherit a parent workspace. `--workspace` overrides discovery.
 
@@ -18,7 +18,7 @@ A workspace is a directory inside a Git repository that contains `.tent/`. Git i
 
 A Node is a directory holding `<name>/<name>.md`. A directory without that file is a plain grouping folder. Placement gives the parent and child tree; the `node-…` id is the stable handle across moves and renames. The file name is the display name; a `title` field, if present, is kept aligned with it. Names must be valid Windows file names on every platform: `< > : " / \ | ? *`, a trailing dot, C0 control characters (U+0000–U+001F), DEL (U+007F), U+2028, U+2029 and the reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, `COM¹`–`COM³` and `LPT¹`–`LPT³`, with or without an extension) are rejected, and surrounding whitespace is trimmed.
 
-`type` is required and is exactly `goal`, `prompt` or `output`; any other value makes the document an invalid Node, in retained versions too. These are names: Tent gives them the same coverage, reading and writing behavior. `description` is an optional one-sentence string; a non-string value is a document problem reported by `workspace check`. Form and topic go in `tags`: free text without path separators or line breaks, any number, no behavior. Tent suggests ten presets: `direction`, `requirement`, `decision`, `spec`, `reference`, `procedure`, `asset`, `evidence`, `analysis` and `issue`. Unknown YAML fields survive every edit. Invalid identity or type data and duplicate ids are reported, never silently repaired.
+`type` is required and is exactly `goal`, `prompt` or `output`; any other value makes the document an invalid Node, in retained versions too. Each type records a different source, and the Node is corrected against it: a `goal` records what the work is for, as the user wants it now; a `prompt` records what is given to get there, such as requirements, constraints, decisions with their reasons, references and ways of working; an `output` records what came out, as it is now. A prompt or output sits under the goal it serves. Coverage, reading and writing are the same for every type; `tent load` gathers prompts through goals, and Stop names changed goals (§5). `description` is an optional one-sentence string; a non-string value is a document problem reported by `workspace check`. Form and topic go in `tags`: free text without path separators or line breaks, any number, no behavior. Tent suggests ten presets: `direction`, `requirement`, `decision`, `spec`, `reference`, `procedure`, `asset`, `evidence`, `analysis` and `issue`. Unknown YAML fields survive every edit. Invalid identity or type data and duplicate ids are reported, never silently repaired.
 
 `verified` is a retired Node field, reported by `workspace check`; it does not confirm a Node or change coverage. The one-off [metadata cleanup](MIGRATION.md#remove-retired-node-metadata) removes it together with retired source tracking fields.
 
@@ -72,7 +72,21 @@ Create a Node with `node create --type output` and the relevant `--resource` or 
 
 ## 5. What the Agent is told
 
-Tent reminds the Agent once at the end of a turn. The reminder points to the Nodes that cover changed files and reports problems in edited Node documents. The Agent reads and maintains those files with the host's tools. When nothing needs recording, it says nothing about Tent.
+Tent speaks at the two ends of a turn's work. Before a change, `tent load` points the Agent to the Nodes for the files it is about to change. At the end of a turn, Stop reminds the Agent once: it points to the Nodes that cover changed files or says that none does, names goals that changed, and reports problems in edited or listed Node documents. The Agent reads and maintains those files with the host's tools. When nothing needs recording, it says nothing about Tent.
+
+### Load
+
+`tent load <path>...` resolves each path from the current directory against the originating checkout, as Stop does, and lists the Nodes covering those files by §3's most specific rule, with every section reference counted as matching. It then lists the direct `prompt` children of each covering Node and of every `goal` above it, nearest first; a Node reached twice is listed once, and invalid or deprecated Nodes are left out. It collects native edits first and writes nothing else.
+
+```text
+These Tent Nodes cover <path>[, <path>…]:
+- <name> (<type>): <absolute path> — <description>
+
+Prompts above them, nearest first:
+- <name> (prompt): <absolute path> — <description>
+```
+
+A Node without a description drops ` — <description>`; with no prompts the second block is left out. With no covering Node it prints `No Tent Node covers <path>[, <path>…].` A path outside the Workspace fails with `<path> is outside the Workspace at <root>.`
 
 ### Brief
 
@@ -84,15 +98,28 @@ Both plugins register only Stop. The host shell translates its Stop input and ou
 
 Stop performs these steps in order:
 
-1. **Compare the checkout with its previous Stop snapshot.** The snapshot keeps HEAD and content digests for uncommitted files. Comparison considers paths changed in commits between the previous and current HEAD, together with the current uncommitted paths, and compares their contents. With no previous snapshot, count current uncommitted files. Snapshots live in the shared `.tent` temporary directory, one per checkout, so linked worktrees have separate baselines. Files inside `.tent` never count as project-file changes. Before finishing, Stop saves the new checkout snapshot. A Workspace outside a Git repository produces no Stop notice.
+1. **Compare the checkout with its previous Stop snapshot.** The snapshot keeps HEAD and content digests for uncommitted files. Comparison considers paths changed in commits between the previous and current HEAD, together with the current uncommitted paths, and compares their contents. With no previous snapshot, count current uncommitted files. Snapshots live in the shared `.tent` temporary directory, one per checkout, so linked worktrees have separate baselines. Files inside `.tent` never count as project-file changes. Before finishing, Stop saves the new checkout snapshot, together with the Tent history position it saw and the reference problems it has reported. A Workspace outside a Git repository produces no Stop notice.
 2. **Select covering Nodes.** Read `resource` and `sources` from current Node frontmatter using §3's most specific matching rule. Reuse cached metadata only while the Node file remains unchanged. A section comparison reads only files changed this turn that have a section reference; unrelated material bodies are not read for coverage.
-3. **Collect direct Node edits.** Record valid Node files edited during this turn in history, and retain the edited documents' concrete format problems for the notice. Compare problem-bearing documents with this checkout's previous Stop observation: unchanged invalid bytes do not produce another notice. A recursive Stop also advances that observation while staying quiet.
-4. **Emit the notice.** Use the exact text below. When both sections are present they appear in this order, separated by one blank line. When both are empty, emit nothing. Node paths are absolute paths under the main checkout's `.tent`, including for a linked-worktree session. The notice contains pointers, without Node bodies, count limits, byte limits or truncation. The same state produces identical bytes.
+3. **Collect direct Node edits.** Record valid Node files edited during this turn in history, and retain the edited documents' concrete format problems for the notice. Compare problem-bearing documents with this checkout's previous Stop observation: unchanged invalid bytes do not produce another notice. A recursive Stop also advances that observation while staying quiet. For Nodes selected in step 2 that were not edited, report only references to files or sections that no longer exist, once per Node and problem until the problem changes.
+4. **Name changed goals.** Read the Tent history since this checkout's previous Stop. A Node that is or was a `goal` and whose type, description, status or body changed, including creation, archiving and deletion, is named; moves, renames and tag changes alone are not. History does not record which session made a change, so changes from other sessions in that window count too. Without a previous history position nothing is named.
+5. **Emit the notice.** Use the exact text below. Sections appear in this order, separated by one blank line: the covered Nodes, or the uncovered reminder when files changed and no Node covers any of them even counting every section reference; the changed goals; the problems. When all are empty, emit nothing. Node paths are absolute paths under the main checkout's `.tent`, including for a linked-worktree session. The notice contains pointers, without Node bodies, count limits, byte limits or truncation. The same state produces identical bytes.
 
 ```text
 Files changed this turn are covered by these Tent Nodes:
+- <name> (<type>): <absolute path>
+
+Correct each against what it records: a goal against what the user wants now, a prompt against the decisions made, an output against the workspace. Record anything lasting the turn settled. Leave a Node that still matches as it is, and if nothing changed say nothing about Tent: a check that changed nothing is noise to the user.
+```
+
+```text
+No Tent Node covers the files changed this turn. If the turn settled something a later session should start from — what the work is for, what was given to get there, or what came out — record it. Otherwise say nothing about Tent: a check that changed nothing is noise to the user.
+```
+
+```text
+These goals changed this turn:
 - <name>: <absolute path>
-If the change made a sentence in them wrong, fix it; if it settled something lasting, record it; otherwise say nothing about Tent.
+
+A goal changes only when the user's will does. If the user has not been told, tell them what changed and why. If the edit only made the goal fit the work, undo it and tell the user the work differs from the goal.
 ```
 
 ```text
@@ -100,13 +127,13 @@ These Tent Node files have problems:
 - <absolute path>: <problem>
 ```
 
-5. **Meet the speed guardrail.** On a repository of 7,570 files, Stop adds at most 600 ms when few files changed and two seconds when all did. Each host's acceptance figure is the median of eleven adjacent alternating pairs of a Hook command and a bare `node` start. Keep the raw pairs and outliers. Measure project and actual-graph copies under `.scratch`; an overrun is reported before changing semantics to reduce time.
+6. **Meet the speed guardrail.** On a repository of 7,570 files, Stop adds at most 600 ms when few files changed and two seconds when all did. Each host's acceptance figure is the median of eleven adjacent alternating pairs of a Hook command and a bare `node` start. Keep the raw pairs and outliers. Measure project and actual-graph copies under `.scratch`; an overrun is reported before changing semantics to reduce time.
 
 When neither an old section fingerprint nor old document text is available, a section is not counted as changed; whole-file and directory declarations can still supply coverage. Only changed files with section references are opened. Without a section record, use the previous checkout snapshot's HEAD text only when the file was clean in that snapshot; the first Stop uses the current HEAD. Previously dirty files without a section record remain unknown.
 
 ## 6. What a reader gets
 
-Ordinary code work needs no Tent read first. Agents find and read Node files with the host's tools; Stop points to the Nodes that cover changed files (§5).
+Tent hands out pointers, never copied bodies. Before files change, `tent load` lists the Nodes that cover them and the prompts that apply; after, Stop lists the Nodes covering the changed files (§5). Agents read those Node files with the host's tools.
 
 The first page of `card show` and `card take` carries an `agentContext`, gathered from the Card's sources. Its related-context lists have at most ten entries each and their complete totals:
 
@@ -164,7 +191,7 @@ While a Card is in progress, brief lists its pinned sources that changed since p
 
 ### Plugins and Skills
 
-One build makes the Codex and Claude Code packages from the same CLI, four Skills, references and this specification; each host gets a thin shell for its manifest, hook definitions and launcher. `tent-init` creates a Tent and maps a project, `tent-node` reads and maintains Nodes, `tent-role` takes on or keeps a Role, and `tent-card` sends and receives Cards. Command details live in references read on demand, and apart from mapping a project, no Skill asks for a fixed reading order, and none asks for a per-turn Node count or a full-tree pass. The plugin runs from its installed path, keeps no graph data in the plugin cache, installs no global hook copies and configures no MCP server. Building, installing, trusting the hooks and real event delivery are separate checks; a package being present proves none of the others.
+One build makes the Codex and Claude Code packages from the same CLI, four Skills, references and this specification; each host gets a thin shell for its manifest, hook definitions and launcher. Each Skill serves one moment: `tent-init` creates a Tent and maps a project, `tent-load` gathers the Nodes for a change before it is made, `tent-save` records what work settled and corrects Nodes against their sources, and `tent-role` takes on or keeps a Role and hands work over with Cards. Command details live in references read on demand, and apart from mapping a project, no Skill asks for a fixed reading order, and none asks for a per-turn Node count or a full-tree pass. The plugin runs from its installed path, keeps no graph data in the plugin cache, installs no global hook copies and configures no MCP server. Building, installing, trusting the hooks and real event delivery are separate checks; a package being present proves none of the others.
 
 ### Build identity
 

@@ -19,7 +19,9 @@ const scratch = fileURLToPath(
 const serialize = (reason: string) => JSON.stringify({ decision: "block", reason }) + "\n";
 const introduction = "Files changed this turn are covered by these Tent Nodes:\n";
 const instruction =
-  "\nIf the change made a sentence in them wrong, fix it; if it settled something lasting, record it; otherwise say nothing about Tent.";
+  "\n\nCorrect each against what it records: a goal against what the user wants now, a prompt against the decisions made, an output against the workspace. Record anything lasting the turn settled. Leave a Node that still matches as it is, and if nothing changed say nothing about Tent: a check that changed nothing is noise to the user.";
+const uncovered =
+  "No Tent Node covers the files changed this turn. If the turn settled something a later session should start from — what the work is for, what was given to get there, or what came out — record it. Otherwise say nothing about Tent: a check that changed nothing is noise to the user.";
 
 async function git(root: string, ...args: string[]) {
   return (
@@ -87,7 +89,7 @@ async function fixture(t: TestContext, repository = true) {
       introduction +
       [...names]
         .sort()
-        .map((name) => `- ${name}: ${path.join(target, name, `${name}.md`)}`)
+        .map((name) => `- ${name} (prompt): ${path.join(target, name, `${name}.md`)}`)
         .join("\n") +
       instruction
     );
@@ -615,7 +617,7 @@ test("a failed first Git Stop preserves the HEAD section difference for its succ
   assert.equal(await f.stop(), undefined);
 });
 
-test("missing section files do not block first Stop coverage and later creation/deletion changes are retained", async (t) => {
+test("missing section files do not block first Stop coverage; later creation is listed and deletion is reported once", async (t) => {
   const f = await fixture(t);
   await f.write("src/a.ts", "base");
   await f.node("Exact", "resource: ../../src/a.ts");
@@ -633,7 +635,110 @@ test("missing section files do not block first Stop coverage and later creation/
   assert.equal(await f.stop(), f.pointers(["Missing"]));
   assert.equal(await f.stop(), undefined);
   await fs.unlink(path.join(f.checkout, "docs/missing.md"));
-  assert.equal(await f.stop(), f.pointers(["Missing"]));
+  assert.equal(
+    await f.stop(),
+    f.pointers(["Missing"]) +
+      "\n\nThese Tent Node files have problems:\n" +
+      `- ${path.join(f.systemRoot, "Missing", "Missing.md")}: Local material does not exist as a file`,
+  );
+  assert.equal(await f.stop(), undefined);
+});
+
+test("a listed Node's reference problem is named once, across quiet Stops, until it is fixed and breaks again", async (t) => {
+  const f = await fixture(t);
+  await f.write("src/a.ts", "base");
+  await f.write("docs/material.md", "# Needed\nText\n");
+  await f.node("Watch", "resource: ../../src/a.ts\nsources:\n  - resource: ../../docs/material.md");
+  await f.seal();
+  await f.commit();
+  const problem =
+    "\n\nThese Tent Node files have problems:\n" +
+    `- ${path.join(f.systemRoot, "Watch", "Watch.md")}: Local material does not exist as a file`;
+  await fs.unlink(path.join(f.checkout, "docs/material.md"));
+  await f.write("src/a.ts", "changed");
+  assert.equal(await f.stop(), f.pointers(["Watch"]) + problem);
+  assert.equal(await f.stop(), undefined);
+  await f.write("src/a.ts", "changed again");
+  assert.equal(await f.stop(), f.pointers(["Watch"]));
+  await f.write("docs/material.md", "# Needed\nBack\n");
+  await f.write("src/a.ts", "third");
+  assert.equal(await f.stop(), f.pointers(["Watch"]));
+  await fs.unlink(path.join(f.checkout, "docs/material.md"));
+  await f.write("src/a.ts", "fourth");
+  assert.equal(await f.stop(), f.pointers(["Watch"]) + problem);
+});
+
+test("changed files no Node covers get one reminder; a covered file whose other section changed stays quiet", async (t) => {
+  const f = await fixture(t);
+  await f.write("src/a.ts", "base");
+  await f.write("docs/guide.md", "# Rules\nrules\n# Other\nother\n");
+  await f.node("Rules", 'resource: "../../docs/guide.md#Rules"');
+  await f.seal();
+  await f.commit();
+  await f.write("src/a.ts", "changed");
+  assert.equal(await f.stop(), uncovered);
+  assert.equal(await f.stop(), undefined);
+  await f.write("docs/guide.md", "# Rules\nrules\n# Other\nchanged\n");
+  assert.equal(await f.stop(), undefined);
+  await f.write("docs/guide.md", "# Rules\nchanged\n# Other\nchanged\n");
+  assert.equal(await f.stop(), f.pointers(["Rules"]));
+});
+
+test("goals whose type, description, status or body changed are named once; tags and other types stay quiet", async (t) => {
+  const f = await fixture(t);
+  const goal = (description: string, body: string, tags = "[]") =>
+    `---\nid: node-aim\ntype: goal\ndescription: ${description}\ntags: ${tags}\n---\n${body}\n`;
+  await f.write("Aim/Aim.md", goal("Sign in.", "Users sign in."), f.systemRoot);
+  await f.node("Rule", "description: A rule");
+  await f.seal();
+  await f.commit();
+  assert.equal(await f.stop(), undefined);
+  const named =
+    "These goals changed this turn:\n" +
+    `- Aim: ${path.join(f.systemRoot, "Aim", "Aim.md")}` +
+    "\n\nA goal changes only when the user's will does. If the user has not been told, tell them what changed and why. If the edit only made the goal fit the work, undo it and tell the user the work differs from the goal.";
+  await f.write("Aim/Aim.md", goal("Sign in.", "Users sign in with a code."), f.systemRoot);
+  assert.equal(await f.stop(), named);
+  assert.equal(await f.stop(), undefined);
+  await f.write(
+    "Aim/Aim.md",
+    goal("Sign in.", "Users sign in with a code.", "[login]"),
+    f.systemRoot,
+  );
+  await f.write(
+    "Rule/Rule.md",
+    "---\nid: node-rule\ntype: prompt\ndescription: Another rule\n---\nChanged.\n",
+    f.systemRoot,
+  );
+  assert.equal(await f.stop(), undefined);
+  await f.write(
+    "Aim/Aim.md",
+    goal("Sign in fast.", "Users sign in with a code.", "[login]"),
+    f.systemRoot,
+  );
+  assert.equal(await f.stop(), named);
+  await f.write(
+    "Aim/Aim.md",
+    goal("Sign in fast.", "Users sign in with a code.", "[login]").replace(
+      "tags: [login]",
+      "tags: [login]\nstatus: deprecated",
+    ),
+    f.systemRoot,
+  );
+  assert.equal(await f.stop(), named);
+  const snapshots = path.join(f.systemRoot, "temp", "stop-snapshots");
+  for (const file of await fs.readdir(snapshots)) {
+    const saved = JSON.parse(await fs.readFile(path.join(snapshots, file), "utf8"));
+    await fs.writeFile(
+      path.join(snapshots, file),
+      JSON.stringify({ ...saved, history: "f".repeat(64) }),
+    );
+  }
+  await f.write(
+    "Aim/Aim.md",
+    goal("Sign in.", "A history the Tent no longer holds."),
+    f.systemRoot,
+  );
   assert.equal(await f.stop(), undefined);
 });
 

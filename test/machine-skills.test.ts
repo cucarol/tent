@@ -19,15 +19,15 @@ async function fixture(t: { after: (callback: () => Promise<void>) => void }): P
 
 test("skill inventory only reports plugin-bundled directories with SKILL.md", async (t) => {
   const root = await fixture(t);
-  for (const name of ["tent-role", "tent-node", "references", "scripts", "empty"]) {
+  for (const name of ["tent-role", "tent-save", "references", "scripts", "empty"]) {
     await fs.mkdir(path.join(root, "skills", name), { recursive: true });
   }
-  for (const name of ["tent-role", "tent-node"]) {
+  for (const name of ["tent-role", "tent-save"]) {
     await fs.writeFile(path.join(root, "skills", name, "SKILL.md"), `# ${name}\n`);
   }
   await fs.mkdir(path.join(root, "skills", "empty", "SKILL.md"));
   assert.deepEqual(await listSkills(root), {
     source: "plugin-bundle",
-    skills: [{ name: "tent-node" }, { name: "tent-role" }],
+    skills: [{ name: "tent-role" }, { name: "tent-save" }],
   });
 });
