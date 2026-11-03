@@ -307,7 +307,7 @@ test("Card list reads live headers and diagnostics without derived progress or c
   const text = await runCardCommand("list", [], { workspace: root });
   assert.equal(text.exitCode, 0, text.stderr);
   assert.match(text.stdout, /header unavailable/);
-  assert.match(text.stdout, /有未收录的改动/);
+  assert.match(text.stdout, /file differs from what Tent saved/);
   assert.equal(await fs.readFile(file, "utf8"), invalid);
   assert.equal((await fs.stat(file)).mtimeMs, invalidMtime);
   assert.equal(await adapter.history.currentCommit(), head);

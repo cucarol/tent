@@ -117,8 +117,6 @@ export function compactReadItem<T>(item: T): T {
   return { ...identity, metadataOmitted: true, metadataRead: exactRead(original) } as T;
 }
 
-export const uncapturedNotice = "有未收录的改动，下一次写命令或 hook 时收录。";
-
 function encode(scope: string, revision: string, position: number) {
   return Buffer.from(JSON.stringify({ version: 1, scope, revision, position })).toString(
     "base64url",

@@ -26,7 +26,7 @@ import {
   deprecateCardDocument,
   type CardDocumentState,
 } from "../core/graph/card-document.js";
-import { pageItems, uncapturedNotice } from "./reader-page.js";
+import { pageItems } from "./reader-page.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 
 const CARD_COMMANDS = ["create", "list", "take", "return", "watch", "deprecate"];
@@ -392,7 +392,7 @@ function formatCard(value: unknown, sub: string) {
             item.title,
             item.publishedAt ? formatCliTime(item.publishedAt) : undefined,
             item.diagnostic,
-            item.uncaptured ? uncapturedNotice : undefined,
+            item.uncaptured ? "file differs from what Tent saved" : undefined,
           ]
             .filter(Boolean)
             .join("  "),
