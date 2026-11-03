@@ -106,7 +106,7 @@ Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.ten
 
 ## Node 的维护者说明
 
-Node 是 `.tent` 下的 Markdown。`type` 必填 `goal`、`prompt` 或 `output`，各自记一种来源：goal 记用户现在要做成什么，prompt 记为此给的东西，output 记实际产出。三者覆盖、读写相同，不决定目标完成；区别只在 `tent load` 经 goal 取 prompt，以及 Stop 点名改过的 goal。`description` 是可选的一句话字符串，不参与覆盖；非字符串由 `workspace check` 报为文档问题。tags 表达形态和主题，与覆盖无关。
+Node 是 `.tent` 下的 Markdown。`type` 必填 `goal`、`prompt` 或 `output`，各自记一种来源：goal 记用户现在要做成什么，prompt 记为此给的东西，output 记实际产出。三者覆盖、读写相同，不决定目标完成；区别只在 `tent load` 经 goal 取 prompt，Stop 点名改过的 goal，以及 `workspace scan` 只把 goal 当作项目的部分。`description` 是可选的一句话字符串，不参与覆盖；非字符串由 `workspace check` 报为文档问题。tags 表达形态和主题，与覆盖无关。
 
 `verified` 已退休，`workspace check` 会报告，不能用来确认 Node 或改变覆盖。一次性[元数据清理](MIGRATION.md#remove-retired-node-metadata)与 source 的 `track` 一并删除它。
 

@@ -103,7 +103,7 @@ test("Node description is optional text and creation accepts it in single and ba
   );
 });
 
-test("module report uses ordinary materials across all Node types and does not inherit child prompt rules", async (t) => {
+test("module report takes goals as parts and does not inherit child prompt rules", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "module-materials-"));
   t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
   await scaffoldInWorkspace(openTestFs(workspace), { name: "Coverage" });
@@ -133,11 +133,13 @@ test("module report uses ordinary materials across all Node types and does not i
   });
   assert.deepEqual(
     result.partFacts.map(({ name }) => name),
-    ["A", "B", "C"],
+    ["A"],
   );
-  assert.equal(
-    result.issues.some(({ code }) => code === "map.uncovered"),
-    false,
+  assert.deepEqual(
+    result.issues
+      .filter(({ code }) => code === "map.uncovered")
+      .flatMap(({ facts }) => facts.files ?? []),
+    ["b.ts", "c.ts"],
   );
   assert.equal(
     result.issues.some(({ code }) => code === "part.oversized"),

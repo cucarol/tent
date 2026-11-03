@@ -212,7 +212,7 @@ export function checkModuleMap(input: ModuleMapInput) {
       code: "map.uncovered",
       object: directory,
       facts: { directory, count: files.length, files },
-      fix: "Assign the listed files to a Node's file, directory or prefix materials.",
+      fix: "Assign the listed files to a goal's file, directory or prefix materials.",
     });
 
   const totalTextFiles = trackedFiles.filter(readable).length;

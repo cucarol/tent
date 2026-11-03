@@ -54,7 +54,9 @@ export async function checkWorkspaceModules(
         reason: node.invalidReason ?? "Invalid Node document",
       });
   const index = buildNodeIndex(current);
+  // Parts are goals; a prompt or output that names files still covers them for load and Stop.
   const nodes: ModuleMapNode[] = current
+    .filter((node) => node.type === "goal")
     .map((node) => {
       const owner = nodeNotePath(node.path);
       const materials: ModuleMapNode["materials"][number][] = [];

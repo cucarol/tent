@@ -114,7 +114,7 @@ test("coverage includes file-only Nodes, while module membership uses the most s
       code: "map.uncovered",
       object: "docs",
       facts: { directory: "docs", count: 2, files: ["docs/a.md", "docs/b.md"] },
-      fix: "Assign the listed files to a Node's file, directory or prefix materials.",
+      fix: "Assign the listed files to a goal's file, directory or prefix materials.",
     },
   ]);
 });

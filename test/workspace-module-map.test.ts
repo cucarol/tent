@@ -36,7 +36,7 @@ async function fixture(t: TestContext) {
   const node = (name: string, data: Record<string, unknown>, body = "") =>
     adapter.writeFile(
       `${name}/${name}.md`,
-      serializeFrontmatter({ id: `node-${name}`, type: "prompt", ...data }, body),
+      serializeFrontmatter({ id: `node-${name}`, type: "goal", ...data }, body),
     );
   return { root, adapter, write, node };
 }
@@ -144,16 +144,26 @@ test("pair exceptions resolve real Markdown links on the same line, from either 
   assert.equal((await inspect()).issues.filter((issue) => issue.code === "deps.cycle").length, 0);
 });
 
-test("ordinary directories, prefixes and files establish module coverage across types", async (t) => {
+test("goals establish part coverage through directories, prefixes and files; other types do not", async (t) => {
   const { root, adapter, node } = await fixture(t);
-  await node("legacy", { type: "goal", resource: "../../legacy/" });
-  await node("normal", { type: "prompt", ...materials("../../normal/") });
-  await node("single", { type: "output", resource: "../../single.ts#Part" });
+  await node("legacy", { resource: "../../legacy/" });
+  await node("normal", materials("../../normal/"));
+  await node("single", { resource: "../../single.ts#Part" });
   await node("module", materials("../../module/*"));
   await node("oldmap", { ...materials("../../old/"), status: "deprecated" });
+  await node("rule", { type: "prompt", resource: "../../rule/" });
+  await node("result", { type: "output", resource: "../../result.ts" });
   const repository = {
     head: null,
-    trackedFiles: ["legacy/a.ts", "normal/a.ts", "single.ts", "module/a.ts", "old/a.ts"],
+    trackedFiles: [
+      "legacy/a.ts",
+      "normal/a.ts",
+      "single.ts",
+      "module/a.ts",
+      "old/a.ts",
+      "rule/a.ts",
+      "result.ts",
+    ],
     commits: [],
     sources: { files: [], errors: [] },
   };
@@ -167,8 +177,9 @@ test("ordinary directories, prefixes and files establish module coverage across 
   assert.deepEqual(
     result.issues
       .filter(({ code }) => code === "map.uncovered")
-      .flatMap(({ facts }) => facts.files ?? []),
-    ["old/a.ts"],
+      .flatMap(({ facts }) => facts.files ?? [])
+      .sort(),
+    ["old/a.ts", "result.ts", "rule/a.ts"],
   );
   assert.deepEqual(await snapshot(root), before);
 });

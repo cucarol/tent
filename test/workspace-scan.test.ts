@@ -32,7 +32,7 @@ async function fixture(t: TestContext, initializeGit = true) {
   const node = (name: string, data: Record<string, unknown>, body = "") =>
     adapter.writeFile(
       `${name}/${name}.md`,
-      serializeFrontmatter({ id: `node-${name}`, type: "prompt", ...data }, body),
+      serializeFrontmatter({ id: `node-${name}`, type: "goal", ...data }, body),
     );
   return { root, adapter, write, node };
 }
@@ -244,6 +244,30 @@ test("CLI scan reports existing parts deterministically without changing project
   ]);
   assert.equal(first.stdout, formatWorkspaceModules(report));
   assert.deepEqual(await currentBytes(), before);
+});
+
+test("scan parts are goals, and a prompt that names files leaves them with their goal", async (t) => {
+  const { root, write, node } = await fixture(t);
+  await write("src/a.ts", "export const a = 1;\n");
+  await write("src/b.ts", "export const b = 2;\n");
+  await write("notes/only.md", "# Notes\n");
+  await node("part", { resource: "../../src/" });
+  await node("rule", {
+    type: "prompt",
+    sources: [{ resource: "../../src/a.ts" }, { resource: "../../notes/only.md" }],
+  });
+  await git(root, "add", ".");
+  await git(root, "commit", "-m", "files");
+  const json = await runWorkspaceCommand("scan", ["--json"], { workspace: root });
+  const report = JSON.parse(json.stdout);
+  assert.deepEqual(report.parts, [
+    { nodeId: "node-part", name: "part", path: ".tent/part", files: 2, children: [] },
+  ]);
+  const uncovered = report.issues
+    .filter((issue: { code: string }) => issue.code === "map.uncovered")
+    .flatMap((issue: { facts: { files: string[] } }) => issue.facts.files);
+  assert.ok(uncovered.includes("notes/only.md"), JSON.stringify(uncovered));
+  assert.ok(!uncovered.some((file: string) => file.startsWith("src/")), JSON.stringify(uncovered));
 });
 
 test("material coverage preserves section addresses independently of body links and deprecated Nodes", async (t) => {
