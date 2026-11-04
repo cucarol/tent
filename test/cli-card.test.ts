@@ -284,7 +284,6 @@ test("Card list reads live headers and diagnostics without derived progress or c
   assert.equal(listed.items[0].title, "Live title");
   assert.equal(listed.items[0].state, "consumed");
   assert.equal("progress" in listed.items[0], false);
-  assert.equal(listed.items[0].uncaptured, true);
   assert.equal(
     value(await runCardCommand("list", ["--state", "pending"], globals)).items.length,
     0,
@@ -303,11 +302,9 @@ test("Card list reads live headers and diagnostics without derived progress or c
   assert.match(unavailable.diagnostic, /header unavailable/);
   assert.equal(unavailable.title, undefined);
   assert.equal("progress" in unavailable, false);
-  assert.equal(unavailable.uncaptured, true);
   const text = await runCardCommand("list", [], { workspace: root });
   assert.equal(text.exitCode, 0, text.stderr);
   assert.match(text.stdout, /header unavailable/);
-  assert.match(text.stdout, /file differs from what Tent saved/);
   assert.equal(await fs.readFile(file, "utf8"), invalid);
   assert.equal((await fs.stat(file)).mtimeMs, invalidMtime);
   assert.equal(await adapter.history.currentCommit(), head);

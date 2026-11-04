@@ -45,7 +45,7 @@ function compactItem<T>(item: T): T {
   }
   if (fits(output, 8 * 1024)) return output as T;
   const identity = Object.fromEntries(
-    ["nodeId", "cardId", "roleId", "commit", "etag", "version", "uncaptured"]
+    ["nodeId", "cardId", "roleId", "commit", "etag", "version"]
       .filter((key) => key in original)
       .map((key) => [key, original[key]]),
   );

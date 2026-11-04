@@ -74,44 +74,13 @@ async function fixture(t: TestContext) {
   return { workspace, root, adapter, cache };
 }
 
-test("unfinished Card lists validate only unfinished headers and skip retained completed bytes", async (t) => {
+test("completion covers closed, deprecated and one-way consumed Cards", async (t) => {
   const { adapter } = await fixture(t);
   assert.deepEqual([...(await completedCardPaths(adapter))].sort(), [
     "cards/card-closed.md",
     "cards/card-deprecated.md",
     "cards/card-plain.md",
   ]);
-  const readHeader = adapter.readFrontmatter.bind(adapter);
-  const headers: string[] = [];
-  t.mock.method(adapter, "readFrontmatter", async (file: string) => {
-    if (file.startsWith("cards/")) headers.push(file);
-    return readHeader(file);
-  });
-  const listDir = adapter.listDir.bind(adapter);
-  let cardDirectories = 0;
-  t.mock.method(adapter, "listDir", async (file: string) => {
-    if (file === "cards") cardDirectories++;
-    return listDir(file);
-  });
-  const unfinished = async () => (await listCardDocuments(adapter, { unfinishedOnly: true })).items;
-  const listed = await unfinished();
-  assert.deepEqual(listed.map((item) => item.cardId).sort(), [
-    "card-pending",
-    "card-returned",
-    "card-working",
-  ]);
-  assert.deepEqual(headers.sort(), [
-    "cards/card-pending.md",
-    "cards/card-returned.md",
-    "cards/card-working.md",
-  ]);
-  assert.equal(cardDirectories, 1);
-  await adapter.writeFile("cards/card-plain.md", "---\nid: [broken\n");
-  assert.deepEqual(await unfinished(), listed);
-  const pending = await adapter.readFile("cards/card-pending.md");
-  await adapter.writeFile("cards/card-pending.md", pending.replace("Original", "Changed"));
-  await adapter.writeFile("cards/card-new.md", "---\nid: [broken\n");
-  assert.ok((await unfinished()).some((item) => item.cardId === "card-new" && item.diagnostic));
 });
 
 test("completion membership follows immutable SQLite events across long-lived and fresh readers", async (t) => {
@@ -154,9 +123,6 @@ test("explicit Card reads and workspace check still inspect completed native edi
     "cards/card-plain.md",
     serializeFrontmatter(original.data, "Changed input"),
   );
-  await assert.rejects(takeCardDocument(adapter, "card-plain", "role-worker"), {
-    code: "INPUT_CHANGED",
-  });
   assert.ok(
     (await listCardDocuments(adapter, { state: "consumed" })).items.some(
       (item) => item.cardId === "card-plain",

@@ -126,7 +126,7 @@ Node 名称在所有平台按 Windows 文件名校验：不得含 `< > : " / \ |
 
 Role 在 `.tent/roles/<role-id>.md` 中保存持续方向的目的、边界、方法和 Node 入口。它提供上下文，不占用锁，也不登记或绑定宿主 Session；多个会话可以按同一 Role 工作。`role create` 之后，Role 文件和 Node 一样用宿主自带工具读改。共享事实由 Node 保存，Role 只链接事实入口。
 
-Card 保存一次固定输入：任务正文、接收 Role（必填）、可选返回地址 returnTo，以及按顺序排列的来源。来源只是地址：创建时检查 Node 和 Role 来源存在，不复制、不钉版本；接收者用自己的工具读当前内容。CLI 将从 Workspace 根目录传入的路径转换为相对 Card 文档的地址。发布后的正文、title、sources、target 和 returnTo 不可修改，手工修改会报告为 `INPUT_CHANGED`。接收者开始时没有发送方的对话；正文写明任务，来源指向其余内容。需求变化写回来源 Node；尚未决定的要求留在 draft Node。
+Card 保存一次固定输入：任务正文、接收 Role（必填）、可选返回地址 returnTo，以及按顺序排列的来源。来源只是地址：创建时检查 Node 和 Role 来源存在，不复制、不钉版本；接收者用自己的工具读当前内容。CLI 将从 Workspace 根目录传入的路径转换为相对 Card 文档的地址。发出后不再编辑：要改任务或接收 Role，取消后重发；首次发布的内容留在历史里。接收者开始时没有发送方的对话；正文写明任务，来源指向其余内容。需求变化写回来源 Node；尚未决定的要求留在 draft Node。
 
 `card take` 打印任务，再逐条给来源的名字和当前位置。Node 来源按 Card 发布时那个地址上的 Node id 找它现在的文件，所以发出后改名或移动的 Node 仍能找到；不存在的路径标 `(not found)`。`workspace check` 不检查 Card 来源：发出的 Card 改不了，来源失效就作废重发。
 

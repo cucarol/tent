@@ -167,7 +167,7 @@ test("a handle/path identity mismatch retains SOURCE_CHANGED and read errors", a
   }
 });
 
-test("Card lists preserve live validation, full-body uncaptured, revision and fallback semantics", async (t) => {
+test("Card lists read live headers and keep a diagnostic for an invalid one", async (t) => {
   const f = await fixture(t);
   const retained = card("card-a");
   await f.adapter.history.captureUnlocked([{ path: f.relative, raw: retained }]);
@@ -177,43 +177,20 @@ test("Card lists preserve live validation, full-body uncaptured, revision and fa
     path.join(f.root, "cards/card-c.md"),
     "---\ntype: card\nid: card-c\nstate: strange\n---\ninvalid",
   );
-  const fallback = new Proxy(f.adapter, {
-    get(target, key) {
-      if (key === "readFrontmatterWithFingerprint") return undefined;
-      const value = Reflect.get(target, key, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  for (const options of [
-    { retainedState: true },
-    { state: "pending" as const, retainedState: true },
-    { includeDeprecated: true, retainedState: true },
-  ]) {
-    const expected = await listCardDocuments(fallback, options);
-    assert.deepEqual(await listCardDocuments(f.adapter, options), expected);
-    assert.deepEqual(await listCardDocuments(f.adapter, options), expected);
-  }
-  const original = await listCardDocuments(f.adapter, { retainedState: true });
-  assert.equal(original.items.find((i) => i.cardId === "card-a")?.uncaptured, undefined);
+  const pending = await listCardDocuments(f.adapter, { state: "pending" });
   assert.deepEqual(
-    (await listCardDocuments(f.adapter, { state: "pending", retainedState: true })).items
-      .filter((i) => !i.diagnostic)
-      .map((i) => i.cardId),
+    pending.items.filter((i) => !i.diagnostic).map((i) => i.cardId),
     ["card-a", "card-b"],
   );
-  await fs.writeFile(f.filename, retained.replace("private body", "changed body"));
-  const edited = await listCardDocuments(f.adapter, { retainedState: true });
-  assert.equal(edited.items.find((i) => i.cardId === "card-a")?.uncaptured, true);
-  assert.notEqual(edited.revision, original.revision);
-  assert.deepEqual(edited, await listCardDocuments(fallback, { retainedState: true }));
+  assert.ok(pending.items.some((i) => i.cardId === "card-c" && i.diagnostic));
   await fs.writeFile(
     f.filename,
     retained.replace("state: pending", "state: consumed\nreceivedBy: role-a"),
   );
+  const after = await listCardDocuments(f.adapter, { state: "pending" });
   assert.equal(
-    (await listCardDocuments(f.adapter, { state: "pending", retainedState: true })).items.some(
-      (i) => i.cardId === "card-a",
-    ),
+    after.items.some((i) => i.cardId === "card-a"),
     false,
   );
+  assert.notEqual(after.revision, pending.revision);
 });

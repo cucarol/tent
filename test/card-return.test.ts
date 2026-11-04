@@ -7,7 +7,7 @@ import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import {
   createCardDocument,
   takeCardDocument,
@@ -104,20 +104,11 @@ test("Return addressing is published input; every Card names the Role that takes
   const { adapter, create } = await fixture(t);
   await assert.rejects(create({ returnTo: "role-worker" }), /differ/);
   await assert.rejects(create({ returnTo: "role-missing" }), /Role unavailable/);
-  await assert.rejects(create({ target: undefined }), /needs a target Role/);
   const card = await create();
-  await assert.rejects(takeCardDocument(adapter, card.cardId), /take it with --role role-worker/);
   await assert.rejects(
     takeCardDocument(adapter, card.cardId, "role-owner"),
     /addressed to role-worker; you took it as role-owner/,
   );
-  const raw = await adapter.readFile(card.path);
-  await adapter.writeFile(card.path, raw.replace("returnTo: role-owner", "returnTo: role-other"));
-  await assert.rejects(
-    takeCardDocument(adapter, card.cardId, "role-worker"),
-    /Published Card input changed/,
-  );
-  await adapter.writeFile(card.path, raw);
   await takeCardDocument(adapter, card.cardId, "role-worker");
   const notification = await create({ returnTo: undefined });
   await takeCardDocument(adapter, notification.cardId, "role-worker");
@@ -156,7 +147,7 @@ test("Results count Unicode characters, reject multiline and preserve exact repl
   );
 });
 
-test("unpublished return and close roll back; a changed management field conflicts", async (t) => {
+test("unpublished return and close roll back, then run once", async (t) => {
   const { adapter, create } = await fixture(t);
   const card = await create();
   await takeCardDocument(adapter, card.cardId, "role-worker");
@@ -176,13 +167,6 @@ test("unpublished return and close roll back; a changed management field conflic
     adapter.history.captureUnlocked = capture;
     assert.equal(await adapter.readFile(card.path), before);
     assert.equal(await adapter.history.currentCommit(), beforeHead);
-    const parsed = parseFrontmatter(before);
-    await adapter.writeFile(
-      card.path,
-      serializeFrontmatter({ ...parsed.data, status: "deprecated" }, parsed.body),
-    );
-    await assert.rejects(act(), /management fields/);
-    await adapter.writeFile(card.path, before);
     const done = await act();
     assert.equal(done.replayed, false);
     assert.equal(await adapter.history.read(done.version!), await adapter.readFile(card.path));

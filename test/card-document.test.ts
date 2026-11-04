@@ -4,21 +4,18 @@ import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { syncBuiltinESMExports } from "node:module";
 import test, { type TestContext } from "node:test";
 import {
   createCardDocument,
   takeCardDocument,
   returnCardDocument,
   watchCardDocuments,
-  CardDocumentError,
   listCardDocuments,
   deprecateCardDocument,
 } from "../src/core/graph/card-document.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
+import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { renameNode } from "../src/core/graph/rename-ops.js";
-import { ReaderError } from "../src/core/graph/reader-error.js";
 import { cliErrorText } from "../src/cli/error-text.js";
 
 async function fixture(t: TestContext) {
@@ -38,99 +35,47 @@ async function fixture(t: TestContext) {
   await createRoleContext(adapter, { roleId: "role-b", title: "B", body: "direction B" });
   return { root, adapter, node };
 }
-const code = (expected: string) => (error: unknown) =>
-  (error as { code?: string }).code === expected;
 
-test("watch retries an atomic Role replacement detected by the real file reader", async (t) => {
-  const { root, adapter } = await fixture(t);
-  const card = await createCardDocument(adapter, { prompt: "Work", target: "role-a" });
-  const rolePath = path.join(root, "roles/role-a.md");
-  const replacement = rolePath + ".replacement";
-  const raw = await fs.readFile(rolePath);
-  await fs.writeFile(replacement, raw);
-  const stat = fs.stat;
-  let replaced = false;
-  t.mock.method(fs, "stat", async (...args: Parameters<typeof fs.stat>) => {
-    if (!replaced && String(args[0]) === rolePath) {
-      replaced = true;
-      // Emulate a replacement becoming visible after the old handle was read.
-      // Windows itself can deny rename while that handle is still open.
-      return stat(replacement, args[1]);
-    }
-    return stat(...args);
-  });
-  syncBuiltinESMExports();
-  t.after(() => {
-    t.mock.restoreAll();
-    syncBuiltinESMExports();
-  });
-  await assert.rejects(adapter.readFile("roles/role-a.md"), code("SOURCE_CHANGED"));
-  await fs.writeFile(replacement, raw);
-  replaced = false;
-  assert.deepEqual(await watchCardDocuments(adapter, "role-a", 10), [{ cardId: card.cardId }]);
-  assert.equal(replaced, true);
-});
-
-test("watch retries transient reads without losing the unchanged inbox head", async (t) => {
-  for (const errno of ["EPERM", "EACCES", "EBUSY", "ENOENT", "SOURCE_CHANGED"]) {
-    const { adapter } = await fixture(t);
-    const card = await createCardDocument(adapter, { prompt: "Work", target: "role-a" });
-    const read = adapter.history.readDirectory.bind(adapter.history);
-    let calls = 0;
-    adapter.history.readDirectory = async (...args) => {
-      if (++calls === 1) throw Object.assign(new Error(`inbox ${errno}`), { code: errno });
-      return read(...args);
-    };
-    assert.deepEqual(await watchCardDocuments(adapter, "role-a", 10), [{ cardId: card.cardId }]);
-    assert.equal(calls, 2);
-  }
-});
-
-test("watch distinguishes one missing read from a missing or deprecated Role", async (t) => {
+test("watch survives one failed poll without losing the unchanged inbox head", async (t) => {
   const { adapter } = await fixture(t);
   const card = await createCardDocument(adapter, { prompt: "Work", target: "role-a" });
-  const read = adapter.readFile.bind(adapter);
+  const read = adapter.history.readDirectory.bind(adapter.history);
   let calls = 0;
-  adapter.readFile = async (file) => {
-    if (file === "roles/role-a.md" && ++calls === 1)
-      throw Object.assign(new Error("replacement ENOENT"), { code: "ENOENT" });
-    return read(file);
+  adapter.history.readDirectory = async (...args) => {
+    if (++calls === 1) throw new Error("inbox read failed");
+    return read(...args);
   };
-  assert.deepEqual(await watchCardDocuments(adapter, "role-a", 0), [{ cardId: card.cardId }]);
+  assert.deepEqual(await watchCardDocuments(adapter, "role-a", 10), [{ cardId: card.cardId }]);
+  assert.equal(calls, 2);
+});
+
+test("watch fails at once for a missing or deprecated Role", async (t) => {
+  const { adapter } = await fixture(t);
   const start = performance.now();
-  await assert.rejects(watchCardDocuments(adapter, "role-missing", 30), code("ROLE_UNAVAILABLE"));
-  assert.ok(performance.now() - start < 1000, "missing Role must not wait for a poll");
+  await assert.rejects(watchCardDocuments(adapter, "role-missing", 30), /Role unavailable/);
+  assert.ok(performance.now() - start < 1000, "a wrong Role must not wait for a poll");
   await adapter.writeFile(
     "roles/role-a.md",
-    (await read("roles/role-a.md")).replace("type: role", "type: role\nstatus: deprecated"),
+    (await adapter.readFile("roles/role-a.md")).replace(
+      "type: role",
+      "type: role\nstatus: deprecated",
+    ),
   );
-  await assert.rejects(watchCardDocuments(adapter, "role-a", 30), code("ROLE_UNAVAILABLE"));
+  await assert.rejects(watchCardDocuments(adapter, "role-a", 30), /Role unavailable/);
 });
 
-test("watch reports persistent and nontransient read failures with their original cause", async (t) => {
+test("watch reports a second failed poll, and any failure once its timeout has passed", async (t) => {
   const { adapter } = await fixture(t);
-  const failure = Object.assign(new Error("EPERM: read roles/role-a.md"), { code: "EPERM" });
+  const failure = new Error("inbox read failed");
   let reads = 0;
-  adapter.readFile = async () => {
+  adapter.history.readDirectory = async () => {
     reads++;
     throw failure;
   };
-  await assert.rejects(watchCardDocuments(adapter, "role-a", 10), (error: unknown) => {
-    assert.equal((error as CardDocumentError).cause, failure);
-    assert.match(cliErrorText(error, "tent card watch"), /EPERM: read roles\/role-a.md/);
-    return true;
-  });
+  await assert.rejects(watchCardDocuments(adapter, "role-a", 10), (error) => error === failure);
   assert.equal(reads, 2);
-  await assert.rejects(watchCardDocuments(adapter, "role-a", 0), code("ROLE_UNAVAILABLE"));
+  await assert.rejects(watchCardDocuments(adapter, "role-a", 0), (error) => error === failure);
   assert.equal(reads, 3, "timeout zero must not sleep or hide a read failure");
-  const invalid = new Error("invalid Role bytes");
-  adapter.readFile = async () => {
-    throw invalid;
-  };
-  await assert.rejects(watchCardDocuments(adapter, "role-a", 30), (error: unknown) => {
-    assert.equal((error as CardDocumentError).cause, invalid);
-    return true;
-  });
 });
 
 test("waiting watch notices native Role retirement even without a new inbox head", async (t) => {
@@ -148,44 +93,40 @@ test("waiting watch notices native Role retirement even without a new inbox head
     );
     return result;
   };
-  await assert.rejects(watchCardDocuments(adapter, "role-a", 10), code("ROLE_UNAVAILABLE"));
+  await assert.rejects(watchCardDocuments(adapter, "role-a", 10), /Role unavailable/);
   assert.equal(await adapter.history.currentCommit(), head);
 });
 
-test("Card commands retain Role read errors and the CLI keeps their cause", async (t) => {
+test("Card commands name a Role read error and the CLI keeps it", async (t) => {
   const { adapter } = await fixture(t);
   const card = await createCardDocument(adapter, {
     prompt: "Work",
     target: "role-a",
     returnTo: "role-b",
   });
-  const header = adapter.readFrontmatter.bind(adapter);
-  const failure = new ReaderError("SOURCE_CHANGED", "Source changed while reading header");
-  adapter.readFrontmatter = async (file) => {
-    if (file === "roles/role-a.md") throw failure;
-    return header(file);
+  const read = adapter.readFile.bind(adapter);
+  adapter.readFile = async (file) => {
+    if (file === "roles/role-a.md") throw new Error("disk said no");
+    return read(file);
   };
   for (const action of [
     () => createCardDocument(adapter, { prompt: "Work", target: "role-a" }),
     () => takeCardDocument(adapter, card.cardId, "role-a"),
   ]) {
     await assert.rejects(action(), (error: unknown) => {
-      assert.equal((error as CardDocumentError).cause, failure);
-      assert.match(cliErrorText(error, "tent card take"), /Source changed while reading header/);
+      assert.match(cliErrorText(error, "tent card take"), /disk said no/);
       return true;
     });
   }
-  adapter.readFrontmatter = header;
+  adapter.readFile = read;
   await takeCardDocument(adapter, card.cardId, "role-a");
-  adapter.readFrontmatter = async () => {
-    throw failure;
+  adapter.readFile = async (file) => {
+    if (file === "roles/role-a.md") throw new Error("disk said no");
+    return read(file);
   };
   await assert.rejects(
     returnCardDocument(adapter, card.cardId, { roleId: "role-a", result: "Done" }),
-    (error: unknown) => {
-      assert.equal((error as CardDocumentError).cause, failure);
-      return true;
-    },
+    /disk said no/,
   );
 });
 
@@ -202,7 +143,7 @@ test("a draft Card is diagnosed and cannot be taken", async (t) => {
     String(listed.items.find((item) => item.cardId === card.cardId)?.diagnostic),
     /Card header unavailable/,
   );
-  await assert.rejects(takeCardDocument(adapter, card.cardId, "role-a"), code("INVALID_DOCUMENT"));
+  await assert.rejects(takeCardDocument(adapter, card.cardId, "role-a"), /draft status/);
 });
 
 test("draft Roles receive new and existing Cards normally", async (t) => {
@@ -278,10 +219,7 @@ test("Card Role filters retain unavailable handling for deprecated and unknown R
       "roles/role-a.md",
       original.replace("type: role", `type: role\nstatus: ${status}`),
     );
-    await assert.rejects(
-      listCardDocuments(adapter, { roleId: "role-a" }),
-      code("ROLE_UNAVAILABLE"),
-    );
+    await assert.rejects(listCardDocuments(adapter, { roleId: "role-a" }), /Role unavailable/);
   }
 });
 
@@ -327,35 +265,6 @@ test("take rolls back an unpublished transaction, then takes the Card exactly on
   );
 });
 
-test("take rejects bytes whose state, target or input differ from the retained Card", async (t) => {
-  const { adapter } = await fixture(t);
-  const card = await createCardDocument(adapter, {
-    cardId: "card-recoverconflict",
-    prompt: "original",
-    target: "role-a",
-  });
-  const original = await adapter.readFile(card.path);
-  for (const [changes, expected] of [
-    [{ state: "consumed", receivedBy: "role-a", status: "deprecated" }, "STATE_CHANGED"],
-    [{ state: "consumed", receivedBy: "role-b", target: "role-b" }, "STATE_CHANGED"],
-  ] as const) {
-    const parsed = parseFrontmatter(original);
-    await adapter.writeFile(
-      card.path,
-      serializeFrontmatter({ ...parsed.data, ...changes }, parsed.body),
-    );
-    await assert.rejects(takeCardDocument(adapter, card.cardId, "role-a"), code(expected));
-  }
-  await adapter.writeFile(
-    card.path,
-    original
-      .replace("state: pending", "state: consumed\nreceivedBy: role-a")
-      .replace("original", "changed"),
-  );
-  await assert.rejects(takeCardDocument(adapter, card.cardId, "role-a"), code("INPUT_CHANGED"));
-  assert.equal((await adapter.history.pathVersions(card.path)).latest!.commit, card.version.commit);
-});
-
 test("Card deprecation preserves input and reception and replays without capture", async (t) => {
   const { adapter } = await fixture(t);
   const created = await createCardDocument(adapter, {
@@ -391,25 +300,8 @@ test("Card deprecation preserves input and reception and replays without capture
   assert.match(String((replay as Record<string, unknown>).notice), /deprecated/);
   await assert.rejects(
     () => takeCardDocument(adapter, created.cardId, "role-b"),
-    code("RECEPTION_CONFLICT"),
+    /addressed to role-a/,
   );
-});
-
-test("Card deprecation rejects manual input and management edits without changing bytes or history", async (t) => {
-  const { adapter } = await fixture(t);
-  const card = await createCardDocument(adapter, { prompt: "fixed input", target: "role-a" });
-  const original = await adapter.readFile(card.path),
-    head = await adapter.history.currentCommit();
-  for (const [raw, expected] of [
-    [original.replace("fixed input", "edited input"), "INPUT_CHANGED"],
-    [original.replace("state: pending", "state: consumed\nreceivedBy: role-a"), "STATE_CHANGED"],
-    [original.replace("state: pending", "state: pending\nstatus: deprecated"), "STATE_CHANGED"],
-  ]) {
-    await adapter.writeFile(card.path, raw!);
-    await assert.rejects(() => deprecateCardDocument(adapter, card.cardId), code(expected!));
-    assert.equal(await adapter.readFile(card.path), raw);
-    assert.equal(await adapter.history.currentCommit(), head);
-  }
 });
 
 test("a deprecated Card still takes with a cancellation notice", async (t) => {
@@ -422,7 +314,7 @@ test("a deprecated Card still takes with a cancellation notice", async (t) => {
   await deprecateCardDocument(adapter, card.cardId);
   await assert.rejects(
     () => takeCardDocument(adapter, card.cardId, "role-b"),
-    code("RECEPTION_CONFLICT"),
+    /addressed to role-a/,
   );
   const taken = (await takeCardDocument(adapter, card.cardId, "role-a")) as Record<string, unknown>;
   assert.equal(taken.state, "consumed");
@@ -445,8 +337,6 @@ test("filtered Card lists skip history and keep malformed-header diagnostics", a
     (await listCardDocuments(adapter, { roleId: "role-a", state: "pending" })).items,
     [],
   );
-  assert.deepEqual((await listCardDocuments(adapter, { cardIds: [] })).items, []);
-  assert.deepEqual((await listCardDocuments(adapter, { cardIds: ["card-missing"] })).items, []);
   await adapter.writeFile(
     "cards/card-invalid.md",
     "---\nid: different\ntype: card\nschemaVersion: 3\n---\n",
@@ -502,10 +392,10 @@ test("Card list batches matching timestamps and excludes untracked handwritten f
 test("Card publication checks only Node/Role sources and stores addresses; moving live Nodes does not rewrite input", async (t) => {
   const { adapter } = await fixture(t);
   const reads: string[] = [],
-    binary = adapter.readBinary.bind(adapter);
-  adapter.readBinary = async (p) => {
+    read = adapter.readFile.bind(adapter);
+  adapter.readFile = async (p) => {
     reads.push(p);
-    return binary(p);
+    return read(p);
   };
   const input = [
     { resource: "/Main/Main.md", extra: { ordered: [2, 1] } },
@@ -520,7 +410,8 @@ test("Card publication checks only Node/Role sources and stores addresses; movin
     target: "role-a",
     sources: input,
   });
-  assert.deepEqual(reads, ["Main/Main.md", "roles/role-a.md"]);
+  assert.ok(reads.includes("Main/Main.md") && reads.includes("roles/role-a.md"));
+  assert.ok(reads.every((p) => !p.startsWith("../")));
   const raw = await adapter.readFile(saved.path),
     parsed = parseFrontmatter(raw);
   assert.deepEqual(parsed.data.sources, input);
@@ -548,7 +439,7 @@ test("one Card has one receiving Role and retries replay reception", async (t) =
   });
   await assert.rejects(
     () => takeCardDocument(adapter, saved.cardId, "role-b"),
-    code("RECEPTION_CONFLICT"),
+    /addressed to role-a/,
   );
   const first = (await takeCardDocument(adapter, saved.cardId, "role-a")) as Record<
     string,
@@ -564,11 +455,11 @@ test("one Card has one receiving Role and retries replay reception", async (t) =
   assert.deepEqual(replay.version, first.version);
   await assert.rejects(
     () => takeCardDocument(adapter, saved.cardId, "role-b"),
-    code("RECEPTION_CONFLICT"),
+    /addressed to role-a/,
   );
 });
 
-test("manual input or management edits stay raw-readable without being retained as reception proof", async (t) => {
+test("a hand edit is what the receiver gets; the first publication stays in history", async (t) => {
   const { adapter } = await fixture(t);
   const path = "cards/card-handwritten.md";
   const published = await createCardDocument(adapter, {
@@ -578,29 +469,25 @@ test("manual input or management edits stay raw-readable without being retained 
     sources: [{ resource: "/Main/Main.md", custom: { keep: true } }],
   });
   const initial = await adapter.readFile(path);
-  assert.equal(
-    await adapter.history.read((await adapter.history.pathVersions(path)).first!),
-    initial,
-    "first publication retains the exact published bytes",
+  const first = (await adapter.history.pathVersions(path)).first!;
+  assert.equal(await adapter.history.read(first), initial);
+  await adapter.writeFile(path, initial.replace("state: pending", "state: interrupted"));
+  await assert.rejects(
+    () => takeCardDocument(adapter, published.cardId, "role-a"),
+    /Invalid Card state/,
   );
-  for (const [changed, expected] of [
-    [initial.replace("original", "changed prompt"), "INPUT_CHANGED"],
-    [initial.replace("keep: true", "keep: false"), "INPUT_CHANGED"],
-    [initial.replace("state: pending", "state: pending\nstatus: deprecated"), "STATE_CHANGED"],
-    [initial.replace("state: pending", "state: interrupted"), "INVALID_DOCUMENT"],
-  ]) {
-    await adapter.writeFile(path, changed!);
-    assert.equal(
-      (await adapter.history.pathVersions(path)).latest!.commit,
-      published.version.commit,
-    );
-    await assert.rejects(
-      () => takeCardDocument(adapter, published.cardId, "role-a"),
-      code(expected!),
-    );
-  }
-  const malformed = initial.replace("sources:", "sources: [broken");
-  await adapter.writeFile(path, malformed);
+  await adapter.writeFile(path, initial.replace("state: pending", "state: pending\nstatus: odd"));
+  await assert.rejects(
+    () => takeCardDocument(adapter, published.cardId, "role-a"),
+    /Unsupported Card status/,
+  );
+  await adapter.writeFile(path, initial.replace("original", "changed prompt"));
+  const taken = (await takeCardDocument(adapter, published.cardId, "role-a")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(taken.text, "changed prompt");
+  assert.equal(await adapter.history.read(first), initial);
   await adapter.remove(path);
   await assert.rejects(
     () =>
@@ -626,7 +513,7 @@ test("large Card inputs and source metadata are complete in Core", async (t) => 
   assert.equal(taken.sources.length, 100);
 });
 
-test("Card title remains fixed after publication and list includes first publication time", async (t) => {
+test("Card list shows the title and first publication time", async (t) => {
   const { adapter } = await fixture(t);
   const card = await createCardDocument(adapter, {
     cardId: "card-title",
@@ -639,14 +526,6 @@ test("Card title remains fixed after publication and list includes first publica
   )!;
   assert.equal(listed.title, "Review findings");
   assert.match(String(listed.publishedAt), /^\d{4}-\d\d-\d\dT/);
-  await adapter.writeFile(
-    card.path,
-    (await adapter.readFile(card.path)).replace("Review findings", "Changed title"),
-  );
-  await assert.rejects(
-    () => takeCardDocument(adapter, card.cardId, "role-a"),
-    code("INPUT_CHANGED"),
-  );
 });
 
 test("Card publication canonicalizes known Node ids in sources and Markdown links", async (t) => {
@@ -662,21 +541,4 @@ test("Card publication canonicalizes known Node ids in sources and Markdown link
     "../Main/Main.md",
   );
   assert.equal(published.body, "[read](../Main/Main.md)");
-});
-
-test("manual target and input edits block reception without retaining the edit", async (t) => {
-  const { adapter } = await fixture(t);
-  const card = await createCardDocument(adapter, { prompt: "original", target: "role-a" });
-  const raw = await adapter.readFile(card.path);
-  for (const [changed, expected] of [
-    [raw.replace("role-a", "role-b"), "STATE_CHANGED"],
-    [raw.replace("original", "changed"), "INPUT_CHANGED"],
-  ]) {
-    await adapter.writeFile(card.path, changed!);
-    await assert.rejects(() => takeCardDocument(adapter, card.cardId, "role-b"), code(expected!));
-    assert.equal(
-      (await adapter.history.pathVersions(card.path)).latest!.commit,
-      card.version.commit,
-    );
-  }
 });

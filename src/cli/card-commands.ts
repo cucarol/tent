@@ -167,7 +167,7 @@ async function runCardCommandOpened(
         cardId: value("id"),
         prompt,
         title: value("title"),
-        target: value("target"),
+        target: value("target")!,
         returnTo: value("return-to"),
         ...material,
       });
@@ -186,7 +186,7 @@ async function runCardCommandOpened(
         ...(created.returnTo ? { returnTo: created.returnTo } : {}),
       };
     } else if (sub === "take") {
-      const taken = await takeCardDocument(fs, id, value("role"));
+      const taken = await takeCardDocument(fs, id, value("role")!);
       result = {
         cardId: taken.cardId,
         path: path.join(systemRoot, taken.path),
@@ -216,7 +216,6 @@ async function runCardCommandOpened(
     else
       result = pageItems(
         await listCardDocuments(fs, {
-          retainedState: true,
           roleId: value("role"),
           waiting: value("role") !== undefined && value("state") === undefined,
           state: value("state") as CardDocumentState | undefined,
@@ -376,7 +375,6 @@ function formatCard(value: unknown, sub: string) {
         title?: string;
         publishedAt?: string;
         diagnostic?: string;
-        uncaptured?: boolean;
       }>;
       page: { hasMore: boolean; next?: unknown };
     };
@@ -392,7 +390,6 @@ function formatCard(value: unknown, sub: string) {
             item.title,
             item.publishedAt ? formatCliTime(item.publishedAt) : undefined,
             item.diagnostic,
-            item.uncaptured ? "file differs from what Tent saved" : undefined,
           ]
             .filter(Boolean)
             .join("  "),
