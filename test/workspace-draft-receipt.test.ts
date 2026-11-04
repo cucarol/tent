@@ -146,26 +146,8 @@ test("dense evidence receipts count every item and locate all omitted evidence w
   assert.equal(JSON.stringify(summary), before, "receipt cannot trim the authoritative evidence");
 });
 
-test("long UTF-8 and escaped paths remain bounded with an actionable sibling report locator", () => {
-  const summary = denseSummary();
-  const draft = path.resolve("C:/workspace", '中文😀\"\n\\'.repeat(1800) + "batch.json");
-  const report = workspaceDraftReportPath(draft);
-  for (const json of [false, true]) {
-    const stdout = formatWorkspaceDraft(
-      summary,
-      { workspaceRoot: "C:/workspace", draft, report },
-      json,
-    );
-    assert.ok(Buffer.byteLength(stdout, "utf8") <= 4096);
-    assert.match(stdout, /Next to the --draft file/);
-    assert.match(stdout, /replace its \.json suffix with \.report\.json/);
-    assert.match(stdout, /batch\.report\.json/);
-    if (json) {
-      const receipt = JSON.parse(stdout);
-      assert.deepEqual(receipt.omitted.reportPath, { count: 1, at: "snapshot header: report" });
-      assert.ok(!receipt.report.includes("\ufffd"));
-    }
-  }
+test("the report sits next to the draft", () => {
+  assert.equal(workspaceDraftReportPath("batch.json"), "batch.report.json");
   assert.equal(workspaceDraftReportPath("batch.JSON"), "batch.report.json");
   assert.equal(workspaceDraftReportPath("batch"), "batch.report.json");
 });

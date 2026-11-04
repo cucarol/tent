@@ -168,7 +168,7 @@ async function workingDigests(
     }
     return stat(path.join(root, file));
   };
-  const failures: Array<{ error: unknown } | undefined> = new Array(candidates.length);
+  let failure: { error: unknown } | undefined;
   const batchSize = Math.max(
     1,
     Math.ceil(candidates.length / Math.min(8, Math.max(1, Math.ceil(candidates.length / 64)))),
@@ -179,11 +179,10 @@ async function workingDigests(
     remaining: Math.min(batchSize, candidates.length - index * batchSize),
   }));
   const hashing: Array<Promise<void>> = [];
-  const hashFailures: Array<{ error: unknown } | undefined> = new Array(batches.length);
   let spare: HashWorker | undefined = early;
-  const hashBatch = async (batch: (typeof batches)[number], index: number) => {
+  const hashBatch = async (batch: (typeof batches)[number]) => {
     try {
-      if (batch.files.some((_, offset) => failures[batch.start + offset])) return;
+      if (failure) return;
       const regularFiles = batch.files.filter((file) => regular.has(file));
       if (!regularFiles.length) return;
       // The first batch ready to hash takes the worker started with status.
@@ -194,7 +193,7 @@ async function workingDigests(
         throw new Error("Git did not hash every Stop candidate");
       regularFiles.forEach((file, offset) => digests.set(file, values[offset]!));
     } catch (error) {
-      hashFailures[index] = { error };
+      failure ??= { error };
     }
   };
   let next = 0;
@@ -213,22 +212,18 @@ async function workingDigests(
             links.set(file, await fs.readlink(filename, { encoding: "buffer" }));
           else if (state?.isFile()) regular.add(file);
         } catch (error) {
-          failures[index] = { error };
+          failure ??= { error };
         } finally {
-          const batchIndex = Math.floor(index / batchSize);
-          const batch = batches[batchIndex]!;
-          if (--batch.remaining === 0) hashing.push(hashBatch(batch, batchIndex));
+          const batch = batches[Math.floor(index / batchSize)]!;
+          if (--batch.remaining === 0) hashing.push(hashBatch(batch));
         }
       }
     }),
   );
   // Each batch starts reading only after all its path checks, while later checks continue.
-  // Drain every started read before preserving validation and then batch error order.
+  // Drain every started read before reporting a failure.
   await Promise.all(hashing);
-  const failure = failures.find((value) => value !== undefined);
   if (failure) throw failure.error;
-  const hashFailure = hashFailures.find((value) => value !== undefined);
-  if (hashFailure) throw hashFailure.error;
   if (links.size) {
     const algorithm = head
       ? head.length === 64

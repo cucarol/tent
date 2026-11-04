@@ -40,25 +40,9 @@ export function formatWorkspaceDraft(
     const local = path.relative(locations.workspaceRoot, filename);
     return local.length < filename.length ? local || "." : filename;
   };
-  const shorten = (value: string) => {
-    // Keep the end visible, since it distinguishes the editable file from its report.
-    const points = Array.from(value);
-    if (Buffer.byteLength(JSON.stringify(value)) <= 384) return value;
-    let start = 0,
-      end = points.length;
-    while (start < end) {
-      const middle = Math.floor((start + end) / 2);
-      if (Buffer.byteLength(JSON.stringify(points.slice(middle).join(""))) > 320)
-        start = middle + 1;
-      else end = middle;
-    }
-    return `…[${start} characters omitted]…${points.slice(start).join("")}`;
-  };
-  const draftPath = relative(locations.draft),
-    reportPath = relative(locations.report);
   const receipt = {
-    draft: shorten(draftPath),
-    report: shorten(reportPath),
+    draft: relative(locations.draft),
+    report: relative(locations.report),
     pathBase: "Relative paths start at Workspace",
     reportLocation:
       'Next to the --draft file: replace its .json suffix with .report.json, or append .report.json. JSON Lines: paths in snapshot header; search "ref":"@<ref>" for one part.',
@@ -66,10 +50,6 @@ export function formatWorkspaceDraft(
     examples: {} as Partial<Record<SampleKey, unknown[]>>,
     omitted: {} as Record<string, { count: number; at: string }>,
   };
-  if (receipt.draft !== draftPath)
-    receipt.omitted.draftPath = { count: 1, at: "snapshot header: draft" };
-  if (receipt.report !== reportPath)
-    receipt.omitted.reportPath = { count: 1, at: "snapshot header: report" };
   const sampleLocation = (key: SampleKey) =>
     key === "guidanceFiles" || key === "warnings"
       ? `snapshot header: ${key}`

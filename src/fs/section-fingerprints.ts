@@ -74,17 +74,17 @@ async function readRecord(
   workspacePath: string,
 ): Promise<Map<string, SectionPrint>> {
   const record = new Map<string, SectionPrint>();
-  const text = await readText(recordPath(systemRoot, workspacePath)).catch(() => undefined);
+  const text = await readText(recordPath(systemRoot, workspacePath));
   for (const row of text?.split("\n") ?? []) {
-    let entry: unknown;
+    let entry: SectionEntry;
     try {
-      entry = JSON.parse(row);
+      entry = JSON.parse(row) as SectionEntry;
     } catch {
+      // The blank end of the file, or a last row a crash cut short.
       continue;
     }
-    const { heading, fingerprint, line } = (entry ?? {}) as Partial<SectionEntry>;
-    if (typeof heading !== "string" || typeof fingerprint !== "string") continue;
-    const kept = typeof line === "string" ? line : record.get(heading)?.line;
+    const { heading, fingerprint, line } = entry;
+    const kept = line ?? record.get(heading)?.line;
     record.set(heading, { fingerprint, ...(kept === undefined ? {} : { line: kept }) });
   }
   return record;
@@ -98,21 +98,12 @@ const entry = ({ heading, fingerprint, line }: SectionEntry): SectionEntry => ({
 const rows = (entries: readonly SectionEntry[]) =>
   entries.map((value) => JSON.stringify(entry(value)) + "\n").join("");
 
-async function withDirectory(target: string, write: () => Promise<void>): Promise<void> {
-  await write().catch(async (error: NodeJS.ErrnoException) => {
-    if (error.code !== "ENOENT") throw error;
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await write();
-  });
-}
-
 async function appendRecord(
   systemRoot: string,
   workspacePath: string,
   entries: readonly SectionEntry[],
 ): Promise<void> {
-  const target = recordPath(systemRoot, workspacePath);
-  await withDirectory(target, () => fs.appendFile(target, rows(entries)));
+  await fs.appendFile(recordPath(systemRoot, workspacePath), rows(entries));
 }
 
 export function byFile<T extends Section>(sections: Iterable<T>): Map<string, T[]> {
@@ -140,7 +131,7 @@ export async function changedSections(
     [...byFile(sections.values()).values()].map(async (file) => {
       const workspacePath = file[0]!.path;
       const recordKey = path.resolve(workspaceRoot, workspacePath);
-      const observe = async (locked: boolean) => {
+      const observe = async () => {
         const record = await readRecord(systemRoot, recordKey);
         const prints = sectionFingerprints(
           await readSectionSource(path.join(workspaceRoot, workspacePath)),
@@ -169,7 +160,7 @@ export async function changedSections(
           }
         }
       };
-      if (!(await withRecordLock(systemRoot, recordKey, () => observe(true)))) await observe(false);
+      if (!(await withRecordLock(systemRoot, recordKey, observe))) await observe();
     }),
   );
   return { changed, observed };
