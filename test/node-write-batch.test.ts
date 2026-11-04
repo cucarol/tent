@@ -46,9 +46,9 @@ test("batch creates forward parents and mutual links and captures once in input 
     capture = fs.history.captureUnlocked.bind(fs.history);
   let locks = 0,
     captures = 0;
-  fs.withLock = async (path, action) => {
+  fs.withLock = async (action) => {
     locks++;
-    return lock(path, action);
+    return lock(action);
   };
   fs.history.captureUnlocked = async (changes, metadata) => {
     captures++;

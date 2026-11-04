@@ -19,7 +19,7 @@ import { NodeWriteError } from "../graph/node-document-write.js";
 import { normalizeOptionalNodeType } from "../base/node-type.js";
 import type { OpsEnv } from "../graph/ops-context.js";
 import { loadOrder, ROOT_KEY } from "../store/order.js";
-import { MUTATION_LOCK_PATH, nodeNotePath, ORDER_PATH } from "../base/paths.js";
+import { nodeNotePath, ORDER_PATH } from "../base/paths.js";
 import { validateNodeName } from "../store/scaffold.js";
 import { normalizeTagList } from "../base/tags.js";
 import { nodeMaterialWarnings } from "../graph/node-material-warnings.js";
@@ -66,7 +66,7 @@ export function validateBatchItemName(ref: string, name: string, parentPath: str
 export function withNodeBatchMutation<T>(env: OpsEnv, operation: () => Promise<T>): Promise<T> {
   // Batch owns capture; the automatic write finalizer would capture
   // intermediate preimages and turn a capture failure into a partial batch save.
-  return env.fs.withLock(MUTATION_LOCK_PATH, operation);
+  return env.fs.withLock(operation);
 }
 
 export async function writeNodesBatchUnlocked(

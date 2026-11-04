@@ -13,14 +13,13 @@ test("Node creation rejects unindexable names before writing and allows nested s
   const root = await makeTent(t);
   const fs = openTestFs(root);
   const env = { fs, clock: new SystemClock(), tentName: "test", tentRoot: root };
-  // Initialize persistent lock bookkeeping before comparing product files.
-  await fs.withLock("mutation.lock", async () => {});
+  // Write the caches first, so the comparison below sees only product files.
+  await fs.withLock(async () => {});
   const before = await readdir(root, { recursive: true });
   const orderBefore = (await fs.exists("order.json")) ? await fs.readFile("order.json") : null;
   for (const parentPath of ["", "prompt"]) {
     const names = [".gitnotes", ".github", "roles", "cards", "temp", ".tent"];
-    if (!parentPath)
-      names.push("index.md", "settings.json", "mutation.lock", "mutation.lock.pending-token");
+    if (!parentPath) names.push("index.md", "settings.json");
     for (const name of names) {
       await assert.rejects(
         createNode(env, { parentPath, name, type: "prompt" }),
@@ -35,24 +34,6 @@ test("Node creation rejects unindexable names before writing and allows nested s
   );
   const id = await createNode(env, { parentPath: "prompt", name: "index.md", type: "prompt" });
   assert.equal((await loadTent(fs)).byId.get(id)?.path, "prompt/index.md");
-});
-
-test("Node scans never enter transient mutation lock directories", async (t) => {
-  const root = await makeTent(t);
-  const fs = openTestFs(root);
-  const listDir = fs.listDir.bind(fs);
-  const lockNames = [
-    "mutation.lock",
-    "mutation.lock.pending-token",
-    "mutation.lock.released-token",
-    "mutation.lock.stale-token",
-  ];
-  fs.listDir = async (dir) => {
-    assert.equal(lockNames.includes(dir), false, `Transient lock left before scanning: ${dir}`);
-    const entries = await listDir(dir);
-    return dir === "" ? [...entries, ...lockNames.map((name) => ({ name, isDir: true }))] : entries;
-  };
-  assert.equal((await loadTent(fs)).byId.has("node-p1"), true);
 });
 
 test("Core loads and extends the typed Node document forest", async (t) => {

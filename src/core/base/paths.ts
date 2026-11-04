@@ -7,7 +7,8 @@ export const TENT_SYSTEM_DIR = ".tent";
 /** Role Markdown documents (operational, not Nodes). */
 export const ROLES_DIR = "roles";
 export const ORDER_PATH = "order.json";
-export const MUTATION_LOCK_PATH = "mutation.lock";
+/** Under .git, so the lock and its transient directories never reach a Node scan. */
+export const MUTATION_LOCK_PATH = ".git/mutation.lock";
 /** Structural marker for an initialized Tent system root. */
 export const INDEX_PATH = "index.md";
 /** Workspace identity and preserved custom settings. */
@@ -50,12 +51,7 @@ export function cardRecordPath(cardId: string): string {
 }
 
 /** 系统注册表文件名（非 Node）。 */
-export const SYSTEM_REGISTRY_FILES = new Set([
-  ORDER_PATH,
-  MUTATION_LOCK_PATH,
-  WORKSPACE_SETTINGS_PATH,
-  INDEX_PATH,
-]);
+export const SYSTEM_REGISTRY_FILES = new Set([ORDER_PATH, WORKSPACE_SETTINGS_PATH, INDEX_PATH]);
 
 /**
  * 若 system root 目录名是 `.tent`，其父目录即 workspace 根。
@@ -75,11 +71,7 @@ export function workspaceRootFromSystemRoot(systemRoot: string): string | undefi
 /** 路径是否落在 operational pipeline（相对 system root，posix 风格）。 */
 export function isOperationalPath(relativePath: string): boolean {
   const path = relativePath.replace(/\\/g, "/").replace(/^\.\/+/, "");
-  if (!path) return false;
-  const top = path.split("/")[0] ?? "";
-  return (
-    OPERATIONAL_TOP_LEVEL.has(top) || /^mutation\.lock\.(?:pending|released|stale)-[^/]+$/.test(top)
-  );
+  return OPERATIONAL_TOP_LEVEL.has(path.split("/")[0]!);
 }
 
 /**

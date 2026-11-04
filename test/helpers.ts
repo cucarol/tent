@@ -8,11 +8,12 @@ import type { TestContext } from "node:test";
 import type { FsAdapter } from "../src/core/store/adapter.js";
 import type { NodeFs } from "../src/fs/node-fs.js";
 import { withFileLock } from "../src/fs/file-lock.js";
+import { MUTATION_LOCK_PATH } from "../src/core/base/paths.js";
 
 /** Test serialization/CAS under slow Git I/O; production lock deadlines have separate tests. */
 export function extendTestLockWait(t: TestContext, adapter: NodeFs, systemRoot: string): void {
-  t.mock.method(adapter, "withLock", <T>(lockPath: string, action: () => Promise<T>) =>
-    withFileLock(path.join(systemRoot, lockPath), async () => action(), {
+  t.mock.method(adapter, "withLock", <T>(action: () => Promise<T>) =>
+    withFileLock(path.join(systemRoot, MUTATION_LOCK_PATH), async () => action(), {
       waitMs: 60_000,
       busyMessage: "Test writer did not release the mutation lock within 60 seconds",
     }),

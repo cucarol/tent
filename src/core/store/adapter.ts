@@ -1,7 +1,6 @@
 // Core 通过文件系统接口读写；CLI 使用 NodeFs，测试可以使用内存实现。
 
 import type { DocumentHistory } from "./history-port.js";
-import { MUTATION_LOCK_PATH } from "../base/paths.js";
 import type { CaptureMetadata } from "./history-port.js";
 
 /** Prefix and decoded-text blob fingerprint from one current document observation. */
@@ -56,8 +55,8 @@ export interface FsAdapter {
   remove(path: string): Promise<void>;
   /** Remove only an empty directory; fail without deleting any contained entries. */
   removeEmptyDir(path: string): Promise<void>;
-  /** 跨进程短期写锁；实现可在锁过期后接管。 */
-  withLock<T>(path: string, action: () => Promise<T>): Promise<T>;
+  /** 图谱唯一的跨进程写锁。 */
+  withLock<T>(action: () => Promise<T>): Promise<T>;
 }
 
 export interface Clock {
@@ -98,6 +97,5 @@ export function withTentMutation<T>(
   action: () => Promise<T>,
   metadata?: CaptureMetadata,
 ): Promise<T> {
-  // 唯一锁：始终 system root 下 mutation.lock，不使用嵌套 .tent/ 或其他路径。
-  return fs.withLock(MUTATION_LOCK_PATH, () => fs.withDocumentHistory(action, metadata));
+  return fs.withLock(() => fs.withDocumentHistory(action, metadata));
 }

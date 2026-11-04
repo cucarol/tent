@@ -1,6 +1,6 @@
 import type { DocumentHeaderObservation, FsAdapter } from "../store/adapter.js";
 import { loadNodeCatalog, type NodeCatalog } from "./node-catalog.js";
-import { MUTATION_LOCK_PATH, isNodeNotePath, nodeNotePath } from "../base/paths.js";
+import { isNodeNotePath, nodeNotePath } from "../base/paths.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { assertNodeEdit } from "./node-document-write.js";
 
@@ -79,8 +79,7 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
     ].sort();
     // An unchanged workspace needs no write lock. A possible save is inspected
     // again under the lock before validating metadata or capturing versions.
-    if (changedNodePaths.length && !locked)
-      return fs.withLock(MUTATION_LOCK_PATH, () => capture(true));
+    if (changedNodePaths.length && !locked) return fs.withLock(() => capture(true));
     const removedById = new Map<string, { path: string; raw: string }>();
     if (removed.length) {
       const head = await fs.history.currentCommit();

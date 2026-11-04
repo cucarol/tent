@@ -16,7 +16,6 @@ import { pageItems } from "../src/cli/reader-page.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { createCardDocument, listCardDocuments } from "../src/core/graph/card-document.js";
 import { createRoleContext } from "../src/core/read/role-context.js";
-import { MUTATION_LOCK_PATH } from "../src/core/base/paths.js";
 
 type Result = { exitCode: number; stdout: string; stderr: string };
 const ok = (result: Result) => {
@@ -387,7 +386,7 @@ test("real lock timeout gives a runnable inspection command without creating the
   let acquired!: () => void, release!: () => void;
   const ready = new Promise<void>((resolve) => (acquired = resolve));
   const held = new Promise<void>((resolve) => (release = resolve));
-  const holder = adapter.withLock(MUTATION_LOCK_PATH, async () => {
+  const holder = adapter.withLock(async () => {
     acquired();
     await held;
   });

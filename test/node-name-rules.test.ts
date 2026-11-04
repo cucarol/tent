@@ -47,8 +47,7 @@ async function snapshot(systemRoot: string) {
       .relative(systemRoot, path.join(entry.parentPath, entry.name))
       .split(path.sep)
       .join("/");
-    if (file.startsWith(".git/") || file.startsWith("temp/") || file.startsWith("mutation.lock"))
-      continue;
+    if (file.startsWith(".git/") || file.startsWith("temp/")) continue;
     files[file] = await fs.readFile(path.join(systemRoot, file), "utf8");
   }
   return files;

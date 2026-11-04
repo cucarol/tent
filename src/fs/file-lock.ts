@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import { toNamespacedPath } from "node:path";
+import { dirname, toNamespacedPath } from "node:path";
 import { setTimeout } from "node:timers/promises";
 
 type LockOwner = { token: string; pid: number };
@@ -68,8 +68,9 @@ export async function withFileLock<T>(
   }
 }
 
-/** The graph's one write lock. */
-export function withMutationLock<T>(lock: string, action: () => Promise<T>): Promise<T> {
+/** The graph's one write lock; a new Tent's first write creates its directory. */
+export async function withMutationLock<T>(lock: string, action: () => Promise<T>): Promise<T> {
+  await fs.mkdir(dirname(lock), { recursive: true });
   return withFileLock(lock, action, {
     waitMs: 8_000,
     busyMessage: `Tent mutation lock is still busy after waiting 8 seconds: ${lock}. Wait for the other write to finish; if no Tent command is running, delete that directory.`,

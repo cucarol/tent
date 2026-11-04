@@ -14,7 +14,6 @@ import {
   TEMP_DIR,
   WORKSPACE_SETTINGS_PATH,
   isSystemNoteName,
-  isOperationalPath,
 } from "../base/paths.js";
 
 /** Optional explicit Nodes for internal fixtures and import operations. */
@@ -99,7 +98,7 @@ export function validateNodeName(value: string, parentPath = ""): string {
     name === ".." ||
     name.startsWith(".git") ||
     OPERATIONAL_TOP_LEVEL.has(name) ||
-    (!parentPath && (isSystemNoteName(name) || isOperationalPath(name)))
+    (!parentPath && isSystemNoteName(name))
   ) {
     throw new Error(`Node name is reserved or excluded from the Node index: ${name}.`);
   }

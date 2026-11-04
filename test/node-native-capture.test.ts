@@ -89,9 +89,9 @@ test("native collection propagates a read failure without taking the lock", asyn
     if (path === file) throw error;
     return header(path);
   };
-  adapter.withLock = (path, action) => {
+  adapter.withLock = (action) => {
     locks++;
-    return lock(path, action);
+    return lock(action);
   };
   await assert.rejects(captureNativeNodeEdits(adapter), (caught) => caught === error);
   assert.equal(locks, 0);
@@ -106,8 +106,8 @@ test("native capture skips an unchanged lock and rereads bytes and HEAD after ac
   const withLock = adapter.withLock.bind(adapter);
   let locks = 0;
   let beforeCapture: (() => Promise<void>) | undefined;
-  adapter.withLock = (lock, action) =>
-    withLock(lock, async () => {
+  adapter.withLock = (action) =>
+    withLock(async () => {
       locks++;
       await beforeCapture?.();
       return action();

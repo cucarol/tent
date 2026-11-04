@@ -38,7 +38,7 @@ async function fixture(t: TestContext) {
       return { path: file, raw: await adapter.readFile(file) };
     }),
   );
-  await adapter.withLock("mutation.lock", () => adapter.history.captureUnlocked(selected));
+  await adapter.withLock(() => adapter.history.captureUnlocked(selected));
   t.after(async () => {
     await adapter.close();
   });

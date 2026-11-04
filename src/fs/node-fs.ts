@@ -16,7 +16,7 @@ import { SqliteDocumentHistory, sqliteContentFingerprint } from "./sqlite-histor
 import { isHistoryDocument } from "../core/store/document-history.js";
 import { durableMkdir, durableReplace, syncDirectory } from "./durable-file.js";
 import { observeMaterialResource, readStructureSource } from "./source-observation.js";
-import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
+import { MUTATION_LOCK_PATH, workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import { materialLocator, localMaterialPath, type MaterialLocator } from "../core/base/material.js";
 import { assertSystemMaterial } from "../core/graph/material-target.js";
 import { documentHeader } from "../core/graph/node-catalog.js";
@@ -152,7 +152,7 @@ export class NodeFs implements FsAdapter {
           throw error;
         },
       );
-      if (pending) await this.withLock("mutation.lock", async () => undefined);
+      if (pending) await this.withLock(async () => undefined);
       this.recoveryConflicts = await this.raw(() => readTransactionConflicts(this));
     });
     try {
@@ -541,10 +541,10 @@ export class NodeFs implements FsAdapter {
     return files;
   }
 
-  async withLock<T>(path: string, action: () => Promise<T>): Promise<T> {
+  async withLock<T>(action: () => Promise<T>): Promise<T> {
     try {
       const locked = () =>
-        withMutationLock(this.abs(path), async () =>
+        withMutationLock(this.abs(MUTATION_LOCK_PATH), async () =>
           withoutFileReadScope(async () => {
             if (this.transactionBypass.getStore()) return action();
             const transaction = this.transaction();

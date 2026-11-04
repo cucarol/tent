@@ -111,7 +111,7 @@ export async function exportGraph(mount: GraphExportSource, outputDir: string) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   // Writers wait for the copy, so the export is one version of the graph.
-  return mount.env.fs.withLock(MUTATION_LOCK_PATH, async () => {
+  return mount.env.fs.withLock(async () => {
     const entries = await inventory(mount.systemRoot);
     const materials = await declaredMaterials(mount.env.fs, entries);
     const candidate = path.join(path.dirname(destination), `.tent-export-${randomUUID()}`);

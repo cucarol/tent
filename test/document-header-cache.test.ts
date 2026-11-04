@@ -162,7 +162,7 @@ test("mutation shares nested header caches but discards surrounding live observa
     mocked.mock.restore();
     syncBuiltinESMExports();
   });
-  await adapter.withLock("mutation.lock", async () => {
+  await adapter.withLock(async () => {
     parseFrontmatter(original).data.id = "node-localmutation";
     await adapter.observationScope(async () => {
       assert.equal(parseFrontmatter(original).data.id, "node-cachetest");
@@ -173,7 +173,7 @@ test("mutation shares nested header caches but discards surrounding live observa
     assert.equal(await adapter.readFile("Fact/Fact.md"), original);
     const edited = original.replace("old body", "new body");
     await fs.writeFile(filename, edited);
-    await adapter.withLock("mutation.lock", async () => {
+    await adapter.withLock(async () => {
       assert.equal(await adapter.readFile("Fact/Fact.md"), edited);
     });
   });
@@ -192,12 +192,12 @@ test("a damaged header cache does not stop a capture", async (t) => {
   t.after(() => adapter.close());
   const original = await adapter.readFile("Fact/Fact.md");
   const before = await adapter.history.currentCommit();
-  await adapter.withLock("mutation.lock", async () => {
+  await adapter.withLock(async () => {
     assert.equal(parseFrontmatter(original).data.id, "node-cachetest");
   });
   await fs.writeFile(path.join(system, ".git/tent-material-cache/document-headers.bin"), "bad");
   const raw = original.replace("original", "changed body with the same header");
-  const result = await adapter.withLock("mutation.lock", () =>
+  const result = await adapter.withLock(() =>
     adapter.history.captureUnlocked([{ path: "Fact/Fact.md", raw }]),
   );
   assert.ok(result.commit && result.commit !== before);
