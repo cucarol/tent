@@ -134,9 +134,9 @@ test("rename, move, archive and delete preserve native document edits and retain
   assert.equal((await read(moved)).data.status, "deprecated");
   const history = await cli("history", [created.nodeId, "--limit", "1"]);
   assert.equal(history.items.length, 1);
-  assert.ok(history.page.nextCursor);
+  assert.equal(history.page.next, 1);
   assert.equal(
-    (await cli("history", [created.nodeId, "--limit", "1", "--cursor", history.page.nextCursor]))
+    (await cli("history", [created.nodeId, "--limit", "1", "--start", String(history.page.next)]))
       .items.length,
     1,
   );

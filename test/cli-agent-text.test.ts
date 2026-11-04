@@ -471,14 +471,10 @@ for (const state of [undefined, "pending"] as const) {
       listed.items.map((item) => item.cardId),
       expected,
     );
-    assert.equal((await listCardDocuments(adapter, filter)).revision, listed.revision);
-    const first = pageItems(listed, "card.list", { limit: 1 });
+    const first = pageItems(listed.items.slice(0, 1), 0, listed.items.length);
     assert.equal(first.items[0]!.cardId, expected[0]);
-    const second = pageItems(await listCardDocuments(adapter, filter), "card.list", {
-      start: 1,
-      limit: 1,
-      expectedRevision: listed.revision,
-    });
+    assert.equal(first.page.next, 1);
+    const second = pageItems(listed.items.slice(1, 2), 1, listed.items.length);
     assert.equal(second.items[0]!.cardId, expected[1]);
     await createCardDocument(adapter, {
       cardId: "card-latest",
@@ -490,15 +486,6 @@ for (const state of [undefined, "pending"] as const) {
     assert.deepEqual(
       changed.items.map((item) => item.cardId),
       state === "pending" ? [...expected, "card-latest"] : ["card-latest", ...expected],
-    );
-    assert.throws(
-      () =>
-        pageItems(changed, "card.list", {
-          start: 1,
-          limit: 1,
-          expectedRevision: listed.revision,
-        }),
-      /changed/i,
     );
   });
 }

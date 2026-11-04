@@ -76,7 +76,7 @@ export interface DocumentHistory {
     nodeId: string,
     start: number,
     limit: number,
-  ): Promise<{ revision: string; total: number; items: HistoryCommit[] }>;
+  ): Promise<{ total: number; items: HistoryCommit[] }>;
   changesInRange(range?: { from?: string; to?: string }): Promise<HistoryCommit[]>;
   nodeVersions(nodeId: string): Promise<HistoryCommit[]>;
   commitChanges(commit: string): Promise<{

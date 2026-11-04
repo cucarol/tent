@@ -11,4 +11,4 @@
 - Each Role's pending Cards form a queue, oldest first. To send a pending Card elsewhere, cancel it and send it again.
 - Cancelling does not reach a receiver that already took the Card; `notice` on its `take` marks a cancelled Card.
 - A Role with unfinished Cards cannot be deleted; cancel those Cards first.
-- Continue a paged `list` with the `page.next` values as `--start` and `--expected-revision`.
+- Continue a paged `list` with `--start <page.next>`.

@@ -8,8 +8,6 @@ import { DatabaseSync, type SQLInputValue } from "../src/fs/sqlite-runtime.js";
 import { SqliteDocumentHistory, sqliteContentFingerprint } from "../src/fs/sqlite-history.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { withFileReadScope } from "../src/fs/file-state-cache.js";
-import { canonicalSha256 } from "../src/core/base/canonical-digest.js";
-import { itemPageStart, pageItems } from "../src/cli/reader-page.js";
 import { testScratchRoot } from "./scratch.js";
 
 const raw = (id: string, body: string) => `---\nid: ${id}\ntype: prompt\n---\n${body}`;
@@ -30,8 +28,6 @@ test("projection updates prepare fixed statements once per batch and recreate th
     "INSERT INTO versions VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET latest=excluded.latest",
     "UPDATE versions SET latest=NULL WHERE id=?",
     "INSERT INTO node_events VALUES(?,?,?)",
-    "SELECT value FROM node_events WHERE id=? ORDER BY seq",
-    "INSERT OR REPLACE INTO nodes VALUES(?,?)",
     "SELECT id FROM identities WHERE digest=?",
     "INSERT INTO identities VALUES(?,?)",
     "SELECT raw FROM blobs WHERE digest=?",
@@ -98,7 +94,7 @@ test("history projections increment by seq, parse each digest once, and page onl
     return changes.length ? [{ ...e, changes }] : [];
   });
   assert.equal(expected.length, 3);
-  assert.equal((await history.nodeVersionPage("node-a", 0, 2)).revision, canonicalSha256(expected));
+  assert.equal((await history.nodeVersionPage("node-a", 0, 2)).total, expected.length);
   assert.deepEqual((await history.nodeVersionPage("node-a", 1, 1)).items, expected.slice(1, 2));
   assert.deepEqual(await history.nodeVersions("node-a"), expected);
   const saved = await history.identityVersions();
@@ -165,37 +161,6 @@ test("history projections increment by seq, parse each digest once, and page onl
   history = new SqliteDocumentHistory(root);
   assert.deepEqual(await history.nodeVersions("node-a"), next);
   assert.deepEqual(await fs.readFile(path.join(root, ".git/history.sqlite")), authority);
-});
-
-test("SQL history windows preserve all page bytes, cursor revision, budget truncation and stale cursor errors", () => {
-  const items = Array.from({ length: 30 }, (_, n) => ({
-    commit: String(n),
-    changes: [{ objectId: "node-a", before: { commit: "x", path: "a/" + "x".repeat(900) } }],
-  }));
-  const revision = canonicalSha256(items),
-    operation = "node.history:node-a";
-  const first = pageItems({ items, revision }, operation, { limit: 20 });
-  const window = pageItems({ items: items.slice(0, 20), revision }, operation, {
-    limit: 20,
-    window: { start: 0, total: items.length },
-  });
-  assert.deepEqual(window, first);
-  const cursor = first.page.nextCursor!,
-    start = itemPageStart(cursor, operation);
-  assert.deepEqual(
-    pageItems({ items: items.slice(start, start + 20), revision }, operation, {
-      cursor,
-      limit: 20,
-      window: { start, total: items.length },
-    }),
-    pageItems({ items, revision }, operation, { cursor, limit: 20 }),
-  );
-  assert.throws(() => itemPageStart(cursor, "node.history:node-b"), /another source/);
-  assert.throws(() => itemPageStart(undefined, operation, 0), /Invalid page limit/);
-  assert.throws(
-    () => pageItems({ items, revision: "changed" }, operation, { cursor }),
-    /source changed/,
-  );
 });
 
 test("one read scope shares ready probes; later requests still settle new interrupted transactions", async (t) => {

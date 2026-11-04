@@ -20,7 +20,6 @@ import {
 } from "../base/material.js";
 import { isHistoryDocument } from "../store/document-history.js";
 import { parseRoleDocument } from "../store/role-document.js";
-import { canonicalSha256 } from "../base/canonical-digest.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { assertSystemMaterial, systemMaterialPath } from "./material-target.js";
 import { cardSourceIdentityError } from "./card-context.js";
@@ -575,10 +574,7 @@ export async function listCardDocuments(
     includeDeprecated?: boolean;
   } = {},
 ) {
-  const read = async () => {
-    const items = await listCardHeaders(fs, options);
-    return { revision: canonicalSha256(items), items };
-  };
+  const read = async () => ({ items: await listCardHeaders(fs, options) });
   return fs.observationScope ? fs.observationScope(read) : read();
 }
 

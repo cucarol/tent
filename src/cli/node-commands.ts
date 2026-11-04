@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { transactionResult } from "./transaction-result.js";
 import { workspaceReadPaths } from "./read-paths.js";
 import { formatCliTime } from "./time-text.js";
-import { itemPageStart, pageItems } from "./reader-page.js";
+import { pageBounds, pageItems } from "./reader-page.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 import { isNodeId } from "../core/base/id.js";
 import { normalizeTagName } from "../core/base/tags.js";
@@ -24,7 +24,7 @@ const HELP: Record<string, string> = {
   archive: "tent node archive <nodeId> [--json]",
   delete: "tent node delete <nodeId> [--json]",
   history:
-    "tent node history <nodeId> [--limit <n>] [--cursor <cursor>] [--json]\ntent node history <nodeId> --version <version> [--json]",
+    "tent node history <nodeId> [--limit <n>] [--start <n>] [--json]\ntent node history <nodeId> --version <version> [--json]",
 };
 export function nodeHelpText(sub?: string): string {
   return (
@@ -58,7 +58,7 @@ async function runNodeCommandOpened(
       move: ["parent"],
       archive: [],
       delete: [],
-      history: ["limit", "cursor", "version"],
+      history: ["limit", "start", "version"],
     };
     if (
       Object.keys(flags).some((key) => !["json", "workspace", ...allowed[sub]!].includes(key)) ||
@@ -74,8 +74,8 @@ async function runNodeCommandOpened(
       return usage(nodeHelpText("create"));
     if (flags.draft !== undefined && !flags.draft.trim())
       return usage("--draft requires a file path");
-    if (flags.version !== undefined && (flags.limit !== undefined || flags.cursor !== undefined))
-      return usage("--version cannot be combined with --limit or --cursor");
+    if (flags.version !== undefined && (flags.limit !== undefined || flags.start !== undefined))
+      return usage("--version cannot be combined with --limit or --start");
     const json = globals.json === true || flags.json === "true";
     const { resolveWorkspacePaths } = await import("./workspace-path.js");
     const { systemRoot, workspaceRoot } = await resolveWorkspacePaths({
@@ -124,15 +124,9 @@ async function runNodeCommandOpened(
             stderr: "",
           };
         }
-        const operation = `node.history:${nodeId}`;
-        const limit = numberFlag(flags, "limit") ?? 20;
-        const start = itemPageStart(flags.cursor, operation, limit);
-        const { items, revision, total } = await fs.history!.nodeVersionPage(nodeId, start, limit);
-        const result = pageItems({ items, revision }, operation, {
-          limit,
-          cursor: flags.cursor,
-          window: { start, total },
-        });
+        const { start, limit } = pageBounds(numberFlag(flags, "start"), numberFlag(flags, "limit"));
+        const { items, total } = await fs.history!.nodeVersionPage(nodeId, start, limit);
+        const result = pageItems(items, start, total);
         return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
       }
       case "create": {
@@ -304,7 +298,7 @@ function parseFlags(args: string[]) {
           "resource",
           "tags",
           "limit",
-          "cursor",
+          "start",
           "draft",
           "version",
         ].map((key) => [key, { type: "string" as const }]),
@@ -348,7 +342,7 @@ function numberFlag(flags: Record<string, string>, key: string) {
 function formatReader(value: unknown) {
   const result = value as {
     items: Record<string, unknown>[];
-    page?: { hasMore: boolean; nextCursor?: string };
+    page?: { hasMore: boolean; next?: number };
   };
   return (
     result.items
@@ -364,7 +358,7 @@ function formatReader(value: unknown) {
           .filter(Boolean)
           .join("  "),
       )
-      .join("\n") + (result.page?.hasMore ? `\nNext: ${result.page.nextCursor}` : "")
+      .join("\n") + (result.page?.hasMore ? `\nNext: --start ${result.page.next}` : "")
   );
 }
 function formatNode(value: unknown) {

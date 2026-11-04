@@ -26,7 +26,7 @@ import {
   deprecateCardDocument,
   type CardDocumentState,
 } from "../core/graph/card-document.js";
-import { pageItems } from "./reader-page.js";
+import { pageBounds, pageItems } from "./reader-page.js";
 import { cliErrorText, unknownCommandError, type ErrorContext } from "./error-text.js";
 
 const CARD_COMMANDS = ["create", "list", "take", "return", "watch", "deprecate"];
@@ -65,7 +65,7 @@ async function runCardCommandOpened(
         : sub === "return"
           ? ["role", "result"]
           : sub === "list"
-            ? ["role", "state", "start", "limit", "expected-revision"]
+            ? ["role", "state", "start", "limit"]
             : sub === "watch"
               ? ["role", "timeout"]
               : sub === "take"
@@ -213,21 +213,16 @@ async function runCardCommandOpened(
         result: value("result")!,
       });
     else if (sub === "deprecate") result = await deprecateCardDocument(fs, id);
-    else
-      result = pageItems(
-        await listCardDocuments(fs, {
-          roleId: value("role"),
-          waiting: value("role") !== undefined && value("state") === undefined,
-          state: value("state") as CardDocumentState | undefined,
-          includeDeprecated: values["include-deprecated"] === true,
-        }),
-        "card.list",
-        {
-          start: number("start"),
-          limit: number("limit"),
-          expectedRevision: value("expected-revision"),
-        },
-      );
+    else {
+      const { start, limit } = pageBounds(number("start"), number("limit"));
+      const { items } = await listCardDocuments(fs, {
+        roleId: value("role"),
+        waiting: value("role") !== undefined && value("state") === undefined,
+        state: value("state") as CardDocumentState | undefined,
+        includeDeprecated: values["include-deprecated"] === true,
+      });
+      result = pageItems(items.slice(start, start + limit), start, items.length);
+    }
     if (sub !== "take") result = workspaceReadPaths(result, workspaceRoot);
     return {
       exitCode: 0,
@@ -251,7 +246,7 @@ export function cardHelpText() {
 
   tent card create --prompt <text>|- --target <role-id> [--title <text>] [--source <node-id|path>]... [--return-to <role-id>] [--id <card-id>]
   tent card list [--role <role-id>] [--state pending|consumed|returned|closed] [--include-deprecated]
-                 [--limit <n>] [--start <n> --expected-revision <revision>]
+                 [--limit <n>] [--start <n>]
   tent card take <card-id> --role <role-id>
   tent card return <card-id> --role <role-id> --result <one line>
   tent card watch --role <role-id> [--timeout <seconds>]
@@ -376,7 +371,7 @@ function formatCard(value: unknown, sub: string) {
         publishedAt?: string;
         diagnostic?: string;
       }>;
-      page: { hasMore: boolean; next?: unknown };
+      page: { hasMore: boolean; next?: number };
     };
     return (
       result.items
@@ -394,7 +389,7 @@ function formatCard(value: unknown, sub: string) {
             .filter(Boolean)
             .join("  "),
         )
-        .join("\n") + (result.page.hasMore ? `\nNext: ${JSON.stringify(result.page.next)}` : "")
+        .join("\n") + (result.page.hasMore ? `\nNext: --start ${result.page.next}` : "")
     );
   }
   return [

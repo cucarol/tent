@@ -11,7 +11,6 @@ import {
   indexValue,
   readIndexValue,
 } from "./sqlite-history-index.js";
-import { canonicalSha256 } from "../core/base/canonical-digest.js";
 import { unifiedLineDiff } from "../core/store/line-diff.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { isNodeId, isRoleId, isCardId } from "../core/base/id.js";
@@ -594,7 +593,6 @@ export class SqliteDocumentHistory implements DocumentHistory {
       }
       const processed = from;
       if (processed < to) {
-        const affected = new Set<string>();
         const batch = this.index.batch(index);
         const knownIdentity = index.prepare("SELECT id FROM identities WHERE digest=?");
         const putIdentity = index.prepare("INSERT INTO identities VALUES(?,?)");
@@ -619,9 +617,8 @@ export class SqliteDocumentHistory implements DocumentHistory {
             readChanges.all(row.seq) as Row[],
             identity,
           );
-          batch.add(Number(row.seq), event, affected);
+          batch.add(Number(row.seq), event);
         }
-        batch.finish(affected);
       }
       const putState = index.prepare("INSERT OR REPLACE INTO state VALUES(?,?)");
       for (const [key, value] of Object.entries({
@@ -746,30 +743,17 @@ export class SqliteDocumentHistory implements DocumentHistory {
   }
   async nodeVersionPage(nodeId: string, start: number, limit: number) {
     if (!isNodeId(nodeId)) throw new Error("Invalid Node id");
-    if (
-      !Number.isSafeInteger(start) ||
-      start < 0 ||
-      !Number.isSafeInteger(limit) ||
-      limit < 1 ||
-      limit > 100
-    )
-      throw new Error("Invalid history page");
-    return this.projection(async (index) => {
-      const row = index.prepare("SELECT value FROM nodes WHERE id=?").get(nodeId);
-      const summary = row
-        ? readIndexValue<{ revision: string; total: number }>(row.value)
-        : undefined;
-      return {
-        revision: String(summary?.revision ?? canonicalSha256([])),
-        total: Number(summary?.total ?? 0),
-        items: await this.checkedHistory(
-          index
-            .prepare("SELECT value FROM node_events WHERE id=? ORDER BY seq LIMIT ? OFFSET ?")
-            .all(nodeId, limit, start)
-            .map((row) => readIndexValue<HistoryCommit>(row.value)),
-        ),
-      };
-    });
+    return this.projection(async (index) => ({
+      total: Number(
+        index.prepare("SELECT count(*) AS n FROM node_events WHERE id=?").get(nodeId)?.n,
+      ),
+      items: await this.checkedHistory(
+        index
+          .prepare("SELECT value FROM node_events WHERE id=? ORDER BY seq LIMIT ? OFFSET ?")
+          .all(nodeId, limit, start)
+          .map((row) => readIndexValue<HistoryCommit>(row.value)),
+      ),
+    }));
   }
   async commitChanges(commit: string) {
     const event = await this.event(commit);

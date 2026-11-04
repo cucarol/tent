@@ -2,7 +2,6 @@ import { DatabaseSync } from "./sqlite-runtime.js";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { canonicalSha256 } from "../core/base/canonical-digest.js";
 import type { HistoryCommit, DocumentVersion } from "../core/store/history-port.js";
 
 export class HistoryIndexDamage extends Error {}
@@ -84,10 +83,10 @@ export class SqliteHistoryIndex {
         .all()
         .map((row) => String(row.name));
       if (tables.length) {
-        const expected = ["events", "identities", "node_events", "nodes", "state", "versions"];
+        const expected = ["events", "identities", "node_events", "state", "versions"];
         if (
           JSON.stringify(tables) !== JSON.stringify(expected) ||
-          db.prepare("PRAGMA user_version").get()?.user_version !== 2
+          db.prepare("PRAGMA user_version").get()?.user_version !== 3
         )
           throw new HistoryIndexDamage("Incompatible history projection");
         db.exec("COMMIT");
@@ -98,9 +97,8 @@ export class SqliteHistoryIndex {
         CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS identities(digest TEXT PRIMARY KEY, id TEXT);
         CREATE TABLE IF NOT EXISTS node_events(id TEXT NOT NULL, seq INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(id,seq));
-        CREATE TABLE IF NOT EXISTS nodes(id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS versions(id TEXT PRIMARY KEY, first TEXT NOT NULL, latest TEXT);
-        PRAGMA user_version=2;
+        PRAGMA user_version=3;
         COMMIT;`);
       return disposable(db);
     } catch (error) {
@@ -128,7 +126,7 @@ export class SqliteHistoryIndex {
 
   reset(db: DatabaseSync) {
     db.exec(
-      "DELETE FROM state; DELETE FROM events; DELETE FROM identities; DELETE FROM node_events; DELETE FROM nodes; DELETE FROM versions;",
+      "DELETE FROM state; DELETE FROM events; DELETE FROM identities; DELETE FROM node_events; DELETE FROM versions;",
     );
   }
 
@@ -140,10 +138,8 @@ export class SqliteHistoryIndex {
     );
     const deleteVersion = db.prepare("UPDATE versions SET latest=NULL WHERE id=?");
     const putNodeEvent = db.prepare("INSERT INTO node_events VALUES(?,?,?)");
-    const nodeEvents = db.prepare("SELECT value FROM node_events WHERE id=? ORDER BY seq");
-    const putNode = db.prepare("INSERT OR REPLACE INTO nodes VALUES(?,?)");
     return {
-      add: (seq: number, event: HistoryCommit, affected: Set<string>) => {
+      add: (seq: number, event: HistoryCommit) => {
         putEvent.run(seq, indexValue(event));
         for (const change of event.changes) {
           const id = change.objectId;
@@ -153,21 +149,12 @@ export class SqliteHistoryIndex {
             putVersion.run(id, value, value);
           } else deleteVersion.run(id);
         }
-        for (const id of new Set(event.changes.flatMap((c) => (c.objectId ? [c.objectId] : [])))) {
+        for (const id of new Set(event.changes.flatMap((c) => (c.objectId ? [c.objectId] : []))))
           putNodeEvent.run(
             id,
             seq,
             indexValue({ ...event, changes: event.changes.filter((c) => c.objectId === id) }),
           );
-          affected.add(id);
-        }
-      },
-      finish: (affected: Set<string>) => {
-        for (const id of affected) {
-          const events = nodeEvents.all(id).map((r) => readIndexValue<HistoryCommit>(r.value));
-          // Keep the public cursor revision identical to canonicalSha256(full history).
-          putNode.run(id, indexValue({ revision: canonicalSha256(events), total: events.length }));
-        }
       },
     };
   }

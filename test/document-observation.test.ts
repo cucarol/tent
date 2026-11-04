@@ -172,5 +172,4 @@ test("Card lists read live headers and keep a diagnostic for an invalid one", as
     after.items.some((i) => i.cardId === "card-a"),
     false,
   );
-  assert.notEqual(after.revision, pending.revision);
 });
