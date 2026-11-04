@@ -43,7 +43,6 @@ export type ContextNode = {
 
 /** A version is opaque: the history adapter alone supplies the immutable directory. */
 export async function historicalContextNodes(fs: FsAdapter, commit: string) {
-  if (!fs.history) throw new Error("Retained history unavailable");
   const candidates: ContextNode[] = [];
   for (const [file, raw] of await fs.history.readDirectory(commit)) {
     const directory = path.posix.dirname(file);
@@ -189,7 +188,6 @@ export function resolveBodyNodeReferences(
 /** Card body identity comes from publication; callers may project that verified id onto live paths. */
 export async function readCardBodyReferences(fs: FsAdapter, cardId: string) {
   const file = cardRecordPath(cardId);
-  if (!fs.history) throw new Error("Card publication history unavailable");
   const publication = (await fs.history.pathVersions(file)).first;
   if (!publication) throw new Error("Card has no retained publication");
   const card = parseCardDocument(cardId, await fs.history.read(publication));

@@ -1,4 +1,3 @@
-import { hasDocumentHistory } from "../store/history-port.js";
 import * as z from "zod/v4";
 import { canonicalDocumentReferencesWithPaths } from "../graph/document-links.js";
 import { validateSystemMaterials, systemMaterialPath } from "../graph/material-target.js";
@@ -67,8 +66,7 @@ export function validateBatchItemName(ref: string, name: string, parentPath: str
 export function withNodeBatchMutation<T>(env: OpsEnv, operation: () => Promise<T>): Promise<T> {
   // Batch owns capture; the automatic write finalizer would capture
   // intermediate preimages and turn a capture failure into a partial batch save.
-  const fs = env.fs;
-  return fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, operation) : operation();
+  return env.fs.withLock(MUTATION_LOCK_PATH, operation);
 }
 
 export async function writeNodesBatchUnlocked(
@@ -189,7 +187,7 @@ export async function writeNodesBatchUnlocked(
         fs.workspaceRoot,
       );
       const prepared = target === undefined ? undefined : finalDocuments.get(target);
-      return prepared ?? fs.readMaterialText?.(resource, documentPath);
+      return prepared ?? fs.readMaterialText(resource, documentPath);
     },
   };
   for (const node of planned)
@@ -208,7 +206,7 @@ export async function writeNodesBatchUnlocked(
   }
   const afterOrder = JSON.stringify(order, null, 2) + "\n";
   const directories = [...createdPaths].sort((a, b) => a.split("/").length - b.split("/").length);
-  await fs.prepareFileTransaction?.(
+  await fs.prepareFileTransaction(
     [
       ...planned.map((n) => ({ path: nodeNotePath(n.path), before: null, after: n.raw })),
       { path: ORDER_PATH, before: beforeOrder, after: afterOrder },
@@ -218,13 +216,12 @@ export async function writeNodesBatchUnlocked(
   for (const path of directories) await fs.mkdir(path);
   for (const node of planned) await fs.writeFile(nodeNotePath(node.path), node.raw);
   await fs.writeFile(ORDER_PATH, afterOrder);
-  const captured =
-    fs.history && (await hasDocumentHistory(fs))
-      ? await fs.history.captureUnlocked(
-          planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
-          { operation: "node.write-many" },
-        )
-      : undefined;
+  const captured = (await fs.history.available())
+    ? await fs.history.captureUnlocked(
+        planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
+        { operation: "node.write-many" },
+      )
+    : undefined;
   return {
     results: planned.map((n) => ({ nodeId: n.nodeId, path: n.path })),
     ...(captured?.commit ? { commit: captured.commit } : {}),

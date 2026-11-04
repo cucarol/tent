@@ -35,7 +35,6 @@ export function createRoleContext(
       if (!isRoleId(roleId) || used.has(roleId))
         throw new Error("Role id is invalid or already exists");
       if (
-        fs.history &&
         (await fs.history.available()) &&
         (await fs.history.pathVersions(roleDocumentPath(roleId))).first
       ) {

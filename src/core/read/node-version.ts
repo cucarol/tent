@@ -8,8 +8,7 @@ import { normalizeOptionalNodeType } from "../base/node-type.js";
 /** A retained Node document's raw bytes, after checking it belongs to the requested Node. */
 export async function readNodeVersion(fs: FsAdapter, nodeId: string, input: unknown) {
   const version = documentVersionSchema.parse(input);
-  if (!isHistoryDocument(version.path) || !fs.history)
-    throw new Error("Not a Tent history document");
+  if (!isHistoryDocument(version.path)) throw new Error("Not a Tent history document");
   const text = await fs.history.read(version);
   const data = parseFrontmatter(text).data;
   if (typeof data.id !== "string" || !isNodeId(data.id))

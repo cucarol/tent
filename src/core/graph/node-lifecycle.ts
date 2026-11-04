@@ -16,8 +16,7 @@ function statusRaw(raw: string, status: unknown) {
 export function archiveNode(env: OpsEnv, nodeId: string) {
   return withTentMutation(env.fs, async () => {
     const history = env.fs.history;
-    if (!history || !(await history.available()))
-      throw new Error("Archive operations require Tent history");
+    if (!(await history.available())) throw new Error("Archive operations require Tent history");
     const catalog = await loadNodeCatalog(env.fs),
       root = catalog.byId.get(nodeId);
     if (!root) throw new Error(`Node not found: ${nodeId}`);

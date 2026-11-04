@@ -14,7 +14,6 @@ import {
 import { changedSections, settleSections } from "../fs/section-fingerprints.js";
 import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { changedGoals } from "../core/return/stop-goals.js";
-import { hasDocumentHistory } from "../core/store/history-port.js";
 import { checkNodeWriteProblems } from "../fs/node-write-problems.js";
 import { withFileLock } from "../fs/file-lock.js";
 import { NodeFs } from "../fs/node-fs.js";
@@ -152,7 +151,7 @@ export async function runTurnHook(
             ].map((problem) => [JSON.stringify(problem), problem]),
           ).values(),
         ];
-        const history = (await hasDocumentHistory(adapter))
+        const history = (await adapter.history.available())
           ? await adapter.history.currentCommit()
           : null;
         // A baseline the history no longer holds (a rebuilt Tent) starts over from this Stop.

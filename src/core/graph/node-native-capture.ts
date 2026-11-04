@@ -1,6 +1,5 @@
-import { hasDocumentHistory } from "../store/history-port.js";
 import type { DocumentHeaderObservation, FsAdapter } from "../store/adapter.js";
-import { documentHeader, loadNodeCatalog, type NodeCatalog } from "./node-catalog.js";
+import { loadNodeCatalog, type NodeCatalog } from "./node-catalog.js";
 import { MUTATION_LOCK_PATH, isNodeNotePath, nodeNotePath } from "../base/paths.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { assertNodeEdit } from "./node-document-write.js";
@@ -13,8 +12,7 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
   changedNodePaths: string[];
   catalog?: NodeCatalog;
 }> {
-  if (!fs.history || !(await hasDocumentHistory(fs)))
-    return { invalidNodes: [], changedNodePaths: [] };
+  if (!(await fs.history.available())) return { invalidNodes: [], changedNodePaths: [] };
   const capture = async (
     locked = false,
   ): Promise<{
@@ -23,30 +21,14 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
     catalog: NodeCatalog;
   }> => {
     fs.invalidNodeEdits = new Map();
-    const observed = new Map<string, string>();
     const fingerprints = new Map<string, DocumentHeaderObservation>();
     const source = new Proxy(fs, {
       get(target, key) {
         if (key === "readFrontmatter")
           return async (path: string) => {
-            if (target.readFrontmatterWithFingerprint) {
-              const header = await target.readFrontmatterWithFingerprint(path);
-              try {
-                if (documentHeader(header.content) === header.content) {
-                  fingerprints.set(path, header);
-                  return header.content;
-                }
-              } catch {
-                // A malformed prefix still needs the ordinary current-byte diagnostic.
-              }
-            }
-            const raw = await target.readFile(path);
-            observed.set(path, raw);
-            try {
-              return documentHeader(raw);
-            } catch {
-              return raw;
-            }
+            const header = await target.readFrontmatterWithFingerprint(path);
+            fingerprints.set(path, header);
+            return header.content;
           };
         const value: unknown = Reflect.get(target, key);
         return typeof value === "function" ? value.bind(target) : value;
@@ -54,7 +36,7 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
     });
     const collect = async () => {
       const catalog = await loadNodeCatalog(source);
-      const blobs = await fs.history!.documentBlobs();
+      const blobs = await fs.history.documentBlobs();
       const retained = new Set([...blobs.keys()].filter(isNodeNotePath));
       const paths = [...catalog.tree.byPath.keys()].map(nodeNotePath);
       const documents: { path: string; raw: string }[] = [];
@@ -66,7 +48,7 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
             if (path === undefined) return;
             const header = fingerprints.get(path);
             if (header && blobs.get(path) === header.fingerprint) continue;
-            documents.push({ path, raw: observed.get(path) ?? (await fs.readFile(path)) });
+            documents.push({ path, raw: await fs.readFile(path) });
           }
         }),
       );
@@ -75,9 +57,7 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
     };
     // Candidate full reads share the header observation's scope. Fingerprints
     // never stand in for raw bytes when a document needs to be retained.
-    const { catalog, documents, retained } = fs.observationScope
-      ? await fs.observationScope(collect)
-      : await collect();
+    const { catalog, documents, retained } = await fs.observationScope(collect);
     const invalid = new Map(
       [...catalog.tree.byPath.values()]
         .filter((node) => node.invalid)
@@ -90,7 +70,7 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
     );
     const currentPaths = new Set([...catalog.tree.byPath.keys()].map(nodeNotePath));
     const removed = [...retained].filter((path) => !currentPaths.has(path));
-    const edited = await fs.history!.changedRetainedDocuments(documents);
+    const edited = await fs.history.changedRetainedDocuments(documents);
     const pending: { path: string; raw: string; previousRaw?: string }[] = [
       ...edited,
       ...documents.filter((document) => !retained.has(document.path)),
@@ -100,12 +80,12 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
     ].sort();
     // An unchanged workspace needs no write lock. A possible save is inspected
     // again under the lock before validating metadata or capturing versions.
-    if (changedNodePaths.length && !locked && fs.withLock)
+    if (changedNodePaths.length && !locked)
       return fs.withLock(MUTATION_LOCK_PATH, () => capture(true));
     const removedById = new Map<string, { path: string; raw: string }>();
     if (removed.length) {
-      const head = await fs.history!.currentCommit();
-      const previous = await fs.history!.readVersions(
+      const head = await fs.history.currentCommit();
+      const previous = await fs.history.readVersions(
         removed.map((path) => ({ commit: head!, path })),
       );
       for (let index = 0; index < previous.length; index++) {
@@ -150,7 +130,7 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
       ...removed.filter((path) => !rejectedMoves.has(path)).map((path) => ({ path, raw: null })),
     );
     if (changes.length)
-      await fs.history!.captureUnlocked(changes, { operation: "node.native-save" });
+      await fs.history.captureUnlocked(changes, { operation: "node.native-save" });
     const invalidNodes = [...invalid.values()].sort((a, b) =>
       a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
     );

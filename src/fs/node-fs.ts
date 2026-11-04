@@ -1,4 +1,4 @@
-import { hasDocumentHistory, type DocumentHistory } from "../core/store/history-port.js";
+import type { DocumentHistory } from "../core/store/history-port.js";
 // node:fs 实现的 FsAdapter。给 CLI(skill 调用)和测试用。
 
 import * as fs from "node:fs/promises";
@@ -527,12 +527,12 @@ export class NodeFs implements FsAdapter {
 
   /** Current retained membership; no replay or read-time cache writes. */
   async retainedDocumentPaths(): Promise<string[] | undefined> {
-    if (!(await hasDocumentHistory(this))) return undefined;
+    if (!(await this.history.available())) return undefined;
     return this.history.retainedPaths();
   }
 
   async withDocumentHistory<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T> {
-    if (!(await hasDocumentHistory(this))) return action();
+    if (!(await this.history.available())) return action();
     return this.historyWrites.run(new Map(), async () => {
       const result = await action();
       const changes = [...this.historyWrites.getStore()!].map(([path, raw]) => ({ path, raw }));
@@ -592,7 +592,7 @@ export class NodeFs implements FsAdapter {
       const locked = () =>
         withMutationLock(this.abs(path), async () =>
           withoutFileReadScope(() =>
-            this.raw(() => hasDocumentHistory(this)).then((hasGit) => {
+            this.raw(() => this.history.available()).then((hasGit) => {
               if (!hasGit || this.transactionBypass.getStore()) return action();
               const transaction = this.transaction();
               return this.boundaryReady.run(true, async () => {

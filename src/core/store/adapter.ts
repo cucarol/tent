@@ -19,28 +19,28 @@ export interface FsAdapter {
   invalidNodeEdits?: ReadonlyMap<string, string>;
   /** External edits preserved while settling an interrupted file transaction. */
   readonly recoveryConflicts?: readonly string[];
-  prepareFileTransaction?(
+  prepareFileTransaction(
     writes: readonly { path: string; before: string | null; after: string | null }[],
     directories: readonly string[],
   ): Promise<void>;
   /** Check an explicit address without reading a directory's members. */
-  observeMaterial?(resource: string, documentPath: string): Promise<void>;
+  observeMaterial(resource: string, documentPath: string): Promise<void>;
   /** Share one Workspace observation among the materials of a single inspection. */
-  observationScope?<T>(action: () => Promise<T>, options?: ObservationOptions): Promise<T>;
+  observationScope<T>(action: () => Promise<T>, options?: ObservationOptions): Promise<T>;
   /** Local text for explicit-write advice; never fetch remote materials. */
-  readMaterialText?(resource: string, documentPath: string): Promise<string | undefined>;
-  readonly history?: DocumentHistory;
+  readMaterialText(resource: string, documentPath: string): Promise<string | undefined>;
+  readonly history: DocumentHistory;
   /** File paths in the independent retained history tree; undefined without Tent history. */
-  retainedDocumentPaths?(): Promise<string[] | undefined>;
+  retainedDocumentPaths(): Promise<string[] | undefined>;
   /** Track selected identity-document writes inside the existing mutation lock. */
-  withDocumentHistory?<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T>;
+  withDocumentHistory<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T>;
   /** 列出 dir 下的直接子项(相对帐根的路径)。 */
   listDir(dir: string): Promise<{ name: string; isDir: boolean }[]>;
   readFile(path: string): Promise<string>;
   /** Read the original Markdown frontmatter prefix, or an empty string without an opening fence. */
-  readFrontmatter?(path: string): Promise<string>;
+  readFrontmatter(path: string): Promise<string>;
   /** Current Markdown prefix and full decoded-text SHA-256 blob fingerprint. */
-  readFrontmatterWithFingerprint?(path: string): Promise<DocumentHeaderObservation>;
+  readFrontmatterWithFingerprint(path: string): Promise<DocumentHeaderObservation>;
   writeFile(path: string, content: string): Promise<void>;
   /**
    * Read raw bytes, including non-UTF-8 payloads.
@@ -60,7 +60,7 @@ export interface FsAdapter {
   /** Remove only an empty directory; fail without deleting any contained entries. */
   removeEmptyDir(path: string): Promise<void>;
   /** 跨进程短期写锁；实现可在锁过期后接管。 */
-  withLock?<T>(path: string, action: () => Promise<T>): Promise<T>;
+  withLock<T>(path: string, action: () => Promise<T>): Promise<T>;
 }
 
 export interface Clock {
@@ -102,7 +102,5 @@ export function withTentMutation<T>(
   metadata?: CaptureMetadata,
 ): Promise<T> {
   // 唯一锁：始终 system root 下 mutation.lock，不使用嵌套 .tent/ 或其他路径。
-  const actionWithHistory = () =>
-    fs.withDocumentHistory ? fs.withDocumentHistory(action, metadata) : action();
-  return fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, actionWithHistory) : actionWithHistory();
+  return fs.withLock(MUTATION_LOCK_PATH, () => fs.withDocumentHistory(action, metadata));
 }

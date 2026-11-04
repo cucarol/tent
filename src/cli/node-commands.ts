@@ -125,7 +125,7 @@ async function runNodeCommandOpened(
           };
         }
         const { start, limit } = pageBounds(numberFlag(flags, "start"), numberFlag(flags, "limit"));
-        const { items, total } = await fs.history!.nodeVersionPage(nodeId, start, limit);
+        const { items, total } = await fs.history.nodeVersionPage(nodeId, start, limit);
         const result = pageItems(items, start, total);
         return print(workspaceReadPaths(result, workspaceRoot), json, formatReader);
       }

@@ -1,4 +1,3 @@
-import { hasDocumentHistory } from "../store/history-port.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { withTentMutation, type FsAdapter } from "../store/adapter.js";
 import { parseFrontmatter, serializeFrontmatter } from "../base/frontmatter.js";
@@ -130,7 +129,7 @@ async function requireUnusedId(fs: FsAdapter, id: string) {
     invalid("Card id already exists in files or history; create a new identity");
 }
 async function historyOf(fs: FsAdapter) {
-  if (!fs.history || !(await fs.history.available()))
+  if (!(await fs.history.available()))
     throw new Error("Card operations require independent Tent history");
   return fs.history;
 }
@@ -216,7 +215,7 @@ async function currentSources(fs: FsAdapter, card: CardDocument, published: Docu
   return Promise.all(
     card.data.sources.map(async ({ resource }) => {
       const file = internalSourcePath(fs, card.path, { resource });
-      if (!file || file.startsWith(ROLES_DIR + "/") || !fs.history) return { resource, file };
+      if (!file || file.startsWith(ROLES_DIR + "/")) return { resource, file };
       const idIn = async (read: Promise<string>) => {
         try {
           return parseFrontmatter(await read).data.id;
@@ -226,8 +225,7 @@ async function currentSources(fs: FsAdapter, card: CardDocument, published: Docu
       };
       const id = await idIn(fs.history.read({ commit: published.commit, path: file }));
       if (typeof id !== "string") return { resource, file };
-      if ((await idIn(fs.readFrontmatter ? fs.readFrontmatter(file) : fs.readFile(file))) === id)
-        return { resource, file };
+      if ((await idIn(fs.readFrontmatter(file))) === id) return { resource, file };
       const node = (await (catalog ??= loadNodeCatalog(fs))).byId.get(id);
       return node ? { resource, file: nodeNotePath(node.path) } : { resource, gone: id };
     }),
@@ -540,7 +538,7 @@ function completedCard(data: Record<string, unknown>): boolean {
 
 /** Routine reads skip Cards completed in Tent history, regardless of subsequent native edits. */
 export async function completedCardPaths(fs: FsAdapter): Promise<ReadonlySet<string>> {
-  if (!fs.history || !(await hasDocumentHistory(fs))) return new Set();
+  if (!(await fs.history.available())) return new Set();
   return fs.history.completedCardPaths((file, raw) => {
     try {
       const data = parseFrontmatter(raw).data;
@@ -575,7 +573,7 @@ export async function listCardDocuments(
   } = {},
 ) {
   const read = async () => ({ items: await listCardHeaders(fs, options) });
-  return fs.observationScope ? fs.observationScope(read) : read();
+  return fs.observationScope(read);
 }
 
 async function listCardHeaders(
@@ -598,9 +596,7 @@ async function listCardHeaders(
         if (entry.isDir || !entry.name.endsWith(".md") || !isCardId(id)) continue;
         const path = cardPath(id);
         try {
-          const data = parseFrontmatter(
-            fs.readFrontmatter ? await fs.readFrontmatter(path) : await fs.readFile(path),
-          ).data;
+          const data = parseFrontmatter(await fs.readFrontmatter(path)).data;
           validateCardHeader(id, data);
           const state = data.state;
           if (!options.includeDeprecated && documentLifecycle(data).status === "deprecated")
@@ -630,7 +626,7 @@ async function listCardHeaders(
       }
     }),
   );
-  if (selected.length && fs.history && (await fs.history.available())) {
+  if (selected.length && (await fs.history.available())) {
     const times = await fs.history.firstCommitTimes(selected.map((item) => item.path));
     for (const item of selected) {
       const time = times.get(item.path);

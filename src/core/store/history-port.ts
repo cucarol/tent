@@ -1,5 +1,4 @@
 import * as z from "zod/v4";
-import type { FsAdapter } from "./adapter.js";
 
 /** commit is an opaque immutable event identity, not a content fingerprint. */
 export type DocumentVersion = { commit: string; path: string };
@@ -84,8 +83,4 @@ export interface DocumentHistory {
     changes: { path: string; before: string | null; after: string | null }[];
   }>;
   diff(from: DocumentVersion, to: DocumentVersion): Promise<string>;
-}
-
-export async function hasDocumentHistory(fs: Pick<FsAdapter, "history">) {
-  return !!fs.history && (await fs.history.available());
 }

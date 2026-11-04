@@ -61,7 +61,7 @@ export async function nodeMaterialWarnings(
   const whole: string[] = [];
   const seen = new Set<string>();
   for (const { resource, locator } of resolvedMaterialOccurrences(data, documentPath)) {
-    if (!locator || !fs.readMaterialText) continue;
+    if (!locator) continue;
     try {
       const identity = wholeMarkdownIdentity(locator, fs.workspaceRoot);
       if (!identity || retained.has(identity) || seen.has(identity)) continue;

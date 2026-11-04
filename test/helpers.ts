@@ -59,25 +59,20 @@ export function injectWriteFailure(
   writeCount: () => number;
 } {
   let writes = 0;
-  const fsAdapter: FsAdapter = {
-    listDir: (dir) => inner.listDir(dir),
-    readFile: (p) => inner.readFile(p),
-    writeFile: async (p, content) => {
-      writes += 1;
-      if (writes === failOnWriteNumber) {
-        throw new Error(`injected write failure #${failOnWriteNumber} on ${p}`);
-      }
-      return inner.writeFile(p, content);
+  const fsAdapter = new Proxy(inner, {
+    get(target, key) {
+      if (key === "writeFile")
+        return async (p: string, content: string) => {
+          writes += 1;
+          if (writes === failOnWriteNumber) {
+            throw new Error(`injected write failure #${failOnWriteNumber} on ${p}`);
+          }
+          return target.writeFile(p, content);
+        };
+      const value: unknown = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
     },
-    readBinary: (p) => inner.readBinary(p),
-    writeBinary: (p, data) => inner.writeBinary(p, data),
-    exists: (p) => inner.exists(p),
-    mkdir: (p) => inner.mkdir(p),
-    move: (from, to) => inner.move(from, to),
-    remove: (p) => inner.remove(p),
-    removeEmptyDir: (p) => inner.removeEmptyDir(p),
-    withLock: inner.withLock?.bind(inner),
-  };
+  });
   return { fs: fsAdapter, writeCount: () => writes };
 }
 

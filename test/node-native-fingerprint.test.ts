@@ -6,8 +6,6 @@ import { syncBuiltinESMExports } from "node:module";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
 import { initializeFixtureWorkspace, testScratchRoot } from "./scratch.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
-import { PropagationMemoryFs } from "./propagation-memory.js";
-import { scaffoldTent } from "../src/core/store/scaffold.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "native-fingerprint-"));
@@ -77,29 +75,15 @@ function countNodeReads(
   };
 }
 
-test("warm unchanged native Nodes use validated fingerprints without full reads; custom adapters retain the direct path", async (t) => {
+test("warm unchanged native Nodes use fingerprints without full reads", async (t) => {
   const f = await fixture(t);
   const count = countNodeReads(t, f.adapter, f.system, f.paths);
   const before = await f.adapter.history.currentCommit();
   const warm = await captureNativeNodeEdits(f.adapter);
   assert.deepEqual(warm.changedNodePaths, []);
   assert.deepEqual(warm.invalidNodes, []);
-  const fingerprint = count.snapshot();
-  assert.deepEqual(fingerprint, { fullReads: 0, opens: 0 });
-  const direct = new Proxy(f.adapter, {
-    get(target, key) {
-      if (key === "readFrontmatterWithFingerprint") return undefined;
-      const value = Reflect.get(target, key, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  const fallback = await captureNativeNodeEdits(direct);
-  assert.deepEqual(fallback.changedNodePaths, []);
-  assert.deepEqual(fallback.invalidNodes, []);
-  assert.deepEqual([...fallback.catalog!.byId], [...warm.catalog!.byId]);
-  assert.deepEqual(count.snapshot(), { fullReads: 8, opens: 8 });
+  assert.deepEqual(count.snapshot(), { fullReads: 0, opens: 0 });
   assert.equal(await f.adapter.history.currentCommit(), before);
-  t.diagnostic(JSON.stringify({ nodes: 8, fingerprint, direct: count.snapshot() }));
 });
 
 test("native fingerprint selection captures same-size body changes with restored mtime and later metadata changes", async (t) => {
@@ -135,41 +119,4 @@ test("native fingerprint selection captures same-size body changes with restored
     }),
     metadata,
   );
-});
-
-test("native fingerprint optimization preserves Memory adapter capture without a fingerprint getter", async () => {
-  const memory = new PropagationMemoryFs();
-  await scaffoldTent(memory, { name: "Memory" });
-  const raw = "---\nid: node-memory\ntype: prompt\n---\nMemory body";
-  await memory.writeFile("Node/Node.md", raw);
-  const saved = await captureNativeNodeEdits(memory);
-  assert.deepEqual(saved.changedNodePaths, ["Node/Node.md"]);
-  const head = (await memory.history.currentCommit())!;
-  assert.equal(await memory.history.read({ commit: head, path: "Node/Node.md" }), raw);
-  const unchanged = await captureNativeNodeEdits(memory);
-  assert.deepEqual(unchanged.changedNodePaths, []);
-  assert.deepEqual(unchanged.invalidNodes, []);
-});
-
-test("native capture does not promote malformed fingerprint/header observations to full document bytes", async (t) => {
-  const f = await fixture(t);
-  const target = f.paths[0]!,
-    raw = await fs.readFile(path.join(f.system, target), "utf8");
-  const observe = f.adapter.readFrontmatterWithFingerprint.bind(f.adapter);
-  const original = await observe(target);
-  const head = await f.adapter.history.currentCommit();
-  for (const observation of [
-    { content: raw, fingerprint: original.fingerprint },
-    { content: original.content, fingerprint: "invalid fingerprint" },
-  ]) {
-    const mocked = t.mock.method(f.adapter, "readFrontmatterWithFingerprint", (file: string) =>
-      file === target ? Promise.resolve(observation) : observe(file),
-    );
-    const result = await captureNativeNodeEdits(f.adapter);
-    mocked.mock.restore();
-    assert.deepEqual(result.invalidNodes, []);
-    assert.deepEqual(result.changedNodePaths, []);
-    assert.equal(result.catalog?.byId.get("node-fingerprint0")?.header, original.content);
-    assert.equal(await f.adapter.history.currentCommit(), head);
-  }
 });

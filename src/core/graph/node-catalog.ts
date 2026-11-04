@@ -30,7 +30,7 @@ export function documentHeader(raw: string): string {
 /** Fresh metadata scan; uses the same hierarchy, duplicate-ID and archive rules as mutations. */
 export async function loadNodeCatalog(fs: FsAdapter) {
   const run = () => loadCatalogInScope(fs);
-  return fs.observationScope ? fs.observationScope(run) : run();
+  return fs.observationScope(run);
 }
 
 async function loadCatalogInScope(fs: FsAdapter) {
@@ -42,16 +42,7 @@ async function loadCatalogInScope(fs: FsAdapter) {
         return async (path: string) => {
           if (!isHistoryDocument(path)) return target.readFile(path);
           // Invalid YAML must still reach the tree loader for quarantine.
-          let header: string;
-          if (target.readFrontmatter) header = await target.readFrontmatter(path);
-          else {
-            header = await target.readFile(path);
-            try {
-              header = documentHeader(header);
-            } catch {
-              /* preserve malformed header */
-            }
-          }
+          const header = await target.readFrontmatter(path);
           headers.set(path, header);
           return header;
         };

@@ -65,7 +65,7 @@ export async function checkGraph(
   observedTree?: LoadedTent,
 ): Promise<GraphCheckResult> {
   const run = () => checkGraphInScope(fs, workspaceRoot, fileExists, observedTree);
-  return fs.observationScope ? fs.observationScope(run) : run();
+  return fs.observationScope(run);
 }
 
 /** The same diagnostics as checkGraph, restricted to these canonical Node files. */
@@ -80,7 +80,7 @@ export async function checkSelectedNodes(
   if (!selected.size) return { documents: 0, issues: [], notices: [], errors: [] };
   const run = () =>
     checkGraphInScope(fs, workspaceRoot, fileExists, undefined, selected, observedCatalog);
-  return fs.observationScope ? fs.observationScope(run) : run();
+  return fs.observationScope(run);
 }
 
 async function checkGraphInScope(
@@ -110,12 +110,10 @@ async function checkGraphInScope(
   // diagnostic, while sibling discovery continues without repair writes.
   const observationFs = new Proxy(readonlyFs, {
     get(target, key) {
-      if (key === "readFile" || (key === "readFrontmatter" && target.readFrontmatter))
+      if (key === "readFile" || key === "readFrontmatter")
         return async (path: string) => {
           try {
-            return await (key === "readFrontmatter" && target.readFrontmatter
-              ? target.readFrontmatter(path)
-              : target.readFile(path));
+            return await target[key](path);
           } catch (cause) {
             const reason = message(cause);
             failedReads.set(path, reason);
@@ -141,7 +139,7 @@ async function checkGraphInScope(
     : undefined;
   const tent = observedTree ?? catalog?.tree ?? (await loadTent(observationFs));
   const nodePaths = new Set([...tent.byId.values()].map((node) => nodeNotePath(node.path)));
-  const retainedPaths = await readonlyFs.retainedDocumentPaths?.();
+  const retainedPaths = await readonlyFs.retainedDocumentPaths();
   if (retainedPaths) {
     // Presence only: content edits are ordinary dirty files, captured by explicit reads.
     const isNodeDocument = (file: string) =>
@@ -286,9 +284,7 @@ async function checkGraphInScope(
       if (selected) {
         // Reference identity needs metadata only; unrelated bodies are never inspected.
         try {
-          const raw = await (readonlyFs.readFrontmatter
-            ? readonlyFs.readFrontmatter(file)
-            : readonlyFs.readFile(file));
+          const raw = await readonlyFs.readFrontmatter(file);
           let valid = true;
           try {
             if (kind === "role") parseRoleDocument(id, raw);
@@ -359,11 +355,9 @@ async function checkGraphInScope(
     return observed;
   }
   function observeMaterial(resource: string, owner: string) {
-    if (!readonlyFs.observeMaterial) throw new Error("Material observer is unavailable");
-    const observe = () => readonlyFs.observeMaterial!(resource, owner);
-    return readonlyFs.observationScope
-      ? readonlyFs.observationScope(observe, { nodePaths })
-      : observe();
+    return readonlyFs.observationScope(() => readonlyFs.observeMaterial(resource, owner), {
+      nodePaths,
+    });
   }
   async function linkReason(target: string, owner: string): Promise<string | undefined> {
     if (target.startsWith("#") || target.startsWith("//")) return;
