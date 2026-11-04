@@ -62,7 +62,7 @@ Workspace directory members come only from the project's Git; Tent creates no pr
 
 A local file, directory such as `src/api/`, or file-name prefix such as `src/flask/views*` supplies ordinary coverage through `resource` or `sources`. The most specific matching declarations win for each changed file: exact file references and references to a Markdown section that actually changed take priority; otherwise the nearest matching directory or prefix wins. Equally specific matches all remain. Coverage does not establish ownership, inherit rules from ancestors or depend on `type`. There is no `track` behavior. Invalid, duplicate-id and deprecated Nodes supply no current coverage. `description` is ordinary metadata and supplies none.
 
-Markdown links, standard fields and bare `node-xxxxxx` tokens in a body relate Nodes to each other. Saves turn Node ids in links and materials into relative paths, and moves and renames rewrite the affected live links and materials, never historical Card input. A local body link must point to an existing file, or to an existing directory when it ends in `/`. `workspace check` reports unresolved links and missing materials.
+Markdown links, standard fields and bare `node-xxxxxx` tokens in a body relate Nodes to each other. Saves turn Node ids in links and materials into relative paths, and moves and renames rewrite the affected live links and materials, never historical Card input. A local body link must point to an existing file, or to an existing directory when it ends in `/`. `workspace check` reports unresolved links and missing materials. It does not look at links in Cards: a sent Card never changes, so nobody could fix one.
 
 ## 4. Results
 

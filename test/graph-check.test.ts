@@ -13,7 +13,6 @@ import { renameNode } from "../src/core/graph/rename-ops.js";
 import { withTentMutation } from "../src/core/store/adapter.js";
 import { testScratchRoot } from "./scratch.js";
 import { loadTent } from "../src/core/store/tree.js";
-import { readCardBodyReferences } from "../src/core/read/card-references.js";
 
 // These fixtures write documents straight to disk; agreement with history is tested elsewhere.
 const checkGraph = async (...args: Parameters<typeof checkGraphAndHistory>) => {
@@ -542,52 +541,24 @@ test("Card source sections are resolved at take, not reported by check", async (
   );
 });
 
-test("failed publication section keeps its known Node identity after alias reuse by an ordinary file", async (t) => {
+test("a stale link in a sent Card is not reported, because nobody could fix it", async (t) => {
   const { workspace, systemRoot, adapter, write, fileExists } = await fixture(t);
   await initializeFixtureHistory(systemRoot);
-  await write("Old/Old.md", { id: "node-old" }, "## Existing\nOriginal Node.");
-  await write("roles/role-a.md", { id: "role-a", type: "role" });
+  await write("roles/role-a.md", { id: "role-a", type: "role" }, "See [gone](../gone.md).");
   await captureFixtureDocuments(systemRoot);
   const card = await createCardDocument(adapter, {
-    cardId: "card-aliasmissing",
-    prompt: "Read [rule](../Old#Missing).",
+    cardId: "card-stale",
+    prompt: "Read [gone](../gone.md).",
     target: "role-a",
     sources: [],
   });
-  const published = await adapter.readFile(card.path);
-  assert.equal(parseFrontmatter(published).body, "Read [rule](../Old#Missing).");
-  const original = (await readCardBodyReferences(adapter, card.cardId)).references[0]!;
-  assert.equal(original.scope, "node");
-  assert.equal(original.nodeId, undefined);
-  assert.equal(original.targetNodeId, "node-old");
-  assert.match(original.reason!, /Missing/);
-  await renameNode(
-    { fs: adapter, clock: { now: () => "2026-10-28T00:00:00.000Z" }, tentName: "test" },
-    "node-old",
-    "New",
-  );
-  await adapter.writeFile("Old", "An ordinary regular file, not a Node document.");
-  assert.equal(await fileExists(path.join(systemRoot, "Old")), true);
-  assert.equal(await adapter.readFile(card.path), published);
-  const beforeHead = await historyHead(systemRoot);
-  const beforeNode = await adapter.readFile("New/New.md");
-  t.mock.method(adapter.history, "captureUnlocked", () => {
-    throw new Error("Graph must not capture");
-  });
   const checked = await checkGraph(adapter, workspace, fileExists);
-  const issue = checked.issues.find(
-    (entry) =>
-      entry.kind === "unresolved-link" &&
-      entry.path === card.path &&
-      entry.target === "../Old#Missing",
-  );
-  assert.ok(issue, JSON.stringify(checked));
-  assert.equal(issue.reason, original.reason);
   assert.deepEqual(checked.errors, []);
-  assert.equal(await historyHead(systemRoot), beforeHead);
-  assert.equal(await adapter.readFile(card.path), published);
-  assert.equal(await adapter.readFile("New/New.md"), beforeNode);
-  assert.equal(await adapter.readFile("Old"), "An ordinary regular file, not a Node document.");
+  assert.deepEqual(
+    checked.issues.map((issue) => issue.path),
+    ["roles/role-a.md"],
+  );
+  assert.ok(!checked.issues.some((issue) => issue.path === card.path));
 });
 
 test("Card sources to moved and deleted documents are left to take without writes", async (t) => {

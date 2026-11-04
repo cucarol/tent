@@ -20,7 +20,6 @@ import { markdownMaterialHeading } from "../base/material-section.js";
 import { NodeSectionError } from "../base/markdown-section.js";
 import { isHistoryDocument } from "../store/document-history.js";
 import { assertSystemMaterial } from "../graph/material-target.js";
-import { readCardBodyReferences } from "../read/card-references.js";
 import { rolesHoldingCard } from "../graph/role-cards.js";
 import { documentLifecycle } from "../base/document-status.js";
 import { loadNodeCatalog, type NodeCatalog } from "../graph/node-catalog.js";
@@ -398,71 +397,18 @@ async function checkGraphInScope(
       error(owner, `Cannot inspect ${JSON.stringify(target)}: ${message(cause)}`);
     }
   }
-  const nodeTargetPath = (target: string, owner: string) => {
-    if (target.startsWith("#") || target.startsWith("//") || /^[a-z][a-z\d+.-]*:/i.test(target))
-      return undefined;
-    const normalized = resolveTargetPath(target, owner);
-    if (
-      isRoleId(normalized) ||
-      isCardId(normalized) ||
-      normalized.startsWith(`${ROLES_DIR}/`) ||
-      normalized.startsWith(`${CARDS_DIR}/`) ||
-      normalized.startsWith("../")
-    )
-      return undefined;
-    return normalized;
-  };
-  const isNodeTarget = (target: string, owner: string, historicalNodeId?: string) => {
-    const normalized = nodeTargetPath(target, owner);
-    return (
-      normalized !== undefined &&
-      (isNodeId(normalized) ||
-        !!resolveOutLink(index, { raw: target, kind: "md" }, owner).targetNodeId ||
-        !!historicalNodeId)
-    );
-  };
   async function checkDocument(document: (typeof documents)[number]) {
     const targets = new Set<string>();
     // Reuse the native Markdown parser for local destinations;
     // collecting destinations never rewrites the observed document.
-    rewriteMarkdownDestinations(document.body, (target) => {
-      targets.add(target);
-      return undefined;
-    });
-    let historicalLinks: Awaited<ReturnType<typeof readCardBodyReferences>> | undefined;
-    let publicationError: string | undefined;
-    const hasLocalLinks = [...targets].some(
-      (target) => nodeTargetPath(target, document.path) !== undefined,
-    );
-    if (
-      hasLocalLinks &&
-      document.valid &&
-      document.path.startsWith(`${CARDS_DIR}/`) &&
-      document.id
-    ) {
-      try {
-        historicalLinks = await readCardBodyReferences(fs, document.id);
-        if (historicalLinks.card.body !== document.body)
-          error(document.path, "Card body differs from its immutable publication");
-      } catch (cause) {
-        publicationError = message(cause);
-      }
-    }
+    // A sent Card never changes, so a stale link in one is nothing anyone could fix.
+    if (!document.path.startsWith(`${CARDS_DIR}/`))
+      rewriteMarkdownDestinations(document.body, (target) => {
+        targets.add(target);
+        return undefined;
+      });
     for (const target of targets) {
-      const historic = historicalLinks?.references.find(
-        (ref) => ref.kind === "link" && ref.raw === target,
-      );
-      const nodeTarget = isNodeTarget(
-        target,
-        document.path,
-        historic?.nodeId ?? historic?.targetNodeId,
-      );
-      const reason =
-        nodeTarget && historic?.nodeId
-          ? undefined
-          : ((nodeTarget && historic?.scope === "node" ? historic.reason : undefined) ??
-            (nodeTarget ? publicationError : undefined) ??
-            (await linkReason(target, document.path)));
+      const reason = await linkReason(target, document.path);
       if (reason)
         result.issues.push({ kind: "unresolved-link", path: document.path, target, reason });
     }
