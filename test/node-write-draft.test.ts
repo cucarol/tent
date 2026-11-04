@@ -622,7 +622,7 @@ for (const cut of ["ids-checkpointed", "node-written", "captured"] as const) {
   });
 }
 
-test("draft CLI rejects direct-create options and the retired input-json entry without consuming artifacts", async (t) => {
+test("draft CLI rejects direct-create options without consuming artifacts", async (t) => {
   const f = await fixture(t, [
     { op: "create", ref: "ready", name: "Ready", type: "prompt", body: "Ready facts" },
   ]);
@@ -633,8 +633,6 @@ test("draft CLI rejects direct-create options and the retired input-json entry w
     ["create", ["Name", "--draft", "draft.json"]],
     ["create", ["--draft", "draft.json", "--description", "Wrong mode"]],
     ["create", ["--draft", "draft.json", "--source", "src/"]],
-    ["create", ["--input-json", before]],
-    ["write-many", ["--input-json", before]],
   ] as Array<[string, string[]]>) {
     const result = await runNodeCommand(command, args, { workspace: f.workspace });
     assert.equal(result.exitCode, 1);

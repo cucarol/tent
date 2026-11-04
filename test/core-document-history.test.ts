@@ -173,15 +173,6 @@ test("material declarations and opaque metadata retain exact Node history withou
   });
   assert.deepEqual(parseFrontmatter(changed.raw).data.provenance, provenance);
   assert.equal(parseFrontmatter(changed.raw).data.resource, "../../not-present.txt");
-  const head = await adapter.history.currentCommit();
-  await assert.rejects(
-    editNode(adapter, original.nodeId, {
-      frontmatter: { verified: provenance },
-    }),
-    /Node field verified is retired; remove it from the document/,
-  );
-  assert.equal(await adapter.readFile("A/A.md"), changed.raw);
-  assert.equal(await adapter.history.currentCommit(), head);
   adapter.readFile = readFile;
 });
 

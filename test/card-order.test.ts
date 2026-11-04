@@ -5,7 +5,6 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { createHash } from "node:crypto";
 import { cardOrderKey } from "../src/core/base/card-order.js";
-import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import {
   createCardDocument,
   takeCardDocument,
@@ -52,7 +51,7 @@ test("Card queue keys order by publication time, then by id", () => {
   assert.deepEqual([...keys].sort(), keys);
 });
 
-test("each Role's queue follows publication time and a retired order field is rejected", async (t) => {
+test("each Role's queue follows publication time", async (t) => {
   const { adapter, create, pending } = await fixture(t);
   const a = await create("card-a", "role-a"),
     c = await create("card-c", "role-a"),
@@ -88,16 +87,6 @@ test("each Role's queue follows publication time and a retired order field is re
   await deprecateCardDocument(adapter, c.cardId);
   assert.deepEqual(await pending("role-a"), [a.cardId, b.cardId]);
   assert.deepEqual(await waiting(), [a.cardId, b.cardId]);
-
-  const raw = await adapter.readFile(b.path);
-  const saved = parseFrontmatter(raw);
-  await adapter.writeFile(
-    b.path,
-    serializeFrontmatter({ ...saved.data, order: "2025-01-01T00:00:00.000Z|card-b" }, saved.body),
-  );
-  await assert.rejects(takeCardDocument(adapter, b.cardId, "role-a"), /order is retired/);
-  await adapter.writeFile(b.path, raw);
-  assert.equal((await takeCardDocument(adapter, b.cardId, "role-a")).state, "consumed");
 });
 
 test("watch emits the Role queue, then returns in return-time order", async (t) => {

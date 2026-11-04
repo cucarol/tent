@@ -227,14 +227,7 @@ test("Card creation keeps path and URI source addresses and rejects ones that na
   await adapter.remove(rolePath);
   assert.equal(await adapter.exists(note), false);
   await adapter.writeFile("attachments/ordinary.md", "ordinary bytes");
-  const invalid: MaterialSource[] = [
-    ...sources,
-    { resource: "/attachments/ordinary.md" },
-    {
-      resource: "/A/Moved/Moved.md",
-      version: { commit: "0".repeat(64), path: "A/Moved/Moved.md" },
-    },
-  ];
+  const invalid: MaterialSource[] = [...sources, { resource: "/attachments/ordinary.md" }];
   const head = await historyHead(path.join(root, ".tent"));
   for (let index = 0; index < invalid.length; index++) {
     const cardId = `card-invalid${index}`;

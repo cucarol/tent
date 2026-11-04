@@ -10,7 +10,7 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 import { deleteNode } from "../src/core/graph/ops.js";
 import { loadTent } from "../src/core/store/tree.js";
 import { nodeNotePath } from "../src/core/base/paths.js";
-import { DELETE_PENDING_PATH, executeDeleteUnlocked } from "../src/core/store/delete-recovery.js";
+import { DELETE_PENDING_PATH } from "../src/core/store/delete-recovery.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(testScratchRoot());
@@ -47,22 +47,6 @@ test("unsupported deletion plans fail without changing original bytes", async (t
   assert.equal(await adapter.readFile("cards/card-old.md"), "historical input");
   assert.equal(await adapter.readFile("card-consumptions/card-old.json"), "historical receipt");
   assert.equal(await adapter.readFile("remove/remove.md"), nodeBefore);
-});
-
-test("new deletion plans cannot introduce retired Canvas writes", async (t) => {
-  const { adapter } = await fixture(t);
-  await assert.rejects(
-    executeDeleteUnlocked(adapter, {
-      kind: "node",
-      id: "node-remove",
-      source: "remove",
-      raw: await adapter.readFile("remove/remove.md"),
-      nodeIds: ["node-remove"],
-      writes: [{ path: "canvas.json", before: null, after: "{}" }],
-    }),
-    /associated write/,
-  );
-  assert.equal(await adapter.exists(DELETE_PENDING_PATH), false);
 });
 
 for (const point of [

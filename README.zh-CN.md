@@ -40,7 +40,7 @@ Tent 是项目的上下文图谱：记下你定了什么，又做出了什么。
 
 ## 安装
 
-需要 Node.js 22.19+ 和 Git。Tent 在 Git 仓库里工作，文件夹还不是仓库时会先运行 `git init`。历史还在私有 Git 里的工作区，须先在离线副本上做[一次性迁移](docs/MIGRATION.md)。0.2.0 的工作区升级后再做两次清理：[图谱布局](docs/MIGRATION.md#map-layout-from-020)和[退役的 Node 字段](docs/MIGRATION.md#remove-retired-node-metadata)；没有可清的东西，跑了也不会改什么。
+需要 Node.js 22.19+ 和 Git。Tent 在 Git 仓库里工作，文件夹还不是仓库时会先运行 `git init`。
 
 **Claude Code：**
 

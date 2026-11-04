@@ -7,7 +7,7 @@ import { resolveOutLink, rewriteMarkdownDestinations } from "../base/links.js";
 import { resolveTargetPath } from "../base/link-target.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { parseRoleDocument } from "../store/role-document.js";
-import { completedCardPaths, parseCurrentCardDocument } from "../graph/card-document.js";
+import { completedCardPaths, parseCardDocument } from "../graph/card-document.js";
 import {
   materialLocator,
   localMaterialPath,
@@ -293,7 +293,7 @@ async function checkGraphInScope(
           let valid = true;
           try {
             if (kind === "role") parseRoleDocument(id, raw);
-            else parseCurrentCardDocument(id, raw);
+            else parseCardDocument(id, raw);
           } catch {
             valid = false;
           }
@@ -317,7 +317,7 @@ async function checkGraphInScope(
             const status = documentLifecycle(parseFrontmatter(parseRoleDocument(id, raw).raw).data);
             if (status.status !== "stable" && status.status !== "draft") retiredRoles.add(id);
           } else {
-            const card = parseCurrentCardDocument(id, raw);
+            const card = parseCardDocument(id, raw);
             if (completed.has(file)) completedDocuments.push({ path: file, raw });
             heldCards.push({ path: file, id, roles: rolesHoldingCard(card.data) });
           }

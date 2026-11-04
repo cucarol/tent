@@ -67,18 +67,6 @@ export class SqliteDocumentHistory implements DocumentHistory {
   private indexing?: Promise<DatabaseSync>;
   private repairing?: Promise<void>;
   private observer = new AsyncLocalStorage<Observer>();
-  private async hasLegacyHistory() {
-    return (
-      (await fs.access(path.join(this.systemRoot, "index.md")).then(
-        () => true,
-        () => false,
-      )) &&
-      (await fs.access(path.join(this.systemRoot, ".git/HEAD")).then(
-        () => true,
-        () => false,
-      ))
-    );
-  }
   constructor(
     readonly systemRoot: string,
     private readonly entry: CaptureMetadata["entry"] = "core",
@@ -100,11 +88,7 @@ export class SqliteDocumentHistory implements DocumentHistory {
         db.exec("PRAGMA busy_timeout=8000");
         const version = db.prepare("PRAGMA user_version").get()?.user_version;
         if (version !== 2 && !(create && version === 0))
-          throw new Error(
-            version === 1
-              ? "Tent history format 1 must be converted offline: from a Tent checkout, run node scripts/one-off/remove-node-records-history.mjs <workspaceRoot>"
-              : `Unsupported Tent SQLite history format: ${version}`,
-          );
+          throw new Error(`Unsupported Tent SQLite history format: ${version}`);
         db.exec("PRAGMA synchronous=EXTRA; PRAGMA foreign_keys=ON");
         if (create)
           db.exec(`PRAGMA journal_mode=DELETE;
@@ -204,29 +188,18 @@ export class SqliteDocumentHistory implements DocumentHistory {
   async available() {
     if (this.closed) throw new Error("Tent history connection is closed");
     if (this.availability) return this.availability;
-    const pending = scopedRead(this.availabilityScope, async () => {
-      const present = await fs.access(path.join(this.systemRoot, ".git/history.sqlite")).then(
+    const pending = scopedRead(this.availabilityScope, () =>
+      fs.access(path.join(this.systemRoot, ".git/history.sqlite")).then(
         () => true,
         () => false,
-      );
-      if (present) return true;
-      if (await this.hasLegacyHistory())
-        throw new Error(
-          "This Workspace has legacy Git history; migrate an offline copy before opening it with SQLite",
-        );
-      return false;
-    });
+      ),
+    );
     this.availability = pending;
-    try {
-      const present = await pending;
-      // Another process may initialize an unopened workspace. A negative result
-      // belongs to this read request only, while an existing history is stable.
-      if (!present && this.availability === pending) this.availability = undefined;
-      return present;
-    } catch (error) {
-      if (this.availability === pending) this.availability = undefined;
-      throw error;
-    }
+    const present = await pending;
+    // Another process may initialize an unopened workspace. A negative result
+    // belongs to this read request only, while an existing history is stable.
+    if (!present && this.availability === pending) this.availability = undefined;
+    return present;
   }
 
   async currentCommit(): Promise<string | null> {

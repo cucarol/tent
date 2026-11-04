@@ -8,7 +8,6 @@
   },
   "files": [
     "cli.mjs",
-    "migrate-history.mjs",
     "manifest.json",
     "skills/",
     "skill-resources/",
@@ -16,7 +15,6 @@
     "docs/upstream/okf-SPEC.md",
     "docs/upstream/okf-LICENSE.md",
     "docs/SPEC.md",
-    "docs/MIGRATION.md",
     "docs/PLUGIN.md",
     "README.md",
     "README.zh-CN.md",

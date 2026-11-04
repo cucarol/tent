@@ -98,15 +98,6 @@ export function rootBundleOptions(buildRoot) {
         outfile: path.join(absoluteRoot, "cli.mjs"),
       },
     },
-    {
-      label: "history-migration",
-      artifact: "migrate-history.mjs",
-      options: {
-        ...shared,
-        entryPoints: ["src/cli/migrate-history.ts"],
-        outfile: path.join(absoluteRoot, "migrate-history.mjs"),
-      },
-    },
   ];
 }
 
@@ -117,7 +108,6 @@ export async function buildPluginRuntime(buildRoot, outputRoot) {
   for (const [artifact, entry] of [
     ["cli", "src/cli/tent.ts"],
     ["turn-hook", "src/cli/turn-hook-entry.ts"],
-    ["migrate-history", "src/cli/migrate-history.ts"],
   ]) {
     const result = await esbuild.build({
       ...canonicalBuildOptions(buildRoot),

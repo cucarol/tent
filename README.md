@@ -40,7 +40,7 @@ Tent maps code, prose, data and assets alike. Parts follow folders, file names a
 
 ## Install
 
-You need Node.js 22.19+ and Git. Tent works inside a Git repository and runs `git init` in a folder that is not one yet. Workspaces still on private-Git history need the one-shot [migration](docs/MIGRATION.md) on an offline copy. Workspaces from 0.2.0 then run two cleanups after upgrading, for the [map layout](docs/MIGRATION.md#map-layout-from-020) and for [retired Node metadata](docs/MIGRATION.md#remove-retired-node-metadata); where there is nothing to remove they change nothing.
+You need Node.js 22.19+ and Git. Tent works inside a Git repository and runs `git init` in a folder that is not one yet.
 
 **Claude Code:**
 

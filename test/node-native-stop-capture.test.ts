@@ -108,11 +108,6 @@ for (const [label, change, reason] of [
     (raw: string) => raw.replace("description: Native Node", "description: 12"),
     /description must be a string/,
   ],
-  [
-    "retired field",
-    (raw: string) => raw.replace("type: prompt", "type: prompt\nsync: old"),
-    /Node field sync is retired/,
-  ],
   ["YAML", (raw: string) => raw.replace("type: prompt", "type: ["), /frontmatter/i],
 ] as const) {
   test(`invalid native new ${label} stays unretained and keeps its original bytes`, async (t) => {

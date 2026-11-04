@@ -1,19 +1,13 @@
-import { testScratchRoot } from "./scratch.js";
-import { removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { test } from "node:test";
 import { runHookCommand } from "../src/cli/hook.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const scratch = testScratchRoot();
-const run = promisify(execFile);
 
-test("both native packages register only Stop and the public CLI rejects retired Hook entry points", async () => {
+test("both native packages register only Stop", async () => {
   for (const host of ["codex", "claude-code"]) {
     const hooks = JSON.parse(
       await fs.readFile(path.join(root, "plugins", host, "tent/hooks/hooks.json"), "utf8"),
@@ -21,90 +15,8 @@ test("both native packages register only Stop and the public CLI rejects retired
     assert.deepEqual(Object.keys(hooks), ["Stop"]);
     assert.equal(hooks.Stop[0].hooks[0].type, "command");
     assert.match(hooks.Stop[0].hooks[0].command, /-- stop$/);
-    assert.doesNotMatch(hooks.Stop[0].hooks[0].command, /start|prompt|tool/);
   }
   const help = await runHookCommand("help", [], { packageRoot: root });
   assert.equal(help.exitCode, 0);
   assert.match(help.stdout, /tent hook stop --host codex\|claude-code/);
-  assert.doesNotMatch(help.stdout, /hook start/);
-  for (const sub of ["start", "tool", "prompt"]) {
-    const result = await runHookCommand(sub, [], { packageRoot: root, stdin: "{}" });
-    assert.equal(result.exitCode, 1);
-    assert.equal(result.stdout, "{}\n");
-    assert.match(result.stderr, new RegExp(`Unknown command: tent hook ${sub}`));
-  }
-});
-
-test("retired hook installer always rejects and leaves existing host configuration unchanged", async () => {
-  await fs.mkdir(scratch, { recursive: true });
-  const fixture = await fs.mkdtemp(path.join(scratch, "agent-hooks-help-"));
-  const home = path.join(fixture, "home");
-  const config = path.join(home, ".codex", "hooks.json");
-  const original =
-    JSON.stringify(
-      {
-        hooks: {
-          SessionStart: [
-            {
-              hooks: [
-                { type: "command", command: "custom-hook" },
-                {
-                  type: "command",
-                  command: "tent session session-start --host codex",
-                  timeout: 60,
-                  statusMessage: "tent-managed-hook",
-                },
-              ],
-            },
-          ],
-          SessionEnd: [
-            {
-              hooks: [
-                {
-                  type: "command",
-                  command: "tent session session-end --host codex",
-                  timeout: 3,
-                  statusMessage: "tent-managed-hook",
-                },
-              ],
-            },
-          ],
-        },
-      },
-      null,
-      2,
-    ) + "\n";
-  try {
-    await fs.mkdir(path.dirname(config), { recursive: true });
-    await fs.writeFile(config, original);
-    const cli = async (args: string[]) =>
-      run(
-        process.execPath,
-        ["--import", "tsx", "src/cli/tent.ts", "agent-hooks", ...args, "--home", home],
-        {
-          cwd: root,
-          windowsHide: true,
-          timeout: 30_000,
-        },
-      );
-    for (const args of [
-      ["remove", "--help"],
-      ["install", "-h"],
-    ]) {
-      await assert.rejects(cli(args), /Unknown command: tent agent-hooks/);
-      assert.equal(await fs.readFile(config, "utf8"), original);
-    }
-    for (const args of [
-      ["remove", "--not-a-flag"],
-      ["install", "--agent"],
-    ]) {
-      await assert.rejects(cli(args));
-      assert.equal(await fs.readFile(config, "utf8"), original);
-    }
-    assert.deepEqual(await fs.readdir(path.dirname(config)), ["hooks.json"]);
-  } finally {
-    const relative = path.relative(scratch, fixture);
-    assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
-    await removeTestFixture(fixture, { recursive: true, force: true });
-  }
 });

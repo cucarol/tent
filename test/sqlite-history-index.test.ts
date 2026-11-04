@@ -256,7 +256,7 @@ test("damaged projection values rebuild, but damaged authoritative content retai
   await assert.rejects(history.nodeVersions("node-a"), /Damaged SQLite content: [a-f0-9]{64}/);
 });
 
-test("initialization refreshes earlier negative availability without weakening legacy or closed errors", async (t) => {
+test("initialization refreshes earlier negative availability and a closed connection still fails", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "history-availability-"));
   const reader = new SqliteDocumentHistory(root);
   t.after(async () => {
@@ -268,24 +268,8 @@ test("initialization refreshes earlier negative availability without weakening l
   await initializer.initialize();
   await initializer.close();
   assert.equal(await reader.available(), true);
-  await fs.writeFile(path.join(root, "index.md"), "legacy marker");
-  await fs.writeFile(path.join(root, ".git/HEAD"), "legacy ref");
-  const sqlite = new SqliteDocumentHistory(root);
-  assert.equal(
-    await sqlite.currentCommit(),
-    null,
-    "an existing SQLite database is not legacy-probed",
-  );
-  await sqlite.close();
   await reader.close();
   await assert.rejects(reader.available(), /connection is closed/);
-  await fs.rm(path.join(root, ".git/history.sqlite"));
-  const legacy = new SqliteDocumentHistory(root);
-  try {
-    await assert.rejects(legacy.available(), /legacy Git history/);
-  } finally {
-    await legacy.close();
-  }
 });
 
 test("an existing unopened adapter sees another process initialize history at the next request", async (t) => {

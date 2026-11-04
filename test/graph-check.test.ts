@@ -637,35 +637,6 @@ test("Card sources to moved and deleted documents are left to take without write
   assert.deepEqual(await bytes(root), before);
 });
 
-test("live Cards with a retired source version are invalid documents", async (t) => {
-  const { workspace, adapter, write, fileExists } = await fixture(t);
-  await write("roles/role-a.md", { id: "role-a", type: "role" });
-  await write(
-    "cards/card-a.md",
-    {
-      id: "card-a",
-      type: "card",
-      schemaVersion: 3,
-      state: "pending",
-      target: "role-a",
-      sources: [
-        {
-          resource: "../Missing/Missing.md",
-          version: { commit: "a".repeat(64), path: "Other/Other.md" },
-        },
-      ],
-    },
-    "prompt",
-  );
-  const result = await checkGraph(adapter, workspace, fileExists);
-  assert.deepEqual(result.errors, [
-    {
-      path: "cards/card-a.md",
-      reason: "Card source versions are retired; remove version from each source",
-    },
-  ]);
-});
-
 test("file inspection failures are diagnostics, not missing file findings", async (t) => {
   const { workspace, write, adapter } = await fixture(t);
   await write(

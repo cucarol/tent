@@ -13,7 +13,6 @@ import { initializeFixtureRepository } from "./scratch.js";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const cliSource = path.join(repoRoot, "src", "cli", "tent.ts");
-const cliBuilt = path.join(repoRoot, "cli.mjs");
 const tsxImport = import.meta.resolve("tsx");
 const scratchRoot = testScratchRoot();
 const temporaryRoots: string[] = [];
@@ -141,55 +140,11 @@ test("tent new adopts an existing project without touching project files", async
   assert.match(repeated.stderr, /already a Tent/);
 });
 
-test("removed legacy and migration commands are not part of the CLI", async () => {
-  const removed = [
-    "migrate",
-    "import",
-    "dispatch",
-    "task-ack",
-    "task-cancel",
-    "new-box",
-    "tag",
-    "untag",
-    "tag-new",
-    "tag-rm",
-    "fork",
-    "clean-temp",
-    "okf-sync",
-    "session",
-    "context",
-    "tools",
-    "agent-hooks",
-    "migration",
-    "user",
-  ];
-  for (const command of removed) {
-    const result = await run(process.execPath, [cliBuilt, command], repoRoot);
-    assert.notEqual(result.code, 0, `${command} must not remain callable`);
-    assert.match(result.stderr, new RegExp(`Unknown command: tent ${command}`));
-  }
-});
-
-test("retired skill-install command cannot change a user skill directory", async () => {
-  const target = await temporaryDirectory("tent-retired-skill-install-");
-  const userSkill = path.join(target, "tent-card", "SKILL.md");
-  await fs.mkdir(path.dirname(userSkill), { recursive: true });
-  await fs.writeFile(userSkill, "# user skill\n");
-  const result = await runCli(repoRoot, "skill-install", "--dir", target, "--force");
-  assert.notEqual(result.code, 0);
-  assert.match(result.stderr, /Unknown command: tent skill-install/);
-  assert.equal(await fs.readFile(userSkill, "utf8"), "# user skill\n");
-});
-
-test("CLI help and version expose only the current surface", async () => {
+test("CLI help and version", async () => {
   const help = await runCliOk(repoRoot, "--help");
   assert.match(help.stdout, /tent node/);
   assert.match(help.stdout, /new <path>/);
   assert.match(help.stdout, /with its own SQLite history/);
-  assert.doesNotMatch(help.stdout, /--repair-existing/);
-  assert.doesNotMatch(help.stdout, /init-map|approved-digest/);
-  assert.doesNotMatch(help.stdout, /skill-install/);
-  assert.doesNotMatch(help.stdout, /tent migrate\b|new-box|task-ack|clean-temp|--vault/);
 
   const pkg = JSON.parse(await fs.readFile(path.join(repoRoot, "package.json"), "utf8"));
   assert.ok(

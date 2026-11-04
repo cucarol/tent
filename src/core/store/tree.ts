@@ -1,4 +1,3 @@
-import { assertNodeFields } from "../base/node-fields.js";
 import { materialFields } from "../base/material.js";
 import { documentLifecycle } from "../base/document-status.js";
 // 加载帐 → Node 树 → 文档生命周期与 identity validity。
@@ -18,7 +17,6 @@ import {
 } from "../base/paths.js";
 import { isNodeId } from "../base/id.js";
 import { contentEtag } from "../base/etag.js";
-import { assertCurrentLayout } from "./retired-layout.js";
 
 export { nodeNotePath } from "../base/paths.js";
 
@@ -37,10 +35,6 @@ export async function loadTent(fs: FsAdapter): Promise<LoadedTent> {
   const byPath = new Map<string, Node>();
   const roots: Node[] = [];
   const top = await fs.listDir("");
-  await assertCurrentLayout(
-    fs,
-    top.filter((entry) => entry.isDir).map((entry) => entry.name),
-  );
   const pending: Array<{ path: string; parent: Node | null; target: Node[] }> = top
     .filter(
       (entry) => entry.isDir && !isOperationalPath(entry.name) && !isSystemNoteName(entry.name),
@@ -187,7 +181,6 @@ export function canonicalIdentityError(data: Record<string, unknown>): string | 
     return `Invalid Node id: ${typeof data.id === "string" && data.id ? data.id : "<missing>"}; canonical Node ids must start with node-.`;
   }
   try {
-    assertNodeFields(data);
     normalizeOptionalNodeType(data.type);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
@@ -220,8 +213,7 @@ function normalizeIdentity(data: Record<string, unknown>): {
     ...(type ? { type } : {}),
   } as NodeFrontmatter;
   if (!type) delete fm.type;
-  // Unknown frontmatter remains opaque user metadata. Runtime never translates
-  // retired collaboration keys into canonical Node or Card state.
+  // Unknown frontmatter remains opaque user metadata.
   const tags = normalizeNodeTags(data.tags);
   if (tags.length > 0) fm.tags = tags;
   else delete fm.tags;

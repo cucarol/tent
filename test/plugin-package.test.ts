@@ -124,7 +124,6 @@ test("both host packages carry the same common payload and separate native shell
   const commonFiles = [
     "cli.mjs",
     "turn-hook.mjs",
-    "migrate-history.mjs",
     "package.json",
     "THIRD_PARTY_NOTICES.txt",
     "LICENSE",

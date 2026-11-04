@@ -36,7 +36,7 @@ Tent now works at the two ends of an agent's turn. Before a change, `tent load` 
 ### Storage
 
 - History moves from a private Git repository to `.tent/.git/history.sqlite`. An interrupted save recovers as the complete old or new state on the next Tent command.
-- A workspace from 0.2.0 is converted once before 0.2.1 opens it; see [Migration](MIGRATION.md).
+- A workspace from 0.2.0 is not carried over. Move its `.tent` aside and set Tent up again.
 
 ### Plugin
 

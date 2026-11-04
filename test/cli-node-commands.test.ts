@@ -294,12 +294,12 @@ test("history --version reads an unchanged Node in another event and verifies it
   assert.match(wrong.stderr, /belongs to another Node/);
 });
 
-test("history --version permits retired fields in historical raw but rejects invalid ids and types", async (t) => {
+test("history --version returns exact bytes and rejects invalid ids and types", async (t) => {
   const { root, tent, cli } = await fixture(t);
-  const created = (await cli("create", ["Legacy", "--id", "node-legacy", "--type", "prompt"])).node;
+  const created = (await cli("create", ["Old", "--id", "node-old", "--type", "prompt"])).node;
   const historical =
-    "---\r\nid: node-legacy\r\ntype: prompt\r\nverified: true\r\nsha256: old\r\nsources:\r\n  - resource: old input\r\n    sha256: retired\r\n---\r\nHistorical bytes  \r\n\r\n";
-  const file = "Legacy/Legacy.md";
+    "---\r\nid: node-old\r\ntype: prompt\r\ncustom: true\r\n---\r\nHistorical bytes  \r\n\r\n";
+  const file = "Old/Old.md";
   const saved = await tent.history.captureUnlocked([{ path: file, raw: historical }], {
     operation: "test.old-document",
   });
@@ -310,7 +310,7 @@ test("history --version permits retired fields in historical raw but rejects inv
   for (const [raw, diagnostic] of [
     [historical.replace("type: prompt", "type: custom"), /type must be goal, prompt or output/],
     [historical.replace("type: prompt\r\n", ""), /type must be goal, prompt or output/],
-    [historical.replace("id: node-legacy", "id: legacy"), /canonical Node id/],
+    [historical.replace("id: node-old", "id: old"), /canonical Node id/],
   ] as const) {
     const version = (
       await tent.history.captureUnlocked([{ path: file, raw }], {
@@ -328,10 +328,4 @@ test("history --version permits retired fields in historical raw but rejects inv
     assert.equal(rejected.stdout, "");
     assert.match(rejected.stderr, diagnostic);
   }
-  await fs.writeFile(path.join(root, created.path), historical);
-  const { loadNodeCatalog } = await import("../src/core/graph/node-catalog.js");
-  assert.match(
-    (await loadNodeCatalog(tent)).tree.byPath.get("Legacy")!.invalidReason!,
-    /Node field .* is retired/,
-  );
 });

@@ -88,12 +88,6 @@ export function parseCardDocument(id: string, raw: string): CardDocument {
   }
   return cardFromParsed(id, raw, parsed);
 }
-/** A live Card file; retired fields stay readable only in retained versions. */
-export function parseCurrentCardDocument(id: string, raw: string): CardDocument {
-  const card = parseCardDocument(id, raw);
-  assertCurrentCardFields(card.data);
-  return card;
-}
 function cardFromParsed(
   id: string,
   raw: string,
@@ -123,7 +117,8 @@ function validateCardHeader(id: string, data: Record<string, unknown>) {
     invalid("A Card cannot have draft status; decide the task before publishing it");
   if (data.title !== undefined && (typeof data.title !== "string" || !data.title.trim()))
     invalid("Card title must be nonempty text");
-  if (data.target !== undefined && (typeof data.target !== "string" || !isRoleId(data.target)))
+  if (data.target === undefined) invalid("Card needs a target Role");
+  if (typeof data.target !== "string" || !isRoleId(data.target))
     invalid("Card target must be an explicit Role id");
   if (
     data.returnTo !== undefined &&
@@ -139,7 +134,7 @@ function validateCardHeader(id: string, data: Record<string, unknown>) {
     (data.state === "pending" || typeof data.receivedBy !== "string" || !isRoleId(data.receivedBy))
   )
     invalid("Card state and receivedBy disagree");
-  if (data.state !== "pending" && data.target !== undefined && data.receivedBy !== data.target)
+  if (data.state !== "pending" && data.receivedBy !== data.target)
     invalid("Targeted Card must be received with its Role");
   if (
     data.returnTo !== undefined &&
@@ -153,21 +148,9 @@ function validateCardHeader(id: string, data: Record<string, unknown>) {
     validateResult(data.result);
   } else if (data.result !== undefined) invalid("Only returned or closed Cards have a result");
 }
-/** Retired fields stay readable in retained versions but not in the current document. */
-function assertCurrentCardFields(data: Record<string, unknown>) {
-  if (data.target === undefined) invalid("Card needs a target Role");
-  if (data.order !== undefined) invalid("Card field order is retired; remove it from the document");
-  if (
-    Array.isArray(data.sources) &&
-    data.sources.some((source) => source && typeof source === "object" && "version" in source)
-  )
-    invalid("Card source versions are retired; remove version from each source");
-}
 function inputOf(document: CardDocument) {
-  const { state, receivedBy, result, status, target, order, sources, ...fields } = document.data;
-  // Earlier publications pinned source versions; a Card's input is the addresses alone.
-  const addresses = sources.map(({ version, ...source }) => source);
-  return { fields: { ...fields, sources: addresses }, body: document.body };
+  const { state, receivedBy, result, status, target, ...fields } = document.data;
+  return { fields, body: document.body };
 }
 function stateOf(document: CardDocument) {
   return {
@@ -348,7 +331,7 @@ async function checkedCard(fs: FsAdapter, id: string, action?: CardAction) {
   const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
     await fs.readBinary(cardPath(id)),
   );
-  const current = parseCurrentCardDocument(id, raw),
+  const current = parseCardDocument(id, raw),
     history = await historyOf(fs);
   const versions = await history.pathVersions(current.path);
   if (!versions.first || !versions.latest)
@@ -437,7 +420,7 @@ export function createCardDocument(
         state: "pending",
       };
       const prompt = await canonicalDocumentReferences(fs, path, fields, input.prompt);
-      const card = parseCurrentCardDocument(id, serializeFrontmatter(fields, prompt));
+      const card = parseCardDocument(id, serializeFrontmatter(fields, prompt));
       requireInput(card);
       if (card.data.target) await roleAvailable(fs, card.data.target);
       if (card.data.returnTo) await roleAvailable(fs, card.data.returnTo);
@@ -851,7 +834,6 @@ export async function listCardDocumentHeaders(
           uncaptured = isUncaptured?.(path, observed ?? raw) ?? false;
           const data = parseFrontmatter(raw).data;
           validateCardHeader(id, data);
-          assertCurrentCardFields(data);
           if (options.unfinishedOnly && completedCard(data)) continue;
           const state = data.state;
           if (!options.includeDeprecated && documentLifecycle(data).status === "deprecated")

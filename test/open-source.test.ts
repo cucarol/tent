@@ -80,55 +80,10 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   for (const keyword of ["cli", "okf", "coding-agents"]) {
     assert.ok(pkg.keywords.includes(keyword), `npm keywords 包含 ${keyword}`);
   }
-  assert.equal(pkg.keywords.includes("obsidian"), false, "Obsidian plugin keywords are retired");
-  assert.equal(
-    pkg.keywords.includes("obsidian-plugin"),
-    false,
-    "Obsidian plugin keywords are retired",
-  );
-  assert.equal(pkg.devDependencies?.obsidian, undefined, "obsidian devDependency is retired");
-  assert.equal(pkg.scripts?.["build:plugin"], undefined, "build:plugin script is retired");
-  assert.equal(pkg.files.includes("main.js"), false, "npm package no longer ships plugin main.js");
-  assert.equal(
-    await exists(path.join(repoRoot, "main.js")),
-    false,
-    "retired root plugin bundle is deleted",
-  );
-  assert.equal(
-    pkg.files.includes("styles.css"),
-    false,
-    "npm package no longer ships plugin styles.css",
-  );
-  assert.equal(
-    pkg.files.includes("versions.json"),
-    false,
-    "npm package no longer ships Obsidian versions.json",
-  );
   assert.match(releaseWorkflow, /npm pack --ignore-scripts/);
-  assert.doesNotMatch(releaseWorkflow, /npm run desktop:package|release\/\*-portable\.exe/);
-  assert.doesNotMatch(releaseWorkflow, /styles\.css|versions\.json/);
-  assert.equal(
-    await exists(path.join(repoRoot, "src", "plugin")),
-    false,
-    "src/plugin production source is retired",
-  );
-  assert.equal(
-    await exists(path.join(repoRoot, "versions.json")),
-    false,
-    "versions.json is retired",
-  );
-  assert.equal(
-    await exists(path.join(repoRoot, "test", "plugin.test.ts")),
-    false,
-    "plugin-only tests are retired",
-  );
   assert.ok(pkg.files.includes("skills/"), "npm 发布包包含 bundled skills/");
   assert.ok(pkg.files.includes("cli.mjs"), "npm 发布包包含 CLI bundle");
-  assert.equal(pkg.files.includes("service.mjs"), false, "Service bundle is retired");
-  assert.equal(pkg.files.includes("mcp.mjs"), false, "npm 发布包不包含 Tent MCP bundle");
   assert.equal(await exists(path.join(repoRoot, "LICENSE")), true);
-  assert.equal(await exists(path.join(repoRoot, "skills", "tent-agent", "SKILL.md")), false);
-  assert.equal(await exists(path.join(repoRoot, "skills", "tent-task", "SKILL.md")), false);
   const skillDirectories = (
     await fs.readdir(path.join(repoRoot, "skills"), { withFileTypes: true })
   ).filter((entry) => entry.isDirectory());
@@ -145,43 +100,7 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
     "tent-role",
     "tent-save",
   ]);
-  assert.equal(
-    await exists(path.join(repoRoot, "skill-resources", "references", "node-maintenance.md")),
-    false,
-  );
-  assert.equal(await exists(path.join(repoRoot, "skills", "tent-init", "vendor")), false);
-  assert.equal(await exists(path.join(repoRoot, "src", "tent-init-map")), false);
-  assert.equal(await exists(path.join(repoRoot, "skills", "tent-genesis", "SKILL.md")), false);
-  assert.equal(await exists(path.join(repoRoot, "src", "service", "provider-catalog.ts")), false);
-  for (const retiredProvider of ["grok", "codex", "claude", "opencode", "copilot", "pi"]) {
-    assert.equal(
-      await exists(path.join(repoRoot, "src", "adapters", `${retiredProvider}-acp`)),
-      false,
-      `${retiredProvider}-acp provider source is retired`,
-    );
-  }
-  assert.equal(await exists(path.join(repoRoot, "src", "adapters", "acp", "index.ts")), false);
-  assert.equal(
-    await exists(path.join(repoRoot, "src", "service", "tool-approval-store.ts")),
-    false,
-  );
-  for (const retiredTest of [
-    "acp-assistant-report.test.ts",
-    "acp-auth-methods.test.ts",
-    "grok-acp-adapter.test.ts",
-    "grok-acp-live.e2e.ts",
-    "mainstream-acp-adapters.test.ts",
-    "mainstream-acp-cli-live.e2e.ts",
-  ]) {
-    assert.equal(
-      await exists(path.join(repoRoot, "test", retiredTest)),
-      false,
-      `${retiredTest} is retired`,
-    );
-  }
-  assert.equal(pkg.scripts?.["test:grok-e2e"], undefined);
-  assert.equal(pkg.scripts?.["test:foreground-e2e"], undefined);
-  // Both languages carry the three-type Node model; 0.2.0 names the migrated format.
+  // Both languages carry the three-type Node model.
   assert.match(readme, /`type` is exactly `goal`, `prompt` or `output`/);
   assert.match(readmeZh, /`type` 只能是 `goal`、`prompt` 或 `output`/);
   for (const text of [readme, readmeZh]) {
@@ -189,13 +108,6 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
     assert.match(text, /codex plugin add tent@tent-local/);
     assert.match(text, /`tags`/);
     assert.match(text, /`decision`/);
-    assert.doesNotMatch(text, /primary\[-secondary\]/, "type suffixes are retired");
-    assert.doesNotMatch(text, /`(?:goal|prompt|output)-[a-z]+`/, "type suffixes are retired");
-    assert.doesNotMatch(
-      text.replace(/\b0\.2\.0\b/g, ""),
-      /\b\d+\.\d+\.\d+\b/,
-      "only the migrated workspace format names a version in README",
-    );
     assert.match(text, /https:\/\/github\.com\/cucarol\/tent\/releases\/latest/);
   }
   const installation = await fs.readFile(path.join(repoRoot, "docs/PLUGIN.md"), "utf8");
@@ -205,8 +117,6 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   assert.match(installation, /claude plugin marketplace add "<交付根目录的绝对路径>\/claude-code"/);
   assert.ok(pkg.files.includes("README.zh-CN.md"), "npm package carries the linked Chinese README");
   assert.match(spec, /Node, Role and Card are the only concepts/);
-  assert.match(spec, /Retired commands and fields are removed, not aliased/);
-  assert.doesNotMatch(spec, /temp\/<role>\/reports\//);
   // Installation metadata and resources are contracts; prose remains editable.
   const { parseFrontmatter } = await import("../src/core/base/frontmatter.js");
   for (const name of skillEntrypoints.filter((name): name is string => name !== undefined)) {
@@ -224,38 +134,6 @@ test("开源可移植性:发布源文件不含开发者机器绝对路径", asyn
   }
   assert.ok(inputSkill.trim(), "Node guidance must be included in its Skill");
   assert.ok(recipients.trim(), "Role command resource must be included");
-  const canonicalPublicContracts = [spec, inputSkill, recipients].join("\n");
-  for (const retired of [
-    /agent:<agentId>/i,
-    /AgentDefinition/i,
-    /LaunchProfile/i,
-    /AgentProfile/i,
-    /agent-profiles/i,
-    /standing roster/i,
-    /roster authorization/i,
-    /out-of-roster/i,
-    /authorized Agent roster/i,
-    /\basSub\b/i,
-    /concept\.(changed|removed)/i,
-    /\bboxId\b/i,
-    /\bUserAsk\b/i,
-    /task\.askUser/i,
-    /Settings route/i,
-    /route:<routeId>/i,
-    /\bdeliveryId\b/i,
-    /task\.deliver/i,
-    /\bparentActor\b/i,
-    /\bactiveDeliveryId\b/i,
-    /\blastReturn\b/i,
-    /\bTaskResult\b/i,
-    /\bWorkspaceLane\b/i,
-    /\bcurrentResultId\b/i,
-    /\bacceptMode\b/i,
-    /task\.(?:submit|accept|reject|cancel|bindOutput)/i,
-    /\bProposal\b|proposal\.(?:list|submit|resolve)|tent propose/,
-  ]) {
-    assert.doesNotMatch(canonicalPublicContracts, retired);
-  }
 });
 
 test("docs/skill drift: current Node/Role/Card protocol and canonical type", async () => {
@@ -263,24 +141,7 @@ test("docs/skill drift: current Node/Role/Card protocol and canonical type", asy
 
   // SPEC: canonical Node type, immutable Card, and optional Role.
   assert.match(spec, /`type` is required and is exactly `goal`, `prompt` or `output`/);
-  assert.doesNotMatch(spec, /NODE_TYPE_PRESETS|primary\[-secondary\]/);
   assert.match(spec, /Node, Role and Card are the only concepts/);
-  assert.doesNotMatch(spec, /TaskResult|WorkspaceLane|currentResultId|acceptMode|task\.bindOutput/);
-  assert.doesNotMatch(spec, /Base type definitions may set optional `workspacePointer: true`/);
-  assert.doesNotMatch(spec, /Built-in `output` enables the flag/);
-  assert.doesNotMatch(spec, /multiple workspace pointer nodes/);
-  assert.doesNotMatch(spec, /workspacePointer/);
-
-  // Obsidian plugin production source is retired; no plugin UI to reintroduce workspacePointer.
-  assert.equal(await exists(path.join(repoRoot, "src", "plugin")), false);
-
-  // Retired direct-write commands are removed from the public CLI surface.
-  const tentCli = await fs.readFile(path.join(repoRoot, "src", "cli", "tent.ts"), "utf8");
-  assert.doesNotMatch(tentCli, /requires a workspace pointer/);
-  assert.doesNotMatch(tentCli, /has no workspace pointer/);
-  assert.doesNotMatch(tentCli, /require-check requires a workspace root/);
-  assert.doesNotMatch(tentCli, /case "(?:complete|stamp|grant-readable)"/);
-  assert.doesNotMatch(tentCli, /\bcomplete\|stamp\b|\bgrant-readable\b/);
 });
 
 test("OKF 0.2 validates YAML and reserved documents separately from link integrity", async (t) => {

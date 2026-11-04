@@ -82,12 +82,12 @@ npm 包 `vibe-tent` 是单独的 CLI 包，用 `npm install -g vibe-tent` 安装
 
 ## 按需入口
 
-| 工作                         | Skill     | CLI  |
-| ---------------------------- | --------- | ---- |
-| 新建空 Tent 和本地历史       | tent-init | new  |
-| 动手前取相关 Node            | tent-load | load |
-| 记下定下的东西、按来源校正 Node | tent-save | node |
-| 按 Role 工作、用 Card 交接   | tent-role | role、card |
+| 工作                            | Skill     | CLI        |
+| ------------------------------- | --------- | ---------- |
+| 新建空 Tent 和本地历史          | tent-init | new        |
+| 动手前取相关 Node               | tent-load | load       |
+| 记下定下的东西、按来源校正 Node | tent-save | node       |
+| 按 Role 工作、用 Card 交接      | tent-role | role、card |
 
 普通工作不要求创建 Role 或 Card。Role 可以独立建立；没有 Role 的 Session 也可接收无 target 的 Card，有 target 时必须指定对应 Role。`new` 只建立空工作区；空图用 `workspace scan --draft <新文件>` 准备部分草稿，Agent 调整名字、边界并写正文，再用 `node create --draft <文件>` 保存。草稿保留 ref、父子关系和中断后的重试，未写正文的条目不进图谱。已有任何 Node 时，scan 只报告地图问题，不再出草稿；干净文本静默，有问题退出码 1。`--json` 直接返回 report 和 parts 树，树节点为 name、path、files、children。详见 [SPEC §7](SPEC.md#7-mapping-a-project)。
 
@@ -107,8 +107,6 @@ Node、Role、Card 命令直接调用 Core，不登记宿主 Session。含 `.ten
 ## Node 的维护者说明
 
 Node 是 `.tent` 下的 Markdown。`type` 必填 `goal`、`prompt` 或 `output`，各自记一种来源：goal 记用户现在要做成什么，prompt 记为此给的东西，output 记实际产出。三者覆盖、读写相同，不决定目标完成；区别只在 `tent load` 经 goal 取 prompt，Stop 点名改过的 goal，以及 `workspace scan` 只把 goal 当作项目的部分。`description` 是可选的一句话字符串，不参与覆盖；非字符串由 `workspace check` 报为文档问题。tags 表达形态和主题，与覆盖无关。
-
-`verified` 已退休，`workspace check` 会报告，不能用来确认 Node 或改变覆盖。一次性[元数据清理](MIGRATION.md#remove-retired-node-metadata)与 source 的 `track` 一并删除它。
 
 正文面向没有本次对话的读者，记录已确认且以后有用的事实、约束、决定及依据。每个可独立维护的事实各占一个 Node；同时变化的事实可以放在一起。链接材料和其他 Node，避免复述。先读现有文件再编辑，需要查找时用宿主的搜索工具。
 

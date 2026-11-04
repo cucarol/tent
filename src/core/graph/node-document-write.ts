@@ -1,4 +1,3 @@
-import { assertNodeFields } from "../base/node-fields.js";
 import { isDeepStrictEqual } from "node:util";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { MaterialAddressError, validateMaterialAddresses } from "../base/material.js";
@@ -24,19 +23,10 @@ export function assertNodeEdit(nodePath: string, previousRaw: string, raw: strin
   // The Node id is the document identity and cannot be changed here.
   if (!isDeepStrictEqual(next.data.id, previous.data.id))
     throw new NodeWriteError("INVALID_EDIT", "A Node's id cannot change.");
-  validateNodeMetadata(next.data);
   assertStatusEdit(previous.data, next.data);
   normalizeOptionalNodeType(next.data.type);
   if (next.data.tags !== undefined) normalizeTagList(next.data.tags);
   validateNodeMaterials(next.data, nodePath, previous.data);
-}
-
-function validateNodeMetadata(next: Record<string, unknown>) {
-  try {
-    assertNodeFields(next);
-  } catch (error) {
-    throw new NodeWriteError("INVALID_EDIT", String(error));
-  }
 }
 
 function validateNodeMaterials(

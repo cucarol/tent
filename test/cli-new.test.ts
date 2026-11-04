@@ -23,24 +23,6 @@ const run = (...args: string[]) =>
     },
   });
 
-test("new rejects retired repair flags before changing an existing Tent", async (t) => {
-  const scratch = path.resolve(testScratchRoot());
-  await fs.mkdir(scratch, { recursive: true });
-  const workspace = await fs.mkdtemp(path.join(scratch, "new-cli-"));
-  t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
-  await fs.mkdir(path.join(workspace, ".tent"));
-  await fs.writeFile(path.join(workspace, ".tent/existing.md"), "Keep this context");
-  await assert.rejects(run("new", workspace, "--repair-existing"), /Unknown option/);
-  assert.deepEqual(await fs.readdir(path.join(workspace, ".tent")), ["existing.md"]);
-  assert.equal(
-    await fs.readFile(path.join(workspace, ".tent/existing.md"), "utf8"),
-    "Keep this context",
-  );
-  const { stdout } = await run("--help");
-  assert.match(stdout, /with its own SQLite history/);
-  assert.doesNotMatch(stdout, /--repair-existing/);
-});
-
 test("existing Git ignore entries and structural markers remain valid", async (t) => {
   const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
@@ -54,12 +36,6 @@ test("existing Git ignore entries and structural markers remain valid", async (t
   assert.equal(isValidTentIndexMarker(tentIndexMarker()), true);
   assert.equal(isValidTentIndexMarker("# bare index\n"), true);
   assert.equal(isValidTentIndexMarker("---\ntype: role\n---\n"), false);
-});
-
-test("retired commands remain unavailable", async () => {
-  await assert.rejects(run("agent", "session-start"), /Unknown command: tent agent/);
-  await assert.rejects(run("ui"), /Unknown command: tent ui/);
-  assert.doesNotMatch((await run("--help")).stdout, /tent ui/);
 });
 
 test("new's local ignore file is neither a Node nor a workspace check issue", async (t) => {

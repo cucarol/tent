@@ -110,20 +110,14 @@ test("full direct CLI preserves Role text, Unicode, duplicate flags and stdin", 
   assert.equal((await saved(piped.roleId)).body, text + "stdin\n");
 });
 
-test("new and retired agent-hooks parse only their own options in isolated directories", async (t) => {
+test("new parses only its own options in isolated directories", async (t) => {
   const root = await fixture(t);
   initializeFixtureRepository(root);
   const created = await cli(root, ["new", "--", "--workspace-name"]);
   assert.equal(created.code, 0, created.stderr);
   await fs.stat(path.join(root, "--workspace-name", ".tent"));
-  for (const args of [
-    ["new", "untouched", "--unknown"],
-    ["agent-hooks", "install", `--home=${path.join(root, "untouched")}`, "--tent-command"],
-    ["agent-hooks", "install", `--home=${path.join(root, "untouched")}`, "--json=false"],
-  ]) {
-    const rejected = await cli(root, args);
-    assert.equal(rejected.code, 1);
-    assert.match(rejected.stderr, /Unknown option|Unknown command|argument/);
-    await assert.rejects(fs.stat(path.join(root, "untouched")), { code: "ENOENT" });
-  }
+  const rejected = await cli(root, ["new", "untouched", "--unknown"]);
+  assert.equal(rejected.code, 1);
+  assert.match(rejected.stderr, /Unknown option|argument/);
+  await assert.rejects(fs.stat(path.join(root, "untouched")), { code: "ENOENT" });
 });

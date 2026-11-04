@@ -15,4 +15,3 @@ docs/plans/
 .tent/
 /.worktrees/
 /.scratch/
-/migrate-history.mjs

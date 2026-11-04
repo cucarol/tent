@@ -23,8 +23,6 @@ import { isHistoryDocument } from "../core/store/document-history.js";
 import { durableMkdir, durableReplace, syncDirectory } from "./durable-file.js";
 import { observeMaterialResource, readStructureSource } from "./source-observation.js";
 import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
-import { parseFrontmatter } from "../core/base/frontmatter.js";
-import { loadNodeCatalog } from "../core/graph/node-catalog.js";
 import { materialLocator, localMaterialPath, type MaterialLocator } from "../core/base/material.js";
 import { assertSystemMaterial } from "../core/graph/material-target.js";
 import { documentHeader } from "../core/graph/node-catalog.js";
