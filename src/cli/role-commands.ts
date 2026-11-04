@@ -71,7 +71,7 @@ async function runRoleCommandOpened(
       cwd: globals.cwd,
       workspace: value("workspace") ?? globals.workspace,
     });
-    const fs = new NodeFs(systemRoot, "cli");
+    const fs = new NodeFs(systemRoot);
     await opened(fs);
     await captureNativeNodeEdits(fs);
     const result = workspaceReadPaths(

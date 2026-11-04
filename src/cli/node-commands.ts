@@ -84,7 +84,7 @@ async function runNodeCommandOpened(
     });
     errorContext.workspaceRoot = workspaceRoot;
     const { NodeFs, SystemClock } = await import("../fs/node-fs.js");
-    const fs = new NodeFs(systemRoot, "cli");
+    const fs = new NodeFs(systemRoot);
     await opened(fs);
     const { readWorkspaceSettings } = await import("../core/workspace/workspace-settings.js");
     const { workspaceId } = await readWorkspaceSettings(fs);

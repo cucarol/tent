@@ -198,7 +198,7 @@ test("mutation shares nested header caches but discards surrounding live observa
   });
 });
 
-test("warm mutation header parses retain authority identity errors and tolerate cache damage", async (t) => {
+test("a damaged header cache does not stop a capture", async (t) => {
   const root = await fixture(t);
   await scaffoldInWorkspace(openTestFs(root), {
     name: "Cache",
@@ -214,15 +214,6 @@ test("warm mutation header parses retain authority identity errors and tolerate 
   await adapter.withLock("mutation.lock", async () => {
     assert.equal(parseFrontmatter(original).data.id, "node-cachetest");
   });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await assert.rejects(
-      adapter.withLock("mutation.lock", () =>
-        adapter.history.captureUnlocked([{ path: "Other/Other.md", raw: original }]),
-      ),
-      /Duplicate historical identity node-cachetest/,
-    );
-    assert.equal(await adapter.history.currentCommit(), before);
-  }
   await fs.writeFile(path.join(system, ".git/tent-material-cache/document-headers.bin"), "bad");
   const raw = original.replace("original", "changed body with the same header");
   const result = await adapter.withLock("mutation.lock", () =>

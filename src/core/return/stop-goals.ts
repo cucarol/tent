@@ -43,17 +43,11 @@ export async function changedGoals(
       else if (change.after) span.after = change.after;
       else delete span.after;
     }
-  const versions = [...spans.values()].flatMap((span) => [span.before, span.after]);
-  const reads = await history.readVersions(
-    versions.filter((version): version is DocumentVersion => !!version),
-  );
-  const raws = new Map<DocumentVersion, string>();
-  let next = 0;
-  for (const version of versions) {
-    if (!version) continue;
-    const read = reads[next++];
-    if (read && !(read instanceof Error)) raws.set(version, read.raw);
-  }
+  const versions = [...spans.values()]
+    .flatMap((span) => [span.before, span.after])
+    .filter((version): version is DocumentVersion => !!version);
+  const reads = await history.readVersions(versions);
+  const raws = new Map(versions.map((version, index) => [version, reads[index]!]));
   const goals: StopNodePointer[] = [];
   for (const span of spans.values()) {
     const before = meaning(span.before && raws.get(span.before));

@@ -578,7 +578,7 @@ for (const cut of ["ids-checkpointed", "node-written", "captured"] as const) {
     const events = await reopened.history.changesInRange({ from: head ?? undefined });
     assert.equal(events.filter((event) => event.operation === "node.write-many").length, 1);
     for (const id of ids) {
-      const versions = await reopened.history.nodeVersions(id);
+      const { items: versions } = await reopened.history.nodeVersionPage(id, 0, 100);
       assert.equal(versions.filter((event) => event.operation === "node.write-many").length, 1);
     }
     assert.equal(

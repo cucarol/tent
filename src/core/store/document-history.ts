@@ -16,7 +16,6 @@ export async function captureDocumentUnlocked(
   raw: string,
   metadata?: CaptureMetadata,
 ): Promise<DocumentVersion | undefined> {
-  if (!isHistoryDocument(path)) throw new Error(`Not a Tent identity document: ${path}`);
   const invalid = fs.invalidNodeEdits?.get(path);
   if (invalid) throw new Error(`Invalid Node ${path}: ${invalid}`);
   if (!(await fs.history.available())) return undefined;

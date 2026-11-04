@@ -51,12 +51,7 @@ async function bytes(directory: string, prefix = ""): Promise<Record<string, str
     const file = path.join(directory, entry.name);
     const key = `${prefix}${entry.name}`;
     // Disposable observation caches may be populated by a read-only query.
-    if (
-      /\/\.git\/(?:tent-material-cache\/|tent-(?:history-index|derived-[a-z0-9-]+)\.json$)/.test(
-        key,
-      )
-    )
-      continue;
+    if (/\/\.git\/tent-material-cache\//.test(key)) continue;
     if (entry.isDirectory()) Object.assign(result, await bytes(file, `${key}/`));
     else result[key] = (await fs.readFile(file)).toString("base64");
   }

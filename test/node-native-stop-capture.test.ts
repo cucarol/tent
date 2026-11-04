@@ -87,16 +87,15 @@ test("native move records actual delete and add paths in one event without chang
   assert.deepEqual(observed.changedNodePaths, ["After/After.md", "Before/Before.md"]);
   assert.deepEqual(observed.invalidNodes, []);
   const head = (await f.adapter.history.currentCommit())!;
-  assert.equal((await f.adapter.history.changesInRange({ from: before })).length, 1);
-  assert.deepEqual(
-    (await f.adapter.history.commitChanges(head)).changes.sort((a, b) =>
-      a.path.localeCompare(b.path),
-    ),
-    [
-      { path: "After/After.md", before: null, after: raw },
-      { path: "Before/Before.md", before: raw, after: null },
-    ],
-  );
+  const moved = await f.adapter.history.changesInRange({ from: before });
+  assert.equal(moved.length, 1);
+  assert.deepEqual(moved[0]!.changes, [
+    {
+      objectId: "node-moved",
+      before: { commit: before, path: "Before/Before.md" },
+      after: { commit: head, path: "After/After.md" },
+    },
+  ]);
   assert.equal(await f.adapter.readFile("After/After.md"), raw);
 });
 
@@ -237,7 +236,9 @@ for (const failure of ["capture", "deleted history read"] as const) {
       });
     } else {
       await fs.rm(path.join(f.systemRoot, "Node"), { recursive: true });
-      t.mock.method(f.adapter.history, "readVersions", async () => [error]);
+      t.mock.method(f.adapter.history, "readVersions", async () => {
+        throw error;
+      });
     }
     await assert.rejects(captureNativeNodeEdits(f.adapter), (caught) => caught === error);
     assert.equal(await f.adapter.history.currentCommit(), before);

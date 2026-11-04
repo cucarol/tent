@@ -102,11 +102,8 @@ test("SQLite safety 2: real Core write-many retains all 112 saved documents in o
     path: `${r.path}/${path.posix.basename(r.path)}.md`,
   }));
   const retained = await adapter.history.readVersions(versions);
-  for (let i = 0; i < versions.length; i++) {
-    const saved = retained[i]!;
-    assert.ok(!(saved instanceof Error));
-    assert.equal(saved.raw, await adapter.readFile(versions[i]!.path));
-  }
+  for (let i = 0; i < versions.length; i++)
+    assert.equal(retained[i], await adapter.readFile(versions[i]!.path));
 });
 
 test("SQLite safety 3: retained versions read historical bytes and ABA stays changed", async (t) => {
@@ -119,7 +116,10 @@ test("SQLite safety 3: retained versions read historical bytes and ABA stays cha
   assert.equal((await readNodeVersion(adapter, "node-n000", source.version)).text, old.raw);
   await fs.writeFile(path.join(root, "N000/N000.md"), old.raw);
   assert.deepEqual((await captureNativeNodeEdits(adapter)).invalidNodes, []);
-  assert.equal(await adapter.history.changedSince(source.version), true);
+  assert.notEqual(
+    (await adapter.history.pathVersions("N000/N000.md")).latest!.commit,
+    source.version.commit,
+  );
   const archived = await archiveNode(env, "node-n002"),
     archivedRaw = await readNodeFile(adapter, "node-n002");
   await editNode(adapter, "node-n002", {
@@ -127,9 +127,9 @@ test("SQLite safety 3: retained versions read historical bytes and ABA stays cha
   });
   await fs.writeFile(path.join(root, "N002/N002.md"), archivedRaw.raw);
   await captureNativeNodeEdits(adapter);
-  assert.equal(
-    await adapter.history.changedSince({ commit: archived.commit!, path: "N002/N002.md" }),
-    true,
+  assert.notEqual(
+    (await adapter.history.pathVersions("N002/N002.md")).latest!.commit,
+    archived.commit,
   );
   assert.equal(
     await adapter.history.read({ commit: archived.commit!, path: "N002/N002.md" }),

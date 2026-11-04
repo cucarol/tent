@@ -114,7 +114,7 @@ async function runCardCommandOpened(
       workspace: value("workspace") ?? globals.workspace,
     });
     const mutation = ["create", "deprecate", "take", "return"].includes(sub);
-    const fs = new NodeFs(systemRoot, "cli"),
+    const fs = new NodeFs(systemRoot),
       id = positionals[0]!;
     await opened(fs);
     const json = values.json === true || globals.json === true;

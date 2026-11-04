@@ -142,17 +142,10 @@ test("watch emits the Role queue, then returns in return-time order", async (t) 
     }
     return hash.digest("hex");
   };
-  for (const cache of ["missing", "corrupt"] as const) {
-    for (const name of await fs.readdir(git))
-      if (name.startsWith("tent-") && name.endsWith(".json")) await fs.rm(path.join(git, name));
-    if (cache === "corrupt")
-      await fs.writeFile(path.join(git, "tent-history-index.json"), "broken");
-    const before = await diskState();
-    const times = await queueTimes(head!, [r1.path, r2.path]);
-    assert.deepEqual(times, retained);
-    assert.deepEqual(await pending("role-a"), [own.cardId, r2.cardId, r1.cardId]);
-    assert.equal(await diskState(), before, `${cache} cache must stay untouched`);
-  }
+  const before = await diskState();
+  assert.deepEqual(await queueTimes(head!, [r1.path, r2.path]), retained);
+  assert.deepEqual(await pending("role-a"), [own.cardId, r2.cardId, r1.cardId]);
+  assert.equal(await diskState(), before, "a read must leave the disk untouched");
 });
 
 test("card list --role shows Cards to take, then returns owed, then results returned to it", async (t) => {

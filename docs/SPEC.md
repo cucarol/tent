@@ -42,7 +42,7 @@ Every Tent command that accesses the graph collects valid native Node edits befo
 
 ### History
 
-Each save records the exact bytes of the changed Node, Role and Card documents as one immutable event in `.tent/.git/history.sqlite`; the project's own Git is never written. An event has an opaque 64-hex id, a time, an operation name and the ids it touched. A version `{commit, path}` names one document in one event. `node history <id>` pages a Node's versions across moves; `node history <id> --version <v>` takes a JSON object `{commit, path}` and prints that document's complete raw bytes after checking its Node id and type, including after a later move or deletion. Historical raw documents may contain retired fields; current Node validation still rejects them. An edit and its revert are two events, so a change since a version stays a change after a revert. Diffs are line diffs with three lines of context. A save that changes nothing creates no event.
+Each save records the exact bytes of the changed Node, Role and Card documents as one immutable event in `.tent/.git/history.sqlite`; the project's own Git is never written. An event has an opaque 64-hex id, a time, an operation name and the ids it touched. A version `{commit, path}` names one document in one event. `node history <id>` pages a Node's versions across moves; `node history <id> --version <v>` takes a JSON object `{commit, path}` and prints that document's complete raw bytes after checking its Node id, including after a later move or deletion. Historical raw documents may contain retired fields; current Node validation still rejects them. An edit and its revert are two events. A save that changes nothing creates no event.
 
 ### Safe writes and recovery
 

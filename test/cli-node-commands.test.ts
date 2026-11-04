@@ -271,38 +271,16 @@ test("history --version reads an unchanged Node in another event and verifies it
   assert.match(wrong.stderr, /belongs to another Node/);
 });
 
-test("history --version returns exact bytes and rejects invalid ids and types", async (t) => {
-  const { root, tent, cli } = await fixture(t);
+test("history --version returns exact bytes, retired fields included", async (t) => {
+  const { tent, cli } = await fixture(t);
   const created = (await cli("create", ["Old", "--id", "node-old", "--type", "prompt"])).node;
   const historical =
-    "---\r\nid: node-old\r\ntype: prompt\r\ncustom: true\r\n---\r\nHistorical bytes  \r\n\r\n";
-  const file = "Old/Old.md";
-  const saved = await tent.history.captureUnlocked([{ path: file, raw: historical }], {
+    "---\r\nid: node-old\r\ntype: custom\r\ncustom: true\r\n---\r\nHistorical bytes  \r\n\r\n";
+  const saved = await tent.history.captureUnlocked([{ path: "Old/Old.md", raw: historical }], {
     operation: "test.old-document",
   });
   assert.equal(
     (await cli("history", [created.nodeId, "--version", JSON.stringify(saved.versions[0])])).text,
     historical,
   );
-  for (const [raw, diagnostic] of [
-    [historical.replace("type: prompt", "type: custom"), /type must be goal, prompt or output/],
-    [historical.replace("type: prompt\r\n", ""), /type must be goal, prompt or output/],
-    [historical.replace("id: node-old", "id: old"), /canonical Node id/],
-  ] as const) {
-    const version = (
-      await tent.history.captureUnlocked([{ path: file, raw }], {
-        operation: "test.invalid-document",
-      })
-    ).versions[0];
-    const rejected = await runNodeCommand(
-      "history",
-      [created.nodeId, "--version", JSON.stringify(version)],
-      {
-        workspace: root,
-      },
-    );
-    assert.equal(rejected.exitCode, 1);
-    assert.equal(rejected.stdout, "");
-    assert.match(rejected.stderr, diagnostic);
-  }
 });

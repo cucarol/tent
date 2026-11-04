@@ -11,8 +11,8 @@ async function checkpoint(point: string) {
   await new Promise<void>(() => setInterval(() => {}, 1000));
 }
 const root = path.join(workspace, ".tent"),
-  history = new SqliteDocumentHistory(root, "core", checkpoint),
-  adapter = new NodeFs(root, "core", history);
+  history = new SqliteDocumentHistory(root, checkpoint),
+  adapter = new NodeFs(root, history);
 if (cut === "file-replaced") {
   const write = adapter.writeFile.bind(adapter);
   adapter.writeFile = async (file, raw) => {

@@ -1,4 +1,3 @@
-import { initializeFixtureHistory } from "./scratch.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
@@ -6,11 +5,8 @@ import { testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { test } from "node:test";
 import { NODE_TYPES, isNodeType, normalizeOptionalNodeType } from "../src/core/base/node-type.js";
-import { parseFrontmatter } from "../src/core/base/frontmatter.js";
-import { readNodeVersion } from "../src/core/read/node-version.js";
-import { scaffoldInWorkspace } from "./scaffold.js";
 import { scaffoldTent } from "../src/core/store/scaffold.js";
-import { canonicalIdentityError, loadTent } from "../src/core/store/tree.js";
+import { loadTent } from "../src/core/store/tree.js";
 
 test("Node type accepts exactly goal, prompt and output", () => {
   assert.deepEqual(NODE_TYPES, ["goal", "prompt", "output"]);
@@ -124,44 +120,4 @@ test("scaffold writes exact types and rejects former labels", async (t) => {
     }),
     /^Error: Node Typed type must be goal, prompt or output\.$/,
   );
-});
-
-test("a historical version with a former suffixed type is rejected like any invalid type", async (t) => {
-  const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "tent-node-type-history-"));
-  t.after(() =>
-    removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
-  );
-  await scaffoldInWorkspace(openTestFs(workspace), { name: "History" });
-  const root = path.join(workspace, ".tent");
-  await initializeFixtureHistory(root);
-  const adapter = openTestFs(root);
-  // No reader tolerates an old type form: a former suffix fails exactly like "reference".
-  const cases = [
-    ["Suffixed", "node-suffixed", "goal-requirement"],
-    ["Padded", "node-padded", "  goal-requirement  "],
-    ["Unknown", "node-unknown", "reference"],
-  ] as const;
-  const message = "Node type must be goal, prompt or output.";
-  const outcomes = [];
-  for (const [name, id, type] of cases) {
-    const file = `${name}/${name}.md`;
-    const raw = `---\nid: ${id}\ntype: ${JSON.stringify(type)}\n---\nWant\n`;
-    await adapter.mkdir(name);
-    await adapter.writeFile(file, raw);
-    const [version] = (await adapter.history.captureUnlocked([{ path: file, raw }])).versions;
-    assert.ok(version);
-    // The live document is valid now; only the retained version keeps the old form.
-    await adapter.writeFile(file, `---\nid: ${id}\ntype: goal\ntags: [requirement]\n---\nWant\n`);
-    assert.equal((await loadTent(adapter)).byId.get(id)?.type, "goal");
-    assert.equal(canonicalIdentityError(parseFrontmatter(raw).data), message, name);
-    // node history --version
-    const read = await readNodeVersion(adapter, id, version).then(
-      () => "accepted",
-      (error: Error) => error.message,
-    );
-    outcomes.push({ read });
-  }
-  assert.deepEqual(outcomes[0], { read: message });
-  assert.deepEqual(outcomes[1], outcomes[0], "a padded former type is invalid too");
-  assert.deepEqual(outcomes[2], outcomes[0], "the same result as an unknown type");
 });

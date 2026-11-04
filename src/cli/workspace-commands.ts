@@ -65,7 +65,7 @@ async function runWorkspaceCommandOpened(
       cwd: globals.cwd,
       workspace: values.workspace ?? globals.workspace,
     });
-    const fs = new NodeFs(roots.systemRoot, "cli");
+    const fs = new NodeFs(roots.systemRoot);
     await opened(fs);
     const { workspaceId } = await readWorkspaceSettings(fs);
     if (!workspaceId)
@@ -179,7 +179,7 @@ async function runWorkspaceCommandOpened(
       };
     }
     const { captureNativeNodeEdits } = await import("../core/graph/node-native-capture.js");
-    const captureFs = new NodeFs(roots.systemRoot, "cli");
+    const captureFs = new NodeFs(roots.systemRoot);
     await opened(captureFs);
     const captureNodes = () =>
       captureFs

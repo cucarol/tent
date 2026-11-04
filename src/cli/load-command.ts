@@ -40,7 +40,7 @@ export async function runLoadCommand(
       files.push(relative);
     }
     const { NodeFs } = await import("../fs/node-fs.js");
-    const fs = new NodeFs(systemRoot, "cli");
+    const fs = new NodeFs(systemRoot);
     try {
       await (await import("../core/graph/node-native-capture.js")).captureNativeNodeEdits(fs);
       const { loadNodeCatalog } = await import("../core/graph/node-catalog.js");

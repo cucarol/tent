@@ -87,10 +87,12 @@ test("archive captures selected documents in ordinary history and status edits r
   assert.equal(bodyReads.includes("Other/Other.md"), false);
   assert.deepEqual(archived.paths.sort(), ["A/A.md", "A/B/B.md", "A/D/D.md"]);
   assert.equal(await read("A/C/C.md"), unchanged);
-  const changes = await adapter.history.commitChanges(archived.commit);
-  assert.equal(changes.changes.length, 3);
+  const { changes } = (await adapter.history.changesInRange({ to: archived.commit })).at(-1)!;
+  assert.equal(changes.length, 3);
   assert.equal(
-    parseFrontmatter(changes.changes.find((c) => c.path === "A/B/B.md")!.before!).data.status,
+    parseFrontmatter(
+      await adapter.history.read(changes.find((c) => c.before?.path === "A/B/B.md")!.before!),
+    ).data.status,
     "draft",
   );
   assert.ok(!(await adapter.history.retainedPaths()).some((file) => file.startsWith("Other/")));

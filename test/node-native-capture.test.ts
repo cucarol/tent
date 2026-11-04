@@ -232,5 +232,5 @@ test("Stop captures native Node creation and deletion without rewriting another 
   assert.ok((await adapter.history.retainedPaths()).every((file) => file !== "原生/原生.md"));
   assert.equal(await adapter.history.read({ commit: addedHead, path: "原生/原生.md" }), created);
   assert.equal(await adapter.readFile("需求/需求.md"), original);
-  assert.ok((await adapter.history.nodeVersions(goal)).length);
+  assert.ok((await adapter.history.nodeVersionPage(goal, 0, 1)).total);
 });

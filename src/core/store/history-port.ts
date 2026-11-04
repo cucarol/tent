@@ -7,11 +7,7 @@ export const documentVersionSchema = z.strictObject({
   path: z.string().min(1),
 });
 export type DocumentChange = { path: string; raw: string | null };
-export type CaptureMetadata = {
-  operation: string;
-  objectIds?: readonly string[];
-  entry?: "cli" | "ui" | "core";
-};
+export type CaptureMetadata = { operation: string };
 export type CaptureResult = {
   commit: string | null;
   created: boolean;
@@ -28,14 +24,7 @@ export type HistoryCommit = {
   parent?: string;
   operation?: string;
   objectIds: string[];
-  entry?: "cli" | "ui" | "core";
   changes: HistoryChange[];
-};
-export type VersionRead = {
-  version: DocumentVersion;
-  raw: string;
-  changedSince: boolean;
-  frontmatter?: Record<string, unknown>;
 };
 export type PublicationObserver = { before(commit: string): Promise<void>; after(): Promise<void> };
 
@@ -51,12 +40,10 @@ export interface DocumentHistory {
     metadata?: CaptureMetadata,
   ): Promise<CaptureResult>;
   read(version: DocumentVersion): Promise<string>;
-  readVersions(versions: readonly DocumentVersion[]): Promise<(VersionRead | Error)[]>;
+  readVersions(versions: readonly DocumentVersion[]): Promise<string[]>;
   readDirectory(commit: string, directory?: string): Promise<Map<string, string>>;
-  changedSince(version: DocumentVersion): Promise<boolean>;
   documentBlobs(): Promise<Map<string, string>>;
   retainedPaths(): Promise<string[]>;
-  pathsUnder(prefix: string): Promise<string[]>;
   changedRetainedDocuments(
     documents: readonly { path: string; raw: string }[],
   ): Promise<{ path: string; raw: string; previousRaw: string }[]>;
@@ -67,20 +54,10 @@ export interface DocumentHistory {
     files: readonly string[],
   ): Promise<{ published: Map<string, string>; returned: Map<string, string> }>;
   completedCardPaths(completed: (file: string, raw: string) => boolean): Promise<Set<string>>;
-  identityVersions(): Promise<{
-    first: Record<string, DocumentVersion>;
-    latest: Record<string, DocumentVersion>;
-  }>;
   nodeVersionPage(
     nodeId: string,
     start: number,
     limit: number,
   ): Promise<{ total: number; items: HistoryCommit[] }>;
   changesInRange(range?: { from?: string; to?: string }): Promise<HistoryCommit[]>;
-  nodeVersions(nodeId: string): Promise<HistoryCommit[]>;
-  commitChanges(commit: string): Promise<{
-    parent: string;
-    changes: { path: string; before: string | null; after: string | null }[];
-  }>;
-  diff(from: DocumentVersion, to: DocumentVersion): Promise<string>;
 }

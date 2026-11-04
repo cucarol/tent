@@ -145,7 +145,6 @@ export class NodeFs implements FsAdapter {
       return;
     if (this.opening) return this.opening;
     this.opening = scopedRead(this.readyScope, async () => {
-      await this.history.available();
       const pending = await fs.access(this.abs(TRANSACTION_PATH)).then(
         () => true,
         (error: NodeJS.ErrnoException) => {
@@ -195,10 +194,10 @@ export class NodeFs implements FsAdapter {
     return result;
   }
 
-  constructor(root: string, entry: CaptureMetadata["entry"] = "core", history?: DocumentHistory) {
+  constructor(root: string, history?: DocumentHistory) {
     this.root = nodePath.resolve(root);
     this.workspaceRoot = workspaceRootFromSystemRoot(this.root);
-    this.history = history ?? new SqliteDocumentHistory(this.root, entry);
+    this.history = history ?? new SqliteDocumentHistory(this.root);
   }
 
   async observationScope<T>(action: () => Promise<T>, options?: ObservationOptions): Promise<T> {
@@ -536,11 +535,7 @@ export class NodeFs implements FsAdapter {
     return this.historyWrites.run(new Map(), async () => {
       const result = await action();
       const changes = [...this.historyWrites.getStore()!].map(([path, raw]) => ({ path, raw }));
-      if (changes.length)
-        await this.history.captureUnlocked(changes, {
-          operation: metadata?.operation ?? "document.capture",
-          ...metadata,
-        });
+      if (changes.length) await this.history.captureUnlocked(changes, metadata);
       return result;
     });
   }
@@ -584,10 +579,6 @@ export class NodeFs implements FsAdapter {
   }
 
   async withLock<T>(path: string, action: () => Promise<T>): Promise<T> {
-    return this.withGraphWriteLock(path, action);
-  }
-
-  private async withGraphWriteLock<T>(path: string, action: () => Promise<T>): Promise<T> {
     try {
       const locked = () =>
         withMutationLock(this.abs(path), async () =>

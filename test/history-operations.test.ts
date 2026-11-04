@@ -14,7 +14,7 @@ test("observed edits, renames and deletes retain their history operations across
     removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
   await initializeFixtureWorkspace(workspace);
-  const adapter = openTestFs(path.join(workspace, ".tent"), "cli");
+  const adapter = openTestFs(path.join(workspace, ".tent"));
   const env = {
     fs: adapter,
     tentName: "history",
@@ -27,9 +27,8 @@ test("observed edits, renames and deletes retain their history operations across
     type: "prompt",
     body: "Initial",
   });
-  const first = (await adapter.history.nodeVersions(id))[0]!;
+  const first = (await adapter.history.nodeVersionPage(id, 0, 100)).items[0]!;
   assert.equal(first.operation, "node.create");
-  assert.equal(first.entry, "cli");
 
   const original = await adapter.readFile("Alpha/Alpha.md");
   await fs.writeFile(
@@ -37,17 +36,17 @@ test("observed edits, renames and deletes retain their history operations across
     original.replace("Initial", "Editor input"),
   );
   await readNodeFile(adapter, id);
-  assert.equal((await adapter.history.nodeVersions(id)).length, 1);
+  assert.equal((await adapter.history.nodeVersionPage(id, 0, 100)).total, 1);
   await readNodeFile(adapter, id, { capture: true });
   await editNode(adapter, id, { body: "Saved fact" });
   await renameNode(env, id, "Beta");
   await deleteNode(env, id);
-  const rows = await adapter.history.nodeVersions(id);
+  const rows = (await adapter.history.nodeVersionPage(id, 0, 100)).items;
   assert.deepEqual(
     rows.map((row) => row.operation),
     ["node.create", "node.native-save", "node.native-save", "node.rename", "node.delete"],
   );
-  assert.ok(rows.every((row) => row.entry === "cli" && row.objectIds.includes(id)));
+  assert.ok(rows.every((row) => row.objectIds.includes(id)));
   assert.equal(rows.at(-1)!.changes[0]!.before!.path, "Beta/Beta.md");
   assert.equal(rows.at(-1)!.changes[0]!.after, undefined);
 

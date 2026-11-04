@@ -88,12 +88,9 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
       const previous = await fs.history.readVersions(
         removed.map((path) => ({ commit: head!, path })),
       );
-      for (let index = 0; index < previous.length; index++) {
-        const document = previous[index]!;
-        if (document instanceof Error) throw document;
-        const id = parseFrontmatter(document.raw).data.id;
-        if (typeof id === "string")
-          removedById.set(id, { path: removed[index]!, raw: document.raw });
+      for (const [index, raw] of previous.entries()) {
+        const id = parseFrontmatter(raw).data.id;
+        if (typeof id === "string") removedById.set(id, { path: removed[index]!, raw });
       }
     }
     const editedById = new Map(
