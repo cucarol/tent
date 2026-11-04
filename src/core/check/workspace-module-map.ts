@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
+import type { FsAdapter } from "../store/adapter.js";
 import { loadTent } from "../store/tree.js";
 import { nodeNotePath } from "../base/paths.js";
 import { buildNodeIndex } from "../base/okf-index.js";
@@ -41,7 +41,7 @@ export async function checkWorkspaceModules(
   workspaceRoot: string,
   repository: WorkspaceModuleMapRepository,
 ) {
-  const tent = await loadTent(readOnlyFs(fs));
+  const tent = await loadTent(fs);
   const inspectionErrors: Array<{ node: string; resource?: string; reason: string }> =
     repository.sources.errors.map((error) => ({ node: error.file, reason: error.reason }));
   const current = [...tent.byPath.values()].filter(

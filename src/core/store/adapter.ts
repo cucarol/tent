@@ -64,34 +64,6 @@ export interface Clock {
   now(): string;
 }
 
-/** Queries must report required repairs, never run a loader's repair writes. */
-export function readOnlyFs(fs: FsAdapter): FsAdapter {
-  return new Proxy(fs, {
-    get(target, key, receiver) {
-      if (
-        [
-          "writeFile",
-          "writeBinary",
-          "mkdir",
-          "move",
-          "remove",
-          "removeEmptyDir",
-          "withLock",
-          "prepareFileTransaction",
-        ].includes(String(key))
-      ) {
-        return () => {
-          throw new Error(
-            "Reader source requires explicit repair; read operations never mutate it",
-          );
-        };
-      }
-      const value: unknown = Reflect.get(target, key, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-}
-
 export function withTentMutation<T>(
   fs: FsAdapter,
   action: () => Promise<T>,

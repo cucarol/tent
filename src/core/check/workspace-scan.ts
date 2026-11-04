@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
+import type { FsAdapter } from "../store/adapter.js";
 import { loadTent } from "../store/tree.js";
 import { nodeNotePath } from "../base/paths.js";
 import {
@@ -50,7 +50,7 @@ export async function scanWorkspace(
   repository: WorkspaceScanRepository,
   fileKind: ScanFileKind,
 ) {
-  const tent = await loadTent(readOnlyFs(fs));
+  const tent = await loadTent(fs);
   const trackedFiles = ordered(
     repository.trackedFiles.filter((file) => !isTentWorkspacePath(file)),
   );

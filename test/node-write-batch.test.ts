@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
-import { readOnlyFs } from "../src/core/store/adapter.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { type NodeWriteBatchInput } from "../src/core/write/node-write-batch.js";
 import { createNode } from "../src/core/graph/ops.js";
@@ -311,7 +310,6 @@ test("batch rollback removes only known documents and preserves hidden external 
   assert.equal(await fs.exists("New/Child/Child.md"), false);
   assert.equal(await fs.readFile("order.json"), beforeOrder);
   assert.equal(await fs.history.currentCommit(), before);
-  assert.throws(() => readOnlyFs(fs).removeEmptyDir("New"), /never mutate/);
 });
 
 test("batch reports Windows EEXIST empty-directory cleanup as a conflict and retains the save failure", async (t) => {

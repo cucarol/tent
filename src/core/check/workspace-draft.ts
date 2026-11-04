@@ -8,7 +8,7 @@ import {
   type RepositoryImport,
   type RepositorySource,
 } from "../base/repository-imports.js";
-import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
+import type { FsAdapter } from "../store/adapter.js";
 import { loadTent } from "../store/tree.js";
 import { validateNodeName } from "../store/scaffold.js";
 import type { NodeWriteBatchInput } from "../write/node-write-batch.js";
@@ -370,7 +370,7 @@ export async function prepareWorkspaceDraft(
   commits: readonly ModuleMapCommit[],
   sources: readonly RepositorySource[] = [],
 ) {
-  if ((await loadTent(readOnlyFs(fs))).byPath.size)
+  if ((await loadTent(fs)).byPath.size)
     throw new Error(
       "Existing Nodes: maintain the current part map instead of bootstrapping another one",
     );

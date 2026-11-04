@@ -1,4 +1,4 @@
-import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
+import type { FsAdapter } from "../store/adapter.js";
 import { isHistoryDocument } from "../store/document-history.js";
 import { nodeNotePath } from "../base/paths.js";
 import { loadTent } from "../store/tree.js";
@@ -35,8 +35,7 @@ export async function loadNodeCatalog(fs: FsAdapter) {
 
 async function loadCatalogInScope(fs: FsAdapter) {
   const headers = new Map<string, string>();
-  const readonly = readOnlyFs(fs);
-  const headerFs = new Proxy(readonly, {
+  const headerFs = new Proxy(fs, {
     get(target, key) {
       if (key === "readFile")
         return async (path: string) => {

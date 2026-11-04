@@ -47,7 +47,7 @@ export function roleDocumentPath(roleId: string): string {
 }
 
 export function cardRecordPath(cardId: string): string {
-  return `${CARDS_DIR}/${safeOperationalSegment(cardId, "card")}.md`;
+  return `${CARDS_DIR}/${cardId}.md`;
 }
 
 /** 系统注册表文件名（非 Node）。 */
@@ -72,36 +72,6 @@ export function workspaceRootFromSystemRoot(systemRoot: string): string | undefi
 export function isOperationalPath(relativePath: string): boolean {
   const path = relativePath.replace(/\\/g, "/").replace(/^\.\/+/, "");
   return OPERATIONAL_TOP_LEVEL.has(path.split("/")[0]!);
-}
-
-/**
- * Sanitize identity segments for operational directory names.
- * Deterministic, path-safe; not a security boundary.
- */
-export function safeOperationalSegment(value: string, emptyPrefix = "id"): string {
-  const source = value.trim();
-  if (!source) throw new Error("Operational segment cannot be empty.");
-  const normalized = source.normalize("NFKC");
-  let clean = normalized
-    .replace(/[<>:"/\\|?*\x00-\x1f~^:[\]@{}]+/g, "-")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[.-]+|[.-]+$/g, "")
-    .slice(0, 40);
-  const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(clean);
-  if (reserved) clean = `${emptyPrefix}-${clean}`;
-  if (!clean) {
-    // Short stable hash of the original so empty sanitization never collides on "".
-    let h = 0;
-    for (let i = 0; i < source.length; i++) h = (h * 31 + source.charCodeAt(i)) >>> 0;
-    return `${emptyPrefix}-${h.toString(36)}`;
-  }
-  if (clean !== normalized || normalized !== source || reserved) {
-    let h = 0;
-    for (let i = 0; i < source.length; i++) h = (h * 31 + source.charCodeAt(i)) >>> 0;
-    return `${clean}-${h.toString(36)}`;
-  }
-  return clean;
 }
 
 /** 是否为应排除在 Node 索引外的生成/系统文件名。 */

@@ -1,6 +1,5 @@
 import type { FsAdapter } from "../store/adapter.js";
 import path from "node:path";
-import { readOnlyFs } from "../store/adapter.js";
 import { loadTent, type LoadedTent } from "../store/tree.js";
 import { buildNodeIndex } from "../base/okf-index.js";
 import { resolveOutLink, rewriteMarkdownDestinations } from "../base/links.js";
@@ -91,7 +90,6 @@ async function checkGraphInScope(
   selected?: ReadonlySet<string>,
   observedCatalog?: NodeCatalog,
 ): Promise<GraphCheckResult> {
-  const readonlyFs = readOnlyFs(fs);
   const result: GraphCheckResult = { documents: 0, issues: [], notices: [], errors: [] };
   const documents: Array<{
     path: string;
@@ -108,7 +106,7 @@ async function checkGraphInScope(
   const failedReads = new Map<string, string>();
   // Native hierarchy and identity rules still apply. An unreadable area is a
   // diagnostic, while sibling discovery continues without repair writes.
-  const observationFs = new Proxy(readonlyFs, {
+  const observationFs = new Proxy(fs, {
     get(target, key) {
       if (key === "readFile" || key === "readFrontmatter")
         return async (path: string) => {
@@ -144,7 +142,7 @@ async function checkGraphInScope(
     isHistoryDocument(file) &&
     !file.startsWith(`${ROLES_DIR}/`) &&
     !file.startsWith(`${CARDS_DIR}/`);
-  const retained = new Set((await readonlyFs.history.retainedPaths()).filter(isNodeDocument));
+  const retained = new Set((await fs.history.retainedPaths()).filter(isNodeDocument));
   const disk = new Set([...tent.byPath.keys()].map(nodeNotePath).filter(isNodeDocument));
   for (const file of disk)
     if ((!selected || selected.has(file)) && !retained.has(file))
@@ -216,7 +214,7 @@ async function checkGraphInScope(
           try {
             observed[index] = {
               status: "fulfilled",
-              value: await readonlyFs.readBinary(item.path),
+              value: await fs.readBinary(item.path),
             };
           } catch (reason) {
             observed[index] = { status: "rejected", reason };
@@ -244,7 +242,7 @@ async function checkGraphInScope(
     nodeDocuments.push({ path: file, validate: () => {}, valid: !node.invalid, invalidReason });
   }
   await readDocuments(nodeDocuments);
-  const completed = selected ? new Set<string>() : await completedCardPaths(readonlyFs);
+  const completed = selected ? new Set<string>() : await completedCardPaths(fs);
   const completedDocuments: Array<{ path: string; raw: string }> = [];
   const referenceDocuments: typeof documents = [];
   if (catalog)
@@ -281,7 +279,7 @@ async function checkGraphInScope(
       if (selected) {
         // Reference identity needs metadata only; unrelated bodies are never inspected.
         try {
-          const raw = await readonlyFs.readFrontmatter(file);
+          const raw = await fs.readFrontmatter(file);
           let valid = true;
           try {
             if (kind === "role") parseRoleDocument(id, raw);
@@ -333,8 +331,8 @@ async function checkGraphInScope(
   for (const file of completed)
     if (!foundCards.has(file))
       error(file, "Completed Card retained in Tent history is missing on disk");
-  if (completedDocuments.length && readonlyFs.history)
-    for (const changed of await readonlyFs.history.changedRetainedDocuments(completedDocuments))
+  if (completedDocuments.length && fs.history)
+    for (const changed of await fs.history.changedRetainedDocuments(completedDocuments))
       error(changed.path, "Completed Card differs from its retained Tent history version");
   const lookupDocuments = [...referenceDocuments, ...documents];
   const byPath = new Map(lookupDocuments.map((document) => [document.path, document]));
@@ -352,7 +350,7 @@ async function checkGraphInScope(
     return observed;
   }
   function observeMaterial(resource: string, owner: string) {
-    return readonlyFs.observationScope(() => readonlyFs.observeMaterial(resource, owner), {
+    return fs.observationScope(() => fs.observeMaterial(resource, owner), {
       nodePaths,
     });
   }
@@ -443,7 +441,7 @@ async function checkGraphInScope(
       document.id
     ) {
       try {
-        historicalLinks = await readCardBodyReferences(readonlyFs, document.id);
+        historicalLinks = await readCardBodyReferences(fs, document.id);
         if (historicalLinks.card.body !== document.body)
           error(document.path, "Card body differs from its immutable publication");
       } catch (cause) {
@@ -484,7 +482,7 @@ async function checkGraphInScope(
         if (!parsed.success) throw new Error("Material resource must be nonempty text");
         const resource = parsed.data;
         const locator = materialLocator(resource, document.path, field === "sources");
-        await assertSystemMaterial(readonlyFs, locator, nodePaths);
+        await assertSystemMaterial(fs, locator, nodePaths);
         directory = isDirectoryMaterial(locator);
         if (isPrefixMaterial(locator))
           prefixResource =
@@ -502,7 +500,7 @@ async function checkGraphInScope(
             let possible;
             try {
               possible = candidate();
-              await assertSystemMaterial(readonlyFs, possible, nodePaths);
+              await assertSystemMaterial(fs, possible, nodePaths);
             } catch {
               continue;
             }

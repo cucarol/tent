@@ -9,7 +9,6 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 import { validateNodeName } from "../src/core/store/scaffold.js";
 import { createNode, renameNode } from "../src/core/graph/ops.js";
 import { checkGraph } from "../src/core/check/graph-check.js";
-import { readOnlyFs } from "../src/core/store/adapter.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { SystemClock } from "../src/fs/node-fs.js";
@@ -336,7 +335,7 @@ test("Core read-only check reports native path mismatches and workspace check ca
     path.join(systemRoot, "Moved", "Moved.md"),
   );
   const before = await adapter.history.currentCommit();
-  const mismatches = (await checkGraph(readOnlyFs(adapter), root, fileExists)).issues
+  const mismatches = (await checkGraph(adapter, root, fileExists)).issues
     .filter((issue) => issue.kind === "node-git-mismatch")
     .map((issue) => ({ path: issue.path, state: "state" in issue ? issue.state : undefined }));
   assert.deepEqual(mismatches, [
@@ -354,7 +353,7 @@ test("Core read-only check reports native path mismatches and workspace check ca
   assert.equal(checked.exitCode, 0, checked.stderr || checked.stdout);
   assert.deepEqual(JSON.parse(checked.stdout).issues, []);
   assert.notEqual(await adapter.history.currentCommit(), before);
-  assert.deepEqual((await checkGraph(readOnlyFs(adapter), root, fileExists)).issues, []);
+  assert.deepEqual((await checkGraph(adapter, root, fileExists)).issues, []);
 });
 
 test("Core graph check skips retained-presence comparison without SQLite history", async (t) => {
