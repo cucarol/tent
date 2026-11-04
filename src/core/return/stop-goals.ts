@@ -6,14 +6,14 @@ import type { StopNodePointer } from "./stop-coverage.js";
 
 type Span = { nodeId: string; before?: DocumentVersion; after?: DocumentVersion };
 
-/** What a goal says: its type, description, status and body. Names and places are not the will. */
+/** What a goal says: its type, description, status and body. Names, places and a body's trailing whitespace are not the will. */
 function meaning(raw: string | undefined) {
   if (raw === undefined) return { goal: false, digest: "" };
   try {
     const { data, body } = parseFrontmatter(raw);
     return {
       goal: data.type === "goal",
-      digest: canonicalSha256([data.type, data.description, data.status, body]),
+      digest: canonicalSha256([data.type, data.description, data.status, body.trimEnd()]),
     };
   } catch {
     // A malformed version is reported as a document problem, not as a changed will.

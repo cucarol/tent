@@ -802,6 +802,19 @@ test("goals whose type, description, status or body changed are named once; tags
   assert.equal(await f.stop(), undefined);
 });
 
+test("a goal whose body differs only in trailing whitespace is not named", async (t) => {
+  const f = await fixture(t);
+  const raw = "---\nid: node-aim\ntype: goal\n---\nUsers sign in.";
+  await f.write("Aim/Aim.md", raw, f.systemRoot);
+  await f.seal();
+  await f.commit();
+  assert.equal(await f.stop(), undefined);
+  await f.write("Aim/Aim.md", `${raw}\n`, f.systemRoot);
+  assert.equal(await f.stop(), undefined);
+  await f.write("Aim/Aim.md", `${raw} With a code.\n`, f.systemRoot);
+  assert.match((await f.stop())!, /^These goals changed this turn:\n- Aim: /);
+});
+
 test("missing section files do not consume the HEAD baseline when the first Stop must retry", async (t) => {
   const f = await fixture(t);
   await f.write("docs/current.md", "# Rules\nOriginal section\n");
