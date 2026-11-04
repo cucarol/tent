@@ -115,7 +115,7 @@ No Tent Node covers the files changed this turn. If the turn settled something a
 These goals changed this turn:
 - <name>: <absolute path>
 
-A goal changes only when the user's will does. If the user has not been told, tell them what changed and why. If the edit only made the goal fit the work, undo it and tell the user the work differs from the goal.
+A goal changes only when the user's will does. If the user has not been told, tell them what changed and why. If the edit only made the goal fit the work, undo it and tell the user the work differs from the goal. Leave an edit you did not make; another session answers for it.
 ```
 
 ```text

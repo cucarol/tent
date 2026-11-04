@@ -177,7 +177,7 @@ export function formatStopCoverage(
           .sort((a, b) => compare(a.path, b.path))
           .map((node) => `- ${node.name}: ${node.path}`)
           .join("\n") +
-        "\n\nA goal changes only when the user's will does. If the user has not been told, tell them what changed and why. If the edit only made the goal fit the work, undo it and tell the user the work differs from the goal.",
+        "\n\nA goal changes only when the user's will does. If the user has not been told, tell them what changed and why. If the edit only made the goal fit the work, undo it and tell the user the work differs from the goal. Leave an edit you did not make; another session answers for it.",
     );
   if (problems.length)
     sections.push(

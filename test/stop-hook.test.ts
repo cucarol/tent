@@ -756,7 +756,7 @@ test("goals whose type, description, status or body changed are named once; tags
   const named =
     "These goals changed this turn:\n" +
     `- Aim: ${path.join(f.systemRoot, "Aim", "Aim.md")}` +
-    "\n\nA goal changes only when the user's will does. If the user has not been told, tell them what changed and why. If the edit only made the goal fit the work, undo it and tell the user the work differs from the goal.";
+    "\n\nA goal changes only when the user's will does. If the user has not been told, tell them what changed and why. If the edit only made the goal fit the work, undo it and tell the user the work differs from the goal. Leave an edit you did not make; another session answers for it.";
   await f.write("Aim/Aim.md", goal("Sign in.", "Users sign in with a code."), f.systemRoot);
   assert.equal(await f.stop(), named);
   assert.equal(await f.stop(), undefined);
