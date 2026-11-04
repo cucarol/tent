@@ -1,5 +1,5 @@
 import { captureFixtureDocuments } from "./scratch.js";
-import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { removeTestFixture } from "./node-fs.js";
 import { historyHead } from "./scratch.js";
 import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
@@ -230,7 +230,7 @@ test("parallel syntax scopes are isolated and absent Tent Git stays read-only", 
 
 test("CLI check installs syntax reuse around the outer document read scope", async (t) => {
   const { root } = await fixture(t);
-  await scaffoldInWorkspace(openTestFs(root), {
+  await scaffoldInWorkspace(root, {
     name: "Syntax",
     nodes: [
       { id: "node-abcdef", name: "Fact", type: "prompt", body: "[ref](https://example.com)" },

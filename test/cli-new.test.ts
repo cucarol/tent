@@ -31,7 +31,7 @@ test("existing Git ignore entries and structural markers remain valid", async (t
   const adapter = openTestFs(root);
   const raw = "# user rules\r\n.tent/\r\n";
   await adapter.writeFile(".gitignore", raw);
-  await scaffoldInWorkspace(adapter, { name: "preserve project" });
+  await scaffoldInWorkspace(root, { name: "preserve project" });
   assert.equal(await adapter.readFile(".gitignore"), raw);
   assert.equal(isValidTentIndexMarker(tentIndexMarker()), true);
   assert.equal(isValidTentIndexMarker("# bare index\n"), true);

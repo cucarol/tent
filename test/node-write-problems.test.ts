@@ -7,7 +7,7 @@ import { formatNodeWriteProblems } from "../src/core/check/node-write-problems.j
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { checkNodeWriteProblems } from "../src/fs/node-write-problems.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
-import { NodeFs } from "../src/fs/node-fs.js";
+import { SqliteDocumentHistory } from "../src/fs/sqlite-history.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import {
   testScratchRoot,
@@ -22,7 +22,7 @@ async function fixture(t: TestContext) {
   t.after(() =>
     removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
-  await scaffoldInWorkspace(openTestFs(root), {
+  await scaffoldInWorkspace(root, {
     name: "Problems",
     nodes: [
       { id: "node-selected", name: "Selected", type: "prompt", body: "Clean." },
@@ -54,9 +54,9 @@ test("advisory inspection failures preserve successful writes and skip zero-writ
   const { root, systemRoot, adapter, cli } = await fixture(t);
   await initializeFixtureHistory(systemRoot);
   await captureFixtureDocuments(systemRoot);
-  const original = NodeFs.prototype.retainedDocumentPaths;
+  const original = SqliteDocumentHistory.prototype.retainedPaths;
   let inspections = 0;
-  NodeFs.prototype.retainedDocumentPaths = async () => {
+  SqliteDocumentHistory.prototype.retainedPaths = async () => {
     inspections++;
     throw new Error("Retained storage is unavailable");
   };
@@ -77,7 +77,7 @@ test("advisory inspection failures preserve successful writes and skip zero-writ
     assert.deepEqual(noop.problems, []);
     assert.equal(inspections, 1);
   } finally {
-    NodeFs.prototype.retainedDocumentPaths = original;
+    SqliteDocumentHistory.prototype.retainedPaths = original;
   }
 });
 
@@ -145,7 +145,8 @@ test("selected Node inspection shares full workspace diagnostics and reads only 
 });
 
 test("invalid selected YAML and type report the workspace check errors; clean writes stay quiet", async (t) => {
-  const { root, adapter, write, fileExists } = await fixture(t);
+  const { root, systemRoot, adapter, write, fileExists } = await fixture(t);
+  await captureFixtureDocuments(systemRoot);
   await adapter.writeFile("Unrelated/Unrelated.md", "---\nid: [\n---\n");
   assert.deepEqual(await checkNodeWriteProblems(adapter, root, ["Selected/Selected.md"]), []);
   assert.equal(formatNodeWriteProblems([]), "");

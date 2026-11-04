@@ -168,8 +168,8 @@ test("Core and Docs edits retain unknown YAML and refuse invalid writes without 
   await fs.mkdir(scratch, { recursive: true });
   const dir = await fs.mkdtemp(path.join(scratch, "tent-yaml-"));
   t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
+  await scaffoldInWorkspace(dir, { name: "yaml" });
   const systemFs = openTestFs(path.join(dir, ".tent"));
-  await scaffoldInWorkspace(openTestFs(dir), { name: "yaml" });
   const env = { fs: systemFs, clock: { now: () => "2026-09-10T00:00:00Z" }, tentName: "yaml" };
   const nodeId = await createNode(env, { parentPath: "", name: "Alpha", type: "prompt" });
   const created = { nodeId, path: "Alpha" };

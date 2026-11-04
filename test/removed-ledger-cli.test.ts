@@ -11,7 +11,7 @@ import { testScratchRoot, initializeFixtureHistory } from "./scratch.js";
 test("removed Node ledger commands, flags and JSON fields reject without changing documents or history", async (t) => {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "removed-ledger-cli-"));
   t.after(() => removeTestFixture(root, { recursive: true, force: true }));
-  await scaffoldInWorkspace(openTestFs(root), {
+  await scaffoldInWorkspace(root, {
     name: "Removed ledger",
     nodes: [],
   });

@@ -1,4 +1,4 @@
-import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { removeTestFixture } from "./node-fs.js";
 import { historyHead } from "./scratch.js";
 import { initializeFixtureHistory } from "./scratch.js";
 import { testScratchRoot } from "./scratch.js";
@@ -26,7 +26,7 @@ async function fixture(t: TestContext) {
       retryDelay: 200,
     }),
   );
-  await scaffoldInWorkspace(openTestFs(root), { name: "Context" });
+  await scaffoldInWorkspace(root, { name: "Context" });
   await initializeFixtureHistory(path.join(root, ".tent"));
   const options = { workspace: root, json: true };
   const node = async (sub: string, args: string[]) => {

@@ -21,8 +21,8 @@ export async function initializeTentWorkspace(workspaceRoot: string): Promise<vo
   try {
     const adapter = new NodeFs(staging);
     try {
-      await scaffoldTent(adapter, { name: path.basename(root) });
       await (adapter.history as SqliteDocumentHistory).initialize();
+      await scaffoldTent(adapter, { name: path.basename(root) });
     } finally {
       await adapter.close();
     }

@@ -13,7 +13,7 @@ async function fixture(t: TestContext) {
   t.after(() =>
     removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
-  await scaffoldInWorkspace(openTestFs(root), {
+  await scaffoldInWorkspace(root, {
     name: "Node commands",
     nodes: [{ id: "node-parent", name: "Parent", type: "goal", body: "Parent body" }],
   });

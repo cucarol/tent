@@ -580,7 +580,7 @@ async function fixture(t: TestContext) {
     removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
   await git(root, "init", "-b", "main");
-  await scaffoldInWorkspace(openTestFs(root), { name: "Draft" });
+  await scaffoldInWorkspace(root, { name: "Draft" });
   await fs.writeFile(path.join(root, ".tent/.gitignore"), "*\n");
   const adapter = openTestFs(path.join(root, ".tent"));
   await fs.mkdir(path.join(root, ".scratch"));
@@ -614,6 +614,7 @@ async function snapshot(root: string, prefix = ""): Promise<Record<string, strin
   )) {
     const file = path.join(root, entry.name),
       name = prefix + entry.name;
+    if (entry.name === "tent-material-cache") continue;
     if (entry.isDirectory()) Object.assign(result, await snapshot(file, name + "/"));
     else
       result[name] = createHash("sha256")

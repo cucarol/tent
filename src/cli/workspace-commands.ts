@@ -74,9 +74,7 @@ async function runWorkspaceCommandOpened(
       );
     if (sub === "scan") {
       const { captureNativeNodeEdits } = await import("../core/graph/node-native-capture.js");
-      const captured = await captureNativeNodeEdits(fs);
-      const { loadNodeCatalog } = await import("../core/graph/node-catalog.js");
-      const catalog = captured.catalog ?? (await loadNodeCatalog(fs));
+      const { catalog } = await captureNativeNodeEdits(fs);
       if (catalog.tree.byPath.size) {
         const { checkWorkspaceModules, formatWorkspaceModules } =
           await import("../core/check/workspace-module-map.js");

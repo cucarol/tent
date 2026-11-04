@@ -30,7 +30,6 @@ export type PublicationObserver = { before(commit: string): Promise<void>; after
 
 /** Immutable versions and publication; file recovery continues to belong to Core. */
 export interface DocumentHistory {
-  available(): Promise<boolean>;
   close(): Promise<void>;
   currentCommit(): Promise<string | null>;
   isPublished(commit: string): Promise<boolean>;

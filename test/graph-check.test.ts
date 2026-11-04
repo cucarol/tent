@@ -6,16 +6,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test, { type TestContext } from "node:test";
-import { checkGraph } from "../src/core/check/graph-check.js";
+import { checkGraph as checkGraphAndHistory } from "../src/core/check/graph-check.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { createCardDocument } from "../src/core/graph/card-document.js";
 import { renameNode } from "../src/core/graph/rename-ops.js";
 import { withTentMutation } from "../src/core/store/adapter.js";
 import { testScratchRoot } from "./scratch.js";
 import { loadTent } from "../src/core/store/tree.js";
 import { readCardBodyReferences } from "../src/core/read/card-references.js";
-import { git } from "./helpers.js";
+
+// These fixtures write documents straight to disk; agreement with history is tested elsewhere.
+const checkGraph = async (...args: Parameters<typeof checkGraphAndHistory>) => {
+  const result = await checkGraphAndHistory(...args);
+  return { ...result, issues: result.issues.filter((issue) => issue.kind !== "node-git-mismatch") };
+};
 
 async function fixture(t: TestContext) {
   const scratch = testScratchRoot();

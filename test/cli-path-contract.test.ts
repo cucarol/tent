@@ -1,4 +1,4 @@
-import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { removeTestFixture } from "./node-fs.js";
 import { initializeFixtureHistory, initializeFixtureRepository } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -23,7 +23,7 @@ async function fixture(t: TestContext) {
     }),
   );
   initializeFixtureRepository(root);
-  await scaffoldInWorkspace(openTestFs(root), {
+  await scaffoldInWorkspace(root, {
     name: "CLI path contract",
     nodes: [
       {

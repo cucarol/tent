@@ -1,6 +1,5 @@
 import { testScratchRoot } from "./scratch.js";
 import { removeTestFixture } from "./node-fs.js";
-import { openTestFs } from "./node-fs.js";
 import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -81,7 +80,7 @@ test("Role validates option syntax before discovery", async (t) => {
 test("full direct CLI preserves Role text, Unicode, duplicate flags and stdin", async (t) => {
   const root = await fixture(t);
   const workspace = path.join(root, "workspace");
-  await scaffoldInWorkspace(openTestFs(workspace), { name: "Role and Hook arguments" });
+  await scaffoldInWorkspace(workspace, { name: "Role and Hook arguments" });
   await initializeFixtureHistory(path.join(workspace, ".tent"));
   const run = async (command: string, sub: string, args: string[], stdin?: string) => {
     const result = await cli(

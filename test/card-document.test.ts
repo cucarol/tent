@@ -260,7 +260,7 @@ test("take rolls back an unpublished transaction, then takes the Card exactly on
   assert.equal(await adapter.history.currentCommit(), head);
   // History is SQLite; this fixture does not own a project Git index.
   assert.equal(
-    (await adapter.history!.retainedPaths()).filter((file) => file.startsWith("cards/")).length,
+    (await adapter.history.retainedPaths()).filter((file) => file.startsWith("cards/")).length,
     1,
   );
 });
@@ -384,9 +384,6 @@ test("Card list batches matching timestamps and excludes untracked handwritten f
     result.find((item) => item.cardId === "card-manual"),
     undefined,
   );
-  t.mock.method(adapter.history, "available", async () => false);
-  const withoutGit = await listCardDocuments(adapter, { roleId: "role-a", state: "pending" });
-  assert.equal(withoutGit.items.length, 0);
 });
 
 test("Card publication checks only Node/Role sources and stores addresses; moving live Nodes does not rewrite input", async (t) => {

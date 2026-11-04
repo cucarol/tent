@@ -15,7 +15,7 @@ test("Node and Card discovery reads headers without bodies or Git capture", asyn
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "direct-status-"));
   t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
-  await scaffoldInWorkspace(openTestFs(workspace), {
+  await scaffoldInWorkspace(workspace, {
     name: "status",
     nodes: [{ id: "node-fact", name: "Fact", type: "prompt", body: "unread body" }],
   });

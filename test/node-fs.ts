@@ -1,10 +1,25 @@
+import { existsSync, mkdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { NodeFs } from "../src/fs/node-fs.js";
+import { HISTORY_SCHEMA } from "../src/fs/sqlite-history.js";
+import { DatabaseSync } from "../src/fs/sqlite-runtime.js";
+
+/** Every Tent has a history, so a fixture's does too. Synchronous, and no fsync: fixtures are many. */
+export function ensureTestHistory(systemRoot: string): void {
+  const file = path.join(systemRoot, ".git/history.sqlite");
+  if (existsSync(file)) return;
+  mkdirSync(path.dirname(file), { recursive: true });
+  const db = new DatabaseSync(file);
+  db.exec("PRAGMA synchronous=OFF");
+  db.exec(HISTORY_SCHEMA);
+  db.close();
+}
 
 const opened = new Map<NodeFs, string>();
 /** Test fixtures own adapters just as a CLI command owns its adapter. */
 export function openTestFs(...args: ConstructorParameters<typeof NodeFs>): NodeFs {
+  ensureTestHistory(path.resolve(args[0]));
   const adapter = new NodeFs(...args);
   opened.set(adapter, path.resolve(args[0]));
   return adapter;

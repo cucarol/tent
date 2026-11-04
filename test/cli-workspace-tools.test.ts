@@ -44,7 +44,7 @@ test("CLI validation errors name the command, argument and field instead of issu
     }),
   );
   const workspace = path.join(root, "workspace");
-  await scaffoldInWorkspace(openTestFs(workspace), { name: "Validation" });
+  await scaffoldInWorkspace(workspace, { name: "Validation" });
   const globals = { workspace };
   const validItem = { op: "create", ref: "ok", name: "Valid", type: "prompt" };
   for (const [item, field, message] of [
@@ -74,7 +74,7 @@ test("CLI creates material Nodes and Cards whose sources are plain addresses", a
   const root = await mkdtemp(path.join(scratch, "cli-workspace-tools-"));
   try {
     const workspace = path.join(root, "workspace");
-    await scaffoldInWorkspace(openTestFs(workspace), {
+    await scaffoldInWorkspace(workspace, {
       name: "CLI tools",
       nodes: [
         {

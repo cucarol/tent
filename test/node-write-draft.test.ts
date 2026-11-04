@@ -23,7 +23,7 @@ async function fixture(t: TestContext, items: NodeWriteBatchInput["items"]) {
   t.after(() =>
     removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
-  await scaffoldInWorkspace(openTestFs(workspace), { name: "Draft" });
+  await scaffoldInWorkspace(workspace, { name: "Draft" });
   const root = path.join(workspace, ".tent");
   await initializeFixtureHistory(root);
   const adapter = openTestFs(root);

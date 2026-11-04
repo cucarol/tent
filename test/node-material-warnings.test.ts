@@ -136,7 +136,7 @@ async function fixture(t: TestContext) {
   t.after(() =>
     removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
-  await scaffoldInWorkspace(openTestFs(root), { name: "Warnings" });
+  await scaffoldInWorkspace(root, { name: "Warnings" });
   await git(root, "init", "--quiet");
   await initializeFixtureHistory(path.join(root, ".tent"));
   await fs.writeFile(path.join(root, ".gitignore"), "report.md\n.tent/\n");

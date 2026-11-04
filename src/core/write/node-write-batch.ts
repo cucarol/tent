@@ -216,15 +216,13 @@ export async function writeNodesBatchUnlocked(
   for (const path of directories) await fs.mkdir(path);
   for (const node of planned) await fs.writeFile(nodeNotePath(node.path), node.raw);
   await fs.writeFile(ORDER_PATH, afterOrder);
-  const captured = (await fs.history.available())
-    ? await fs.history.captureUnlocked(
-        planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
-        { operation: "node.write-many" },
-      )
-    : undefined;
+  const captured = await fs.history.captureUnlocked(
+    planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
+    { operation: "node.write-many" },
+  );
   return {
     results: planned.map((n) => ({ nodeId: n.nodeId, path: n.path })),
-    ...(captured?.commit ? { commit: captured.commit } : {}),
+    ...(captured.commit ? { commit: captured.commit } : {}),
     ...(warnings.length ? { warnings } : {}),
   };
 }

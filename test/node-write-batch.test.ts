@@ -23,7 +23,7 @@ async function fixture(t: TestContext) {
       retryDelay: 200,
     });
   });
-  await scaffoldInWorkspace(openTestFs(workspace), { name: "Batch" });
+  await scaffoldInWorkspace(workspace, { name: "Batch" });
   const root = path.join(workspace, ".tent"),
     fs = openTestFs(root);
   await initializeFixtureHistory(root);

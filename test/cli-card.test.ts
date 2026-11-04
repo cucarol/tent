@@ -234,7 +234,7 @@ async function fixture(t: TestContext) {
     assert.equal(path.dirname(root), scratch);
     await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
-  await scaffoldInWorkspace(openTestFs(root), { name: "Card CLI" });
+  await scaffoldInWorkspace(root, { name: "Card CLI" });
   await initializeFixtureHistory(path.join(root, ".tent"));
   return { root, globals: { workspace: root, json: true } };
 }

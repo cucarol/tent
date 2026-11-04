@@ -22,7 +22,7 @@ async function fixture(t: TestContext, withHistory = true) {
   t.after(() =>
     removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
-  await scaffoldInWorkspace(openTestFs(root), { name: "Name rules" });
+  await scaffoldInWorkspace(root, { name: "Name rules" });
   initializeFixtureRepository(root);
   const systemRoot = path.join(root, ".tent");
   if (withHistory) await initializeFixtureHistory(systemRoot);

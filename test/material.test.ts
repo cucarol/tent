@@ -1,4 +1,4 @@
-import { openTestFs } from "./node-fs.js";
+import { openTestFs, removeTestFixture } from "./node-fs.js";
 import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -285,7 +285,7 @@ test("real Node move and rename preserve resource targets, ordered sources and h
   } finally {
     const relative = path.relative(scratch, fixture);
     assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
-    await fs.rm(fixture, { recursive: true, force: true, maxRetries: 5 });
+    await removeTestFixture(fixture, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 

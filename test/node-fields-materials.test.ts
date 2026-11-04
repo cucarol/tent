@@ -63,7 +63,7 @@ test("Node description is optional text and creation accepts it in single and ba
   );
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "node-description-"));
   t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
-  await scaffoldInWorkspace(openTestFs(workspace), { name: "Description" });
+  await scaffoldInWorkspace(workspace, { name: "Description" });
   const adapter = openTestFs(path.join(workspace, ".tent"));
   const env = {
     fs: adapter,
@@ -102,7 +102,7 @@ test("Node description is optional text and creation accepts it in single and ba
 test("module report takes goals as parts and does not inherit child prompt rules", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "module-materials-"));
   t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
-  await scaffoldInWorkspace(openTestFs(workspace), { name: "Coverage" });
+  await scaffoldInWorkspace(workspace, { name: "Coverage" });
   const adapter = openTestFs(path.join(workspace, ".tent"));
   const files = Array.from(
     { length: 24 },

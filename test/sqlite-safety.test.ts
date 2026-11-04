@@ -17,7 +17,7 @@ import { readNodeVersion } from "../src/core/read/node-version.js";
 
 async function fixture(t: TestContext) {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "sqlite-safety-"));
-  await scaffoldInWorkspace(openTestFs(workspace), {
+  await scaffoldInWorkspace(workspace, {
     name: "Safety",
     nodes: Array.from({ length: 112 }, (_, i) => ({
       name: `N${String(i).padStart(3, "0")}`,
@@ -248,7 +248,7 @@ test("SQLite safety 5: move, rename and deletion keep retained versions readable
   await assert.rejects(readNodeFile(adapter, "node-n000"), /Node not found/);
   assert.equal(await adapter.history.read(version), fixed.raw);
   assert.equal(
-    (await adapter.retainedDocumentPaths())!.some((p) => p.includes("Moved/")),
+    (await adapter.history.retainedPaths()).some((p) => p.includes("Moved/")),
     false,
   );
 });

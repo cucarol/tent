@@ -19,8 +19,7 @@ async function makeSystemRoot(t: TestContext): Promise<{ systemFs: NodeFs }> {
   t.after(() =>
     removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
-  const workspaceFs = openTestFs(workspace);
-  await scaffoldInWorkspace(workspaceFs, {
+  await scaffoldInWorkspace(workspace, {
     name: "rel-core",
     nodes: [{ name: "Alpha", type: "prompt", body: "# Alpha\n" }],
   });

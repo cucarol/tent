@@ -126,12 +126,11 @@ test("an unopened history sees another connection initialize it and a closed one
     await reader.close();
     await fs.rm(root, { recursive: true, force: true });
   });
-  assert.equal(await reader.available(), false);
+  await assert.rejects(reader.currentCommit(), /has no history.*run tent new/);
   const initializer = new SqliteDocumentHistory(root);
   await initializer.initialize();
   await initializer.close();
-  assert.equal(await reader.available(), true);
   assert.equal(await reader.currentCommit(), null);
   await reader.close();
-  await assert.rejects(reader.available(), /connection is closed/);
+  await assert.rejects(reader.currentCommit(), /connection is closed/);
 });

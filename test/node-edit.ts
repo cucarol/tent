@@ -18,8 +18,7 @@ export const saveNodesBatch = (env: OpsEnv, input: NodeWriteBatchInput) =>
   withNodeBatchMutation(env, () => writeNodesBatchUnlocked(env, input));
 
 async function latestVersion(fs: FsAdapter, path: string) {
-  if (!(await fs.history?.available())) return {};
-  const version = (await fs.history!.pathVersions(path)).latest;
+  const version = (await fs.history.pathVersions(path)).latest;
   return version ? { version } : {};
 }
 

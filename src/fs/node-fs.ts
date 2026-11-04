@@ -524,14 +524,7 @@ export class NodeFs implements FsAdapter {
     await syncDirectory(nodePath.dirname(this.abs(path)));
   }
 
-  /** Current retained membership; no replay or read-time cache writes. */
-  async retainedDocumentPaths(): Promise<string[] | undefined> {
-    if (!(await this.history.available())) return undefined;
-    return this.history.retainedPaths();
-  }
-
   async withDocumentHistory<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T> {
-    if (!(await this.history.available())) return action();
     return this.historyWrites.run(new Map(), async () => {
       const result = await action();
       const changes = [...this.historyWrites.getStore()!].map(([path, raw]) => ({ path, raw }));
@@ -582,40 +575,38 @@ export class NodeFs implements FsAdapter {
     try {
       const locked = () =>
         withMutationLock(this.abs(path), async () =>
-          withoutFileReadScope(() =>
-            this.raw(() => this.history.available()).then((hasGit) => {
-              if (!hasGit || this.transactionBypass.getStore()) return action();
-              const transaction = this.transaction();
-              return this.boundaryReady.run(true, async () => {
-                this.recoveryConflicts = await transaction.recover();
-                return this.transactionScope.run(transaction, () =>
-                  this.history.withPublicationObserver(
-                    {
-                      before: (commit) => transaction.beforePublish(commit),
-                      after: () => transaction.finish(),
-                    },
-                    async () => {
+          withoutFileReadScope(async () => {
+            if (this.transactionBypass.getStore()) return action();
+            const transaction = this.transaction();
+            return this.boundaryReady.run(true, async () => {
+              this.recoveryConflicts = await transaction.recover();
+              return this.transactionScope.run(transaction, () =>
+                this.history.withPublicationObserver(
+                  {
+                    before: (commit) => transaction.beforePublish(commit),
+                    after: () => transaction.finish(),
+                  },
+                  async () => {
+                    try {
+                      const result = await action();
+                      await transaction.finish();
+                      return result;
+                    } catch (error) {
                       try {
-                        const result = await action();
-                        await transaction.finish();
-                        return result;
-                      } catch (error) {
-                        try {
-                          this.recoveryConflicts = await transaction.recover();
-                        } catch (recovery) {
-                          throw new AggregateError(
-                            [error, recovery],
-                            `${String(error)}; transaction recovery also failed: ${String(recovery)}`,
-                          );
-                        }
-                        throw error;
+                        this.recoveryConflicts = await transaction.recover();
+                      } catch (recovery) {
+                        throw new AggregateError(
+                          [error, recovery],
+                          `${String(error)}; transaction recovery also failed: ${String(recovery)}`,
+                        );
                       }
-                    },
-                  ),
-                );
-              });
-            }),
-          ),
+                      throw error;
+                    }
+                  },
+                ),
+              );
+            });
+          }),
         );
       // Reuse exact-header parses during mutation and capture. The lock callback
       // still discards file/structure observations before inspecting live state.

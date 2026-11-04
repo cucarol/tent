@@ -124,14 +124,8 @@ function requireInput(card: CardDocument) {
   if (!card.body.trim() && !card.data.sources.length) invalid("Card needs prompt text or sources");
 }
 async function requireUnusedId(fs: FsAdapter, id: string) {
-  const history = await historyOf(fs);
-  if ((await fs.exists(cardPath(id))) || (await history.pathVersions(cardPath(id))).first)
+  if ((await fs.exists(cardPath(id))) || (await fs.history.pathVersions(cardPath(id))).first)
     invalid("Card id already exists in files or history; create a new identity");
-}
-async function historyOf(fs: FsAdapter) {
-  if (!(await fs.history.available()))
-    throw new Error("Card operations require independent Tent history");
-  return fs.history;
 }
 async function roleAvailable(fs: FsAdapter, roleId: string) {
   try {
@@ -235,7 +229,7 @@ async function currentSources(fs: FsAdapter, card: CardDocument, published: Docu
 async function checkedCard(fs: FsAdapter, id: string) {
   const path = cardPath(id);
   const current = parseCardDocument(id, await fs.readFile(path));
-  const history = await historyOf(fs);
+  const history = fs.history;
   const versions = await history.pathVersions(path);
   if (!versions.first || !versions.latest)
     throw new Error("Card has no retained publication; create a Card through Tent");
@@ -256,7 +250,7 @@ export function createCardDocument(
   return withTentMutation(
     fs,
     async () => {
-      const history = await historyOf(fs),
+      const history = fs.history,
         id = input.cardId ?? makeCardId(),
         path = cardPath(id);
       await requireUnusedId(fs, id);
@@ -469,7 +463,7 @@ export async function watchCardDocuments(
   for (;;) {
     try {
       await roleAvailable(fs, roleId);
-      const history = await historyOf(fs);
+      const history = fs.history;
       const head = await history.currentCommit();
       if (head && head !== observed) {
         const selected: CardDocument[] = [];
@@ -538,7 +532,6 @@ function completedCard(data: Record<string, unknown>): boolean {
 
 /** Routine reads skip Cards completed in Tent history, regardless of subsequent native edits. */
 export async function completedCardPaths(fs: FsAdapter): Promise<ReadonlySet<string>> {
-  if (!(await fs.history.available())) return new Set();
   return fs.history.completedCardPaths((file, raw) => {
     try {
       const data = parseFrontmatter(raw).data;
@@ -626,7 +619,7 @@ async function listCardHeaders(
       }
     }),
   );
-  if (selected.length && (await fs.history.available())) {
+  if (selected.length) {
     const times = await fs.history.firstCommitTimes(selected.map((item) => item.path));
     for (const item of selected) {
       const time = times.get(item.path);

@@ -77,7 +77,7 @@ test("failed file sync rejects the save, keeps the original and removes the prep
   restoreBuiltins(t);
   await assert.rejects(adapter.writeFile("keep.md", "new bytes"), (error) => error === failure);
   assert.equal(await fs.readFile(path.join(root, "keep.md"), "utf8"), "last complete bytes");
-  assert.deepEqual(await fs.readdir(root), ["keep.md"]);
+  assert.deepEqual(await fs.readdir(root), [".git", "keep.md"]);
 });
 
 test("publication failure keeps the original and cleans up the synced temporary", async (t) => {
@@ -91,7 +91,7 @@ test("publication failure keeps the original and cleans up the synced temporary"
   restoreBuiltins(t);
   await assert.rejects(durableReplace(file, "replacement"), (error) => error === failure);
   assert.equal(await fs.readFile(file, "utf8"), "original");
-  assert.deepEqual(await fs.readdir(root), ["keep.md"]);
+  assert.deepEqual(await fs.readdir(root), [".git", "keep.md"]);
 });
 
 test(

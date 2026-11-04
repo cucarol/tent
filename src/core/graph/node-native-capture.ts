@@ -10,9 +10,8 @@ export type InvalidNativeNode = { path: string; nodeId?: string; reason: string 
 export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
   invalidNodes: InvalidNativeNode[];
   changedNodePaths: string[];
-  catalog?: NodeCatalog;
+  catalog: NodeCatalog;
 }> {
-  if (!(await fs.history.available())) return { invalidNodes: [], changedNodePaths: [] };
   const capture = async (
     locked = false,
   ): Promise<{

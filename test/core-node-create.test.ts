@@ -17,7 +17,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   await mkdir(scratch, { recursive: true });
   const root = await mkdtemp(path.join(scratch, "node-create-"));
   t.after(() => removeTestFixture(root, { recursive: true, force: true }));
-  await scaffoldInWorkspace(openTestFs(root), { name: "Create fixture" });
+  await scaffoldInWorkspace(root, { name: "Create fixture" });
   return openTestFs(path.join(root, ".tent"));
 }
 

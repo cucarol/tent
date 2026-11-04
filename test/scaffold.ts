@@ -1,5 +1,6 @@
-import type { FsAdapter } from "../src/core/store/adapter.js";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { NODE_FRONTMATTER_KEY_ORDER, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { normalizeOptionalNodeType } from "../src/core/base/node-type.js";
 import { isNodeId, makeUniqueNodeId } from "../src/core/base/id.js";
@@ -14,17 +15,18 @@ import {
   tentIndexMarker,
   type ScaffoldTentOptions,
 } from "../src/core/store/scaffold.js";
+import { NodeFs } from "../src/fs/node-fs.js";
+import { ensureTestHistory } from "./node-fs.js";
+
 export async function scaffoldInWorkspace(
-  workspaceFs: FsAdapter,
+  workspace: string,
   options: ScaffoldTentOptions,
-): Promise<{ systemRootRelative: string }> {
-  const systemRelative = TENT_SYSTEM_DIR;
-  if (await workspaceFs.exists(systemRelative)) {
-    throw new Error(`Target already has a Tent system dir: ${systemRelative}`);
-  }
-  await workspaceFs.mkdir(systemRelative);
-  // Nested adapter-style paths under workspace root
-  const nested = (p: string) => `${systemRelative}/${p}`.replace(/\\/g, "/");
+): Promise<void> {
+  const systemRoot = path.join(workspace, TENT_SYSTEM_DIR);
+  if (existsSync(systemRoot))
+    throw new Error(`Target already has a Tent system dir: ${TENT_SYSTEM_DIR}`);
+  ensureTestHistory(systemRoot);
+  const tent = new NodeFs(systemRoot);
 
   const usedIds = new Set<string>();
   for (const node of options.nodes ?? []) {
@@ -34,20 +36,17 @@ export async function scaffoldInWorkspace(
     if (!isNodeId(id)) throw new Error(`Scaffold Node id must use canonical node-* form: ${id}`);
     usedIds.add(id);
     const frontmatter: Record<string, unknown> = { id, type };
-    const path = nested(nodeName);
-    await workspaceFs.mkdir(path);
-    await workspaceFs.writeFile(
-      `${path}/${nodeName}.md`,
+    await tent.mkdir(nodeName);
+    await tent.writeFile(
+      `${nodeName}/${nodeName}.md`,
       serializeFrontmatter(frontmatter, node.body ?? "", NODE_FRONTMATTER_KEY_ORDER),
     );
   }
 
-  await workspaceFs.mkdir(nested(TEMP_DIR));
-  await workspaceFs.writeFile(nested(INDEX_PATH), tentIndexMarker());
-  await workspaceFs.writeFile(
-    nested(WORKSPACE_SETTINGS_PATH),
+  await tent.mkdir(TEMP_DIR);
+  await tent.writeFile(INDEX_PATH, tentIndexMarker());
+  await tent.writeFile(
+    WORKSPACE_SETTINGS_PATH,
     JSON.stringify({ workspaceId: `ws-${randomUUID()}` }, null, 2) + "\n",
   );
-
-  return { systemRootRelative: systemRelative };
 }

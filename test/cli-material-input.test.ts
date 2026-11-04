@@ -26,7 +26,7 @@ async function fixture(t: TestContext) {
       retryDelay: 200,
     }),
   );
-  await scaffoldInWorkspace(openTestFs(root), {
+  await scaffoldInWorkspace(root, {
     name: "CLI materials",
     nodes: [
       {

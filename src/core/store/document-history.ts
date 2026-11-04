@@ -18,6 +18,5 @@ export async function captureDocumentUnlocked(
 ): Promise<DocumentVersion | undefined> {
   const invalid = fs.invalidNodeEdits?.get(path);
   if (invalid) throw new Error(`Invalid Node ${path}: ${invalid}`);
-  if (!(await fs.history.available())) return undefined;
   return (await fs.history.captureUnlocked([{ path, raw }], metadata)).versions[0];
 }

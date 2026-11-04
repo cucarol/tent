@@ -155,7 +155,7 @@ test("without Tent Git the scope performs no cache writes", async (t) => {
 
 test("mutation shares nested header caches but discards surrounding live observations", async (t) => {
   const root = await fixture(t);
-  await scaffoldInWorkspace(openTestFs(root), {
+  await scaffoldInWorkspace(root, {
     name: "Cache",
     nodes: [{ id: "node-cachetest", name: "Fact", type: "prompt", body: "old body" }],
   });
@@ -200,7 +200,7 @@ test("mutation shares nested header caches but discards surrounding live observa
 
 test("a damaged header cache does not stop a capture", async (t) => {
   const root = await fixture(t);
-  await scaffoldInWorkspace(openTestFs(root), {
+  await scaffoldInWorkspace(root, {
     name: "Cache",
     nodes: [{ id: "node-cachetest", name: "Fact", type: "prompt", body: "original" }],
   });
@@ -225,7 +225,7 @@ test("a damaged header cache does not stop a capture", async (t) => {
 
 test("warm check observes same-size native edits and bad headers without changing authority on a hit", async (t) => {
   const root = await fixture(t);
-  await scaffoldInWorkspace(openTestFs(root), {
+  await scaffoldInWorkspace(root, {
     name: "Cache",
     nodes: [{ id: "node-cachetest", name: "Fact", type: "prompt", body: "old body" }],
   });

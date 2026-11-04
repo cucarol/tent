@@ -139,32 +139,29 @@ async function checkGraphInScope(
     : undefined;
   const tent = observedTree ?? catalog?.tree ?? (await loadTent(observationFs));
   const nodePaths = new Set([...tent.byId.values()].map((node) => nodeNotePath(node.path)));
-  const retainedPaths = await readonlyFs.retainedDocumentPaths();
-  if (retainedPaths) {
-    // Presence only: content edits are ordinary dirty files, captured by explicit reads.
-    const isNodeDocument = (file: string) =>
-      isHistoryDocument(file) &&
-      !file.startsWith(`${ROLES_DIR}/`) &&
-      !file.startsWith(`${CARDS_DIR}/`);
-    const retained = new Set(retainedPaths.filter(isNodeDocument));
-    const disk = new Set([...tent.byPath.keys()].map(nodeNotePath).filter(isNodeDocument));
-    for (const file of disk)
-      if ((!selected || selected.has(file)) && !retained.has(file))
-        result.issues.push({
-          kind: "node-git-mismatch",
-          path: file,
-          state: "disk-only",
-          reason: "Node document exists on disk but not in retained history",
-        });
-    for (const file of retained)
-      if ((!selected || selected.has(file)) && !disk.has(file))
-        result.issues.push({
-          kind: "node-git-mismatch",
-          path: file,
-          state: "git-only",
-          reason: "retained history records this Node document but it is missing on disk",
-        });
-  }
+  // Presence only: content edits are ordinary dirty files, captured by explicit reads.
+  const isNodeDocument = (file: string) =>
+    isHistoryDocument(file) &&
+    !file.startsWith(`${ROLES_DIR}/`) &&
+    !file.startsWith(`${CARDS_DIR}/`);
+  const retained = new Set((await readonlyFs.history.retainedPaths()).filter(isNodeDocument));
+  const disk = new Set([...tent.byPath.keys()].map(nodeNotePath).filter(isNodeDocument));
+  for (const file of disk)
+    if ((!selected || selected.has(file)) && !retained.has(file))
+      result.issues.push({
+        kind: "node-git-mismatch",
+        path: file,
+        state: "disk-only",
+        reason: "Node document exists on disk but not in retained history",
+      });
+  for (const file of retained)
+    if ((!selected || selected.has(file)) && !disk.has(file))
+      result.issues.push({
+        kind: "node-git-mismatch",
+        path: file,
+        state: "git-only",
+        reason: "retained history records this Node document but it is missing on disk",
+      });
   const index = buildNodeIndex([...tent.byPath.values()].filter((node) => !node.invalid));
   type DocumentRead = {
     path: string;

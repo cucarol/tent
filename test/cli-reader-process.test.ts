@@ -11,7 +11,7 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 test("separate CLI processes retain native edits through brief and read the original history version", async (t) => {
   const workspace = await fs.mkdtemp(path.join(testScratchRoot(), "history-process-"));
   t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
-  await scaffoldInWorkspace(openTestFs(workspace), {
+  await scaffoldInWorkspace(workspace, {
     name: "History",
     nodes: [{ id: "node-alpha", name: "A", type: "prompt", body: "Original body" }],
   });

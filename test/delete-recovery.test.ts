@@ -18,7 +18,7 @@ async function fixture(t: TestContext) {
     assert.equal(path.dirname(root), scratch);
     await removeTestFixture(root, { recursive: true, force: true });
   });
-  await scaffoldInWorkspace(openTestFs(root), {
+  await scaffoldInWorkspace(root, {
     name: "delete",
     nodes: [{ id: "node-remove", name: "remove", type: "prompt", body: "original" }],
   });

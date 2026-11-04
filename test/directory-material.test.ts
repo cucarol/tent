@@ -65,7 +65,7 @@ test("directory and prefix declarations inspect local and external addresses wit
 
 test("coverage address checks preserve missing directory and prefix-parent diagnostics", async (t) => {
   const workspace = await fixture(t);
-  await scaffoldInWorkspace(openTestFs(workspace), {
+  await scaffoldInWorkspace(workspace, {
     name: "Checks",
     nodes: [
       { id: "node-dir", name: "Directory", type: "prompt" },
@@ -167,7 +167,7 @@ test("directory declarations preserve slash, reject fragments and enforce safe s
 
 test("directory markers cannot select Node files as Card sources or response evidence", async (t) => {
   const workspace = await fixture(t);
-  await scaffoldInWorkspace(openTestFs(workspace), {
+  await scaffoldInWorkspace(workspace, {
     name: "Directory boundaries",
     nodes: [{ id: "node-main", name: "Main", type: "prompt", body: "fact" }],
   });

@@ -20,6 +20,13 @@ type Observer = { before(commit: string): Promise<void>; after(): Promise<void> 
 type Row = Record<string, string | number | null>;
 type Event = { seq: number; id: string; parent: string | null; time: string; metadata: string };
 export type SqliteCheckpoint = "before-publication" | "before-commit" | "after-commit";
+export const HISTORY_SCHEMA = `PRAGMA journal_mode=DELETE;
+  CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, parent TEXT, time TEXT NOT NULL, metadata TEXT NOT NULL) STRICT;
+  CREATE TABLE IF NOT EXISTS blobs(digest TEXT PRIMARY KEY, raw TEXT NOT NULL) STRICT;
+  CREATE TABLE IF NOT EXISTS changes(event INTEGER NOT NULL REFERENCES events(seq), path TEXT NOT NULL, before_digest TEXT REFERENCES blobs(digest), after_digest TEXT REFERENCES blobs(digest), PRIMARY KEY(event,path)) STRICT;
+  CREATE INDEX IF NOT EXISTS changes_path ON changes(path,event);
+  CREATE TABLE IF NOT EXISTS current(path TEXT PRIMARY KEY, digest TEXT NOT NULL REFERENCES blobs(digest), event INTEGER NOT NULL REFERENCES events(seq)) STRICT;
+  PRAGMA user_version=2;`;
 
 export function sqliteContentFingerprint(raw: string): string {
   const bytes = Buffer.from(raw);
@@ -107,11 +114,15 @@ export class SqliteDocumentHistory implements DocumentHistory {
     if (this.database) return this.database;
     if (this.opening) return this.opening;
     this.opening = (async () => {
-      const available = await this.available();
-      if (!create && !available)
-        throw new Error("This Workspace has no Tent history: .tent/.git/history.sqlite is missing");
-      await durableMkdir(path.join(this.systemRoot, ".git"));
-      const db = new DatabaseSync(path.join(this.systemRoot, ".git", "history.sqlite"));
+      const file = path.join(this.systemRoot, ".git", "history.sqlite");
+      if (!create)
+        await fs.access(file).catch(() => {
+          throw new Error(
+            "This Tent has no history: .tent/.git/history.sqlite is missing. Restore that file, or move .tent aside and run tent new.",
+          );
+        });
+      await durableMkdir(path.dirname(file));
+      const db = new DatabaseSync(file);
       try {
         // Even the first format read can race another connection's exclusive commit.
         db.exec("PRAGMA busy_timeout=8000");
@@ -119,14 +130,7 @@ export class SqliteDocumentHistory implements DocumentHistory {
         if (version !== 2 && !(create && version === 0))
           throw new Error(`Unsupported Tent SQLite history format: ${version}`);
         db.exec("PRAGMA synchronous=EXTRA; PRAGMA foreign_keys=ON");
-        if (create)
-          db.exec(`PRAGMA journal_mode=DELETE;
-          CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, parent TEXT, time TEXT NOT NULL, metadata TEXT NOT NULL) STRICT;
-          CREATE TABLE IF NOT EXISTS blobs(digest TEXT PRIMARY KEY, raw TEXT NOT NULL) STRICT;
-          CREATE TABLE IF NOT EXISTS changes(event INTEGER NOT NULL REFERENCES events(seq), path TEXT NOT NULL, before_digest TEXT REFERENCES blobs(digest), after_digest TEXT REFERENCES blobs(digest), PRIMARY KEY(event,path)) STRICT;
-          CREATE INDEX IF NOT EXISTS changes_path ON changes(path,event);
-          CREATE TABLE IF NOT EXISTS current(path TEXT PRIMARY KEY, digest TEXT NOT NULL REFERENCES blobs(digest), event INTEGER NOT NULL REFERENCES events(seq)) STRICT;`);
-        if (create) db.exec("PRAGMA user_version=2");
+        if (create) db.exec(HISTORY_SCHEMA);
         this.database = db;
         return db;
       } catch (error) {
@@ -169,14 +173,6 @@ export class SqliteDocumentHistory implements DocumentHistory {
       result.set(digest, raw);
     }
     return result;
-  }
-  async available() {
-    if (this.closed) throw new Error("Tent history connection is closed");
-    if (this.database) return true;
-    return fs.access(path.join(this.systemRoot, ".git/history.sqlite")).then(
-      () => true,
-      () => false,
-    );
   }
 
   async currentCommit(): Promise<string | null> {

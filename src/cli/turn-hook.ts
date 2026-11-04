@@ -84,9 +84,7 @@ export async function runTurnHook(
           new Set(sections.changed.keys()),
         ).filter((node) => !invalid.has(node.path));
         const present = new Set(
-          [...(captured.catalog?.tree.byPath.values() ?? [])].map((node) =>
-            nodeNotePath(node.path),
-          ),
+          [...captured.catalog.tree.byPath.values()].map((node) => nodeNotePath(node.path)),
         );
         const invalidNativePaths = new Set(captured.invalidNodes.map((node) => node.path.slice(6)));
         const checked = await checkNodeWriteProblems(
@@ -151,9 +149,7 @@ export async function runTurnHook(
             ].map((problem) => [JSON.stringify(problem), problem]),
           ).values(),
         ];
-        const history = (await adapter.history.available())
-          ? await adapter.history.currentCommit()
-          : null;
+        const history = await adapter.history.currentCommit();
         // A baseline the history no longer holds (a rebuilt Tent) starts over from this Stop.
         const goals =
           snapshot.previousHistory &&

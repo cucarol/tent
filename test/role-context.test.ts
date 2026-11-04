@@ -18,7 +18,7 @@ async function fixture(t: TestContext) {
     assert.equal(path.dirname(root), scratch);
     await removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   });
-  await scaffoldInWorkspace(openTestFs(root), { name: "roles" });
+  await scaffoldInWorkspace(root, { name: "roles" });
   const adapter = openTestFs(path.join(root, ".tent"));
   await initializeFixtureHistory(path.join(root, ".tent"));
   return { root, adapter };

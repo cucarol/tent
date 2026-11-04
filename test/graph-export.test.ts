@@ -17,7 +17,7 @@ test("export validates standard bundle materials and reports external and unreso
   await fs.mkdir(scratch, { recursive: true });
   const workspace = await fs.mkdtemp(path.join(scratch, "standard-export-"));
   t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
-  await scaffoldInWorkspace(openTestFs(workspace), {
+  await scaffoldInWorkspace(workspace, {
     name: "standard export",
     nodes: [{ id: "node-material", name: "Material", type: "prompt" }],
   });
@@ -120,7 +120,7 @@ test("export still rejects malformed native Node, Role and Card frontmatter", as
     path.join(path.resolve(testScratchRoot()), "export-invalid-native-"),
   );
   t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
-  await scaffoldInWorkspace(openTestFs(workspace), { name: "Invalid native" });
+  await scaffoldInWorkspace(workspace, { name: "Invalid native" });
   const systemRoot = path.join(workspace, ".tent"),
     adapter = openTestFs(systemRoot);
   const mount = {
@@ -146,7 +146,7 @@ for (const outcome of ["success", "failure"]) {
       await fs.mkdir(scratch, { recursive: true });
       const workspace = await fs.mkdtemp(path.join(scratch, "export-rename-"));
       t.after(() => removeTestFixture(workspace, { recursive: true, force: true }));
-      await scaffoldInWorkspace(openTestFs(workspace), { name: "rename retry" });
+      await scaffoldInWorkspace(workspace, { name: "rename retry" });
       const systemRoot = path.join(workspace, ".tent"),
         destination = path.join(workspace, "output", "bundle"),
         mount = {

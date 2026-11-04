@@ -1,6 +1,5 @@
 import { testScratchRoot } from "./scratch.js";
 import { removeTestFixture } from "./node-fs.js";
-import { openTestFs } from "./node-fs.js";
 import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -49,7 +48,7 @@ test("full CLI preserves text, stdin, repeated options and terminators through d
   t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   const workspace = path.join(root, "workspace");
   const dataDir = path.join(root, "service");
-  await scaffoldInWorkspace(openTestFs(workspace), { name: "CLI arguments" });
+  await scaffoldInWorkspace(workspace, { name: "CLI arguments" });
   await initializeFixtureHistory(path.join(workspace, ".tent"));
   const entry = fileURLToPath(new URL("../src/cli/tent.ts", import.meta.url));
   const env = Object.fromEntries(

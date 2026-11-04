@@ -1,4 +1,4 @@
-import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { removeTestFixture } from "./node-fs.js";
 import { testScratchRoot } from "./scratch.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
@@ -10,7 +10,7 @@ import { scaffoldInWorkspace } from "./scaffold.js";
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "cli-provenance-"));
   t.after(() => removeTestFixture(root, { recursive: true, force: true }));
-  await scaffoldInWorkspace(openTestFs(root), { name: "Actors", nodes: [] });
+  await scaffoldInWorkspace(root, { name: "Actors", nodes: [] });
   await fs.writeFile(path.join(root, "proof.txt"), "Evidence.\n");
   const globals = { workspace: root, json: true };
   const run = async (command: string, args: string[], stdin?: string) => {

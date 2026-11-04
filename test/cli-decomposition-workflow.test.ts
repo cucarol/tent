@@ -18,7 +18,7 @@ async function fixture(t: TestContext) {
   t.after(() =>
     removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
-  await scaffoldInWorkspace(openTestFs(workspace), { name: "CLI decomposition" });
+  await scaffoldInWorkspace(workspace, { name: "CLI decomposition" });
   await initializeFixtureHistory(path.join(workspace, ".tent"));
   return {
     workspace,

@@ -12,7 +12,7 @@ import { readWorkspaceScanRepository } from "../src/fs/workspace-scan.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { git } from "./helpers.js";
 import { testScratchRoot } from "./scratch.js";
-import { openTestFs, removeTestFixture } from "./node-fs.js";
+import { removeTestFixture } from "./node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { readWorkspaceDraftReport } from "./workspace-draft-report.js";
 
@@ -420,7 +420,7 @@ test("scan and CLI draft read only opted-in manifest bytes; guidance stays path-
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "scan-products-"));
   t.after(() => removeTestFixture(root, { recursive: true, force: true }));
   await git(root, "init", "-b", "main");
-  await scaffoldInWorkspace(openTestFs(root), { name: "Products" });
+  await scaffoldInWorkspace(root, { name: "Products" });
   const content: Record<string, string> = {
     "package.json": JSON.stringify({
       bin: "./launch/run",

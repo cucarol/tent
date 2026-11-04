@@ -47,7 +47,7 @@ test("scaffoldTent:core 生成自包含帐骨架(index,不进 SPEC/CLAUDE/AGENTS
     removeTestFixture(workspace, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
   const workspaceFs = openTestFs(workspace);
-  await scaffoldInWorkspace(workspaceFs, {
+  await scaffoldInWorkspace(workspace, {
     name: "workspace",
     nodes: [{ name: "root", type: "goal" }],
   });

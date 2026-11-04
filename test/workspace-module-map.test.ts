@@ -26,7 +26,7 @@ async function fixture(t: TestContext) {
     removeTestFixture(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
   await git(root, "init", "-b", "main");
-  await scaffoldInWorkspace(openTestFs(root), { name: "Map" });
+  await scaffoldInWorkspace(root, { name: "Map" });
   await fs.writeFile(path.join(root, ".tent/.gitignore"), "*\n");
   const adapter = openTestFs(path.join(root, ".tent"));
   const write = async (file: string, body: string) => {

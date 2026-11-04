@@ -43,7 +43,7 @@ async function fixture(t: TestContext) {
       retryDelay: 200,
     });
   });
-  await scaffoldInWorkspace(openTestFs(root), {
+  await scaffoldInWorkspace(root, {
     name: "Text",
     nodes: [
       { id: "node-goal", name: "Goal", type: "goal", body: "Goal body\n" },

@@ -34,10 +34,7 @@ export function createRoleContext(
       const roleId = input.roleId ?? makeUniqueRoleId(used);
       if (!isRoleId(roleId) || used.has(roleId))
         throw new Error("Role id is invalid or already exists");
-      if (
-        (await fs.history.available()) &&
-        (await fs.history.pathVersions(roleDocumentPath(roleId))).first
-      ) {
+      if ((await fs.history.pathVersions(roleDocumentPath(roleId))).first) {
         throw new Error("Role id already exists in history; create a new identity");
       }
       const fields = { type: "role", id: roleId, title: input.title };

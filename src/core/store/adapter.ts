@@ -30,8 +30,6 @@ export interface FsAdapter {
   /** Local text for explicit-write advice; never fetch remote materials. */
   readMaterialText(resource: string, documentPath: string): Promise<string | undefined>;
   readonly history: DocumentHistory;
-  /** File paths in the independent retained history tree; undefined without Tent history. */
-  retainedDocumentPaths(): Promise<string[] | undefined>;
   /** Track selected identity-document writes inside the existing mutation lock. */
   withDocumentHistory<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T>;
   /** 列出 dir 下的直接子项(相对帐根的路径)。 */

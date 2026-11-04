@@ -1,6 +1,6 @@
 import { removeTestFixture } from "./node-fs.js";
 import { openTestFs } from "./node-fs.js";
-import { historyHead } from "./scratch.js";
+import { captureFixtureDocuments, historyHead } from "./scratch.js";
 import { initializeFixtureHistory } from "./scratch.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -27,7 +27,7 @@ import { editNode, readNodeFile, saveNodesBatch } from "./node-edit.js";
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-material-"));
   t.after(() => removeTestFixture(root, { recursive: true, force: true }));
-  await scaffoldInWorkspace(openTestFs(root), { name: "Materials" });
+  await scaffoldInWorkspace(root, { name: "Materials" });
   const adapter = openTestFs(path.join(root, ".tent"));
   const env = {
     fs: adapter,
@@ -111,7 +111,7 @@ test("Node frontmatter and raw writes reject new invalid resource and source add
 });
 
 test("legacy addresses survive body/raw/metadata edits, source reorder and removal but not additions", async (t) => {
-  const { adapter, id, note } = await fixture(t);
+  const { root, adapter, id, note } = await fixture(t);
   const invalid = "/../spec/x.md";
   const legacy = {
     id,
@@ -124,6 +124,7 @@ test("legacy addresses survive body/raw/metadata edits, source reorder and remov
     ],
   };
   await adapter.writeFile(note, serializeFrontmatter(legacy, "legacy"));
+  await captureFixtureDocuments(path.join(root, ".tent"));
   const edit = (input: Parameters<typeof editNode>[2]) => editNode(adapter, id, input);
   await edit({ body: "body update" });
   await edit({ frontmatter: { description: "metadata update" } });
@@ -156,9 +157,9 @@ test("Core edits retain legacy addresses and workspace check reports their repai
       "legacy",
     ),
   );
+  await captureFixtureDocuments(path.join(root, ".tent"));
   const cli = (sub: string, args: string[]) =>
     runNodeCommand(sub, args, { workspace: root, json: true });
-  const read = await readNodeFile(adapter, id);
   await editNode(adapter, id, { body: "Core update" });
   const live = await readNodeFile(adapter, id);
   assert.equal(live.body, "Core update");
@@ -302,7 +303,6 @@ test("ordinary .tent files are rejected consistently by new declarations and liv
     "legacy",
   );
   await adapter.writeFile(note, legacy);
-  const retained = await readNodeFile(adapter, id);
   await editNode(adapter, id, { body: "editable legacy" });
 });
 
