@@ -1,5 +1,4 @@
 import type { FsAdapter } from "./adapter.js";
-import { contentEtag } from "../base/etag.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { isRoleId } from "../base/id.js";
 import { roleDocumentPath } from "../base/paths.js";
@@ -11,7 +10,6 @@ export type RoleDocument = {
   title?: string;
   raw: string;
   body: string;
-  etag: string;
 };
 
 export class RoleDocumentError extends Error {
@@ -47,7 +45,6 @@ export function parseRoleDocument(roleId: string, raw: string): RoleDocument {
     title: typeof data.title === "string" ? data.title : roleId,
     raw,
     body,
-    etag: contentEtag(raw),
   };
 }
 

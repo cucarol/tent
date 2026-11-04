@@ -23,17 +23,11 @@ export interface FsAdapter {
     writes: readonly { path: string; before: string | null; after: string | null }[],
     directories: readonly string[],
   ): Promise<void>;
-  /** Observe explicit content or safely validate a coverage address without reading members. */
-  observeMaterial?(
-    resource: string,
-    documentPath: string,
-  ): Promise<{
-    coverage?: true;
-    systemPath?: string;
-  }>;
+  /** Check an explicit address without reading a directory's members. */
+  observeMaterial?(resource: string, documentPath: string): Promise<void>;
   /** Share one Workspace observation among the materials of a single inspection. */
   observationScope?<T>(action: () => Promise<T>, options?: ObservationOptions): Promise<T>;
-  /** Validated local text for explicit-write advice; never fetch remote materials. */
+  /** Local text for explicit-write advice; never fetch remote materials. */
   readMaterialText?(resource: string, documentPath: string): Promise<string | undefined>;
   readonly history?: DocumentHistory;
   /** File paths in the independent retained history tree; undefined without Tent history. */

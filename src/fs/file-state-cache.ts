@@ -53,7 +53,6 @@ type Store = { entries: Record<string, Entry>; dirty: boolean };
 type ReadScope = {
   forceContent: boolean;
   values: Map<string, Promise<unknown>>;
-  pending: Map<string, Promise<unknown>>;
   stores: Map<string, Promise<Store>>;
 };
 const scopes = new AsyncLocalStorage<ReadScope>();
@@ -71,7 +70,6 @@ export async function withFileReadScope<T>(
   const scope: ReadScope = {
     forceContent,
     values: new Map(),
-    pending: new Map(),
     stores: new Map(),
   };
   return scopes.run(scope, async () => {
@@ -106,18 +104,6 @@ export function hasFileReadScope(): boolean {
 }
 export function withoutFileReadScope<T>(action: () => Promise<T>): Promise<T> {
   return scopes.exit(action);
-}
-export function scopedPendingRead<T>(key: string, read: () => Promise<T>): Promise<T> {
-  const scope = scopes.getStore();
-  if (!scope) return read();
-  let pending = scope.pending.get(key) as Promise<T> | undefined;
-  if (!pending) {
-    pending = read().finally(() => {
-      if (scope.pending.get(key) === pending) scope.pending.delete(key);
-    });
-    scope.pending.set(key, pending);
-  }
-  return pending;
 }
 export function scopedRead<T>(key: string, read: () => Promise<T>): Promise<T> {
   const scope = scopes.getStore();

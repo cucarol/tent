@@ -189,35 +189,26 @@ test("public rename rejects YAML aliases before changing unknown metadata or mov
   }
 });
 
-test("preimage history capture rejects external edits before binary write, move or remove", async (t) => {
-  const h = await fixture(t),
-    { adapter, workspaceId } = h;
-  const capture = adapter.history!.captureUnlocked.bind(adapter.history);
+test("binary write, move and remove first file the bytes on disk in history", async (t) => {
   for (const operation of ["binary", "move", "remove"] as const) {
-    const raw = `---\nid: node-alpha\ntype: prompt\n---\nBefore ${operation}\n`;
-    const edited = raw.replace(`Before ${operation}`, `OTHER_EDITOR ${operation}`);
-    await adapter.writeFile("A/A.md", raw);
-    let injected = false;
-    adapter.history!.captureUnlocked = async (changes) => {
-      const result = await capture(changes);
-      if (!injected && changes.some((c) => c.path === "A/A.md" && c.raw === raw)) {
-        injected = true;
-        await fs.writeFile(path.join(h.mount.systemRoot, "A/A.md"), edited);
-      }
-      return result;
+    const h = await fixture(t),
+      { adapter } = h;
+    const raw = `---\nid: node-alpha\ntype: prompt\n---\nHand edit before ${operation}\n`;
+    await fs.writeFile(path.join(h.mount.systemRoot, "A/A.md"), raw);
+    const capture = adapter.history!.captureUnlocked.bind(adapter.history);
+    let filed = false;
+    adapter.history!.captureUnlocked = async (changes, metadata) => {
+      filed ||= changes.some((c) => c.path === "A/A.md" && c.raw === raw);
+      return capture(changes, metadata);
     };
-    const act = () =>
-      withTentMutation(adapter, async () => {
-        if (operation === "binary")
-          await adapter.writeBinary("A/A.md", Buffer.from(raw + "MODEL_EDIT"));
-        if (operation === "move") await adapter.move("A", "Moved");
-        if (operation === "remove") await adapter.remove("A");
-      });
-    await assert.rejects(act, /Document changed during history capture/, operation);
+    await withTentMutation(adapter, async () => {
+      if (operation === "binary")
+        await adapter.writeBinary("A/A.md", Buffer.from(raw + "MODEL_EDIT"));
+      if (operation === "move") await adapter.move("A", "Moved");
+      if (operation === "remove") await adapter.remove("A");
+    });
     adapter.history!.captureUnlocked = capture;
-    assert.equal(injected, true, operation);
-    assert.equal(await adapter.readFile("A/A.md"), edited, operation);
-    assert.equal(await adapter.exists("Moved"), false);
+    assert.equal(filed, true, operation);
   }
 });
 

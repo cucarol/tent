@@ -1,10 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import type { FsAdapter } from "../src/core/store/adapter.js";
 import { documentLifecycle } from "../src/core/base/document-status.js";
-import { contentEtag } from "../src/core/base/etag.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { nodeNotePath } from "../src/core/base/paths.js";
-import { loadNodeCatalog, readCatalogDocument } from "../src/core/graph/node-catalog.js";
+import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 import { assertNodeEdit } from "../src/core/graph/node-document-write.js";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
 import type { OpsEnv } from "../src/core/graph/ops-context.js";
@@ -36,15 +35,14 @@ export async function readNodeFile(
   if (options.capture) await captureNativeNodeEdits(fs);
   const node = (await loadNodeCatalog(fs)).byId.get(nodeId);
   if (!node) throw new Error(`Node not found: ${nodeId}`);
-  const { raw } = await readCatalogDocument(fs, node);
-  const { data, body } = parseFrontmatter(raw);
   const path = nodeNotePath(node.path);
+  const raw = await fs.readFile(path);
+  const { data, body } = parseFrontmatter(raw);
   return {
     nodeId,
     directory: node.path,
     path,
     raw,
-    etag: contentEtag(raw),
     body,
     frontmatter: data,
     ...documentLifecycle(data),
@@ -76,7 +74,6 @@ export async function editNode(fs: FsAdapter, nodeId: string, edit: NodeEdit) {
   return {
     ...current,
     raw,
-    etag: contentEtag(raw),
     changed: raw !== current.raw,
     ...(await latestVersion(fs, current.path)),
   };

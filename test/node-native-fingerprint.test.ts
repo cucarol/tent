@@ -40,20 +40,32 @@ function countNodeReads(
   const opens = new Map<string, number>();
   const filenames = new Set(paths.map((file) => path.resolve(system, file)));
   const open = fs.open,
+    bytes = fs.readFile,
     readFile = adapter.readFile.bind(adapter);
+  const opened = (target: unknown) => {
+    const filename = path.resolve(String(target));
+    if (filenames.has(filename)) opens.set(filename, (opens.get(filename) ?? 0) + 1);
+  };
   t.mock.method(adapter, "readFile", async (file: string) => {
     if (paths.includes(file)) fullReads++;
     return readFile(file);
   });
-  const mock = t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
-    const filename = path.resolve(String(args[0]));
-    if (filenames.has(filename) && args[1] === "r")
-      opens.set(filename, (opens.get(filename) ?? 0) + 1);
+  const openMock = t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+    opened(args[0]);
     return open(...args);
   });
+  const readMock = t.mock.method(
+    fs,
+    "readFile",
+    async (...args: Parameters<typeof fs.readFile>) => {
+      opened(args[0]);
+      return bytes(...args);
+    },
+  );
   syncBuiltinESMExports();
   t.after(() => {
-    mock.mock.restore();
+    openMock.mock.restore();
+    readMock.mock.restore();
     syncBuiltinESMExports();
   });
   return {

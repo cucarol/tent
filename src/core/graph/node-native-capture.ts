@@ -4,7 +4,6 @@ import { documentHeader, loadNodeCatalog, type NodeCatalog } from "./node-catalo
 import { MUTATION_LOCK_PATH, isNodeNotePath, nodeNotePath } from "../base/paths.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { assertNodeEdit } from "./node-document-write.js";
-import { ReaderError } from "./reader-error.js";
 
 export type InvalidNativeNode = { path: string; nodeId?: string; reason: string };
 
@@ -33,10 +32,7 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
             if (target.readFrontmatterWithFingerprint) {
               const header = await target.readFrontmatterWithFingerprint(path);
               try {
-                if (
-                  /^[a-f0-9]{64}$/.test(header.fingerprint) &&
-                  documentHeader(header.content) === header.content
-                ) {
+                if (documentHeader(header.content) === header.content) {
                   fingerprints.set(path, header);
                   return header.content;
                 }
@@ -69,44 +65,19 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
             const path = paths[next++];
             if (path === undefined) return;
             const header = fingerprints.get(path);
-            if (
-              header &&
-              /^[a-f0-9]{64}$/.test(header.fingerprint) &&
-              blobs.get(path) === header.fingerprint
-            )
-              continue;
-            const raw = observed.get(path) ?? (await fs.readFile(path));
-            let currentHeader: string;
-            try {
-              currentHeader = documentHeader(raw);
-            } catch {
-              currentHeader = raw;
-            }
-            if (header && currentHeader !== header.content)
-              throw new ReaderError(
-                "SOURCE_CHANGED",
-                "Node metadata changed during native collection; retry",
-              );
-            documents.push({ path, raw });
+            if (header && blobs.get(path) === header.fingerprint) continue;
+            documents.push({ path, raw: observed.get(path) ?? (await fs.readFile(path)) });
           }
         }),
       );
       documents.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
       return { catalog, documents, retained };
     };
-    let collected: Awaited<ReturnType<typeof collect>>;
-    try {
-      // Candidate full reads share the header observation's scope. Fingerprints
-      // never stand in for raw bytes when a document needs to be retained.
-      collected = fs.observationScope ? await fs.observationScope(collect) : await collect();
-    } catch (error) {
-      // The unlocked scan is only a probe. If a writer invalidates it, queue
-      // one fresh observation before any validation, capture or caller action.
-      if (!locked && fs.withLock && error instanceof ReaderError && error.code === "SOURCE_CHANGED")
-        return fs.withLock(MUTATION_LOCK_PATH, () => capture(true));
-      throw error;
-    }
-    const { catalog, documents, retained } = collected;
+    // Candidate full reads share the header observation's scope. Fingerprints
+    // never stand in for raw bytes when a document needs to be retained.
+    const { catalog, documents, retained } = fs.observationScope
+      ? await fs.observationScope(collect)
+      : await collect();
     const invalid = new Map(
       [...catalog.tree.byPath.values()]
         .filter((node) => node.invalid)
@@ -178,14 +149,6 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
     changes.push(
       ...removed.filter((path) => !rejectedMoves.has(path)).map((path) => ({ path, raw: null })),
     );
-    for (const document of changes) {
-      const raw = await fs.readFile(document.path).catch((error) => {
-        if (error.code === "ENOENT") return null;
-        throw error;
-      });
-      if (raw !== document.raw)
-        throw new Error(`Node changed during native capture; retry: ${document.path}`);
-    }
     if (changes.length)
       await fs.history!.captureUnlocked(changes, { operation: "node.native-save" });
     const invalidNodes = [...invalid.values()].sort((a, b) =>

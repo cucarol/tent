@@ -16,7 +16,6 @@ import {
   OPERATIONAL_TOP_LEVEL,
 } from "../base/paths.js";
 import { isNodeId } from "../base/id.js";
-import { contentEtag } from "../base/etag.js";
 
 export { nodeNotePath } from "../base/paths.js";
 
@@ -163,7 +162,6 @@ async function loadNode(fs: FsAdapter, path: string, parent: Node | null): Promi
     path,
     name,
     fm,
-    etag: contentEtag(raw),
     body,
     children: [],
     parent,

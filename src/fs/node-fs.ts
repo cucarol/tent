@@ -10,12 +10,6 @@ import type {
   ObservationOptions,
 } from "../core/store/adapter.js";
 import { withMutationLock } from "./file-lock.js";
-import { constants } from "node:fs";
-import {
-  checkedSourceFile,
-  checkedSourceDirectory,
-  currentSourceFileIdentity,
-} from "./checked-source-file.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CaptureMetadata } from "../core/store/history-port.js";
 import { SqliteDocumentHistory, sqliteContentFingerprint } from "./sqlite-history.js";
@@ -26,7 +20,6 @@ import { workspaceRootFromSystemRoot } from "../core/base/paths.js";
 import { materialLocator, localMaterialPath, type MaterialLocator } from "../core/base/material.js";
 import { assertSystemMaterial } from "../core/graph/material-target.js";
 import { documentHeader } from "../core/graph/node-catalog.js";
-import { ReaderError } from "../core/graph/reader-error.js";
 import {
   FileTransaction,
   TRANSACTION_PATH,
@@ -37,7 +30,6 @@ import {
 import {
   cachedFileValue,
   fileState,
-  sameFileState,
   withFileReadScope,
   withoutFileReadScope,
   scopedRead,
@@ -51,8 +43,6 @@ import {
 import { withDocumentHeaderCache } from "./document-header-cache.js";
 
 type ObservedBytes = { bytes: Buffer; state: FileState };
-type ObservedPrefix = { header: string; state: FileState; bytes?: Buffer };
-type ObservedDocumentHeader = { value: DocumentHeaderObservation; state: FileState };
 
 let nextReadyScope = 0;
 
@@ -62,7 +52,6 @@ export class NodeFs implements FsAdapter {
   invalidNodeEdits?: ReadonlyMap<string, string>;
   readonly history: DocumentHistory;
   private historyWrites = new AsyncLocalStorage<Map<string, string | null>>();
-  private historyPreimages = new AsyncLocalStorage<Map<string, string | null>>();
   private readonly transactionScope = new AsyncLocalStorage<FileTransaction>();
   private readonly transactionBypass = new AsyncLocalStorage<boolean>();
   private readonly boundaryReady = new AsyncLocalStorage<boolean>();
@@ -92,9 +81,7 @@ export class NodeFs implements FsAdapter {
   }
 
   private raw<T>(action: () => Promise<T>): Promise<T> {
-    return this.transactionBypass.run(true, () =>
-      this.historyWrites.exit(() => this.historyPreimages.exit(action)),
-    );
+    return this.transactionBypass.run(true, () => this.historyWrites.exit(action));
   }
 
   private transaction(): FileTransaction {
@@ -126,13 +113,10 @@ export class NodeFs implements FsAdapter {
         if (next === parent) throw new Error("Tent transaction root is missing");
         parent = next;
       }
-      try {
-        await checkedSourceDirectory(this.root, parent);
-      } catch (error) {
-        if (/Symbolic links|Source target|Workspace root changed/.test(String(error)))
-          return "external";
-        throw error;
-      }
+      // Do not write through a link that leads out of the Tent.
+      const inside = nodePath.relative(await fs.realpath(this.root), await fs.realpath(parent));
+      if (inside === ".." || inside.startsWith(`..${nodePath.sep}`) || nodePath.isAbsolute(inside))
+        return "external";
       const stat = await fs.lstat(this.abs(p)).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return null;
         throw error;
@@ -142,7 +126,6 @@ export class NodeFs implements FsAdapter {
       if (stat.isSymbolicLink()) return "external";
       if (stat.isDirectory()) return "directory";
       if (!stat.isFile()) return "external";
-      await checkedSourceFile(this.root, this.abs(p));
       return { bytes: (await fs.readFile(this.abs(p))).toString("base64") };
     } catch (error) {
       // An external file can replace an ancestor of several recorded paths.
@@ -268,27 +251,14 @@ export class NodeFs implements FsAdapter {
     const filename = localMaterialPath(locator, this.workspaceRoot);
     if (!filename) return;
     await this.assertMaterial(locator);
-    return readStructureSource(
-      locator.kind === "uri" ? nodePath.parse(filename).root : this.workspaceRoot,
-      filename,
-    );
+    return readStructureSource(filename);
   }
 
   async observeMaterial(resource: string, documentPath: string) {
-    const workspaceRoot = workspaceRootFromSystemRoot(this.root);
-    if (!workspaceRoot) throw new Error("Material observation requires a Workspace .tent root");
+    if (!this.workspaceRoot)
+      throw new Error("Material observation requires a Workspace .tent root");
     await this.assertMaterial(materialLocator(resource, documentPath, true));
-    const observed = await observeMaterialResource(workspaceRoot, documentPath, resource);
-    const relative = nodePath.relative(this.root, observed.canonicalPath);
-    const inside =
-      relative !== ".." &&
-      !relative.startsWith(`..${nodePath.sep}`) &&
-      !nodePath.isAbsolute(relative);
-    const systemPath = inside ? relative.split(nodePath.sep).join("/") : undefined;
-    return {
-      ...observed,
-      ...(systemPath ? { systemPath } : {}),
-    };
+    await observeMaterialResource(this.workspaceRoot, documentPath, resource);
   }
 
   private abs(p: string): string {
@@ -315,7 +285,7 @@ export class NodeFs implements FsAdapter {
 
   async readFile(path: string): Promise<string> {
     await this.ready();
-    return (await this.readBytes(path, false)).bytes.toString("utf8");
+    return (await this.readBytes(path)).bytes.toString("utf8");
   }
 
   async readFrontmatter(path: string): Promise<string> {
@@ -324,17 +294,11 @@ export class NodeFs implements FsAdapter {
 
   async readFrontmatterWithFingerprint(path: string): Promise<DocumentHeaderObservation> {
     await this.ready();
-    return withFileReadScope(async () => {
-      const filename = this.abs(path);
-      const state = fileState(await fs.stat(filename, { bigint: true }));
-      const key = `document-header:${filename}`;
-      const previous = peekScopedRead<ObservedDocumentHeader>(key);
-      if (previous) {
-        const observed = await previous;
-        if (sameFileState(observed.state, state)) return observed.value;
-        forgetScopedRead(key);
-      }
-      const observed = await scopedRead(key, async () => {
+    const filename = this.abs(path);
+    const key = `document-header:${filename}`;
+    return withFileReadScope(() =>
+      scopedRead(key, async () => {
+        const state = fileState(await fs.stat(filename, { bigint: true }));
         const cache = await this.readCacheFile();
         const cached = await cachedFileValue(
           cache,
@@ -347,26 +311,22 @@ export class NodeFs implements FsAdapter {
             typeof (value as DocumentHeaderObservation).fingerprint === "string" &&
             /^[a-f0-9]{64}$/.test((value as DocumentHeaderObservation).fingerprint),
         );
-        if (cached) return { value: cached, state };
-        const read = await this.readBytes(path, false);
+        if (cached) return cached;
+        const read = await this.readBytes(path);
         // Match readFile's UTF-8 replacement/BOM semantics, not a raw-byte digest.
         const raw = read.bytes.toString("utf8");
+        const fingerprint = sqliteContentFingerprint(raw);
         let content: string;
         try {
           content = documentHeader(raw);
         } catch {
           // Preserve malformed-header diagnostics without persisting a whole body.
-          return {
-            value: { content: raw, fingerprint: sqliteContentFingerprint(raw) },
-            state: read.state,
-          };
+          return { content: raw, fingerprint };
         }
-        const value = { content, fingerprint: sqliteContentFingerprint(raw) };
-        await rememberFileValue(cache, key, read.state, value);
-        return { value, state: read.state };
-      });
-      return observed.value;
-    });
+        await rememberFileValue(cache, key, read.state, { content, fingerprint });
+        return { content, fingerprint };
+      }),
+    );
   }
 
   /** A derived cache must retain the identity of the observation that supplied its content. */
@@ -383,37 +343,25 @@ export class NodeFs implements FsAdapter {
             return { content: bytes.toString("utf8"), state };
           }
         }
-        const prefix = await scopedRead(`prefix-bytes:${this.abs(path)}`, () =>
-          this.readPrefix(path),
+        const state = fileState(await fs.stat(this.abs(path), { bigint: true }));
+        const cache = await this.readCacheFile();
+        const key = `header:${this.abs(path)}`;
+        const cached = await cachedFileValue(
+          cache,
+          key,
+          state,
+          (value): value is string => typeof value === "string",
         );
-        return { content: prefix.header, state: prefix.state };
+        if (cached !== undefined) return { content: cached, state };
+        const content = await this.readHeaderBytes(path);
+        await rememberFileValue(cache, key, state, content);
+        return { content, state };
       }),
     );
   }
 
-  private async readPrefix(path: string): Promise<ObservedPrefix> {
-    const state = fileState(await fs.stat(this.abs(path), { bigint: true }));
-    const cache = await this.readCacheFile();
-    const key = `header:${this.abs(path)}`;
-    const cached = await cachedFileValue(
-      cache,
-      key,
-      state,
-      (value): value is string => typeof value === "string",
-    );
-    if (cached !== undefined) return { header: cached, state };
-    const { header, bytes } = await this.readFrontmatterUncached(path, state);
-    const after = fileState(await fs.stat(this.abs(path), { bigint: true }));
-    if (!sameFileState(state, after))
-      throw new ReaderError("SOURCE_CHANGED", "Source changed while reading header");
-    await rememberFileValue(cache, key, state, header);
-    return { header, bytes, state };
-  }
-
-  private async readFrontmatterUncached(
-    path: string,
-    expected: FileState,
-  ): Promise<{ header: string; bytes: Buffer; complete: boolean }> {
+  /** Read only as far as the closing fence. */
+  private async readHeaderBytes(path: string): Promise<string> {
     const handle = await fs.open(this.abs(path), "r");
     const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
     const chunk = Buffer.alloc(4096);
@@ -422,22 +370,10 @@ export class NodeFs implements FsAdapter {
     let raw = "";
     let openingEnd = -1;
     let searchFrom = 0;
-    const chunks: Buffer[] = [];
     try {
-      // Path stats can both see the original file after a directory is swapped
-      // out and restored. Bind the bytes to the handle actually opened as well.
-      const opened = fileState(await handle.stat({ bigint: true }));
-      if (!sameFileState(opened, expected))
-        throw new ReaderError("SOURCE_CHANGED", "Source changed while reading header");
-      const finish = async (header: string, complete: boolean) => {
-        if (!sameFileState(fileState(await handle.stat({ bigint: true })), opened))
-          throw new ReaderError("SOURCE_CHANGED", "Source changed while reading header");
-        return { header, bytes: Buffer.concat(chunks), complete };
-      };
       while (true) {
         const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
         const eof = bytesRead === 0;
-        if (bytesRead) chunks.push(Buffer.from(chunk.subarray(0, bytesRead)));
         raw += decoder.decode(chunk.subarray(0, bytesRead), { stream: !eof });
 
         if (openingEnd < 0) {
@@ -446,7 +382,7 @@ export class NodeFs implements FsAdapter {
             openingEnd = match[0].length;
             searchFrom = openingEnd;
           } else if (eof || !/^(?:\uFEFF)?(?:-{0,2}|---[\t ]*\r?)$/.test(raw)) {
-            return await finish("", eof);
+            return "";
           } else {
             continue;
           }
@@ -462,7 +398,7 @@ export class NodeFs implements FsAdapter {
             closing[0].endsWith("\n") ||
             (end < raw.length && !(raw[end] === "\r" && end === raw.length - 1))
           ) {
-            return await finish(raw.slice(0, end), eof);
+            return raw.slice(0, end);
           }
           searchFrom = closing.index;
         } else {
@@ -476,7 +412,7 @@ export class NodeFs implements FsAdapter {
               openingEnd - 1,
             ) + 1;
         }
-        if (eof) return await finish(raw, true);
+        if (eof) return raw;
       }
     } finally {
       await handle.close();
@@ -499,89 +435,16 @@ export class NodeFs implements FsAdapter {
 
   async readBinary(path: string): Promise<Uint8Array> {
     await this.ready();
-    return (await this.readBytes(path, true)).bytes;
+    return (await this.readBytes(path)).bytes;
   }
 
-  private async readBytes(path: string, checked: boolean): Promise<ObservedBytes> {
-    const key = `bytes:${this.abs(path)}`;
-    const previous = peekScopedRead<ObservedBytes>(key);
-    if (previous) {
-      const observed = await previous;
-      // Reused bytes have no new opened handle to validate their current path.
-      // Uncached reads perform this check in the validated-open flow below.
-      const current = fileState(
-        checked
-          ? await currentSourceFileIdentity(this.root, this.abs(path))
-          : await fs.stat(this.abs(path), { bigint: true }),
-      );
-      if (sameFileState(observed.state, current)) return observed;
-      // Core rereads documents to detect conflicts. A request-local snapshot must
-      // not turn that recheck into a comparison with its own earlier bytes.
-      forgetScopedRead(key);
-    }
-    return scopedRead(key, () =>
-      this.readBytesUncached(
-        path,
-        checked,
-        peekScopedRead<ObservedPrefix>(`prefix-bytes:${this.abs(path)}`),
-      ),
-    );
-  }
-
-  private async readBytesUncached(
-    path: string,
-    checked: boolean,
-    pendingPrefix?: Promise<ObservedPrefix>,
-  ): Promise<ObservedBytes> {
-    const candidate = this.abs(path);
-    if (checked) await currentSourceFileIdentity(this.root, candidate);
-    const handle = await fs.open(
-      candidate,
-      checked
-        ? constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
-        : "r",
-    );
-    try {
-      const before = await handle.stat({ bigint: true }),
-        current = checked ? await currentSourceFileIdentity(this.root, candidate) : undefined;
-      if (current && (before.dev !== current.dev || before.ino !== current.ino))
-        throw new ReaderError("SOURCE_CHANGED", "Source changed while opening");
-      const prefix = await pendingPrefix;
-      const retained =
-        prefix?.bytes && sameFileState(prefix.state, fileState(before)) ? prefix.bytes : undefined;
-      let buf: Buffer;
-      // Keep native readFile behavior for unknown-size and over-limit inputs.
-      if (retained || (before.isFile() && before.size > 0n && before.size <= 0x7fffffffn)) {
-        const start = retained?.length ?? 0;
-        const rest = Buffer.alloc(Number(before.size) - start);
-        let offset = 0;
-        while (offset < rest.length) {
-          const { bytesRead } = await handle.read(
-            rest,
-            offset,
-            rest.length - offset,
-            start + offset,
-          );
-          if (!bytesRead) throw new ReaderError("SOURCE_CHANGED", "Source truncated while reading");
-          offset += bytesRead;
-        }
-        buf = retained ? Buffer.concat([retained, rest]) : rest;
-      } else buf = await handle.readFile();
-      const after = await handle.stat({ bigint: true }),
-        final = checked
-          ? await currentSourceFileIdentity(this.root, candidate)
-          : await fs.stat(candidate, { bigint: true });
-      if (
-        BigInt(buf.length) !== before.size ||
-        !sameFileState(fileState(after), fileState(before)) ||
-        final.dev !== before.dev ||
-        final.ino !== before.ino
-      )
-        throw new ReaderError("SOURCE_CHANGED", "Source changed while reading");
-      return { bytes: buf, state: fileState(before) };
-    } finally {
-      await handle.close();
-    }
+  /** One request reads a file once; the state comes first, so an edit mid-read only misses the cache. */
+  private readBytes(path: string): Promise<ObservedBytes> {
+    const filename = this.abs(path);
+    return scopedRead(`bytes:${filename}`, async () => {
+      const state = fileState(await fs.stat(filename, { bigint: true }));
+      return { bytes: await fs.readFile(filename), state };
+    });
   }
 
   async writeBinary(path: string, data: Uint8Array): Promise<void> {
@@ -670,42 +533,19 @@ export class NodeFs implements FsAdapter {
 
   async withDocumentHistory<T>(action: () => Promise<T>, metadata?: CaptureMetadata): Promise<T> {
     if (!(await hasDocumentHistory(this))) return action();
-    return this.recordDocumentChanges(action, metadata);
+    return this.historyWrites.run(new Map(), async () => {
+      const result = await action();
+      const changes = [...this.historyWrites.getStore()!].map(([path, raw]) => ({ path, raw }));
+      if (changes.length)
+        await this.history.captureUnlocked(changes, {
+          operation: metadata?.operation ?? "document.capture",
+          ...metadata,
+        });
+      return result;
+    });
   }
 
-  private async recordDocumentChanges<T>(
-    action: () => Promise<T>,
-    metadata?: CaptureMetadata,
-  ): Promise<T> {
-    return this.historyPreimages.run(new Map(), () =>
-      this.historyWrites.run(new Map(), async () => {
-        const result = await action();
-        const changes = [...this.historyWrites.getStore()!].map(([path, raw]) => ({ path, raw }));
-        try {
-          for (const change of changes) {
-            const current = await this.readFile(change.path).catch((error) => {
-              if (error.code === "ENOENT") return null;
-              throw error;
-            });
-            if (current !== change.raw)
-              throw new Error(`Document changed during save: ${change.path}`);
-          }
-          if (changes.length) {
-            await this.history.captureUnlocked(changes, {
-              operation: metadata?.operation ?? "document.capture",
-              ...metadata,
-            });
-          }
-        } catch (error) {
-          throw new Error(
-            `Tent files may already be saved, but history capture failed; reread before retrying: ${String(error)}`,
-          );
-        }
-        return result;
-      }),
-    );
-  }
-
+  /** The bytes on disk go into history first, so a hand edit is never overwritten unrecorded. */
   private async beforeHistoryChange(paths: string[]) {
     for (const path of paths) {
       const invalid = this.invalidNodeEdits?.get(path);
@@ -714,33 +554,17 @@ export class NodeFs implements FsAdapter {
     const tracked = this.historyWrites.getStore();
     if (!tracked) return;
     const before = [];
-    const expected = new Map<string, string | null>();
     for (const path of new Set(paths.filter(isHistoryDocument))) {
+      if (tracked.has(path)) continue;
       const raw = await this.readFile(path).catch((error) => {
         if (error.code === "ENOENT") return null;
         throw error;
       });
-      if (tracked.has(path) && tracked.get(path) !== raw)
-        throw new Error(`Document changed before save: ${path}; reread before retrying`);
-      expected.set(path, raw);
-      if (tracked.has(path)) continue;
-      this.historyPreimages.getStore()!.set(path, raw);
       tracked.set(path, raw);
       if (raw !== null) before.push({ path, raw });
     }
-    // Preserve a selected preimage before destructive operations; never stage unrelated files.
     if (before.length)
       await this.history.captureUnlocked(before, { operation: "document.external-capture" });
-    // Git can take time. An editor does not hold our lock: never overwrite edits
-    // made during capture. The final filesystem operation is still not a CAS.
-    for (const [path, raw] of expected) {
-      const current = await this.readFile(path).catch((error) => {
-        if (error.code === "ENOENT") return null;
-        throw error;
-      });
-      if (current !== raw)
-        throw new Error(`Document changed during history capture: ${path}; reread before retrying`);
-    }
     return tracked;
   }
 

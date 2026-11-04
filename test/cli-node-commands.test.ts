@@ -7,7 +7,6 @@ import test, { type TestContext } from "node:test";
 import { nodeHelpText, runNodeCommand } from "../src/cli/node-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
-import { moveNode } from "../src/core/graph/move-ops.js";
 
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(path.join(testScratchRoot(), "node-cli-"));
@@ -108,7 +107,7 @@ test("all three Node types use the same explicit material creation path", async 
 });
 
 test("rename, move, archive and delete preserve native document edits and retain history", async (t) => {
-  const { root, tent, cli, read } = await fixture(t);
+  const { root, cli, read } = await fixture(t);
   const created = (
     await cli("create", [
       "Child",
@@ -128,11 +127,6 @@ test("rename, move, archive and delete preserve native document edits and retain
   const renamed = await cli("rename", [created.nodeId, "Renamed"]);
   assert.equal(renamed.path, ".tent/Parent/Renamed/Renamed.md");
   assert.equal((await read(renamed.path)).body, "Native update");
-  const env = { fs: tent, clock: { now: () => "2026-11-03T00:00:00Z" }, tentName: "Node commands" };
-  await assert.rejects(
-    moveNode(env, created.nodeId, null, { mode: "inside" }, "Parent/Child"),
-    /path changed/,
-  );
   await cli("move", [created.nodeId, "--parent", "root"]);
   const moved = ".tent/Renamed/Renamed.md";
   assert.equal((await read(moved)).body, "Native update");

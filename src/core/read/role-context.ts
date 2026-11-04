@@ -53,10 +53,6 @@ export function createRoleContext(
       await fs.writeFile(document.path, raw);
       const version = await captureDocumentUnlocked(fs, document.path, raw, {
         operation: "role.create",
-      }).catch((error) => {
-        throw new Error(
-          `Role may already be saved, but history capture failed; reread before retrying: ${String(error)}`,
-        );
       });
       return { roleId, path: document.path, ...(version ? { version } : {}) };
     },

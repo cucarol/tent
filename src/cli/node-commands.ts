@@ -180,7 +180,7 @@ async function runNodeCommandOpened(
             return input;
           });
           return mutationPrint(result, json, (value) =>
-            value.results.map((item) => `${item.nodeId}  ${item.path}  ${item.etag}`).join("\n"),
+            value.results.map((item) => `${item.nodeId}  ${item.path}`).join("\n"),
           );
         }
         const { materialFields } = await import("../core/base/material.js");
@@ -188,7 +188,6 @@ async function runNodeCommandOpened(
         const { validateNodeName } = await import("../core/store/scaffold.js");
         const { createNode } = await import("../core/graph/ops.js");
         const { loadNodeCatalog } = await import("../core/graph/node-catalog.js");
-        const { contentEtag } = await import("../core/base/etag.js");
         const name = oneTarget(positionals, nodeHelpText(sub));
         if (typeof name !== "string") return name;
         if (!flags.type) return usage("tent node create requires --type <type>");
@@ -221,16 +220,8 @@ async function runNodeCommandOpened(
           ...(flags.tags ? { tags: parseCsv(flags.tags).map(normalizeTagName) } : {}),
         });
         const node = (await loadNodeCatalog(fs)).byId.get(nodeId)!;
-        const raw = await fs.readFile(nodeNotePath(node.path));
         return mutationPrint(
-          {
-            node: {
-              nodeId,
-              type: node.type,
-              path: `.tent/${nodeNotePath(node.path)}`,
-              etag: contentEtag(raw),
-            },
-          },
+          { node: { nodeId, type: node.type, path: `.tent/${nodeNotePath(node.path)}` } },
           json,
           (value) => `Created ${formatNode(value)}`,
         );
@@ -257,13 +248,12 @@ async function runNodeCommandOpened(
         if (!Object.prototype.hasOwnProperty.call(flags, "parent")) {
           return usage("tent node move <nodeId> --parent <nodeId|root> [--json]");
         }
-        const expectedPath = await selectedPath(fs, target);
         const parent = flags.parent;
         const newParentId = !parent || parent === "root" ? null : parent;
         if (newParentId && !isNodeId(newParentId)) {
           return usage("tent node move --parent must be root or a stable node- id");
         }
-        const result = await moveNode(env, target, newParentId, { mode: "inside" }, expectedPath);
+        const result = await moveNode(env, target, newParentId, { mode: "inside" });
         for (const [from, to] of Object.entries(result.pathMap ?? {}))
           if (from !== to) writtenNodePaths.add(nodeNotePath(to));
         return await mutationPrint(result, json, () => `Moved ${target}`);
@@ -272,7 +262,6 @@ async function runNodeCommandOpened(
         const { archiveNode } = await import("../core/graph/node-lifecycle.js");
         const target = oneTarget(positionals, `tent node ${sub} <nodeId> [--json]`);
         if (typeof target !== "string") return target;
-        await selectedPath(fs, nodeRef(target));
         const result = await archiveNode(env, nodeRef(target));
         return await mutationPrint(result, json, () => `Archived ${target}`);
       }

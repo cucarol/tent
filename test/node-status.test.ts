@@ -6,48 +6,12 @@ import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { loadTent, isContentMutable, isUsableNode } from "../src/core/store/tree.js";
-import { archiveNode, NodeLifecycleError } from "../src/core/graph/node-lifecycle.js";
+import { archiveNode } from "../src/core/graph/node-lifecycle.js";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 import { documentLifecycle } from "../src/core/base/document-status.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { editNode } from "./node-edit.js";
 
-test("archive reports saved paths and reachable preimages when outer history finalization fails", async (t) => {
-  const { root, adapter, env } = await fixture(t);
-  const capture = adapter.history.captureUnlocked.bind(adapter.history);
-  let afterCapture = false;
-  adapter.history.captureUnlocked = async (changes, metadata) => {
-    const result = await capture(changes, metadata);
-    const rootChange = changes.find((c) => c.path === "A/A.md");
-    if (
-      !afterCapture &&
-      changes.length === 3 &&
-      rootChange?.raw &&
-      parseFrontmatter(rootChange.raw).data.status === "deprecated"
-    ) {
-      afterCapture = true;
-      await fs.writeFile(
-        path.join(root, "A/A.md"),
-        rootChange.raw + "\nexternal change after capture",
-      );
-    }
-    return result;
-  };
-  await assert.rejects(
-    () => archiveNode(env, "node-root"),
-    (asyncError) => {
-      assert.ok(asyncError instanceof NodeLifecycleError);
-      assert.deepEqual(asyncError.details.savedPaths.sort(), ["A/A.md", "A/B/B.md", "A/D/D.md"]);
-      assert.ok(asyncError.details.beforeCommit);
-      assert.match(asyncError.message, /Document changed during save/);
-      return true;
-    },
-  );
-  assert.ok(afterCapture);
-  assert.match(await adapter.readFile("A/A.md"), /external change after capture/);
-  // The explicit preimage is reachable despite the outer failure; current files are not rolled back.
-  assert.ok((await adapter.history.changesInRange()).length > 0);
-});
 const raw = (id: string, extra = "", body = "fact") =>
   `\uFEFF---\r\nid: ${id}\r\ntype: prompt\r\nextra: {nested: [1, two]} # preserve\r\n${extra}---\r\n${body}`;
 async function fixture(t: TestContext) {
@@ -144,7 +108,7 @@ test("archive captures selected documents in ordinary history and status edits r
   assert.equal(await adapter.history.read({ commit: archived.commit, path: "A/A.md" }), before);
 });
 
-test("archive errors report attempted writes and restore the whole unpublished group", async (t) => {
+test("a failed archive write restores the whole group", async (t) => {
   const { adapter, env } = await fixture(t);
   const beforeRoot = await adapter.readFile("A/A.md"),
     beforeChild = await adapter.readFile("A/B/B.md");
@@ -153,19 +117,9 @@ test("archive errors report attempted writes and restore the whole unpublished g
     if (file === "A/B/B.md") throw new Error("injected write failure");
     await write(file, raw);
   };
-  await assert.rejects(archiveNode(env, "node-root"), (asyncError) => {
-    assert.ok(asyncError instanceof NodeLifecycleError);
-    assert.deepEqual(asyncError.details.savedPaths, ["A/A.md"]);
-    assert.ok(asyncError.details.beforeCommit);
-    return true;
-  });
+  await assert.rejects(archiveNode(env, "node-root"), /injected write failure/);
   assert.equal(await adapter.readFile("A/A.md"), beforeRoot);
   assert.equal(await adapter.readFile("A/B/B.md"), beforeChild);
-  const captured = await adapter.history.captureUnlocked([]);
-  assert.equal(
-    await adapter.history.read({ commit: captured.commit!, path: "A/A.md" }),
-    beforeRoot,
-  );
 });
 
 test("unknown lifecycle blocks archive while ordinary mode metadata does not", async (t) => {
@@ -181,28 +135,14 @@ test("unknown lifecycle blocks archive while ordinary mode metadata does not", a
   assert.equal(parseFrontmatter(await adapter.readFile("A/A.md")).data.status, "deprecated");
 });
 
-test("archive publication failure reports saved files and preserves the reachable preimage", async (t) => {
+test("a failed archive publication restores the files", async (t) => {
   const { adapter, env } = await fixture(t);
   const before = await adapter.readFile("A/A.md");
   const capture = adapter.history.captureUnlocked.bind(adapter.history);
   adapter.history.captureUnlocked = async (changes, metadata) => {
-    if (
-      changes.length === 3 &&
-      changes.every((c) => c.raw !== null && parseFrontmatter(c.raw).data.status === "deprecated")
-    ) {
-      throw new Error("injected publication failure");
-    }
+    if (metadata?.operation === "node.archive") throw new Error("injected publication failure");
     return capture(changes, metadata);
   };
-  let beforeCommit: string | undefined;
-  await assert.rejects(archiveNode(env, "node-root"), (error) => {
-    assert.ok(error instanceof NodeLifecycleError);
-    assert.match(error.message, /publication failure/);
-    assert.deepEqual(error.details.savedPaths.sort(), ["A/A.md", "A/B/B.md", "A/D/D.md"]);
-    beforeCommit = error.details.beforeCommit;
-    return true;
-  });
-  assert.ok(beforeCommit);
-  assert.equal(await adapter.history.read({ commit: beforeCommit, path: "A/A.md" }), before);
+  await assert.rejects(archiveNode(env, "node-root"), /publication failure/);
   assert.equal(await adapter.readFile("A/A.md"), before);
 });

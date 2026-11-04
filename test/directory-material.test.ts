@@ -50,10 +50,7 @@ test("directory and prefix declarations inspect local and external addresses wit
       pathToFileURL(external).href + "/",
       pathToFileURL(path.join(external, "member*")).href,
     ]) {
-      const observation = await adapter.observeMaterial(resource, "index.md");
-      assert.equal(observation.coverage, true);
-
-      assert.equal("directoryFiles" in observation, false);
+      await adapter.observeMaterial(resource, "index.md");
     }
     await assert.rejects(adapter.observeMaterial("../missing/", "index.md"), /ENOENT/);
     await assert.rejects(adapter.observeMaterial("../missing/a-*", "index.md"), /ENOENT/);
@@ -164,11 +161,8 @@ test("directory declarations preserve slash, reject fragments and enforce safe s
     link,
     process.platform === "win32" ? "junction" : "dir",
   );
-  assert.equal((await observeMaterialResource(workspace, "index.md", "../src/")).coverage, true);
-  await assert.rejects(
-    observeMaterialResource(workspace, "index.md", "../src/link/"),
-    /Symbolic links/,
-  );
+  await observeMaterialResource(workspace, "index.md", "../src/");
+  await observeMaterialResource(workspace, "index.md", "../src/link/");
 });
 
 test("directory markers cannot select Node files as Card sources or response evidence", async (t) => {

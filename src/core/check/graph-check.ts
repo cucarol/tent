@@ -211,8 +211,7 @@ async function checkGraphInScope(
   async function readDocuments(pending: readonly DocumentRead[]) {
     const observed = new Array<PromiseSettledResult<Uint8Array>>(pending.length);
     let next = 0;
-    // Keep independent path/handle checks active when one read is slow. This is
-    // bounded I/O concurrency, not a larger batch that waits for its slowest file.
+    // Bounded I/O concurrency, not a larger batch that waits for its slowest file.
     await Promise.all(
       Array.from({ length: Math.min(32, pending.length) }, async () => {
         for (;;) {

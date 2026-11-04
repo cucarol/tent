@@ -60,9 +60,9 @@ export async function readText(filename: string): Promise<string | undefined> {
   }
 }
 
-async function readSectionSource(root: string, filename: string): Promise<string | undefined> {
+async function readSectionSource(filename: string): Promise<string | undefined> {
   try {
-    return await readStructureSource(root, filename);
+    return await readStructureSource(filename);
   } catch (error) {
     if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
     throw error;
@@ -143,7 +143,7 @@ export async function changedSections(
       const observe = async (locked: boolean) => {
         const record = await readRecord(systemRoot, recordKey);
         const prints = sectionFingerprints(
-          await readSectionSource(workspaceRoot, path.join(workspaceRoot, workspacePath)),
+          await readSectionSource(path.join(workspaceRoot, workspacePath)),
           file.map(({ heading }) => {
             const line = record.get(heading)?.line;
             return line === undefined ? { heading } : { heading, line };
@@ -188,7 +188,7 @@ export async function settleSections(
     [...byFile(sections.observed.values()).values()].map((file) =>
       withRecordLock(systemRoot, path.resolve(workspaceRoot, file[0]!.path), async () => {
         const now = sectionFingerprints(
-          await readSectionSource(workspaceRoot, path.join(workspaceRoot, file[0]!.path)),
+          await readSectionSource(path.join(workspaceRoot, file[0]!.path)),
           file,
         );
         const settled = file.filter(

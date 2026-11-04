@@ -13,75 +13,37 @@ import { runHookCommand } from "../src/cli/hook.js";
 import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { documentHeader } from "../src/core/graph/node-catalog.js";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
-import { ReaderError } from "../src/core/graph/reader-error.js";
-import { editNode, readNodeFile } from "./node-edit.js";
 
-for (const writer of ["native save", "locked save"] as const) {
-  test(
-    `native capture observes a concurrent ${writer} during collection before retaining bytes`,
-    {
-      // Windows disallows atomic replacement while the old handle is held open.
-      skip: writer === "locked save" && process.platform === "win32",
-    },
-    async (t) => {
-      const { workspace, adapter, output } = await fixture(t);
-      const file = "需求/结果/结果.md";
-      const filename = path.join(workspace, ".tent", file);
-      const head = await adapter.history.currentCommit();
-      const original = await adapter.readFile(file);
-      const open = fs.open.bind(fs);
-      let competed = false;
-      const mocked = t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
-        const handle = await open(...args);
-        if (
-          path.resolve(String(args[0])).toLowerCase() !== filename.toLowerCase() ||
-          args[1] !== "r" ||
-          competed
-        )
-          return handle;
-        return new Proxy(handle, {
-          get(target, key) {
-            if (key === "read" || key === "readFile")
-              return async (...readArgs: unknown[]) => {
-                const result = await Reflect.apply(target[key], target, readArgs);
-                if (!competed) {
-                  assert.ok(
-                    key === "read" ? result.bytesRead > 0 : Buffer.byteLength(result) > 0,
-                    "the opened handle supplied real bytes before the competing write",
-                  );
-                  competed = true;
-                  if (writer === "locked save") {
-                    const current = await readNodeFile(adapter, output);
-                    await editNode(adapter, output, {
-                      body: `${current.body}\ncompeting save`,
-                    });
-                  } else await fs.writeFile(filename, original + "\ncompeting save\n");
-                }
-                return result;
-              };
-            const value = Reflect.get(target, key, target);
-            return typeof value === "function" ? value.bind(target) : value;
-          },
-        });
-      });
-      syncBuiltinESMExports();
-      let result;
-      try {
-        result = await captureNativeNodeEdits(adapter);
-      } finally {
-        mocked.mock.restore();
-        syncBuiltinESMExports();
-      }
-      assert.equal(competed, true, `a real ${writer} changed the opened file during the scan`);
-      assert.deepEqual(result.invalidNodes, []);
-      const raw = await adapter.readFile(file);
-      assert.equal(raw.split("competing save").length, 2);
-      const captured = await adapter.history.currentCommit();
-      assert.equal(await adapter.history.read({ commit: captured!, path: file }), raw);
-      assert.equal((await adapter.history.changesInRange({ from: head! })).length, 1);
-    },
-  );
-}
+test("a save during collection is captured by the next command", async (t) => {
+  const { workspace, adapter } = await fixture(t);
+  const file = "需求/结果/结果.md";
+  const filename = path.join(workspace, ".tent", file);
+  const original = await adapter.readFile(file);
+  const readFile = fs.readFile;
+  let competed = false;
+  const mocked = t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+    const result = await readFile(...args);
+    if (!competed && path.resolve(String(args[0])).toLowerCase() === filename.toLowerCase()) {
+      competed = true;
+      await fs.writeFile(filename, original + "\ncompeting save\n");
+    }
+    return result;
+  });
+  syncBuiltinESMExports();
+  try {
+    await captureNativeNodeEdits(adapter);
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.equal(competed, true, "a real save changed the file during the scan");
+  const next = await captureNativeNodeEdits(adapter);
+  assert.deepEqual(next.invalidNodes, []);
+  const raw = await adapter.readFile(file);
+  assert.match(raw, /competing save/);
+  const captured = await adapter.history.currentCommit();
+  assert.equal(await adapter.history.read({ commit: captured!, path: file }), raw);
+});
 
 async function fixture(t: TestContext) {
   await fs.mkdir(path.resolve(testScratchRoot()), { recursive: true });
@@ -114,39 +76,28 @@ async function fixture(t: TestContext) {
   return { workspace, adapter, goal, output, options, parse };
 }
 
-for (const failure of ["changed-twice", "storage"] as const) {
-  test(`native collection propagates ${failure} without retrying a locked observation`, async (t) => {
-    const { adapter } = await fixture(t);
-    const file = "需求/结果/结果.md";
-    const head = await adapter.history.currentCommit();
-    const raw = await adapter.readFile(file);
-    const read = adapter.readFile.bind(adapter);
-    const header = adapter.readFrontmatterWithFingerprint.bind(adapter);
-    const lock = adapter.withLock.bind(adapter);
-    let reads = 0,
-      locks = 0;
-    const error =
-      failure === "changed-twice"
-        ? new ReaderError("SOURCE_CHANGED", "controlled concurrent change")
-        : Object.assign(new Error("controlled storage failure"), { code: "EACCES" });
-    adapter.readFrontmatterWithFingerprint = async (path) => {
-      if (path === file) {
-        reads++;
-        throw error;
-      }
-      return header(path);
-    };
-    adapter.withLock = (path, action) => {
-      locks++;
-      return lock(path, action);
-    };
-    await assert.rejects(captureNativeNodeEdits(adapter), (caught) => caught === error);
-    assert.equal(reads, failure === "changed-twice" ? 2 : 1);
-    assert.equal(locks, failure === "changed-twice" ? 1 : 0);
-    assert.equal(await read(file), raw);
-    assert.equal(await adapter.history.currentCommit(), head);
-  });
-}
+test("native collection propagates a read failure without taking the lock", async (t) => {
+  const { adapter } = await fixture(t);
+  const file = "需求/结果/结果.md";
+  const head = await adapter.history.currentCommit();
+  const raw = await adapter.readFile(file);
+  const header = adapter.readFrontmatterWithFingerprint.bind(adapter);
+  const lock = adapter.withLock.bind(adapter);
+  let locks = 0;
+  const error = Object.assign(new Error("controlled storage failure"), { code: "EACCES" });
+  adapter.readFrontmatterWithFingerprint = async (path) => {
+    if (path === file) throw error;
+    return header(path);
+  };
+  adapter.withLock = (path, action) => {
+    locks++;
+    return lock(path, action);
+  };
+  await assert.rejects(captureNativeNodeEdits(adapter), (caught) => caught === error);
+  assert.equal(locks, 0);
+  assert.equal(await adapter.readFile(file), raw);
+  assert.equal(await adapter.history.currentCommit(), head);
+});
 
 test("native capture skips an unchanged lock and rereads bytes and HEAD after acquiring a needed lock", async (t) => {
   const { adapter, output } = await fixture(t);
@@ -203,7 +154,7 @@ test("valid native metadata retains exact declarations and opaque provenance val
 
 for (const malformed of ["yaml", "schema"] as const)
   test(`native ${malformed} errors remain untouched and visible in check`, async (t) => {
-    const { adapter, goal, output, options, parse } = await fixture(t);
+    const { adapter, goal, options } = await fixture(t);
     const file = "需求/结果/结果.md";
     const previous = await adapter.history.currentCommit();
     const original = await adapter.readFile(file);
@@ -225,7 +176,7 @@ for (const malformed of ["yaml", "schema"] as const)
   });
 
 test("an unretained invalid descendant cannot be moved or captured through its valid parent", async (t) => {
-  const { adapter, goal, options, parse } = await fixture(t);
+  const { adapter, goal, options } = await fixture(t);
   const head = await adapter.history.currentCommit();
   const file = "需求/坏文件/坏文件.md";
   const raw = "---\nid: node-badnative\ntype: invalid\n---\nKeep these bytes";

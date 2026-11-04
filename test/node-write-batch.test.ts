@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
-import { contentEtag } from "../src/core/base/etag.js";
 import { readOnlyFs } from "../src/core/store/adapter.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { type NodeWriteBatchInput } from "../src/core/write/node-write-batch.js";
@@ -87,7 +86,6 @@ test("batch creates forward parents and mutual links and captures once in input 
   for (const node of result.results) {
     const name = node.path.split("/").at(-1)!;
     const raw = await fs.readFile(`${node.path}/${name}.md`);
-    assert.equal(node.etag, contentEtag(raw));
     assert.equal("generated" in parseFrontmatter(raw).data, false);
   }
   const child = parseFrontmatter(await fs.readFile("Parent/Child/Child.md"));

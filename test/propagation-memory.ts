@@ -255,6 +255,5 @@ export class PropagationMemoryFs implements FsAdapter {
     const locator = materialLocator(resource, documentPath);
     if (locator.kind !== "path") throw new Error("Fixture only observes local materials");
     await this.readFile(locator.target);
-    return {};
   }
 }

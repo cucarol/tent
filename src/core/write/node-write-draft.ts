@@ -2,7 +2,7 @@ import { rewriteMarkdownDestinations } from "../base/links.js";
 import { materialOccurrences } from "../base/material.js";
 import { makeUniqueNodeId } from "../base/id.js";
 import type { OpsEnv } from "../graph/ops-context.js";
-import { loadNodeCatalog, readCatalogDocument } from "../graph/node-catalog.js";
+import { loadNodeCatalog } from "../graph/node-catalog.js";
 import {
   nodeWriteBatchInputSchema,
   withNodeBatchMutation,
@@ -77,8 +77,7 @@ export function writeNodesDraft(
       if (!item.id) continue;
       const live = catalog.byId.get(item.id);
       if (!live) continue;
-      const document = await readCatalogDocument(env.fs, live);
-      saved.set(item, { nodeId: live.nodeId, path: live.path, etag: document.etag });
+      saved.set(item, { nodeId: live.nodeId, path: live.path });
     }
     // Identity replay is decisive even if the saved entry's draft body was later blanked.
     const selected = items.filter((item) => saved.has(item) || (item.body ?? "").trim());

@@ -382,7 +382,6 @@ test("an exception after committed capture retains full ID input and replay pres
   const id = retry.items[0].id;
   f.adapter.history.captureUnlocked = capture;
   await renameNode(f.env, id, "Renamed");
-  const live = await readNodeFile(f.adapter, id);
   await editNode(f.adapter, id, { body: "External current body" });
   const changed = await readNodeFile(f.adapter, id);
   const head = await f.adapter.history.currentCommit();
@@ -400,7 +399,6 @@ test("an exception after committed capture retains full ID input and replay pres
   await fs.writeFile(f.filename, JSON.stringify(retry));
   const result = await f.save();
   assert.equal(result.results[0].path, "Renamed");
-  assert.equal(result.results[0].etag, changed.etag);
   assert.equal((await readNodeFile(f.adapter, id)).raw, changed.raw);
   assert.equal(await f.adapter.exists("Ready"), false);
   assert.equal(await f.adapter.exists("Renamed/Child/Child.md"), true);

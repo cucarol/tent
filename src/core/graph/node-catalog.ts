@@ -2,9 +2,7 @@ import { readOnlyFs, type FsAdapter } from "../store/adapter.js";
 import { isHistoryDocument } from "../store/document-history.js";
 import { nodeNotePath } from "../base/paths.js";
 import { loadTent } from "../store/tree.js";
-import { ReaderError } from "./reader-error.js";
 import { type DocumentStatus } from "../base/document-status.js";
-import { contentEtag } from "../base/etag.js";
 
 /** A header observation is navigation data, never a full-document edit token. */
 export type CatalogNode = {
@@ -27,20 +25,6 @@ export function documentHeader(raw: string): string {
   const closing = fence.exec(raw);
   if (!closing) throw new Error("Unterminated frontmatter fence");
   return raw.slice(0, closing.index + closing[0].length);
-}
-
-export async function readCatalogDocument(fs: FsAdapter, node: CatalogNode) {
-  const raw = await fs.readFile(nodeNotePath(node.path));
-  let matchesHeader = false;
-  try {
-    matchesHeader = documentHeader(raw) === node.header;
-  } catch {
-    /* This header was valid during lookup; a parse failure now is also a change. */
-  }
-  if (!matchesHeader)
-    throw new ReaderError("SOURCE_CHANGED", "Node metadata changed during lookup; retry");
-  const { header: _header, ...metadata } = node;
-  return { ...metadata, raw, etag: contentEtag(raw) };
 }
 
 /** Fresh metadata scan; uses the same hierarchy, duplicate-ID and archive rules as mutations. */

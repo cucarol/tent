@@ -1,23 +1,9 @@
-import { withTentMutation, type FsAdapter } from "../store/adapter.js";
+import { withTentMutation } from "../store/adapter.js";
 import { documentLifecycle } from "../base/document-status.js";
 import { parseFrontmatter, serializeFrontmatter } from "../base/frontmatter.js";
 import { nodeNotePath } from "../store/tree.js";
-import { loadNodeCatalog, readCatalogDocument } from "./node-catalog.js";
+import { loadNodeCatalog } from "./node-catalog.js";
 import type { OpsEnv } from "./ops-context.js";
-import type { DocumentVersion } from "../store/history-port.js";
-
-type StatusWrite = { path: string; before: string; after: string };
-type SaveContext = { savedPaths: string[]; beforeCommit?: string };
-
-export class NodeLifecycleError extends Error {
-  constructor(
-    message: string,
-    readonly details: { savedPaths: string[]; beforeCommit?: string },
-  ) {
-    super(message);
-    this.name = "NodeLifecycleError";
-  }
-}
 
 function statusRaw(raw: string, status: unknown) {
   const { data, body, keyOrder } = parseFrontmatter(raw);
@@ -26,100 +12,41 @@ function statusRaw(raw: string, status: unknown) {
   return serializeFrontmatter(data, body, keyOrder);
 }
 
-/** Writes have finite before/after images. Files and SQLite are not one atomic transaction. */
-async function saveStatusWrites(
-  fs: FsAdapter,
-  writes: StatusWrite[],
-  context: SaveContext,
-  operation: string,
-) {
-  if (!fs.history || !(await fs.history.available()))
-    throw new Error("Archive operations require Tent history");
-  if (!writes.length)
-    return { changed: false, paths: [] as string[], versions: [] as DocumentVersion[] };
-  const before = await fs.history.captureUnlocked(
-    writes.map((w) => ({ path: w.path, raw: w.before })),
-    { operation: "document.external-capture" },
-  );
-  context.beforeCommit = before.commit ?? undefined;
-  const savedPaths = context.savedPaths;
-  try {
-    // Preflight all bytes before the first write; check again immediately before each write.
-    for (const w of writes)
-      if ((await fs.readFile(w.path)) !== w.before)
-        throw new Error(`Document changed before lifecycle save: ${w.path}`);
-    for (const w of writes) {
-      if ((await fs.readFile(w.path)) !== w.before)
-        throw new Error(`Document changed during lifecycle save: ${w.path}`);
-      await fs.writeFile(w.path, w.after);
-      savedPaths.push(w.path);
-    }
-    for (const w of writes)
-      if ((await fs.readFile(w.path)) !== w.after)
-        throw new Error(`Document changed after lifecycle save: ${w.path}`);
-    const captured = await fs.history.captureUnlocked(
-      writes.map((w) => ({ path: w.path, raw: w.after })),
-      { operation },
-    );
-    return {
-      changed: true,
-      paths: savedPaths,
-      commit: captured.commit!,
-      versions: captured.versions,
-    };
-  } catch (error) {
-    throw new NodeLifecycleError(
-      `Lifecycle save failed; files may be partially saved. Reread before continuing: ${String(error)}`,
-      { savedPaths, ...(before.commit ? { beforeCommit: before.commit } : {}) },
-    );
-  }
-}
-
-/** Keep known save evidence through the outer NodeFs history finalizer as well. */
-async function lifecycleMutation<T>(fs: FsAdapter, action: (context: SaveContext) => Promise<T>) {
-  const context: SaveContext = { savedPaths: [] };
-  try {
-    return await withTentMutation(fs, () => action(context));
-  } catch (error) {
-    if (error instanceof NodeLifecycleError) throw error;
-    throw new NodeLifecycleError(
-      `Lifecycle operation failed; reread before continuing: ${String(error)}`,
-      context,
-    );
-  }
-}
-
 /** Archive exactly the current subtree; local deprecated declarations are not inherited. */
 export function archiveNode(env: OpsEnv, nodeId: string) {
-  return lifecycleMutation(env.fs, async (context) => {
+  return withTentMutation(env.fs, async () => {
+    const history = env.fs.history;
+    if (!history || !(await history.available()))
+      throw new Error("Archive operations require Tent history");
     const catalog = await loadNodeCatalog(env.fs),
       root = catalog.byId.get(nodeId);
     if (!root) throw new Error(`Node not found: ${nodeId}`);
-    const members = [...catalog.byId.values()].filter(
-      (n) => n.path === root.path || n.path.startsWith(root.path + "/"),
-    );
+    const inSubtree = (path: string) => path === root.path || path.startsWith(root.path + "/");
     // Invalid descendants must not disappear from a successful subtree operation.
-    if (
-      [...catalog.byPath.values()].some(
-        (n) => (n.path === root.path || n.path.startsWith(root.path + "/")) && n.invalid,
-      )
-    ) {
+    if ([...catalog.byPath.values()].some((n) => inSubtree(n.path) && n.invalid))
       throw new Error("Archive subtree contains invalid documents; repair them first");
+    const changes: { path: string; raw: string }[] = [];
+    for (const member of catalog.byId.values()) {
+      if (!inSubtree(member.path)) continue;
+      const path = nodeNotePath(member.path);
+      const raw = await env.fs.readFile(path);
+      const { status } = documentLifecycle(parseFrontmatter(raw).data);
+      if (status === null) throw new Error(`Unsupported status in archive subtree: ${member.path}`);
+      if (status === "deprecated") continue;
+      const after = statusRaw(raw, "deprecated");
+      await env.fs.writeFile(path, after);
+      changes.push({ path, raw: after });
     }
-    const writes: StatusWrite[] = [];
-    for (const member of members) {
-      const { raw } = await readCatalogDocument(env.fs, member);
-      const lifecycle = documentLifecycle(parseFrontmatter(raw).data);
-      if (lifecycle.status === null)
-        throw new Error(`Unsupported status in archive subtree: ${member.path}`);
-      if (lifecycle.status !== "deprecated")
-        writes.push({
-          path: nodeNotePath(member.path),
-          before: raw,
-          after: statusRaw(raw, "deprecated"),
-        });
-    }
-    const result = await saveStatusWrites(env.fs, writes, context, "node.archive");
-    return { nodeId, path: root.path, ...result };
+    const captured = changes.length
+      ? await history.captureUnlocked(changes, { operation: "node.archive" })
+      : undefined;
+    return {
+      nodeId,
+      path: root.path,
+      changed: changes.length > 0,
+      paths: changes.map((change) => change.path),
+      commit: captured?.commit ?? undefined,
+      versions: captured?.versions ?? [],
+    };
   });
 }

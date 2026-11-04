@@ -79,7 +79,6 @@ test("missing declared worktree remains unavailable even after merging its mater
       (issue: { kind: string }) => issue.kind === "missing-material-file",
     ),
   );
-  const node = await readNodeFile(adapter, output.nodeId);
   await editNode(adapter, output.nodeId, { body: "More context" });
   assert.equal((await readNodeFile(adapter, output.nodeId)).frontmatter.resource, resource);
 });
@@ -101,8 +100,7 @@ test("file observation checks declared sections without repository discovery", a
   );
   syncBuiltinESMExports();
   try {
-    const initial = await adapter.observeMaterial(resource, "Output/Output.md");
-    assert.equal(initial.canonicalPath, await fs.realpath(filename));
+    await adapter.observeMaterial(resource, "Output/Output.md");
     await fs.writeFile(filename, "# Other\nno selected section\n");
     await assert.rejects(adapter.observeMaterial(resource, "Output/Output.md"), /not found/i);
     assert.equal(mocked.mock.callCount(), 0);
@@ -112,7 +110,7 @@ test("file observation checks declared sections without repository discovery", a
   }
 });
 
-test("declared file safety and access errors remain authoritative", async (t) => {
+test("a material read follows a link and reports access errors", async (t) => {
   const { main, worktree, base } = await fixture(t);
   await initializeTentWorkspace(main);
   const adapter = openTestFs(path.join(main, ".tent"));
@@ -127,11 +125,11 @@ test("declared file safety and access errors remain authoritative", async (t) =>
     path.join(worktree, "assets"),
     process.platform === "win32" ? "junction" : "dir",
   );
-  await assert.rejects(adapter.observeMaterial(resource, "Output/Output.md"), /Symbolic links/);
+  assert.equal(await adapter.readMaterialText(resource, "Output/Output.md"), "copied bytes\n");
   await fs.unlink(path.join(worktree, "assets"));
   await fs.mkdir(path.join(worktree, "assets"));
   await fs.writeFile(filename, "live bytes\n");
-  const blocked = t.mock.method(fs, "open", async () => {
+  const blocked = t.mock.method(fs, "readFile", async () => {
     throw Object.assign(new Error("access denied"), { code: "EACCES" });
   });
   syncBuiltinESMExports();

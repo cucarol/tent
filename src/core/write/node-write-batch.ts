@@ -3,7 +3,6 @@ import * as z from "zod/v4";
 import { canonicalDocumentReferencesWithPaths } from "../graph/document-links.js";
 import { validateSystemMaterials, systemMaterialPath } from "../graph/material-target.js";
 import { materialLocator } from "../base/material.js";
-import { contentEtag } from "../base/etag.js";
 import {
   NODE_FRONTMATTER_KEY_ORDER,
   parseFrontmatter,
@@ -49,7 +48,7 @@ const createItem = z.strictObject({
 export const nodeWriteBatchInputSchema = z.strictObject({ items: z.array(createItem).min(1) });
 export type NodeWriteBatchInput = z.infer<typeof nodeWriteBatchInputSchema>;
 export type NodeWriteBatchResult = {
-  results: { nodeId: string; path: string; etag: string }[];
+  results: { nodeId: string; path: string }[];
   commit?: string;
   warnings?: string[];
 };
@@ -227,7 +226,7 @@ export async function writeNodesBatchUnlocked(
         )
       : undefined;
   return {
-    results: planned.map((n) => ({ nodeId: n.nodeId, path: n.path, etag: contentEtag(n.raw) })),
+    results: planned.map((n) => ({ nodeId: n.nodeId, path: n.path })),
     ...(captured?.commit ? { commit: captured.commit } : {}),
     ...(warnings.length ? { warnings } : {}),
   };

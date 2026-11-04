@@ -53,11 +53,10 @@ export async function moveNode(
   nodeId: string,
   newParentId: string | null,
   position: MovePosition,
-  expectedPath?: string,
 ): Promise<MoveNodeResult> {
   return withTentMutation(
     env.fs,
-    async () => moveNodeUnlocked(env, nodeId, newParentId, position, expectedPath),
+    async () => moveNodeUnlocked(env, nodeId, newParentId, position),
     { operation: "node.move" },
   );
 }
@@ -68,7 +67,6 @@ export async function moveNodeUnlocked(
   nodeId: string,
   newParentId: string | null,
   position: MovePosition,
-  expectedPath?: string,
 ): Promise<MoveNodeResult> {
   const id = nodeId.trim();
   if (!id) throw new Error("Node id is required for move.");
@@ -76,8 +74,6 @@ export async function moveNodeUnlocked(
   const tent = await loadTent(env.fs);
   const moved = tent.byId.get(id);
   if (!moved) throw new Error(`Node not found: ${id}.`);
-  if (expectedPath !== undefined && moved.path !== expectedPath)
-    throw new Error("Node path changed; reread before moving");
   if (!isContentMutable(moved)) throw new Error("Invalid nodes cannot be moved.");
   assertContentMutable(moved, "moved");
   if (moved.invalid) {

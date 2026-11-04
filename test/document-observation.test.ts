@@ -8,7 +8,6 @@ import { initializeFixtureHistory, testScratchRoot } from "./scratch.js";
 import { documentHeader } from "../src/core/graph/node-catalog.js";
 import { sqliteContentFingerprint } from "../src/fs/sqlite-history.js";
 import { listCardDocuments } from "../src/core/graph/card-document.js";
-import { withFileReadScope } from "../src/fs/file-state-cache.js";
 
 const card = (id: string, body = "private body") =>
   `---\ntype: card\nid: ${id}\nschemaVersion: 3\nstate: pending\ntarget: role-a\ntitle: ${id}\n---\n${body}`;
@@ -34,10 +33,10 @@ async function fixture(t: TestContext, raw = card("card-a")) {
 
 function sourceOpens(t: TestContext, filename: string) {
   let count = 0;
-  const open = fs.open;
-  const mock = t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+  const readFile = fs.readFile;
+  const mock = t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
     if (path.resolve(String(args[0])) === path.resolve(filename)) count++;
-    return open(...args);
+    return readFile(...args);
   });
   syncBuiltinESMExports();
   t.after(() => {
@@ -74,27 +73,25 @@ test("document observation caches only prefix and decoded-text fingerprint acros
   assert.equal(count(), 2, "explicit content checks bypass persistent observations");
 });
 
-test("current stat detects body/header edits with restored mtime and path replacement inside one scope", async (t) => {
+test("current stat detects body/header edits with restored mtime and path replacement", async (t) => {
   const f = await fixture(t);
-  await withFileReadScope(async () => {
-    const first = await f.adapter.readFrontmatterWithFingerprint(f.relative);
-    const times = await fs.stat(f.filename);
-    const changed = card("card-a", "PRIVATE BODY");
-    assert.equal(Buffer.byteLength(changed), Buffer.byteLength(card("card-a")));
-    await fs.writeFile(f.filename, changed);
-    await fs.utimes(f.filename, times.atime, times.mtime);
-    const next = await f.adapter.readFrontmatterWithFingerprint(f.relative);
-    assert.equal(next.content, first.content);
-    assert.notEqual(next.fingerprint, first.fingerprint);
-    assert.equal(next.fingerprint, sqliteContentFingerprint(changed));
-    const replacement = card("card-b", "PRIVATE BODY");
-    await fs.writeFile(f.filename + ".new", replacement);
-    await fs.utimes(f.filename + ".new", times.atime, times.mtime);
-    await fs.rename(f.filename + ".new", f.filename);
-    const replaced = await f.adapter.readFrontmatterWithFingerprint(f.relative);
-    assert.equal(replaced.content, documentHeader(replacement));
-    assert.equal(replaced.fingerprint, sqliteContentFingerprint(replacement));
-  });
+  const first = await f.adapter.readFrontmatterWithFingerprint(f.relative);
+  const times = await fs.stat(f.filename);
+  const changed = card("card-a", "PRIVATE BODY");
+  assert.equal(Buffer.byteLength(changed), Buffer.byteLength(card("card-a")));
+  await fs.writeFile(f.filename, changed);
+  await fs.utimes(f.filename, times.atime, times.mtime);
+  const next = await f.adapter.readFrontmatterWithFingerprint(f.relative);
+  assert.equal(next.content, first.content);
+  assert.notEqual(next.fingerprint, first.fingerprint);
+  assert.equal(next.fingerprint, sqliteContentFingerprint(changed));
+  const replacement = card("card-b", "PRIVATE BODY");
+  await fs.writeFile(f.filename + ".new", replacement);
+  await fs.utimes(f.filename + ".new", times.atime, times.mtime);
+  await fs.rename(f.filename + ".new", f.filename);
+  const replaced = await f.adapter.readFrontmatterWithFingerprint(f.relative);
+  assert.equal(replaced.content, documentHeader(replacement));
+  assert.equal(replaced.fingerprint, sqliteContentFingerprint(replacement));
 });
 
 test("missing/damaged cache, racy files and malformed headers reread complete current bytes", async (t) => {
@@ -133,30 +130,13 @@ test("missing/damaged cache, racy files and malformed headers reread complete cu
   await assert.rejects(read(), { code: "ENOENT" });
 });
 
-test("a handle/path identity mismatch retains SOURCE_CHANGED and read errors", async (t) => {
+test("a read error reaches the caller", async (t) => {
   const f = await fixture(t);
-  await fs.writeFile(f.filename + ".new", card("card-b"));
-  const open = fs.open;
-  const mock = t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
-    // Model a pathname restored after opening a replacement: current path stats
-    // describe A while the acquired handle still supplies B.
-    if (path.resolve(String(args[0])) === path.resolve(f.filename))
-      return open(f.filename + ".new", "r");
-    return open(...args);
-  });
-  syncBuiltinESMExports();
-  try {
-    await assert.rejects(f.adapter.readFrontmatterWithFingerprint(f.relative), {
-      code: "SOURCE_CHANGED",
-    });
-  } finally {
-    mock.mock.restore();
-    syncBuiltinESMExports();
-  }
-  const denied = t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+  const readFile = fs.readFile;
+  const denied = t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
     if (path.resolve(String(args[0])) === path.resolve(f.filename))
       throw Object.assign(new Error("denied"), { code: "EACCES" });
-    return open(...args);
+    return readFile(...args);
   });
   syncBuiltinESMExports();
   try {

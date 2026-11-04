@@ -767,14 +767,14 @@ test("section source ENOTDIR observes absence and still detects a later readable
     code: "ENOTDIR",
   });
   const filename = path.join(f.checkout, "docs/spec.md");
-  const open = fs.open;
+  const readFile = fs.readFile;
   let blocked = 0;
-  const mocked = t.mock.method(fs, "open", (...args: Parameters<typeof open>) => {
+  const mocked = t.mock.method(fs, "readFile", (...args: Parameters<typeof readFile>) => {
     if (path.relative(filename, String(args[0])) === "") {
       blocked++;
       throw error;
     }
-    return open(...args);
+    return readFile(...args);
   });
   syncBuiltinESMExports();
   try {
@@ -789,7 +789,25 @@ test("section source ENOTDIR observes absence and still detects a later readable
   assert.equal(await f.stop(), undefined);
 });
 
-for (const failure of ["EACCES", "invalid UTF-8", "symlink"] as const) {
+test("a section source behind a link is read through it", async (t) => {
+  const f = await fixture(t);
+  await f.write("docs/spec.md", "# Rules\nOriginal section\n");
+  await f.node("Section", 'resource: "../../docs/spec.md#Rules"');
+  await f.seal();
+  await f.commit();
+  const external = path.join(f.root, "external");
+  await fs.mkdir(external);
+  await fs.writeFile(path.join(external, "spec.md"), "# Rules\nChanged behind the link\n");
+  await fs.rm(path.join(f.checkout, "docs"), { recursive: true });
+  await fs.symlink(
+    external,
+    path.join(f.checkout, "docs"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  assert.equal(await f.stop(), f.pointers(["Section"]));
+});
+
+for (const failure of ["EACCES", "invalid UTF-8"] as const) {
   test(`section source ${failure} remains a Stop failure rather than an absent section`, async (t) => {
     const f = await fixture(t);
     await f.write("docs/spec.md", "# Rules\nOriginal section\n");
@@ -804,11 +822,11 @@ for (const failure of ["EACCES", "invalid UTF-8", "symlink"] as const) {
     if (failure === "EACCES") {
       await f.write("docs/spec.md", "# Rules\nChanged section\n");
       const error = Object.assign(new Error("Controlled section read failure"), { code: "EACCES" });
-      const open = fs.open;
+      const readFile = fs.readFile;
       const filename = path.join(f.checkout, "docs/spec.md");
-      const mocked = t.mock.method(fs, "open", (...args: Parameters<typeof open>) => {
+      const mocked = t.mock.method(fs, "readFile", (...args: Parameters<typeof readFile>) => {
         if (path.relative(filename, String(args[0])) === "") throw error;
-        return open(...args);
+        return readFile(...args);
       });
       syncBuiltinESMExports();
       try {
@@ -820,25 +838,11 @@ for (const failure of ["EACCES", "invalid UTF-8", "symlink"] as const) {
         mocked.mock.restore();
         syncBuiltinESMExports();
       }
-    } else if (failure === "invalid UTF-8") {
+    } else {
       await fs.writeFile(path.join(f.checkout, "docs/spec.md"), Buffer.from([0xff]));
       await assert.rejects(
         runTurnHook("codex", { eventName: "Stop", cwd: f.checkout }, emit),
         (caught) => (caught as NodeJS.ErrnoException).code === "ERR_ENCODING_INVALID_ENCODED_DATA",
-      );
-    } else {
-      const external = path.join(f.root, "external");
-      await fs.mkdir(external);
-      await fs.writeFile(path.join(external, "spec.md"), "# Rules\nNever follow this target\n");
-      await fs.rm(path.join(f.checkout, "docs"), { recursive: true });
-      await fs.symlink(
-        external,
-        path.join(f.checkout, "docs"),
-        process.platform === "win32" ? "junction" : "dir",
-      );
-      await assert.rejects(
-        runTurnHook("codex", { eventName: "Stop", cwd: f.checkout }, emit),
-        /Symbolic links/,
       );
     }
     assert.equal(serialized, 0);
