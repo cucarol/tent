@@ -155,7 +155,7 @@ test("rename and move retain nested metadata and comments through real write pat
     await systemFs.readFile(nodeNotePath(watcher.path)),
     prefix + "[target](../Beta/Beta.md)\n",
   );
-  const moved = await moveNode(env, target.nodeId, parent.nodeId, { mode: "inside" });
+  const moved = await moveNode(env, target.nodeId, parent.nodeId);
   assert.ok(moved.rewrittenNotes.includes(watcher.path));
   assert.equal(
     await systemFs.readFile(nodeNotePath(watcher.path)),

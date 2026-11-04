@@ -44,7 +44,7 @@ test("moveNode preserves the directory stem when title differs from its filename
       `---\ntype: ${dir === "roles" ? "role" : "note"}\ncustom: keep\n---\n[Source](/source/source.md)\n`,
     );
   }
-  const moved = await moveNode(env, target, parent, { mode: "inside" });
+  const moved = await moveNode(env, target, parent);
   assert.equal(moved.path, "parent/source");
   assert.equal(
     await fsa.readFile("parent/source/source.md"),
@@ -91,16 +91,16 @@ test("moveNode: keep system basenames nested and preserve rejected moves", async
     const original = await fsa.readFile(`${childPath}/${name}.md`);
     const orderBefore = await fsa.readFile("order.json");
     const pathsBefore = await fs.readdir(dir, { recursive: true });
-    await assert.rejects(moveNode(env, child, null, { mode: "inside" }), /reserved or excluded/);
+    await assert.rejects(moveNode(env, child, null), /reserved or excluded/);
     assert.deepEqual(await fs.readdir(dir, { recursive: true }), pathsBefore);
     assert.equal(await fsa.readFile(`${childPath}/${name}.md`), original);
     assert.equal(await fsa.readFile("order.json"), orderBefore);
     assert.equal((await loadTent(fsa)).byId.get(child)?.parent?.id, parent);
 
-    await moveNode(env, child, dest, { mode: "inside" });
+    await moveNode(env, child, dest);
     assert.equal((await loadTent(fsa)).byId.get(child)?.path, `dest/${name}`);
     assert.equal(await fsa.readFile(`dest/${name}/${name}.md`), original);
-    await moveNode(env, child, parent, { mode: "inside" });
+    await moveNode(env, child, parent);
     assert.equal((await loadTent(fsa)).byId.get(child)?.path, childPath);
     assert.equal(await fsa.readFile(`${childPath}/${name}.md`), original);
   }
@@ -127,7 +127,7 @@ test("moveNode: reparent keeps node-, moves subtree, rewrites path links", async
     `---\nid: ${hubId}\ntype: prompt\n---\n\nSee [Child](../parent/child/child.md) and [[parent/child]].\n`,
   );
 
-  const result = await moveNode(env as any, childId, destId, { mode: "inside" });
+  const result = await moveNode(env as any, childId, destId);
   assert.equal(result.id, childId);
   assert.equal(result.oldPath, "parent/child");
   assert.equal(result.path, "dest/child");
@@ -197,7 +197,7 @@ test("moveNode: depth-changing reparent restyles ./ and ../ inside moved subtree
     ].join("\n"),
   );
 
-  const result = await moveNode(env as any, childId, nestId, { mode: "inside" });
+  const result = await moveNode(env as any, childId, nestId);
   assert.equal(result.path, "dest/nest/child");
   assert.equal(await fsa.exists("dest/nest/child/child.md"), true);
 
@@ -246,7 +246,7 @@ test("moveNode: reparent to root restyles outbound relative to unmoved peer", as
     ].join("\n"),
   );
 
-  await moveNode(env as any, childId, null, { mode: "inside" });
+  await moveNode(env as any, childId, null);
   assert.equal(await fsa.exists("child/child.md"), true);
   const body = await fsa.readFile("child/child.md");
   assert.match(body, /\[P\]\(\.\.\/peer\/peer\.md\)/);
@@ -281,7 +281,7 @@ test("moveNode restyles a moved declaration to the same workspace file", async (
     `---\nid: ${beta}\ntype: prompt\n---\n\n${links.join("\n")}\n`,
   );
 
-  await moveNode(env, beta, parent, { mode: "inside" });
+  await moveNode(env, beta, parent);
   const rewritten = await fsa.readFile("Parent/Beta/Beta.md");
   for (const [index, { url }] of targets.entries()) {
     assert.ok(rewritten.includes(`[outside-${index}](../../../Alpha/${url})`), url);
@@ -336,15 +336,15 @@ test("moveNode: same-parent reorder is order-only (no link rewrite)", async (t) 
   await saveOrder(fsa, orderBefore);
   const betaBefore = await fsa.readFile("beta/beta.md");
 
-  const result = await moveNode(env as any, c, null, { mode: "before", siblingId: a });
-  assert.equal(result.id, c);
-  assert.equal(result.path, "gamma");
-  assert.equal(result.oldPath, "gamma");
+  const result = await moveNode(env as any, a, null);
+  assert.equal(result.id, a);
+  assert.equal(result.path, "alpha");
+  assert.equal(result.oldPath, "alpha");
   assert.deepEqual(result.rewrittenNotes, []);
-  assert.equal(result.pathMap["gamma"], "gamma");
+  assert.equal(result.pathMap["alpha"], "alpha");
 
   const orderAfter = await loadOrder(fsa);
-  assert.deepEqual(orderAfter[ROOT_KEY], [c, a, b]);
+  assert.deepEqual(orderAfter[ROOT_KEY], [b, c, a]);
   assert.equal(await fsa.readFile("beta/beta.md"), betaBefore);
   assert.equal(await fsa.exists("gamma/gamma.md"), true);
 });
@@ -360,17 +360,14 @@ test("moveNode: refuses cycles but preserves local deprecated status during a mo
   const parent = await createNode(env as any, { parentPath: "", name: "p", type: "prompt" });
   const child = await createNode(env as any, { parentPath: "p", name: "c", type: "prompt" });
 
-  await assert.rejects(
-    () => moveNode(env as any, parent, child, { mode: "inside" }),
-    /own subtree/i,
-  );
+  await assert.rejects(() => moveNode(env as any, parent, child), /own subtree/i);
 
   // Deprecated is currentness, not a structure lock.
   await fsa.writeFile(
     "p/c/c.md",
     `---\nid: ${child}\ntype: prompt\nstatus: deprecated\n---\n\n# c\n`,
   );
-  await moveNode(env as any, child, null, { mode: "inside" });
+  await moveNode(env as any, child, null);
   assert.match(await fsa.readFile("c/c.md"), /status: deprecated/);
 });
 
@@ -403,10 +400,7 @@ test("moveNode: injected write failure restores tree and note bytes", async (t) 
   const injected = injectWriteFailure(base, 1);
   const env = envFor(injected.fs);
 
-  await assert.rejects(
-    () => moveNode(env as any, a, dest, { mode: "inside" }),
-    /injected write failure/,
-  );
+  await assert.rejects(() => moveNode(env as any, a, dest), /injected write failure/);
 
   assert.equal(await base.exists("alpha/alpha.md"), true);
   assert.equal(await base.exists("dest/alpha"), false);
@@ -437,9 +431,7 @@ for (const operation of ["move", "rename"] as const)
     });
     const edited = `${await fsa.readFile("hub/hub.md")}\nSaved by an editor\n`;
     const run = () =>
-      operation === "move"
-        ? moveNode(env, child, dest, { mode: "inside" })
-        : renameNode(env, child, "renamed");
+      operation === "move" ? moveNode(env, child, dest) : renameNode(env, child, "renamed");
 
     const move = fsa.move.bind(fsa);
     fsa.move = async (from, to) => {
@@ -478,9 +470,9 @@ test("attachments is an ordinary indexed Node name through move, place and renam
     "---\nid: node-attachments\ntype: prompt\n---\nExisting identity\n",
   );
   assert.equal((await loadTent(fsa)).byId.get("node-attachments")?.path, "attachments");
-  await moveNode(env, "node-attachments", parent, { mode: "inside" });
+  await moveNode(env, "node-attachments", parent);
   assert.equal((await loadTent(fsa)).byId.get("node-attachments")?.path, "parent/attachments");
-  await moveNode(env, "node-attachments", null, { mode: "inside" });
+  await moveNode(env, "node-attachments", null);
   await renameNode(env, "node-attachments", "renamed");
   await renameNode(env, "node-attachments", "attachments");
   assert.equal((await loadTent(fsa)).byId.get("node-attachments")?.path, "attachments");

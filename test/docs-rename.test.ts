@@ -125,6 +125,7 @@ test("rewriteNodeLinks: reference definitions preserve formatting and exclude co
     ]),
     "old",
     "new",
+    { renameNodeId: "node-abc123", conceptIndex: new Map() },
   );
   assert.equal(
     result.body,

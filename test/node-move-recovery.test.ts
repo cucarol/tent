@@ -92,7 +92,7 @@ for (const [operation, points] of [
 
 test("ordinary successful move and rename rewrite links to the new path", async (t) => {
   const f = await fixture(t);
-  await moveNode(f.env, f.child, f.dest, { mode: "inside" });
+  await moveNode(f.env, f.child, f.dest);
   await renameNode(f.env, f.child, "renamed");
   assert.equal((await loadTent(f.fsa)).byId.get(f.child)?.path, "dest/renamed");
   assert.match(await f.fsa.readFile("hub/hub.md"), /dest\/renamed\/renamed.md/);

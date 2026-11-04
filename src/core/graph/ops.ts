@@ -5,27 +5,24 @@ import {
 } from "../base/material.js";
 // Tent 状态动作的统一入口，供 CLI 与插件共同调用。
 
-import { FsAdapter, withTentMutation } from "../store/adapter.js";
+import { withTentMutation } from "../store/adapter.js";
 import { loadTent, join, nodeNotePath, LoadedTent } from "../store/tree.js";
 import { isNodeId, makeUniqueNodeId } from "../base/id.js";
 import { NODE_FRONTMATTER_KEY_ORDER, serializeFrontmatter } from "../base/frontmatter.js";
 import { loadOrder, saveOrder, ROOT_KEY } from "../store/order.js";
 import { Node } from "../base/types.js";
-import { assertContentMutable, isContentMutable } from "../store/tree.js";
 import { normalizeTagList } from "../base/tags.js";
 import { normalizeOptionalNodeType } from "../base/node-type.js";
 import { validateNodeName } from "../store/scaffold.js";
 import type { OpsEnv } from "./ops-context.js";
-import { ORDER_PATH } from "../base/paths.js";
 import { canonicalDocumentReferences } from "./document-links.js";
-import type { CaptureMetadata } from "../store/history-port.js";
 import { captureDocumentUnlocked } from "../store/document-history.js";
 import { validateSystemMaterials } from "./material-target.js";
 
 export type { OpsEnv } from "./ops-context.js";
 export { renameNode, type RenameNodeResult } from "./rename-ops.js";
 export { archiveNode } from "./node-lifecycle.js";
-export { moveNode, type MoveNodeResult, type MovePosition } from "./move-ops.js";
+export { moveNode, type MoveNodeResult } from "./move-ops.js";
 
 // ---- 结构编辑(建框/移动/改属性)----
 // Node 文档与结构编辑。
@@ -41,15 +38,13 @@ export type NewNodeInput = MaterialFields & {
 } & ({ parentPath: string; parentId?: never } | { parentId: string | null; parentPath?: never });
 
 export async function createNode(env: OpsEnv, input: NewNodeInput): Promise<string> {
-  return withMutation(env.fs, async () => createNodeUnlocked(env, input), {
+  return withTentMutation(env.fs, () => createNodeUnlocked(env, input), {
     operation: "node.create",
   });
 }
 
-export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Promise<string> {
+async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Promise<string> {
   const materials = materialFields(input as unknown as Record<string, unknown>);
-  if (input.description !== undefined && typeof input.description !== "string")
-    throw new Error("Node description must be a string");
   const tent = await loadTent(env.fs);
   // Resolve an identity under the same mutation lock as the creation, after any earlier writer.
   const parentPath =
@@ -58,20 +53,15 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
       : input.parentId === null
         ? ""
         : requireNodeById(tent, input.parentId).path;
-  assertNotTempPath(parentPath);
   const name = validateNodeName(input.name, parentPath);
   const type = normalizeOptionalNodeType(input.type);
-  if (parentPath) {
-    const parent = tent.byPath.get(parentPath);
-    if (!parent || !isContentMutable(parent)) throw new Error("Target parent node is invalid.");
-    assertContentMutable(parent, "used as create parent");
-  }
+  const parent = parentPath ? tent.byPath.get(parentPath) : undefined;
+  if (parentPath && (!parent || parent.invalid)) throw new Error("Target parent node is invalid.");
   const existing = new Set([...tent.byPath.values()].map((node) => node.id));
   const id = input.id ?? makeUniqueNodeId(existing, env.rand);
   if (!isNodeId(id)) throw new Error("Invalid Node id.");
-  if (tent.duplicateIds.has(id)) throw new Error(`Duplicate Node id: ${id}.`);
+  if (existing.has(id)) throw new Error(`Node id already exists: ${id}.`);
   const path = join(parentPath, name);
-  assertNotTempPath(path);
   // V0.1: every user Node writes an exact canonical type marker.
   const tags = input.tags === undefined ? [] : normalizeTagList(input.tags);
   const fm = {
@@ -105,30 +95,12 @@ export async function createNodeUnlocked(env: OpsEnv, input: NewNodeInput): Prom
         : `Node path already exists: ${path}.`,
     );
   }
-  if (existing.has(id)) {
-    throw new Error(`Node id already exists: ${id}.`);
-  }
-  // Only a missing order table is removed on rollback; other read failures stop before any write.
-  const beforeOrder = await env.fs.readFile(ORDER_PATH).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
-    throw error;
-  });
-  try {
-    await ensureDir(env.fs, path);
-    await env.fs.writeFile(notePath, content);
-    const parent = parentPath ? tent.byPath.get(parentPath) : undefined;
-    const parentKey = parent ? parent.id : ROOT_KEY;
-    const order = await loadOrder(env.fs);
-    const siblings = order[parentKey] ?? [];
-    order[parentKey] = siblings.includes(id) ? siblings : [...siblings, id];
-    await saveOrder(env.fs, order);
-    await captureDocumentUnlocked(env.fs, notePath, content, { operation: "node.create" });
-  } catch (error) {
-    await env.fs.remove(path);
-    if (beforeOrder === null) await env.fs.remove(ORDER_PATH);
-    else await env.fs.writeFile(ORDER_PATH, beforeOrder);
-    throw error;
-  }
+  await env.fs.writeFile(notePath, content);
+  const parentKey = parent ? parent.id : ROOT_KEY;
+  const order = await loadOrder(env.fs);
+  order[parentKey] = [...(order[parentKey] ?? []), id];
+  await saveOrder(env.fs, order);
+  await captureDocumentUnlocked(env.fs, notePath, content, { operation: "node.create" });
   return id;
 }
 
@@ -158,16 +130,6 @@ export async function deleteNode(
 
 // ---- 内部工具 ----
 
-async function ensureDir(fs: FsAdapter, path: string): Promise<void> {
-  if (path && !(await fs.exists(path))) await fs.mkdir(path);
-}
-
-function assertNotTempPath(path: string): void {
-  if (path === "temp" || path.startsWith("temp/")) {
-    throw new Error("temp/ is a system pipeline; typed nodes cannot be created or moved there.");
-  }
-}
-
 function collectSubtreeIds(node: Node, ids = new Set<string>()): Set<string> {
   ids.add(node.id);
   for (const child of node.children) collectSubtreeIds(child, ids);
@@ -183,12 +145,4 @@ function requireNodeById(tent: LoadedTent, nodeId: string): Node {
   const node = tent.byId.get(nodeId);
   if (!node) throw new Error(`Node not found: ${nodeId}.`);
   return node;
-}
-
-async function withMutation<T>(
-  fs: FsAdapter,
-  action: () => Promise<T>,
-  metadata: CaptureMetadata,
-): Promise<T> {
-  return withTentMutation(fs, action, metadata);
 }

@@ -47,7 +47,6 @@ export async function loadTent(fs: FsAdapter): Promise<LoadedTent> {
     while (pending.length && active.size < 16) {
       const { path, parent, target } = pending.shift()!;
       const task = (async () => {
-        if (isOperationalPath(path)) return;
         const [node, entries] = await Promise.all([loadNode(fs, path, parent), fs.listDir(path)]);
         if (node) target.push(node);
         for (const entry of entries) {
@@ -77,10 +76,9 @@ export async function loadTent(fs: FsAdapter): Promise<LoadedTent> {
   for (const root of sortedRoots) sortChildren(root, order);
 
   // 解析隔离状态 + 建索引
-  for (const root of sortedRoots) resolveSubtree(root);
   const duplicateIds = findDuplicateIds(sortedRoots);
-  for (const root of sortedRoots) applyDuplicateInvalid(root, duplicateIds);
-  for (const root of sortedRoots) indexSubtree(root, byId, byPath, duplicateIds);
+  for (const root of sortedRoots) spreadInvalid(root, duplicateIds);
+  for (const root of sortedRoots) indexSubtree(root, byId, byPath);
 
   return { roots: sortedRoots, byId, byPath, duplicateIds };
 }
@@ -95,7 +93,8 @@ function findDuplicateIds(roots: Node[]): Set<string> {
   return new Set([...counts].filter(([, count]) => count > 1).map(([id]) => id));
 }
 
-function applyDuplicateInvalid(
+/** A Node's own problem makes its whole subtree invalid, under the nearest invalid ancestor. */
+function spreadInvalid(
   node: Node,
   duplicateIds: Set<string>,
   inherited?: { rootPath: string; reason: string },
@@ -105,14 +104,14 @@ function applyDuplicateInvalid(
         rootPath: node.path,
         reason: `Duplicate id: ${node.id}; independent Nodes must have unique ids.`,
       }
-    : undefined;
-  const invalid = inherited || direct;
-  if (invalid) {
-    node.invalid = true;
-    node.invalidRootPath = invalid.rootPath;
-    node.invalidReason = invalid.reason;
-  }
-  for (const child of node.children) applyDuplicateInvalid(child, duplicateIds, invalid);
+    : node.invalid
+      ? { rootPath: node.path, reason: node.invalidReason! }
+      : undefined;
+  const invalid = inherited ?? direct;
+  node.invalid = !!invalid;
+  node.invalidRootPath = invalid?.rootPath;
+  node.invalidReason = invalid?.reason;
+  for (const child of node.children) spreadInvalid(child, duplicateIds, invalid);
 }
 
 function sortChildren(node: Node, order: OrderMap): void {
@@ -133,7 +132,6 @@ function compareText(left: string, right: string): number {
 }
 
 async function loadNode(fs: FsAdapter, path: string, parent: Node | null): Promise<Node | null> {
-  if (isOperationalPath(path)) return null;
   const nodeFile = nodeNotePath(path);
   if (!(await fs.exists(nodeFile))) {
     // 没有同名 .md 的文件夹不是 Node（普通分组）。但其子孙里可能有 —— 透传扫描。
@@ -218,60 +216,15 @@ function normalizeIdentity(data: Record<string, unknown>): {
   return { fm, tags };
 }
 
-function resolveSubtree(node: Node, inheritedInvalid?: { rootPath: string; reason: string }): void {
-  const directInvalid = node.invalid
-    ? {
-        rootPath: node.invalidRootPath || node.path,
-        reason: node.invalidReason || "Invalid frontmatter.",
-      }
-    : invalidIdentityReference(node);
-  const invalid = inheritedInvalid || directInvalid;
-  node.invalid = !!invalid;
-  node.invalidRootPath = invalid?.rootPath;
-  node.invalidReason = invalid?.reason;
-  const lifecycle = documentLifecycle(node.fm);
-  node.status = lifecycle.status;
-  node.statusDiagnostic = lifecycle.statusDiagnostic;
-  for (const c of node.children) resolveSubtree(c, invalid);
-}
-
-function invalidIdentityReference(node: Node): { rootPath: string; reason: string } | undefined {
-  if (!isNodeId(node.id)) {
-    return {
-      rootPath: node.path,
-      reason: `Invalid Node id: ${node.id || "<missing>"}; canonical Node ids must start with node-.`,
-    };
-  }
-  return undefined;
-}
-
 /** Default current-context discovery; lifecycle never grants or denies write permission. */
 export function isUsableNode(node: Node): boolean {
   return !node.invalid && node.status !== null && node.status !== "deprecated";
 }
 
-/**
- * Core content & structure mutation gate.
- * A deprecated document may be explicitly selected and edited without reactivation.
- */
-export function assertContentMutable(node: Node, action = "modified"): void {
-  if (node.invalid) throw new Error(`Invalid nodes cannot be ${action}.`);
-}
-
-/** True when Core may mutate the explicitly selected document. */
-export function isContentMutable(node: Node): boolean {
-  return !node.invalid;
-}
-
-function indexSubtree(
-  node: Node,
-  byId: Map<string, Node>,
-  byPath: Map<string, Node>,
-  duplicateIds: Set<string>,
-): void {
-  if (!node.invalid && isNodeId(node.id) && !duplicateIds.has(node.id)) byId.set(node.id, node);
+function indexSubtree(node: Node, byId: Map<string, Node>, byPath: Map<string, Node>): void {
+  if (!node.invalid) byId.set(node.id, node);
   byPath.set(node.path, node);
-  for (const c of node.children) indexSubtree(c, byId, byPath, duplicateIds);
+  for (const c of node.children) indexSubtree(c, byId, byPath);
 }
 
 // ---- 路径工具(纯字符串,不依赖 node:path,核心层保持可移植) ----

@@ -228,7 +228,7 @@ test("real Node move and rename preserve resource targets, ordered sources and h
     await adapter.mkdir("cards");
     const cardRaw = serializeFrontmatter({ type: "card", resource: "/A/A.md" }, "historical input");
     await adapter.writeFile("cards/card-history.md", cardRaw);
-    await moveNode(env, sourceId, parentId, { mode: "inside" });
+    await moveNode(env, sourceId, parentId);
     await renameNode(env, sourceId, "New");
     const raw = await adapter.readFile("Group/New/New.md");
     const parsed = parseFrontmatter(raw);

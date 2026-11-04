@@ -563,7 +563,7 @@ test("failed publication section keeps its known Node identity after alias reuse
   assert.match(original.reason!, /Missing/);
   await renameNode(
     { fs: adapter, clock: { now: () => "2026-10-28T00:00:00.000Z" }, tentName: "test" },
-    "Old",
+    "node-old",
     "New",
   );
   await adapter.writeFile("Old", "An ordinary regular file, not a Node document.");
@@ -604,7 +604,7 @@ test("Card sources to moved and deleted documents are left to take without write
   });
   await renameNode(
     { fs: adapter, clock: { now: () => "2026-10-04T00:00:00.000Z" }, tentName: "test" },
-    "Original",
+    "node-original",
     "Moved",
   );
   await withTentMutation(adapter, async () => {

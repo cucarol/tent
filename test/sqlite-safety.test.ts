@@ -240,7 +240,7 @@ test("SQLite safety 5: move, rename and deletion keep retained versions readable
   const { adapter, env } = await fixture(t);
   const version = (await adapter.history.pathVersions("N000/N000.md")).latest!,
     fixed = { raw: await adapter.history.read(version) };
-  await moveNode(env, "node-n000", "node-n001", { mode: "inside" });
+  await moveNode(env, "node-n000", "node-n001");
   await renameNode(env, "node-n000", "Moved");
   assert.equal((await readNodeFile(adapter, "node-n000")).directory, "N001/Moved");
   assert.equal(await adapter.history.read(version), fixed.raw);

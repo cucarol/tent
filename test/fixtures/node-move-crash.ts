@@ -18,7 +18,7 @@ class CrashFs extends NodeFs {
 }
 const fs = new CrashFs(root);
 const env = { fs, clock: { now: () => new Date().toISOString() }, tentName: "crash" };
-if (operation === "move") await moveNode(env, nodeId, parentId, { mode: "inside" });
+if (operation === "move") await moveNode(env, nodeId, parentId);
 else if (operation === "rename") await renameNode(env, nodeId, "renamed");
 else throw new Error(`Unknown operation: ${operation}`);
 throw new Error(`Crash point not reached: ${crashPoint}`);

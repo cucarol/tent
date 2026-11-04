@@ -9,19 +9,10 @@ import { normalizeTarget, resolveTargetPath } from "../base/link-target.js";
 import { materialLocator, rewriteMaterialPaths } from "../base/material.js";
 import { rewriteMarkdownDestinations } from "../base/links.js";
 import type { OpsEnv } from "./ops-context.js";
-import { isOperationalPath } from "../base/paths.js";
+import { ROLES_DIR } from "../base/paths.js";
 import { validateNodeName } from "../store/scaffold.js";
 import type { Node } from "../base/types.js";
-import {
-  nodeNotePath,
-  baseName,
-  dirName,
-  assertContentMutable,
-  isContentMutable,
-  join,
-  loadTent,
-  type LoadedTent,
-} from "../store/tree.js";
+import { nodeNotePath, baseName, dirName, join, loadTent, type LoadedTent } from "../store/tree.js";
 
 export interface RenameNodeResult {
   id: string;
@@ -39,14 +30,14 @@ export interface RenameNodeResult {
  * - entire directory tree moves; child relative structure preserved
  * - path-based Markdown links rewritten in the same mutation
  * - unqualified name targets rewrite only when Tent resolution uniquely hits this node
- * - refuses target collision, illegal names, operational paths
+ * - refuses target collision and illegal names
  */
-export async function renameNode(
+export function renameNode(
   env: OpsEnv,
-  nodeIdOrPath: string,
+  nodeId: string,
   newNameRaw: string,
 ): Promise<RenameNodeResult> {
-  return withTentMutation(env.fs, () => renameNodeUnlocked(env, nodeIdOrPath, newNameRaw), {
+  return withTentMutation(env.fs, () => renameNodeUnlocked(env, nodeId, newNameRaw), {
     operation: "node.rename",
   });
 }
@@ -76,83 +67,42 @@ export async function applyNodeMove(
   }
 }
 
-async function renameNodeUnlocked(
-  env: OpsEnv,
-  nodeIdOrPath: string,
-  newNameRaw: string,
-): Promise<RenameNodeResult> {
-  const tent = await loadTent(env.fs);
-  const target = resolveRenameTarget(tent, nodeIdOrPath);
-  const newName = validateNodeName(newNameRaw, dirName(target.path));
-  if (!isContentMutable(target)) {
-    throw new Error("Invalid nodes cannot be renamed.");
-  }
-  assertContentMutable(target, "renamed");
-  if (target.invalid) {
-    throw new Error("Invalid nodes cannot be renamed.");
-  }
-  const oldPath = target.path;
-  const oldName = target.name;
-  if (newName === oldName) {
-    return {
-      id: target.id,
-      oldPath,
-      path: oldPath,
-      name: oldName,
-      pathMap: { [oldPath]: oldPath },
-      rewrittenNotes: [],
-    };
-  }
-
-  const parentPath = dirName(oldPath);
-  const newPath = join(parentPath, newName);
-  assertNotOperationalPath(oldPath);
-  assertNotOperationalPath(newPath);
-  if (newPath !== oldPath && (await env.fs.exists(newPath))) {
-    throw new Error(`Rename target already exists: ${newPath}.`);
-  }
-  const siblings = target.parent ? target.parent.children : tent.roots;
-  if (siblings.some((node) => node.id !== target.id && node.name === newName)) {
-    throw new Error(`A sibling Node already uses the name: ${newName}.`);
-  }
-
-  const subtree = collectSubtree(target);
+/** What moving a Node's subtree to newPath changes: its paths and every document that links them. */
+export async function planNodeMove(
+  fs: FsAdapter,
+  tent: LoadedTent,
+  moved: Node,
+  newPath: string,
+  newName: string,
+) {
   const pathMap = new Map<string, string>();
   const materialMoves = new Map<string, string>();
-  for (const node of subtree) {
-    const rel = relativePath(oldPath, node.path);
-    const nextNodePath = rel ? join(newPath, rel) : newPath;
+  const visit = (node: Node) => {
+    const nextPath = newPath + node.path.slice(moved.path.length);
     // Node path (folder) and identity-note path stem (folder/Name) both appear in links.
-    pathMap.set(node.path, nextNodePath);
-    materialMoves.set(node.path, nextNodePath);
-    materialMoves.set(nodeNotePath(node.path), nodeNotePath(nextNodePath));
+    pathMap.set(node.path, nextPath);
+    materialMoves.set(node.path, nextPath);
+    materialMoves.set(nodeNotePath(node.path), nodeNotePath(nextPath));
     pathMap.set(
       nodeNotePath(node.path).replace(/\.md$/i, ""),
-      nodeNotePath(nextNodePath).replace(/\.md$/i, ""),
+      nodeNotePath(nextPath).replace(/\.md$/i, ""),
     );
-  }
-
-  const conceptIndex = buildNodeIndex(tent.byPath.values());
-  const rewriteOpts: RewriteNodeLinksOptions = {
-    renameNodeId: target.id,
-    conceptIndex,
+    node.children.forEach(visit);
   };
+  visit(moved);
 
+  const opts = { renameNodeId: moved.id, conceptIndex: buildNodeIndex(tent.byPath.values()) };
   // Plan rewrites: resolve from pre-move note path; restyle relatives from post-move path when moved.
-  const plannedWrites: NodeMoveWrite[] = [];
+  const writes: NodeMoveWrite[] = [];
   const rewrittenNotes: string[] = [];
   for (const node of tent.byPath.values()) {
     const notePath = nodeNotePath(node.path);
-    if (!(await env.fs.exists(notePath))) continue;
-    const raw = await env.fs.readFile(notePath);
+    const raw = await fs.readFile(notePath);
     const { data, body, keyOrder } = parseFrontmatter(raw);
-    if (typeof data.id === "string" && data.id !== node.id) {
-      throw new Error(`Refuse rename: frontmatter id drift on ${node.path}.`);
-    }
     const afterNodePath = pathMap.get(node.path) ?? node.path;
     const restyleFromNotePath = nodeNotePath(afterNodePath);
-    const rewritten = rewriteNodeLinks(body, notePath, pathMap, oldName, newName, {
-      ...rewriteOpts,
+    const rewritten = rewriteNodeLinks(body, notePath, pathMap, moved.name, newName, {
+      ...opts,
       restyleFromNotePath,
     });
     const materialsChanged = rewriteMaterialPaths(
@@ -165,61 +115,48 @@ async function renameNodeUnlocked(
     syncNodeTitle(data, afterNodePath);
     const nextRaw = serializeFrontmatter(data, rewritten.body, keyOrder);
     if (nextRaw === raw) continue;
-    plannedWrites.push({ path: restyleFromNotePath, before: raw, content: nextRaw });
+    writes.push({ path: restyleFromNotePath, before: raw, content: nextRaw });
     rewrittenNotes.push(afterNodePath);
   }
+  writes.push(...(await rewriteRoleLinks(fs, pathMap, moved.name, newName, opts, materialMoves)));
+  return { pathMap: Object.fromEntries(pathMap), writes, rewrittenNotes: rewrittenNotes.sort() };
+}
 
-  plannedWrites.push(
-    ...(await rewriteRoleAndNoteLinks(
-      env.fs,
-      pathMap,
-      oldName,
-      newName,
-      rewriteOpts,
-      materialMoves,
-    )),
-  );
-  await applyNodeMove(env.fs, oldPath, newPath, plannedWrites);
+async function renameNodeUnlocked(
+  env: OpsEnv,
+  nodeId: string,
+  newNameRaw: string,
+): Promise<RenameNodeResult> {
+  const tent = await loadTent(env.fs);
+  const target = tent.byId.get(nodeId);
+  if (!target) throw new Error(`Node not found: ${nodeId}.`);
+  const newName = validateNodeName(newNameRaw, dirName(target.path));
+  const oldPath = target.path;
+  if (newName === target.name) {
+    return {
+      id: target.id,
+      oldPath,
+      path: oldPath,
+      name: newName,
+      pathMap: { [oldPath]: oldPath },
+      rewrittenNotes: [],
+    };
+  }
+
+  const newPath = join(dirName(oldPath), newName);
+  if (await env.fs.exists(newPath)) throw new Error(`Rename target already exists: ${newPath}.`);
+  const plan = await planNodeMove(env.fs, tent, target, newPath, newName);
+  await applyNodeMove(env.fs, oldPath, newPath, plan.writes);
 
   // order.json is id-keyed — no path rewrite.
-
-  const pathMapRecord: Record<string, string> = {};
-  for (const [from, to] of pathMap) pathMapRecord[from] = to;
-
   return {
     id: target.id,
     oldPath,
     path: newPath,
     name: newName,
-    pathMap: pathMapRecord,
-    rewrittenNotes: rewrittenNotes.sort(),
+    pathMap: plan.pathMap,
+    rewrittenNotes: plan.rewrittenNotes,
   };
-}
-
-function resolveRenameTarget(tent: LoadedTent, nodeIdOrPath: string): Node {
-  const key = nodeIdOrPath.trim().replace(/\\/g, "/");
-  const byId = tent.byId.get(key);
-  if (byId) return byId;
-  const byPath = tent.byPath.get(key);
-  if (byPath) return byPath;
-  throw new Error(`Node not found: ${nodeIdOrPath}.`);
-}
-
-function assertNotOperationalPath(path: string): void {
-  if (isOperationalPath(path) || path === "temp" || path.startsWith("temp/")) {
-    throw new Error("temp/ and other system pipelines cannot be renamed as Nodes.");
-  }
-}
-
-function collectSubtree(node: Node, out: Node[] = []): Node[] {
-  out.push(node);
-  for (const child of node.children) collectSubtree(child, out);
-  return out;
-}
-
-function relativePath(root: string, child: string): string {
-  if (child === root) return "";
-  return child.slice(root.length + 1);
 }
 
 export type RewriteNodeLinksOptions = {
@@ -236,7 +173,7 @@ export type RewriteNodeLinksOptions = {
   restyleFromNotePath?: string;
 };
 
-export async function rewriteRoleAndNoteLinks(
+async function rewriteRoleLinks(
   fs: FsAdapter,
   pathMap: Map<string, string>,
   oldName: string,
@@ -245,22 +182,20 @@ export async function rewriteRoleAndNoteLinks(
   materialMoves: ReadonlyMap<string, string>,
 ): Promise<NodeMoveWrite[]> {
   const writes: NodeMoveWrite[] = [];
-  for (const dir of ["roles"]) {
-    if (!(await fs.exists(dir))) continue;
-    for (const entry of await fs.listDir(dir)) {
-      if (entry.isDir || !entry.name.endsWith(".md")) continue;
-      const path = `${dir}/${entry.name}`;
-      const raw = await fs.readFile(path);
-      const { data, body, keyOrder } = parseFrontmatter(raw);
-      const rewritten = rewriteNodeLinks(body, path, pathMap, oldName, newName, opts);
-      const materialsChanged = rewriteMaterialPaths(data, path, path, materialMoves);
-      if (rewritten.changed || materialsChanged)
-        writes.push({
-          path,
-          before: raw,
-          content: serializeFrontmatter(data, rewritten.body, keyOrder),
-        });
-    }
+  if (!(await fs.exists(ROLES_DIR))) return writes;
+  for (const entry of await fs.listDir(ROLES_DIR)) {
+    if (entry.isDir || !entry.name.endsWith(".md")) continue;
+    const path = `${ROLES_DIR}/${entry.name}`;
+    const raw = await fs.readFile(path);
+    const { data, body, keyOrder } = parseFrontmatter(raw);
+    const rewritten = rewriteNodeLinks(body, path, pathMap, oldName, newName, opts);
+    const materialsChanged = rewriteMaterialPaths(data, path, path, materialMoves);
+    if (rewritten.changed || materialsChanged)
+      writes.push({
+        path,
+        before: raw,
+        content: serializeFrontmatter(data, rewritten.body, keyOrder),
+      });
   }
   return writes;
 }
@@ -279,26 +214,13 @@ export function rewriteNodeLinks(
   pathMap: Map<string, string>,
   oldName: string,
   newName: string,
-  opts?: RewriteNodeLinksOptions,
+  opts: RewriteNodeLinksOptions,
 ): { body: string; changed: boolean } {
-  if (pathMap.size === 0) return { body, changed: false };
-  const oldPaths = [...pathMap.keys()].sort((a, b) => b.length - a.length);
   let afterIndex: Map<string, OkfNode[]> | undefined;
-  const postMoveIndex = opts
-    ? () => (afterIndex ??= movedNodeIndex(opts.conceptIndex, pathMap))
-    : undefined;
+  const postMoveIndex = () => (afterIndex ??= movedNodeIndex(opts.conceptIndex, pathMap));
   const next = rewriteMarkdownDestinations(body, (url) => {
     if (isExternalOrAnchor(url)) return undefined;
-    return mapLinkTarget(
-      url,
-      fromNotePath,
-      pathMap,
-      oldPaths,
-      oldName,
-      newName,
-      opts,
-      postMoveIndex,
-    );
+    return mapLinkTarget(url, fromNotePath, pathMap, oldName, newName, opts, postMoveIndex);
   });
   return { body: next, changed: next !== body };
 }
@@ -313,11 +235,10 @@ function mapLinkTarget(
   raw: string,
   fromNotePath: string,
   pathMap: Map<string, string>,
-  oldPaths: string[],
   oldName: string,
   newName: string,
-  opts?: RewriteNodeLinksOptions,
-  postMoveIndex?: () => Map<string, OkfNode[]>,
+  opts: RewriteNodeLinksOptions,
+  postMoveIndex: () => Map<string, OkfNode[]>,
 ): string | undefined {
   const { pathPart, tail } = splitDestTail(raw);
   if (!pathPart) return undefined;
@@ -326,15 +247,14 @@ function mapLinkTarget(
     return mapUnqualifiedName(pathPart, tail, oldName, newName, opts);
   }
 
-  const restyleFrom = opts?.restyleFromNotePath ?? fromNotePath;
-  const sourceMoved = restyleFrom.replace(/\\/g, "/") !== fromNotePath.replace(/\\/g, "/");
+  const restyleFrom = opts.restyleFromNotePath ?? fromNotePath;
+  const sourceMoved = restyleFrom !== fromNotePath;
   let isRelativeForm = pathPart.startsWith("./") || pathPart.startsWith("../");
   let localNode: OkfNode | undefined;
 
   // Resolve against the pre-move note path (link text was authored there).
   let targetPath = resolveTargetPath(pathPart, fromNotePath);
   if (
-    opts &&
     !isRelativeForm &&
     !pathPart.startsWith("/") &&
     !resolveIndexDocument(opts.conceptIndex, targetPath)
@@ -358,10 +278,9 @@ function mapLinkTarget(
   const mapped =
     normalized === ".." || normalized.startsWith("../")
       ? undefined
-      : resolveMappedPath(normalized, pathMap, oldPaths);
+      : resolveMappedPath(normalized, pathMap);
   const needsDisambiguation =
     localNode !== undefined &&
-    postMoveIndex !== undefined &&
     resolveDocumentNode(postMoveIndex(), pathPart, restyleFrom)?.nodeId !== localNode.nodeId;
 
   // Absolute / multi-segment system-root paths only rewrite on pathMap hits.
@@ -442,9 +361,9 @@ function mapUnqualifiedName(
   tail: string,
   oldName: string,
   newName: string,
-  opts?: RewriteNodeLinksOptions,
+  opts: RewriteNodeLinksOptions,
 ): string | undefined {
-  if (!opts || oldName === newName) return undefined;
+  if (oldName === newName) return undefined;
   const bare = pathPart.replace(/\.md$/i, "");
   const resolved = resolveNode(opts.conceptIndex, bare);
   if (!resolved || resolved.nodeId !== opts.renameNodeId) return undefined;
@@ -457,21 +376,9 @@ function mapUnqualifiedName(
   return (sourceHadMd ? `${newName}.md` : newName) + tail;
 }
 
-function resolveMappedPath(
-  normalized: string,
-  pathMap: Map<string, string>,
-  oldPaths: string[],
-): string | undefined {
+function resolveMappedPath(normalized: string, pathMap: Map<string, string>): string | undefined {
   const clean = normalized.replace(/\\/g, "/").replace(/^\.\//, "");
-  if (pathMap.has(clean)) return pathMap.get(clean);
-  const noMd = clean.replace(/\.md$/i, "");
-  if (pathMap.has(noMd)) return pathMap.get(noMd);
-  for (const oldPath of oldPaths) {
-    if (clean === oldPath || noMd === oldPath || clean === `${oldPath}.md`) {
-      return pathMap.get(oldPath);
-    }
-  }
-  return undefined;
+  return pathMap.get(clean) ?? pathMap.get(clean.replace(/\.md$/i, ""));
 }
 
 function isUnqualifiedName(raw: string): boolean {

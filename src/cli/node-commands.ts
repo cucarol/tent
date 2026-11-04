@@ -247,7 +247,7 @@ async function runNodeCommandOpened(
         if (newParentId && !isNodeId(newParentId)) {
           return usage("tent node move --parent must be root or a stable node- id");
         }
-        const result = await moveNode(env, target, newParentId, { mode: "inside" });
+        const result = await moveNode(env, target, newParentId);
         for (const [from, to] of Object.entries(result.pathMap ?? {}))
           if (from !== to) writtenNodePaths.add(nodeNotePath(to));
         return await mutationPrint(result, json, () => `Moved ${target}`);

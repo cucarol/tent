@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { loadTent, isContentMutable, isUsableNode } from "../src/core/store/tree.js";
+import { loadTent, isUsableNode } from "../src/core/store/tree.js";
 import { archiveNode } from "../src/core/graph/node-lifecycle.js";
 import { loadNodeCatalog } from "../src/core/graph/node-catalog.js";
 import { documentLifecycle } from "../src/core/base/document-status.js";
@@ -44,7 +44,7 @@ test("local status never inherits or freezes edits; unknown status stays visible
   assert.equal("archived" in root, false);
   assert.equal(isUsableNode(tree.byId.get("node-draft")!), true);
   assert.equal(tree.byId.get("node-draft")!.status, "draft");
-  assert.equal(isContentMutable(root), true);
+  assert.equal(root.invalid, false);
   assert.equal(isUsableNode(root), false);
   const edited = await editNode(adapter, root.id, {
     body: "corrected old explanation",
