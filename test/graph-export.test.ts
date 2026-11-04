@@ -55,7 +55,7 @@ test("export validates standard bundle materials and reports external and unreso
     "Current Node",
   );
   await adapter.writeFile("version-leases/version-leases.md", ordinaryNode);
-  await adapter.writeFile("mutation.lock.guard.stale-test/owner.json", '{"pid":1}');
+  await adapter.writeFile("mutation.lock.stale-test/owner.json", '{"pid":1}');
   await adapter.writeFile(".git/tent-history-index.json", '{"disposable":true}');
   await adapter.writeFile(".git/tent-derived-card-progress.json", '{"disposable":true}');
   await adapter.writeFile(".git/tent-derived-card-progress.json.pending.tmp", "incomplete");
@@ -118,10 +118,9 @@ test("export validates standard bundle materials and reports external and unreso
     ),
     ordinaryNode,
   );
-  await assert.rejects(
-    fs.stat(path.join(result.outputDir, ".tent/mutation.lock.guard.stale-test")),
-    { code: "ENOENT" },
-  );
+  await assert.rejects(fs.stat(path.join(result.outputDir, ".tent/mutation.lock.stale-test")), {
+    code: "ENOENT",
+  });
   await assert.rejects(fs.stat(path.join(result.outputDir, "outside.txt")), { code: "ENOENT" });
 });
 

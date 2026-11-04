@@ -8,7 +8,7 @@ import {
 } from "../core/return/section-fingerprint.js";
 type StopMaterialFile = { path: string; heading?: string };
 import { readStructureSource } from "./source-observation.js";
-import { FileLockGuardBusyError, withFileLockGuard } from "./file-lock-guard.js";
+import { FileLockBusyError, withFileLock } from "./file-lock.js";
 
 type Section = Required<StopMaterialFile>;
 /** One record entry: a linked section's fingerprint, with the heading line that selected it. */
@@ -44,9 +44,9 @@ export async function withRecordLock<T>(
   const record = recordPath(systemRoot, workspacePath);
   await fs.mkdir(path.dirname(record), { recursive: true });
   try {
-    return { value: await withFileLockGuard(record, action, { waitMs: 500, flush: false }) };
+    return { value: await withFileLock(`${record}.lock`, action, { waitMs: 500, flush: false }) };
   } catch (error) {
-    if (error instanceof FileLockGuardBusyError) return undefined;
+    if (error instanceof FileLockBusyError) return undefined;
     throw error;
   }
 }

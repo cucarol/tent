@@ -30,7 +30,7 @@ export const INTEGRATION_TEST_FILES = Object.freeze([
   "test/core-document-history.test.ts",
   "test/direct-workspace-export.test.ts",
   "test/docs-move.test.ts",
-  "test/file-lock-concurrency.test.ts",
+  "test/file-lock.test.ts",
   "test/history-operations.test.ts",
   "test/node-move-recovery.test.ts",
   "test/node-native-capture.test.ts",

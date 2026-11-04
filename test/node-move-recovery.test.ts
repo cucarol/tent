@@ -11,7 +11,6 @@ import { withTentMutation } from "../src/core/store/adapter.js";
 import { createNode, moveNode, renameNode } from "../src/core/graph/ops.js";
 import { scaffoldTent } from "../src/core/store/scaffold.js";
 import { loadTent } from "../src/core/store/tree.js";
-import { MUTATION_LOCK_STALE_MS } from "../src/fs/mutation-lock.js";
 
 async function fixture(t: TestContext) {
   const scratch = testScratchRoot();
@@ -68,9 +67,6 @@ async function crash(f: Fixture, operation: string, point: string) {
     { encoding: "utf8", timeout: 30_000 },
   );
   assert.equal(result.status, 77, result.stderr || String(result.error));
-  // 保留真实退出进程的锁和 PID，只推进已有锁的过期时间，避免每个用例等待两分钟。
-  const expired = new Date(Date.now() - MUTATION_LOCK_STALE_MS - 1000);
-  await fs.utimes(path.join(f.root, "mutation.lock"), expired, expired);
 }
 
 async function assertRestored(f: Fixture) {

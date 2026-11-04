@@ -9,7 +9,7 @@ import type {
   DocumentHeaderObservation,
   ObservationOptions,
 } from "../core/store/adapter.js";
-import { withFileMutationLock } from "./mutation-lock.js";
+import { withMutationLock } from "./file-lock.js";
 import { constants } from "node:fs";
 import {
   checkedSourceFile,
@@ -766,49 +766,41 @@ export class NodeFs implements FsAdapter {
   private async withGraphWriteLock<T>(path: string, action: () => Promise<T>): Promise<T> {
     try {
       const locked = () =>
-        withFileMutationLock(
-          this.abs(path),
-          async () =>
-            withoutFileReadScope(() =>
-              this.raw(() => hasDocumentHistory(this)).then((hasGit) => {
-                if (!hasGit || this.transactionBypass.getStore()) return action();
-                const transaction = this.transaction();
-                return this.boundaryReady.run(true, async () => {
-                  this.recoveryConflicts = await transaction.recover();
-                  return this.transactionScope.run(transaction, () =>
-                    this.history.withPublicationObserver(
-                      {
-                        before: (commit) => transaction.beforePublish(commit),
-                        after: () => transaction.finish(),
-                      },
-                      async () => {
+        withMutationLock(this.abs(path), async () =>
+          withoutFileReadScope(() =>
+            this.raw(() => hasDocumentHistory(this)).then((hasGit) => {
+              if (!hasGit || this.transactionBypass.getStore()) return action();
+              const transaction = this.transaction();
+              return this.boundaryReady.run(true, async () => {
+                this.recoveryConflicts = await transaction.recover();
+                return this.transactionScope.run(transaction, () =>
+                  this.history.withPublicationObserver(
+                    {
+                      before: (commit) => transaction.beforePublish(commit),
+                      after: () => transaction.finish(),
+                    },
+                    async () => {
+                      try {
+                        const result = await action();
+                        await transaction.finish();
+                        return result;
+                      } catch (error) {
                         try {
-                          const result = await action();
-                          await transaction.finish();
-                          return result;
-                        } catch (error) {
-                          try {
-                            this.recoveryConflicts = await transaction.recover();
-                          } catch (recovery) {
-                            throw new AggregateError(
-                              [error, recovery],
-                              `${String(error)}; transaction recovery also failed: ${String(recovery)}`,
-                            );
-                          }
-                          throw error;
+                          this.recoveryConflicts = await transaction.recover();
+                        } catch (recovery) {
+                          throw new AggregateError(
+                            [error, recovery],
+                            `${String(error)}; transaction recovery also failed: ${String(recovery)}`,
+                          );
                         }
-                      },
-                    ),
-                  );
-                });
-              }),
-            ),
-          {
-            waitMs: 8_000,
-            busyMessage:
-              "Tent mutation lock is still busy after waiting 8 seconds; wait for the other write to finish, then reread before retrying.",
-            acquireFailedMessage: "Cannot acquire the Tent mutation lock.",
-          },
+                        throw error;
+                      }
+                    },
+                  ),
+                );
+              });
+            }),
+          ),
         );
       // Reuse exact-header parses during mutation and capture. The lock callback
       // still discards file/structure observations before inspecting live state.

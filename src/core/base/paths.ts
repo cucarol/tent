@@ -78,8 +78,7 @@ export function isOperationalPath(relativePath: string): boolean {
   if (!path) return false;
   const top = path.split("/")[0] ?? "";
   return (
-    OPERATIONAL_TOP_LEVEL.has(top) ||
-    /^mutation\.lock\.guard(?:\.(?:pending|released|stale)-[^/]+)?$/.test(top)
+    OPERATIONAL_TOP_LEVEL.has(top) || /^mutation\.lock\.(?:pending|released|stale)-[^/]+$/.test(top)
   );
 }
 

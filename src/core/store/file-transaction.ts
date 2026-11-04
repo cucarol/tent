@@ -11,8 +11,8 @@ const relativePath = z
       !/[\\:\0]/.test(p) &&
       !p.startsWith("/") &&
       p.split("/").every((s) => s !== ".." && s !== "." && s !== "") &&
-      ![".git", "mutation.lock"].includes(p.split("/")[0]!.toLowerCase()) &&
-      !p.toLowerCase().startsWith("mutation.lock.guard"),
+      p.split("/")[0]!.toLowerCase() !== ".git" &&
+      !p.toLowerCase().startsWith("mutation.lock"),
   );
 // Bytes are base64, so a binary attachment moved with a Node is restored exactly.
 const state = z.union([

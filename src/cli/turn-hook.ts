@@ -16,7 +16,7 @@ import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { changedGoals } from "../core/return/stop-goals.js";
 import { hasDocumentHistory } from "../core/store/history-port.js";
 import { checkNodeWriteProblems } from "../fs/node-write-problems.js";
-import { withFileLockGuard } from "../fs/file-lock-guard.js";
+import { withFileLock } from "../fs/file-lock.js";
 import { NodeFs } from "../fs/node-fs.js";
 export type TurnHookInput = { eventName: unknown; cwd: unknown; stopHookActive?: unknown };
 /** The host owns only its native envelope. Adjacent Stops observe one checkout. */
@@ -47,8 +47,8 @@ export async function runTurnHook(
     .digest("hex");
   const sectionRoot = path.join(systemRoot, "temp", "stop-checkouts", identity);
   await fs.mkdir(path.dirname(sectionRoot), { recursive: true });
-  return withFileLockGuard(
-    sectionRoot,
+  return withFileLock(
+    `${sectionRoot}.lock`,
     async () => {
       const adapter = new NodeFs(systemRoot);
       // Capture keeps its own adapter so its invalid-edit marks cannot reach the coverage read.

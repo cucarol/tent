@@ -20,12 +20,7 @@ test("Node creation rejects unindexable names before writing and allows nested s
   for (const parentPath of ["", "prompt"]) {
     const names = [".gitnotes", ".github", "roles", "cards", "temp", ".tent"];
     if (!parentPath)
-      names.push(
-        "index.md",
-        "settings.json",
-        "mutation.lock.guard",
-        "mutation.lock.guard.pending-token",
-      );
+      names.push("index.md", "settings.json", "mutation.lock", "mutation.lock.pending-token");
     for (const name of names) {
       await assert.rejects(
         createNode(env, { parentPath, name, type: "prompt" }),
@@ -42,26 +37,20 @@ test("Node creation rejects unindexable names before writing and allows nested s
   assert.equal((await loadTent(fs)).byId.get(id)?.path, "prompt/index.md");
 });
 
-test("Node scans never enter transient mutation lock guard directories", async (t) => {
+test("Node scans never enter transient mutation lock directories", async (t) => {
   const root = await makeTent(t);
   const fs = openTestFs(root);
   const listDir = fs.listDir.bind(fs);
-  const guardNames = [
-    "mutation.lock.guard",
-    "mutation.lock.guard.pending-token",
-    "mutation.lock.guard.released-token",
-    "mutation.lock.guard.stale-token",
+  const lockNames = [
+    "mutation.lock",
+    "mutation.lock.pending-token",
+    "mutation.lock.released-token",
+    "mutation.lock.stale-token",
   ];
   fs.listDir = async (dir) => {
-    assert.equal(
-      guardNames.includes(dir),
-      false,
-      `Transient guard disappeared before scanning: ${dir}`,
-    );
+    assert.equal(lockNames.includes(dir), false, `Transient lock left before scanning: ${dir}`);
     const entries = await listDir(dir);
-    return dir === ""
-      ? [...entries, ...guardNames.map((name) => ({ name, isDir: true }))]
-      : entries;
+    return dir === "" ? [...entries, ...lockNames.map((name) => ({ name, isDir: true }))] : entries;
   };
   assert.equal((await loadTent(fs)).byId.has("node-p1"), true);
 });
