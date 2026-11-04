@@ -252,3 +252,37 @@ test("SQLite safety 5: move, rename and deletion keep retained versions readable
     false,
   );
 });
+
+test("recovery keeps a file it did not write when a folder became a link to it", async (t) => {
+  const { workspace, root } = await fixture(t);
+  const file = "N001/N001.md";
+  const version = (text: string) => ({ bytes: Buffer.from(text).toString("base64") });
+  const before = version(await fs.readFile(path.join(root, file), "utf8"));
+  const after = version("new\n");
+  await fs.writeFile(
+    path.join(root, TRANSACTION_PATH),
+    JSON.stringify({
+      publish: null,
+      entries: [{ path: file, before, after, versions: [before, after] }],
+    }),
+  );
+  const outside = path.join(workspace, "outside");
+  await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, "N001.md"), "the user's own file\n");
+  await fs.rm(path.join(root, "N001"), { recursive: true });
+  await fs.symlink(
+    outside,
+    path.join(root, "N001"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const reopened = openTestFs(root);
+  try {
+    await reopened.ready();
+    assert.deepEqual(reopened.recoveryConflicts, [file]);
+    assert.equal(await fs.readFile(path.join(outside, "N001.md"), "utf8"), "the user's own file\n");
+    assert.equal(await reopened.exists(TRANSACTION_PATH), false);
+  } finally {
+    await reopened.close();
+    await fs.unlink(path.join(root, "N001"));
+  }
+});
