@@ -80,7 +80,7 @@ export class SqliteDocumentHistory implements DocumentHistory {
     this.opening = (async () => {
       const available = await this.available();
       if (!create && !available)
-        throw new Error("Tent SQLite history is unavailable; initialize or migrate this Workspace");
+        throw new Error("This Workspace has no Tent history: .tent/.git/history.sqlite is missing");
       await durableMkdir(path.join(this.systemRoot, ".git"));
       const db = new DatabaseSync(path.join(this.systemRoot, ".git", "history.sqlite"));
       try {

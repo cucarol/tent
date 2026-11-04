@@ -84,7 +84,7 @@ export function parseCardDocument(id: string, raw: string): CardDocument {
   try {
     parsed = parseFrontmatter(raw);
   } catch (error) {
-    invalid(`Invalid Card metadata: ${String(error)}`);
+    invalid(`Invalid Card metadata: ${error instanceof Error ? error.message : String(error)}`);
   }
   return cardFromParsed(id, raw, parsed);
 }
@@ -97,7 +97,7 @@ function cardFromParsed(
   try {
     sourcesSchema.parse(parsed.data.sources);
   } catch (error) {
-    invalid(`Invalid Card metadata: ${String(error)}`);
+    invalid(`Invalid Card metadata: ${error instanceof Error ? error.message : String(error)}`);
   }
   const data = parsed.data;
   validateCardHeader(id, data);
@@ -861,7 +861,7 @@ export async function listCardDocumentHeaders(
           items.push({
             cardId: id,
             path,
-            diagnostic: "Card header unavailable; inspect raw",
+            diagnostic: "Card header unavailable; run tent workspace check",
             ...(uncaptured ? { uncaptured: true } : {}),
           });
         }
@@ -882,7 +882,7 @@ export async function listCardDocumentHeaders(
         items[i] = {
           cardId,
           path,
-          diagnostic: "Card header unavailable; inspect raw",
+          diagnostic: "Card header unavailable; run tent workspace check",
           ...(uncaptured ? { uncaptured: true } : {}),
         };
       }

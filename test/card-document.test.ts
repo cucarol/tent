@@ -467,7 +467,7 @@ test("filtered Card lists skip history and keep malformed-header diagnostics", a
       {
         cardId: "card-invalid",
         path: "cards/card-invalid.md",
-        diagnostic: "Card header unavailable; inspect raw",
+        diagnostic: "Card header unavailable; run tent workspace check",
       },
     ],
   );
