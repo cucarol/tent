@@ -67,10 +67,6 @@ test("document observation caches only prefix and decoded-text fingerprint acros
   const cache = await fs.readFile(f.cache, "utf8");
   assert.ok(!cache.includes("private body"), "full document text must not persist");
   assert.ok(cache.includes(expected.fingerprint));
-  await f.adapter.observationScope(() => f.adapter.readFrontmatterWithFingerprint(f.relative), {
-    forceContent: true,
-  });
-  assert.equal(count(), 2, "explicit content checks bypass persistent observations");
 });
 
 test("current stat detects body/header edits with restored mtime and path replacement", async (t) => {
@@ -99,14 +95,9 @@ test("missing/damaged cache, racy files and malformed headers reread complete cu
   const count = sourceOpens(t, f.filename);
   const read = () => f.adapter.readFrontmatterWithFingerprint(f.relative);
   const expected = await read();
-  for (const invalid of ["missing", "json", "checksum"]) {
+  for (const invalid of ["missing", "json"]) {
     if (invalid === "missing") await fs.rm(f.cache);
-    else if (invalid === "json") await fs.writeFile(f.cache, "{");
-    else {
-      const cache = JSON.parse(await fs.readFile(f.cache, "utf8"));
-      Object.values(cache.entries).forEach((entry: any) => (entry.digest = "bad"));
-      await fs.writeFile(f.cache, JSON.stringify(cache));
-    }
+    else await fs.writeFile(f.cache, "{");
     const before = count();
     assert.deepEqual(await read(), expected);
     assert.equal(count(), before + 1);

@@ -43,64 +43,6 @@ export async function withMarkdownSyntaxCache<T>(
   return { result, used };
 }
 
-export function validMarkdownSyntaxCache(value: unknown): value is MarkdownSyntaxCache {
-  if (!(value instanceof Map)) return false;
-  const record = (value: unknown): value is Record<string, unknown> =>
-    !!value && typeof value === "object" && !Array.isArray(value);
-  for (const [key, entry] of value) {
-    if (
-      typeof key !== "string" ||
-      !/^[a-f0-9]{64}$/.test(key) ||
-      !record(entry) ||
-      !Number.isSafeInteger(entry.length) ||
-      (entry.length as number) < 0
-    )
-      return false;
-    const span = (value: unknown) =>
-      record(value) &&
-      Number.isSafeInteger(value.start) &&
-      Number.isSafeInteger(value.end) &&
-      (value.start as number) >= 0 &&
-      (value.start as number) <= (value.end as number) &&
-      (value.end as number) <= (entry.length as number);
-    if (
-      !Array.isArray(entry.links) ||
-      !entry.links.every(
-        (link) =>
-          record(link) &&
-          typeof link.url === "string" &&
-          (link.label === undefined || typeof link.label === "string") &&
-          (link.span === undefined || span(link.span)),
-      ) ||
-      !Array.isArray(entry.mentionExclusions) ||
-      !entry.mentionExclusions.every(span) ||
-      !Array.isArray(entry.destinations) ||
-      !entry.destinations.every(
-        (destination) =>
-          record(destination) &&
-          typeof destination.url === "string" &&
-          (destination.span === undefined ||
-            (span(destination.span) &&
-              typeof (destination.span as Record<string, unknown>).angled === "boolean")),
-      ) ||
-      !Array.isArray(entry.headings) ||
-      !entry.headings.every(
-        (heading) =>
-          record(heading) &&
-          Number.isSafeInteger(heading.start) &&
-          (heading.start as number) >= 0 &&
-          (heading.start as number) <= (entry.length as number) &&
-          Number.isSafeInteger(heading.depth) &&
-          (heading.depth as number) >= 1 &&
-          (heading.depth as number) <= 6 &&
-          typeof heading.text === "string",
-      )
-    )
-      return false;
-  }
-  return true;
-}
-
 export function markdownSyntax(body: string): MarkdownSyntax {
   const cache = syntaxCaches.getStore();
   const key = cache ? createHash("sha256").update(body).digest("hex") : undefined;

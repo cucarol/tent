@@ -52,31 +52,6 @@ export async function withFrontmatterCache<T>(
   return { result, used };
 }
 
-/** Validate disposable decoded values without reparsing their YAML on every process. */
-export function validFrontmatterCache(value: unknown): value is FrontmatterCache {
-  if (!(value instanceof Map)) return false;
-  try {
-    for (const [etag, entry] of value) {
-      if (
-        typeof etag !== "string" ||
-        !/^[a-f0-9]{24}$/.test(etag) ||
-        !isRecord(entry) ||
-        !isRecord(entry.data) ||
-        !Array.isArray(entry.keys) ||
-        !entry.keys.every((key) => typeof key === "string") ||
-        new Set(entry.keys).size !== entry.keys.length ||
-        entry.keys.length !== Object.keys(entry.data).length ||
-        !entry.keys.every((key) => Object.prototype.hasOwnProperty.call(entry.data, key))
-      )
-        return false;
-      assertJsonValue(entry.data);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function parseFrontmatter(raw: string): ParsedFrontmatter {
   const boundary = frontmatterBoundary(raw);
   if (!boundary) return { data: {}, body: raw, keyOrder: [] };

@@ -7,7 +7,6 @@ import type { CaptureMetadata } from "./history-port.js";
 /** Prefix and decoded-text blob fingerprint from one current document observation. */
 export type DocumentHeaderObservation = { content: string; fingerprint: string };
 export type ObservationOptions = {
-  forceContent?: boolean;
   /** Valid Node document paths already checked by this read-only inspection. */
   nodePaths?: ReadonlySet<string>;
 };

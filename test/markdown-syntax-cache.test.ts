@@ -6,14 +6,10 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { deserialize, serialize } from "node:v8";
+import { deserialize } from "node:v8";
 import { test, type TestContext } from "node:test";
 import { extractOutLinksDetailed, rewriteMarkdownDestinations } from "../src/core/base/links.js";
-import {
-  validMarkdownSyntaxCache,
-  withMarkdownSyntaxCache,
-} from "../src/core/base/markdown-syntax.js";
-import { withPersistedMarkdownSyntax } from "../src/fs/markdown-syntax-cache.js";
+import { withMarkdownSyntaxCache } from "../src/core/base/markdown-syntax.js";
 import { testScratchRoot } from "./scratch.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
@@ -54,7 +50,6 @@ test("one exact-body parse serves links, spans and rewrites without sharing outp
   const cold = await withMarkdownSyntaxCache(new Map(), async () => observe(body));
   assert.deepEqual(cold.result, expected);
   assert.equal(cold.used.size, 1);
-  assert.equal(validMarkdownSyntaxCache(cold.used), true);
   const warm = await withMarkdownSyntaxCache(cold.used, async () => {
     const result = observe(body);
     assert.deepEqual(result, expected);
@@ -167,46 +162,7 @@ async function fixture(t: TestContext) {
   return { root, file: path.join(root, ".git", "tent-material-cache", "markdown-syntax.bin") };
 }
 
-test("persisted syntax survives narrow reads; missing, corrupt and mismatched caches fall back byte for byte", async (t) => {
-  const { root, file } = await fixture(t);
-  const read = () => withPersistedMarkdownSyntax(root, async () => JSON.stringify(observe(body)));
-  const expected = JSON.stringify(observe(body));
-  assert.equal(await read(), expected);
-  const bytes = await fs.readFile(file);
-  const stat = await fs.stat(file);
-  assert.equal(await read(), expected);
-  assert.deepEqual(await fs.readFile(file), bytes);
-  assert.equal((await fs.stat(file)).mtimeMs, stat.mtimeMs);
-  await withPersistedMarkdownSyntax(root, async () => observe("[other](other.md)"));
-  const narrow = deserialize((await fs.readFile(file)).subarray(32));
-  assert.equal(narrow.entries.size, 2);
-  const writeEnvelope = async (value: unknown) => {
-    const payload = serialize(value);
-    await fs.writeFile(
-      file,
-      Buffer.concat([createHash("sha256").update(payload).digest(), payload]),
-    );
-  };
-  for (const saved of [
-    { version: -1, entries: narrow.entries },
-    { version: 2, entries: new Map([["invalid-key", {}]]) },
-    { version: 2, entries: new Map([[createHash("sha256").update(body).digest("hex"), null]]) },
-    null,
-  ]) {
-    await writeEnvelope(saved);
-    assert.equal(await read(), expected);
-  }
-  await fs.writeFile(file, "corrupt");
-  assert.equal(await read(), expected);
-  await fs.rm(file);
-  assert.equal(await read(), expected);
-  await fs.rm(file);
-  await fs.mkdir(file);
-  assert.equal(await read(), expected);
-  assert.deepEqual(await fs.readdir(path.dirname(file)), ["markdown-syntax.bin"]);
-});
-
-test("parallel syntax scopes are isolated and absent Tent Git stays read-only", async (t) => {
+test("parallel syntax scopes are isolated", async () => {
   const results = await Promise.all(
     ["a.md", "b.md"].map((url) =>
       withMarkdownSyntaxCache(new Map(), async () => {
@@ -219,13 +175,6 @@ test("parallel syntax scopes are isolated and absent Tent Git stays read-only", 
   assert.equal(results[1]!.result[0]!.raw, "b.md");
   assert.equal(results[0]!.used.size, 1);
   assert.equal(results[1]!.used.size, 1);
-  const { root } = await fixture(t);
-  await fs.rmdir(path.join(root, ".git"));
-  assert.deepEqual(
-    await withPersistedMarkdownSyntax(root, async () => observe(body)),
-    observe(body),
-  );
-  assert.deepEqual(await fs.readdir(root), []);
 });
 
 test("CLI check installs syntax reuse around the outer document read scope", async (t) => {
@@ -255,7 +204,7 @@ test("CLI check installs syntax reuse around the outer document read scope", asy
   };
   const first = await check();
   const bytes = await fs.readFile(file);
-  assert.ok(deserialize(bytes.subarray(32)).entries.size > 0);
+  assert.ok(deserialize(bytes).entries.size > 0);
   const head = await historyHead(system);
   const stat = await fs.stat(file);
   assert.equal(await check(), first);

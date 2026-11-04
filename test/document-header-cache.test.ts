@@ -11,7 +11,6 @@ import { test, type TestContext } from "node:test";
 import {
   parseFrontmatter,
   serializeFrontmatter,
-  validFrontmatterCache,
   withFrontmatterCache,
 } from "../src/core/base/frontmatter.js";
 import { withDocumentHeaderCache } from "../src/fs/document-header-cache.js";
@@ -80,15 +79,6 @@ test("changed header bytes and invalid YAML never reuse an earlier parse", async
   });
   assert.equal(next.used.size, 1);
   assert.equal(next.used.has(contentEtag(prefix)), false);
-  assert.equal(validFrontmatterCache(next.used), true);
-  assert.equal(
-    validFrontmatterCache(new Map([[contentEtag(prefix), { data: { x: 1 }, keys: [] }]])),
-    false,
-  );
-  assert.equal(
-    validFrontmatterCache(new Map([[contentEtag(prefix), { data: { x: Infinity }, keys: ["x"] }]])),
-    false,
-  );
 });
 
 test("parallel cache scopes keep their own observed headers", async () => {
@@ -130,7 +120,7 @@ test("disk cache is disposable, preserves other headers during narrow reads and 
   await fs.rm(file);
   assert.deepEqual(await read(), cold);
   await withDocumentHeaderCache(root, async () => parseFrontmatter("---\nonly: true\n---\n"));
-  const saved = deserialize((await fs.readFile(file)).subarray(32));
+  const saved = deserialize(await fs.readFile(file));
   assert.equal(saved.entries.size, 2);
   assert.ok(saved.entries.has(contentEtag(prefix)));
   // A directory at the cache filename blocks replacement on every supported OS.
@@ -145,12 +135,6 @@ test("disk cache is disposable, preserves other headers during narrow reads and 
     /action failed/,
   );
   assert.deepEqual(await fs.readdir(directory), ["document-headers.bin"]);
-});
-
-test("without Tent Git the scope performs no cache writes", async (t) => {
-  const root = await fixture(t);
-  await withDocumentHeaderCache(root, async () => parseFrontmatter(prefix));
-  assert.deepEqual(await fs.readdir(root), []);
 });
 
 test("mutation shares nested header caches but discards surrounding live observations", async (t) => {
@@ -180,12 +164,9 @@ test("mutation shares nested header caches but discards surrounding live observa
   });
   await adapter.withLock("mutation.lock", async () => {
     parseFrontmatter(original).data.id = "node-localmutation";
-    await adapter.observationScope(
-      async () => {
-        assert.equal(parseFrontmatter(original).data.id, "node-cachetest");
-      },
-      { forceContent: true },
-    );
+    await adapter.observationScope(async () => {
+      assert.equal(parseFrontmatter(original).data.id, "node-cachetest");
+    });
   });
   assert.equal(cacheReads, 1, "nested same-root observations load the header cache once");
   await adapter.observationScope(async () => {

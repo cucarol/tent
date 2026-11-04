@@ -212,7 +212,7 @@ export class NodeFs implements FsAdapter {
           }));
         }
         return action();
-      }, options),
+      }),
     );
   }
 
@@ -228,20 +228,12 @@ export class NodeFs implements FsAdapter {
     );
   }
 
-  private observe<T>(action: () => Promise<T>, options?: { forceContent?: boolean }): Promise<T> {
-    if (hasFileReadScope() && !options?.forceContent) return action();
-    return withFileReadScope(
-      () => withDocumentHeaderCache(this.root, () => action()),
-      options?.forceContent,
-    );
+  private observe<T>(action: () => Promise<T>): Promise<T> {
+    return hasFileReadScope() ? action() : withDocumentHeaderCache(this.root, action);
   }
 
-  private readCacheFile(): Promise<string | undefined> {
-    return scopedRead(`cache-location:${this.root}`, async () =>
-      (await this.exists(".git"))
-        ? this.abs(".git/tent-material-cache/file-state.json")
-        : undefined,
-    );
+  private get cacheFile(): string {
+    return this.abs(".git/tent-material-cache/file-state.json");
   }
 
   async readMaterialText(resource: string, documentPath: string) {
@@ -287,10 +279,6 @@ export class NodeFs implements FsAdapter {
     return (await this.readBytes(path)).bytes.toString("utf8");
   }
 
-  async readFrontmatter(path: string): Promise<string> {
-    return (await this.readFrontmatterObservation(path)).content;
-  }
-
   async readFrontmatterWithFingerprint(path: string): Promise<DocumentHeaderObservation> {
     await this.ready();
     const filename = this.abs(path);
@@ -298,18 +286,7 @@ export class NodeFs implements FsAdapter {
     return withFileReadScope(() =>
       scopedRead(key, async () => {
         const state = fileState(await fs.stat(filename, { bigint: true }));
-        const cache = await this.readCacheFile();
-        const cached = await cachedFileValue(
-          cache,
-          key,
-          state,
-          (value): value is DocumentHeaderObservation =>
-            !!value &&
-            typeof value === "object" &&
-            typeof (value as DocumentHeaderObservation).content === "string" &&
-            typeof (value as DocumentHeaderObservation).fingerprint === "string" &&
-            /^[a-f0-9]{64}$/.test((value as DocumentHeaderObservation).fingerprint),
-        );
+        const cached = await cachedFileValue<DocumentHeaderObservation>(this.cacheFile, key, state);
         if (cached) return cached;
         const read = await this.readBytes(path);
         // Match readFile's UTF-8 replacement/BOM semantics, not a raw-byte digest.
@@ -322,39 +299,32 @@ export class NodeFs implements FsAdapter {
           // Preserve malformed-header diagnostics without persisting a whole body.
           return { content: raw, fingerprint };
         }
-        await rememberFileValue(cache, key, read.state, { content, fingerprint });
+        await rememberFileValue(this.cacheFile, key, read.state, { content, fingerprint });
         return { content, fingerprint };
       }),
     );
   }
 
-  /** A derived cache must retain the identity of the observation that supplied its content. */
-  async readFrontmatterObservation(path: string): Promise<{ content: string; state: FileState }> {
+  async readFrontmatter(path: string): Promise<string> {
     await this.ready();
+    const key = `header:${this.abs(path)}`;
     return withFileReadScope(() =>
-      scopedRead(`header:${this.abs(path)}`, async () => {
+      scopedRead(key, async () => {
         const full = peekScopedRead<ObservedBytes>(`bytes:${this.abs(path)}`);
         if (full) {
-          const { bytes, state } = await full;
+          const text = (await full).bytes.toString("utf8");
           try {
-            return { content: documentHeader(bytes.toString("utf8")), state };
+            return documentHeader(text);
           } catch {
-            return { content: bytes.toString("utf8"), state };
+            return text;
           }
         }
         const state = fileState(await fs.stat(this.abs(path), { bigint: true }));
-        const cache = await this.readCacheFile();
-        const key = `header:${this.abs(path)}`;
-        const cached = await cachedFileValue(
-          cache,
-          key,
-          state,
-          (value): value is string => typeof value === "string",
-        );
-        if (cached !== undefined) return { content: cached, state };
+        const cached = await cachedFileValue<string>(this.cacheFile, key, state);
+        if (cached !== undefined) return cached;
         const content = await this.readHeaderBytes(path);
-        await rememberFileValue(cache, key, state, content);
-        return { content, state };
+        await rememberFileValue(this.cacheFile, key, state, content);
+        return content;
       }),
     );
   }

@@ -24,13 +24,3 @@ export function cachedSemanticContent(inputs: () => unknown, compute: () => stri
   cache.used.set(key, value);
   return value;
 }
-
-export function validSemanticContentCache(value: unknown): value is SemanticContentCache {
-  return (
-    value instanceof Map &&
-    [...value].every(
-      ([key, content]) =>
-        typeof key === "string" && /^[a-f0-9]{64}$/.test(key) && typeof content === "string",
-    )
-  );
-}

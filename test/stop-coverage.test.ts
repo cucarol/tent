@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   formatStopCoverage,
@@ -232,10 +231,9 @@ test("main-checkout absolute materials cover the same relative path in a linked 
   assert.equal(index.nodes[0]!.path, path.join(f.systemRoot, "Main", "Main.md"));
 });
 
-test("warm Stop reuses unchanged exact header observations and rechecks changed files", async (t) => {
+test("Stop coverage reads headers, not bodies, and sees a changed Node", async (t) => {
   const f = await fixture(t);
   await f.node("A", "resource: ../../src/a.ts", "BODY".repeat(40_000));
-  const observed: string[] = [];
   const readFile = f.adapter.readFile.bind(f.adapter);
   t.mock.method(f.adapter, "readFile", async (filename: string) => {
     assert.notEqual(
@@ -245,29 +243,9 @@ test("warm Stop reuses unchanged exact header observations and rechecks changed 
     );
     return readFile(filename);
   });
-  const read = f.adapter.readFrontmatterObservation.bind(f.adapter);
-  t.mock.method(f.adapter, "readFrontmatterObservation", async (filename: string) => {
-    observed.push(filename);
-    return read(filename);
-  });
-  // Keep the conservative file-state cache's one-second age rule without a sleep.
-  const now = Date.now() + 10_000;
-  t.mock.method(Date, "now", () => now);
-  const coldStart = performance.now();
-  const cold = await f.load();
-  const coldMs = performance.now() - coldStart;
-  assert.deepEqual(observed, ["A/A.md"]);
-  observed.length = 0;
-  const warmStart = performance.now();
-  assert.deepEqual(await f.load(), cold);
-  const warmMs = performance.now() - warmStart;
-  assert.deepEqual(observed, []);
+  assert.deepEqual(names(await f.load(), ["src/a.ts"]), ["A"]);
   await f.node("A", "resource: ../../src/b.ts");
   assert.deepEqual(names(await f.load(), ["src/b.ts"]), ["A"]);
-  assert.deepEqual(observed, ["A/A.md"]);
-  t.diagnostic(
-    `header cache: cold ${coldMs.toFixed(1)} ms / 1 read; warm ${warmMs.toFixed(1)} ms / 0 reads`,
-  );
 });
 
 test("format emits the exact sections, deterministic order, no truncation or body", () => {

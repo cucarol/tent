@@ -208,11 +208,10 @@ More
  * `target` is the workspace root. Existing project files remain untouched.
  */
 async function newTent(target: string): Promise<void> {
-  const { NodeFs } = await import("../fs/node-fs.js");
   const { initializeTentWorkspace } = await import("../fs/workspace-init.js");
   const workspaceRoot = path.resolve(target);
-  const fsa = new NodeFs(workspaceRoot);
-  if (await fsa.exists(".tent")) return fail(`Target is already a Tent: ${workspaceRoot}`);
+  if (await fs.lstat(path.join(workspaceRoot, ".tent")).catch(() => null))
+    return fail(`Target is already a Tent: ${workspaceRoot}`);
 
   const { initializeProjectGit } = await import("../fs/project-git.js");
   if (await initializeProjectGit(workspaceRoot))

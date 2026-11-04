@@ -3,14 +3,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { createHash } from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { withFileReadScope } from "../src/fs/file-state-cache.js";
 import { readStructureSource } from "../src/fs/source-observation.js";
 import { testScratchRoot } from "./scratch.js";
 
-const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const raw = (id = "node-first") =>
   `---\nid: ${id}\ntype: prompt\n---\n${"Body 😀\n".repeat(10_000)}`;
 
@@ -176,7 +174,7 @@ test("structure text rejects invalid UTF-8 and NUL bytes", async (t) => {
   }
 });
 
-test("deleted, corrupt, obsolete and tampered persisted entries fall back to source bytes", async (t) => {
+test("deleted, corrupt and obsolete persisted caches fall back to source bytes", async (t) => {
   const f = await fixture(t);
   const expected = await readCached(f.adapter, f.relative);
   const valid = await fs.readFile(f.cacheFile, "utf8");
@@ -185,21 +183,6 @@ test("deleted, corrupt, obsolete and tampered persisted entries fall back to sou
     undefined,
     "broken JSON",
     JSON.stringify({ ...JSON.parse(valid), schema: 999 }),
-    (() => {
-      const cache = JSON.parse(valid);
-      cache.schema = 1;
-      const entry = cache.entries[`header:${f.filename}`];
-      entry.value = "---\nid: node-replaced\ntype: output\n---\n";
-      entry.digest = digest(JSON.stringify([entry.state, entry.writtenAtNs, entry.value]));
-      return JSON.stringify(cache);
-    })(),
-    (() => {
-      const cache = JSON.parse(valid);
-      for (const entry of Object.values(cache.entries) as Array<{ digest: string }>)
-        entry.digest = "broken";
-      return JSON.stringify(cache);
-    })(),
-    JSON.stringify({ schema: 2, entries: [] }),
   ];
   for (const invalid of variants) {
     if (invalid === undefined) await fs.rm(f.cacheFile);
@@ -248,24 +231,6 @@ test("overlapping independent scopes observe separate native file versions", asy
     resume();
   }
   assert.deepEqual(await first, [raw(), raw()]);
-});
-
-test("forced scopes bypass persisted values and a parent request's acquired bytes", async (t) => {
-  const f = await fixture(t);
-  const expected = await readCached(f.adapter, f.relative);
-  const io = sourceIo(t, [f.filename]);
-  await withFileReadScope(async () => {
-    assert.equal(await f.adapter.readFrontmatter(f.relative), expected.header);
-    assert.equal(await readStructureSource(f.filename), raw());
-  }, true);
-  assert.ok(io.bytes >= Buffer.byteLength(raw()));
-  await withFileReadScope(async () => {
-    assert.equal(await f.adapter.readFile(f.relative), raw());
-    const changed = raw("node-other");
-    await fs.writeFile(f.filename, changed);
-    const forced = await withFileReadScope(() => f.adapter.readFile(f.relative), true);
-    assert.equal(forced, changed);
-  });
 });
 
 test("concurrent readers in one request acquire source bytes once", async (t) => {
