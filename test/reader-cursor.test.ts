@@ -29,10 +29,7 @@ test("CLI previews oversized metadata and keeps later records reachable", () => 
   };
   const first = pageItems(items, "node.list", { limit: 1 });
   assert.equal((first.items[0] as Record<string, unknown>)?.descriptionTruncated, true);
-  assert.deepEqual((first.items[0] as Record<string, unknown>)?.metadataRead, {
-    nodeId: "node-large",
-    view: "raw",
-  });
+  assert.equal(first.items[0]?.nodeId, "node-large");
   const second = pageItems(items, "node.list", { limit: 1, cursor: first.page.nextCursor });
   assert.equal(second.items[0]?.nodeId, "node-later");
 });

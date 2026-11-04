@@ -221,11 +221,7 @@ export class NodeFs implements FsAdapter {
     return result;
   }
 
-  constructor(
-    root: string,
-    private readonly entry: CaptureMetadata["entry"] = "core",
-    history?: DocumentHistory,
-  ) {
+  constructor(root: string, entry: CaptureMetadata["entry"] = "core", history?: DocumentHistory) {
     this.root = nodePath.resolve(root);
     this.workspaceRoot = workspaceRootFromSystemRoot(this.root);
     this.history = history ?? new SqliteDocumentHistory(this.root, entry);

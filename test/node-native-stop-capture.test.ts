@@ -131,11 +131,7 @@ for (const [label, change, reason] of [
 }
 
 for (const [label, change, reason] of [
-  [
-    "id change",
-    (raw: string) => raw.replace("node-native", "node-renamed"),
-    /cannot change the Node id/,
-  ],
+  ["id change", (raw: string) => raw.replace("node-native", "node-renamed"), /id cannot change/],
   ["type", (raw: string) => raw.replace("type: prompt", "type: unknown"), /type/i],
   [
     "description",

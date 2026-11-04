@@ -20,30 +20,7 @@ const cursorSchema = z.strictObject({
 function fits(value: unknown, budget = bytes) {
   return Buffer.byteLength(JSON.stringify(value)) <= budget;
 }
-function exactRead(value: Record<string, unknown>) {
-  if (value.read && typeof value.read === "object") return value.read;
-  if (typeof value.nodeId === "string")
-    return {
-      nodeId: value.nodeId,
-      view: "raw",
-      ...(typeof value.etag === "string" ? { expectedEtag: value.etag } : {}),
-      ...(value.version ? { version: value.version } : {}),
-    };
-  if (typeof value.cardId === "string")
-    return {
-      cardId: value.cardId,
-      view: "raw",
-      ...(typeof value.etag === "string" ? { expectedEtag: value.etag } : {}),
-    };
-  if (typeof value.roleId === "string")
-    return {
-      roleId: value.roleId,
-      view: "raw",
-      ...(typeof value.etag === "string" ? { expectedEtag: value.etag } : {}),
-    };
-  return undefined;
-}
-export function compactItem<T>(item: T): T {
+function compactItem<T>(item: T): T {
   if (fits(item, 6 * 1024)) return item;
   if (!item || typeof item !== "object" || Array.isArray(item)) return item;
   const original = item as Record<string, unknown>;
@@ -66,21 +43,13 @@ export function compactItem<T>(item: T): T {
       output[key] = compactItem(value);
     } else output[key] = value;
   }
-  output.metadataRead ??= exactRead(original);
   if (fits(output, 8 * 1024)) return output as T;
-  return compactReadItem(item);
-}
-
-/** Existing identity-only fallback when a receipt has no room for readable content. */
-export function compactReadItem<T>(item: T): T {
-  if (!item || typeof item !== "object" || Array.isArray(item)) return item;
-  const original = item as Record<string, unknown>;
   const identity = Object.fromEntries(
-    ["nodeId", "cardId", "roleId", "commit", "etag", "version", "read", "uncaptured"]
+    ["nodeId", "cardId", "roleId", "commit", "etag", "version", "uncaptured"]
       .filter((key) => key in original)
       .map((key) => [key, original[key]]),
   );
-  return { ...identity, metadataOmitted: true, metadataRead: exactRead(original) } as T;
+  return { ...identity, metadataOmitted: true } as T;
 }
 
 function encode(scope: string, revision: string, position: number) {
@@ -108,7 +77,7 @@ function offset(cursor: string | undefined, scope: string, revision: string) {
 export function itemPageStart(cursor: string | undefined, operation: string, limit = 20) {
   let start = 0;
   if (cursor) {
-    const scope = canonicalSha256({ operation, source: "cli", input: undefined });
+    const scope = canonicalSha256({ operation, source: "cli" });
     // pageItems checks the revision against the selected history snapshot before
     // publishing any records; only the position is needed for the SQL query.
     let revision: string;
@@ -123,7 +92,7 @@ export function itemPageStart(cursor: string | undefined, operation: string, lim
     throw new ReaderError("INVALID_INPUT", "Invalid page limit");
   return start;
 }
-export function pageItems<T extends { items: unknown[]; revision?: string }>(
+export function pageItems<T extends { items: unknown[]; revision: string }>(
   result: T,
   operation: string,
   options: {
@@ -132,21 +101,11 @@ export function pageItems<T extends { items: unknown[]; revision?: string }>(
     start?: number;
     expectedRevision?: string;
     window?: { start: number; total: number };
-    maxBytes?: number;
   } = {},
 ) {
-  const revision = result.revision ?? canonicalSha256(result);
-  const scope = canonicalSha256({
-    operation,
-    source: "cli",
-    input: "scope" in result ? result.scope : undefined,
-  });
+  const { revision } = result;
+  const scope = canonicalSha256({ operation, source: "cli" });
   const compacted = result.items.map((item) => compactItem(item));
-  const { scope: visibleScope, ...other } = result as T & { scope?: unknown };
-  const base =
-    visibleScope !== undefined && !fits(visibleScope, 1024)
-      ? { ...other, scopeOmitted: true }
-      : result;
   const start = options.cursor ? offset(options.cursor, scope, revision) : (options.start ?? 0);
   const limit = options.limit ?? 20;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
@@ -158,7 +117,7 @@ export function pageItems<T extends { items: unknown[]; revision?: string }>(
   if (options.expectedRevision && options.expectedRevision !== revision)
     throw new ReaderError("SOURCE_CHANGED", "List changed; restart the query");
   const make = (end: number) => ({
-    ...base,
+    ...result,
     items: compacted.slice(start - windowStart, end - windowStart),
     page: {
       hasMore: end < total,
@@ -166,15 +125,14 @@ export function pageItems<T extends { items: unknown[]; revision?: string }>(
         ? {
             nextCursor: encode(scope, revision, end),
             next: { start: end, expectedRevision: revision },
-            nextIndex: end,
           }
         : {}),
     },
   });
   let end = Math.min(start + limit, total);
-  while (end > start && !fits(make(end), options.maxBytes)) end--;
+  while (end > start && !fits(make(end))) end--;
   const page = make(end);
-  if ((end === start && start < total) || !fits(page, options.maxBytes))
+  if ((end === start && start < total) || !fits(page))
     throw new PageError("PAGE_TOO_LARGE", "Record exceeds CLI page budget");
   return page;
 }

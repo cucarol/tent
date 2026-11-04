@@ -9,7 +9,7 @@ import {
   nodeNotePath,
 } from "../base/paths.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
-import { prepareNodeDocumentWrite } from "./node-document-write.js";
+import { assertNodeEdit } from "./node-document-write.js";
 import { ReaderError } from "./reader-error.js";
 import { recoverPendingNodeMoveUnlocked } from "../store/node-move-recovery.js";
 import { recoverPendingDeleteUnlocked } from "../store/delete-recovery.js";
@@ -186,9 +186,7 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
           throw new Error(
             `Duplicate id: ${node.id}; retained Node identity remains at ${editedById.get(node.id)!.path}.`,
           );
-        const previousRaw = document.previousRaw ?? moved?.raw ?? document.raw;
-        const id = String(parseFrontmatter(previousRaw).data.id);
-        prepareNodeDocumentWrite({ id, path: directory }, previousRaw, { raw: document.raw });
+        assertNodeEdit(directory, document.previousRaw ?? moved?.raw ?? document.raw, document.raw);
       } catch (error) {
         invalid.set(`.tent/${document.path}`, {
           path: `.tent/${document.path}`,

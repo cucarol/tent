@@ -22,7 +22,6 @@ import {
 } from "../base/material.js";
 import { isHistoryDocument } from "../store/document-history.js";
 import { parseRoleDocument } from "../store/role-document.js";
-import { ReaderError } from "./reader-error.js";
 import { canonicalSha256 } from "../base/canonical-digest.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import { assertSystemMaterial, systemMaterialPath } from "./material-target.js";
@@ -510,69 +509,6 @@ function deprecatedCardNotice(card: CardDocument) {
     : {};
 }
 
-/** A range end must not split a surrogate pair or a CRLF. */
-function boundary(text: string, end: number): number {
-  if (
-    end > 0 &&
-    end < text.length &&
-    ((/[\uD800-\uDBFF]/.test(text[end - 1]!) && /[\uDC00-\uDFFF]/.test(text[end]!)) ||
-      (text[end - 1] === "\r" && text[end] === "\n"))
-  )
-    return end - 1;
-  return end;
-}
-
-type PageOptions = {
-  view?: "body" | "raw";
-  range?: { unit: "utf16"; start: number; end: number };
-  expectedEtag?: string;
-  capture?: boolean;
-  /** Pure CLI reads use retained documents for derived state, with live material observations. */
-  retainedState?: boolean;
-};
-function cardPage<T extends Record<string, unknown>>(
-  id: string,
-  raw: string,
-  options: PageOptions,
-  metadata: T,
-) {
-  const path = cardPath(id),
-    etag = contentEtag(raw),
-    view = options.view ?? "body";
-  let text = raw;
-  if (view === "body") {
-    try {
-      text = parseFrontmatter(raw).body;
-    } catch {
-      invalid("Malformed Card YAML; read raw to inspect its original bytes");
-    }
-  }
-  const range = options.range ?? { unit: "utf16" as const, start: 0, end: text.length };
-  if (
-    range.unit !== "utf16" ||
-    !Number.isSafeInteger(range.start) ||
-    !Number.isSafeInteger(range.end) ||
-    range.start < 0 ||
-    range.end < range.start ||
-    range.end > text.length ||
-    boundary(text, range.start) !== range.start ||
-    boundary(text, range.end) !== range.end
-  )
-    throw new ReaderError("INVALID_RANGE", "Card range must preserve UTF-16 and CRLF boundaries");
-  if (options.expectedEtag && options.expectedEtag !== etag)
-    throw new ReaderError("SOURCE_CHANGED", "Card changed; reread before continuing");
-  return {
-    cardId: id,
-    path,
-    etag,
-    view,
-    ...metadata,
-    text: text.slice(range.start, range.end),
-    range,
-    total: text.length,
-  };
-}
-
 export function takeCardDocument(
   fs: FsAdapter,
   id: string,
@@ -638,7 +574,13 @@ export function takeCardDocument(
           operation: "card.take",
         })
       ).versions[0];
-      return cardPage(id, raw, {}, { ...metadata, version: savedVersion });
+      return {
+        cardId: id,
+        path: current.path,
+        ...metadata,
+        version: savedVersion,
+        text: current.body,
+      };
     },
     { operation: "card.take" },
   );

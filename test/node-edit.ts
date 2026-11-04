@@ -1,13 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import type { FsAdapter } from "../src/core/store/adapter.js";
 import { documentLifecycle } from "../src/core/base/document-status.js";
 import { contentEtag } from "../src/core/base/etag.js";
-import { parseFrontmatter } from "../src/core/base/frontmatter.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/base/frontmatter.js";
 import { nodeNotePath } from "../src/core/base/paths.js";
 import { loadNodeCatalog, readCatalogDocument } from "../src/core/graph/node-catalog.js";
-import {
-  prepareNodeDocumentWrite,
-  type NodeDocumentEdit,
-} from "../src/core/graph/node-document-write.js";
+import { assertNodeEdit } from "../src/core/graph/node-document-write.js";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
 import type { OpsEnv } from "../src/core/graph/ops-context.js";
 import {
@@ -54,10 +52,24 @@ export async function readNodeFile(
   };
 }
 
+type NodeEdit = { raw?: string; body?: string; frontmatter?: Record<string, unknown> };
+
+/** The bytes an editor leaves behind: the whole new file, or these fields and body changed in place. */
+function editedFile(previous: string, edit: NodeEdit) {
+  if (edit.raw !== undefined) return edit.raw;
+  const { data, body, keyOrder } = parseFrontmatter(previous);
+  const nextData = { ...data, ...edit.frontmatter };
+  const nextBody = edit.body ?? body;
+  return nextBody === body && isDeepStrictEqual(nextData, data)
+    ? previous
+    : serializeFrontmatter(nextData, nextBody, keyOrder);
+}
+
 /** Edits a Node as an Agent does: rewrite the file, then capture it as the next Tent command would. */
-export async function editNode(fs: FsAdapter, nodeId: string, edit: NodeDocumentEdit) {
+export async function editNode(fs: FsAdapter, nodeId: string, edit: NodeEdit) {
   const current = await readNodeFile(fs, nodeId);
-  const raw = prepareNodeDocumentWrite({ id: nodeId, path: current.directory }, current.raw, edit);
+  const raw = editedFile(current.raw, edit);
+  assertNodeEdit(current.directory, current.raw, raw);
   if (raw !== current.raw) await fs.writeFile(current.path, raw);
   const { invalidNodes } = await captureNativeNodeEdits(fs);
   if (invalidNodes.length) throw new Error(invalidNodes.map(({ reason }) => reason).join("; "));

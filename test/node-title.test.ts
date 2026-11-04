@@ -9,9 +9,8 @@ import { createNode, renameNode } from "../src/core/graph/ops.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { loadTent } from "../src/core/store/tree.js";
 import { scaffoldTent } from "../src/core/store/scaffold.js";
-import { editNode, readNodeFile } from "./node-edit.js";
 
-test("Node names follow filenames; writes synchronize existing titles and retain metadata", async (t) => {
+test("Node names follow filenames; renames synchronize existing titles and retain metadata", async (t) => {
   const scratch = path.resolve(testScratchRoot());
   await fs.mkdir(scratch, { recursive: true });
   const root = await fs.mkdtemp(path.join(scratch, "node-title-"));
@@ -34,21 +33,6 @@ test("Node names follow filenames; writes synchronize existing titles and retain
   assert.equal(tent.byId.get(id)?.name, "Scoped");
   assert.equal((await loadTent(adapter)).byPath.get("Scoped")!.name, "Scoped");
   assert.equal(await adapter.readFile("Scoped/Scoped.md"), original);
-  let edit = await readNodeFile(adapter, id);
-  await editNode(adapter, id, { body: "fact" });
-  const current = parseFrontmatter(await adapter.readFile("Scoped/Scoped.md"));
-  assert.equal(current.data.title, "Scoped");
-  assert.deepEqual(current.data.custom, { nested: [1, "keep"] });
-  const write = adapter.writeFile.bind(adapter);
-  let writes = 0;
-  adapter.writeFile = async (file, raw) => {
-    writes++;
-    await write(file, raw);
-  };
-  edit = await readNodeFile(adapter, id);
-  await editNode(adapter, id, { body: "fact" });
-  assert.equal(writes, 0);
-  adapter.writeFile = write;
   const child = await createNode(env, { name: "Child", parentPath: "Scoped", type: "prompt" });
   const childRaw = (await adapter.readFile("Scoped/Child/Child.md")).replace(
     "type: prompt",
@@ -59,6 +43,7 @@ test("Node names follow filenames; writes synchronize existing titles and retain
   const renamed = parseFrontmatter(await adapter.readFile("Renamed/Renamed.md"));
   assert.equal(renamed.data.id, id);
   assert.equal(renamed.data.title, "Renamed");
+  assert.deepEqual(renamed.data.custom, { nested: [1, "keep"] });
   const movedChild = parseFrontmatter(await adapter.readFile("Renamed/Child/Child.md"));
   assert.equal(movedChild.data.id, child);
   assert.equal(movedChild.data.title, "Child");

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { materialCoverage, materialCoverageContains } from "../src/core/base/material-coverage.js";
 import { materialOccurrences, validateMaterialAddresses } from "../src/core/base/material.js";
-import { assertNodeFields } from "../src/core/graph/node-document-write.js";
+import { assertNodeFields } from "../src/core/base/node-fields.js";
 import { canonicalIdentityError, loadTent } from "../src/core/store/tree.js";
 import { createNode } from "../src/core/graph/ops.js";
 import { nodeWriteBatchInputSchema } from "../src/core/write/node-write-batch.js";
