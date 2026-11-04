@@ -20,17 +20,17 @@ export function fileState(stat: BigIntStats): FileState {
   };
 }
 /** A conservative second covers coarse timestamps even when Node exposes nanoseconds. */
-function stateCacheHit(state: FileState, cached: FileState, writtenAtNs: string): boolean {
+function stateCacheHit(state: FileState, cached: FileState, writtenAtMs: number): boolean {
   return (
     state.size === cached.size &&
     state.mtimeNs === cached.mtimeNs &&
     state.ctimeNs === cached.ctimeNs &&
     state.dev === cached.dev &&
     state.ino === cached.ino &&
-    BigInt(state.mtimeNs) < BigInt(writtenAtNs) - 1_000_000_000n
+    Number(state.mtimeNs) / 1e6 < writtenAtMs - 1000
   );
 }
-type Entry = { state: FileState; writtenAtNs: string; value: unknown };
+type Entry = { state: FileState; writtenAtMs: number; value: unknown };
 type Store = { entries: Record<string, Entry>; dirty: boolean };
 type ReadScope = {
   values: Map<string, Promise<unknown>>;
@@ -38,7 +38,7 @@ type ReadScope = {
 };
 const scopes = new AsyncLocalStorage<ReadScope>();
 // Bump when what an entry means changes.
-const cacheSchema = 2;
+const cacheSchema = 3;
 
 /** The scope belongs to one request; nested inspections reuse it, parallel requests do not. */
 export async function withFileReadScope<T>(action: () => Promise<T>): Promise<T> {
@@ -117,7 +117,7 @@ export async function cachedFileValue<T>(
   state: FileState,
 ): Promise<T | undefined> {
   const entry = (await cacheStore(filename)).entries[key];
-  return entry && stateCacheHit(state, entry.state, entry.writtenAtNs)
+  return entry && stateCacheHit(state, entry.state, entry.writtenAtMs)
     ? (entry.value as T)
     : undefined;
 }
@@ -128,6 +128,6 @@ export async function rememberFileValue(
   value: unknown,
 ): Promise<void> {
   const store = await cacheStore(filename);
-  store.entries[key] = { state, writtenAtNs: String(BigInt(Date.now()) * 1_000_000n), value };
+  store.entries[key] = { state, writtenAtMs: Date.now(), value };
   store.dirty = true;
 }

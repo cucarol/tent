@@ -183,6 +183,7 @@ test("deleted, corrupt and obsolete persisted caches fall back to source bytes",
     undefined,
     "broken JSON",
     JSON.stringify({ ...JSON.parse(valid), schema: 999 }),
+    valid.replace(/"writtenAtMs":\d+/g, '"writtenAtMs":"x"'),
   ];
   for (const invalid of variants) {
     if (invalid === undefined) await fs.rm(f.cacheFile);
