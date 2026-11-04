@@ -54,8 +54,6 @@ export class NodeFs implements FsAdapter {
   private historyWrites = new AsyncLocalStorage<Map<string, string | null>>();
   private readonly transactionScope = new AsyncLocalStorage<FileTransaction>();
   private readonly transactionBypass = new AsyncLocalStorage<boolean>();
-  private readonly boundaryReady = new AsyncLocalStorage<boolean>();
-  private opening?: Promise<void>;
   private readonly readyScope = `node-fs-ready:${nextReadyScope++}`;
   private readonly materialNodesScope = `${this.readyScope}:material-nodes`;
   recoveryConflicts: readonly string[] = [];
@@ -66,12 +64,15 @@ export class NodeFs implements FsAdapter {
   ) {
     const bytes = (s: string | null): TransactionFileState =>
       s === null ? null : { bytes: Buffer.from(s).toString("base64") };
-    await this.transactionScope
-      .getStore()
-      ?.prepare([
-        ...directories.map((path) => ({ path, expected: null, after: "directory" as const })),
-        ...writes.map((w) => ({ path: w.path, expected: bytes(w.before), after: bytes(w.after) })),
-      ]);
+    await this.openTransaction?.prepare([
+      ...directories.map((path) => ({ path, expected: null, after: "directory" as const })),
+      ...writes.map((w) => ({ path: w.path, expected: bytes(w.before), after: bytes(w.after) })),
+    ]);
+  }
+
+  /** The open transaction a write belongs to; recovery's own writes bypass it. */
+  private get openTransaction() {
+    return this.transactionBypass.getStore() ? undefined : this.transactionScope.getStore();
   }
 
   /** The owner closes its adapter after all requests/mutations have finished. */
@@ -102,21 +103,6 @@ export class NodeFs implements FsAdapter {
 
   private async fileState(p: string): Promise<ObservedTransactionState> {
     try {
-      let parent = nodePath.dirname(this.abs(p));
-      while (
-        !(await fs.lstat(parent).catch((error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return null;
-          throw error;
-        }))
-      ) {
-        const next = nodePath.dirname(parent);
-        if (next === parent) throw new Error("Tent transaction root is missing");
-        parent = next;
-      }
-      // Do not write through a link that leads out of the Tent.
-      const inside = nodePath.relative(await fs.realpath(this.root), await fs.realpath(parent));
-      if (inside === ".." || inside.startsWith(`..${nodePath.sep}`) || nodePath.isAbsolute(inside))
-        return "external";
       const stat = await fs.lstat(this.abs(p)).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return null;
         throw error;
@@ -137,14 +123,8 @@ export class NodeFs implements FsAdapter {
 
   /** The only read-side mutation: settle an interrupted transaction before observing the workspace. */
   async ready(): Promise<void> {
-    if (
-      this.transactionBypass.getStore() ||
-      this.transactionScope.getStore() ||
-      this.boundaryReady.getStore()
-    )
-      return;
-    if (this.opening) return this.opening;
-    this.opening = scopedRead(this.readyScope, async () => {
+    if (this.transactionBypass.getStore() || this.transactionScope.getStore()) return;
+    return scopedRead(this.readyScope, async () => {
       const pending = await fs.access(this.abs(TRANSACTION_PATH)).then(
         () => true,
         (error: NodeJS.ErrnoException) => {
@@ -155,16 +135,6 @@ export class NodeFs implements FsAdapter {
       if (pending) await this.withLock(async () => undefined);
       this.recoveryConflicts = await this.raw(() => readTransactionConflicts(this));
     });
-    try {
-      await this.opening;
-    } finally {
-      this.opening = undefined;
-    }
-  }
-
-  private async prepareFiles(changes: { path: string; after: TransactionFileState }[]) {
-    if (!this.transactionBypass.getStore())
-      await this.transactionScope.getStore()?.prepare(changes);
   }
 
   private async missingParents(p: string) {
@@ -200,20 +170,18 @@ export class NodeFs implements FsAdapter {
     this.history = history ?? new SqliteDocumentHistory(this.root);
   }
 
-  async observationScope<T>(action: () => Promise<T>, options?: ObservationOptions): Promise<T> {
-    await this.ready();
-    return this.boundaryReady.run(true, () =>
-      this.observe(async () => {
-        if (options?.nodePaths) {
-          forgetScopedRead(this.materialNodesScope);
-          await scopedRead(this.materialNodesScope, async () => ({
-            paths: options.nodePaths!,
-            invalidNodeEdits: this.invalidNodeEdits,
-          }));
-        }
-        return action();
-      }),
-    );
+  observationScope<T>(action: () => Promise<T>, options?: ObservationOptions): Promise<T> {
+    return this.observe(async () => {
+      await this.ready();
+      if (options?.nodePaths) {
+        forgetScopedRead(this.materialNodesScope);
+        await scopedRead(this.materialNodesScope, async () => ({
+          paths: options.nodePaths!,
+          invalidNodeEdits: this.invalidNodeEdits,
+        }));
+      }
+      return action();
+    });
   }
 
   private async assertMaterial(locator: MaterialLocator) {
@@ -392,11 +360,10 @@ export class NodeFs implements FsAdapter {
     forgetScopedReads();
     const abs = this.abs(path);
     const tracked = await this.beforeHistoryChange([path]);
-    if (!this.transactionBypass.getStore() && this.transactionScope.getStore())
-      await this.prepareFiles([
-        ...(await this.missingParents(path)),
-        { path, after: { bytes: Buffer.from(content).toString("base64") } },
-      ]);
+    await this.openTransaction?.prepare([
+      ...(await this.missingParents(path)),
+      { path, after: { bytes: Buffer.from(content).toString("base64") } },
+    ]);
     await durableMkdir(nodePath.dirname(abs));
     await durableReplace(abs, content, "utf8");
     if (tracked && isHistoryDocument(path)) tracked.set(path, content);
@@ -422,11 +389,10 @@ export class NodeFs implements FsAdapter {
     const tracked = await this.beforeHistoryChange([path]);
     await durableMkdir(nodePath.dirname(abs));
     const payload = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-    if (!this.transactionBypass.getStore() && this.transactionScope.getStore())
-      await this.prepareFiles([
-        ...(await this.missingParents(path)),
-        { path, after: { bytes: payload.toString("base64") } },
-      ]);
+    await this.openTransaction?.prepare([
+      ...(await this.missingParents(path)),
+      { path, after: { bytes: payload.toString("base64") } },
+    ]);
     await durableReplace(abs, payload);
     if (tracked && isHistoryDocument(path))
       tracked.set(path, new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(payload));
@@ -443,8 +409,10 @@ export class NodeFs implements FsAdapter {
   }
 
   async mkdir(path: string): Promise<void> {
-    if (!this.transactionBypass.getStore() && this.transactionScope.getStore())
-      await this.prepareFiles([...(await this.missingParents(path)), { path, after: "directory" }]);
+    await this.openTransaction?.prepare([
+      ...(await this.missingParents(path)),
+      { path, after: "directory" },
+    ]);
     await durableMkdir(this.abs(path));
   }
 
@@ -453,9 +421,10 @@ export class NodeFs implements FsAdapter {
     const files = this.historyWrites.getStore() ? await this.filesUnder(from) : [];
     const targets = files.map((file) => to + file.slice(from.length));
     const tracked = await this.beforeHistoryChange([...files, ...targets]);
-    if (!this.transactionBypass.getStore() && this.transactionScope.getStore()) {
+    const transaction = this.openTransaction;
+    if (transaction) {
       const tree = await this.transactionTree(from);
-      await this.prepareFiles([
+      await transaction.prepare([
         ...(await this.missingParents(to)),
         ...tree.map((e) => ({ path: e.path, after: null })),
         ...tree.map((e) => ({ path: to + e.path.slice(from.length), after: e.after })),
@@ -477,10 +446,9 @@ export class NodeFs implements FsAdapter {
     forgetScopedReads();
     const files = this.historyWrites.getStore() ? await this.filesUnder(path) : [];
     const tracked = await this.beforeHistoryChange(files);
-    if (!this.transactionBypass.getStore() && this.transactionScope.getStore())
-      await this.prepareFiles(
-        (await this.transactionTree(path)).map((e) => ({ path: e.path, after: null })),
-      );
+    await this.openTransaction?.prepare(
+      (await this.transactionTree(path)).map((e) => ({ path: e.path, after: null })),
+    );
     const present = await this.exists(path);
     await fs.rm(this.abs(path), { recursive: true, force: true });
     if (present) await syncDirectory(nodePath.dirname(this.abs(path)));
@@ -488,8 +456,7 @@ export class NodeFs implements FsAdapter {
   }
 
   async removeEmptyDir(path: string): Promise<void> {
-    if (!this.transactionBypass.getStore() && this.transactionScope.getStore())
-      await this.prepareFiles([{ path, after: null }]);
+    await this.openTransaction?.prepare([{ path, after: null }]);
     await fs.rmdir(this.abs(path));
     await syncDirectory(nodePath.dirname(this.abs(path)));
   }
@@ -548,34 +515,32 @@ export class NodeFs implements FsAdapter {
           withoutFileReadScope(async () => {
             if (this.transactionBypass.getStore()) return action();
             const transaction = this.transaction();
-            return this.boundaryReady.run(true, async () => {
-              this.recoveryConflicts = await transaction.recover();
-              return this.transactionScope.run(transaction, () =>
-                this.history.withPublicationObserver(
-                  {
-                    before: (commit) => transaction.beforePublish(commit),
-                    after: () => transaction.finish(),
-                  },
-                  async () => {
+            this.recoveryConflicts = await transaction.recover();
+            return this.transactionScope.run(transaction, () =>
+              this.history.withPublicationObserver(
+                {
+                  before: (commit) => transaction.beforePublish(commit),
+                  after: () => transaction.finish(),
+                },
+                async () => {
+                  try {
+                    const result = await action();
+                    await transaction.finish();
+                    return result;
+                  } catch (error) {
                     try {
-                      const result = await action();
-                      await transaction.finish();
-                      return result;
-                    } catch (error) {
-                      try {
-                        this.recoveryConflicts = await transaction.recover();
-                      } catch (recovery) {
-                        throw new AggregateError(
-                          [error, recovery],
-                          `${String(error)}; transaction recovery also failed: ${String(recovery)}`,
-                        );
-                      }
-                      throw error;
+                      this.recoveryConflicts = await transaction.recover();
+                    } catch (recovery) {
+                      throw new AggregateError(
+                        [error, recovery],
+                        `${String(error)}; transaction recovery also failed: ${String(recovery)}`,
+                      );
                     }
-                  },
-                ),
-              );
-            });
+                    throw error;
+                  }
+                },
+              ),
+            );
           }),
         );
       // Reuse exact-header parses during mutation and capture. The lock callback

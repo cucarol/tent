@@ -103,7 +103,6 @@ test("a later request settles a transaction interrupted after the last one", asy
   await fs.writeFile(
     path.join(root, ".git/tent-transaction.json"),
     JSON.stringify({
-      version: 1,
       publish: null,
       entries: [
         {

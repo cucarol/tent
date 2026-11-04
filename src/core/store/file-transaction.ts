@@ -1,44 +1,17 @@
-import * as z from "zod/v4";
 import type { FsAdapter } from "./adapter.js";
 
 export const TRANSACTION_PATH = ".git/tent-transaction.json";
 export const TRANSACTION_CONFLICTS_PATH = ".git/tent-transaction-conflicts.json";
-const relativePath = z
-  .string()
-  .min(1)
-  .refine(
-    (p) =>
-      !/[\\:\0]/.test(p) &&
-      !p.startsWith("/") &&
-      p.split("/").every((s) => s !== ".." && s !== "." && s !== "") &&
-      p.split("/")[0]!.toLowerCase() !== ".git" &&
-      !p.toLowerCase().startsWith("mutation.lock"),
-  );
 // Bytes are base64, so a binary attachment moved with a Node is restored exactly.
-const state = z.union([
-  z.null(),
-  z.literal("directory"),
-  z.strictObject({
-    bytes: z.string().regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
-  }),
-]);
-export type TransactionFileState = z.infer<typeof state>;
+export type TransactionFileState = null | "directory" | { bytes: string };
 export type ObservedTransactionState = TransactionFileState | "external";
-const entry = z.strictObject({
-  path: relativePath,
-  before: state,
-  after: state,
-  versions: z.array(state),
-});
-const journal = z.strictObject({
-  version: z.literal(1),
-  publish: z
-    .string()
-    .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)
-    .nullable(),
-  entries: z.array(entry),
-});
-type Journal = z.infer<typeof journal>;
+type Entry = {
+  path: string;
+  before: TransactionFileState;
+  after: TransactionFileState;
+  versions: TransactionFileState[];
+};
+type Journal = { publish: string | null; entries: Entry[] };
 const equal = (a: ObservedTransactionState, b: ObservedTransactionState) =>
   a === b ||
   (typeof a === "object" &&
@@ -49,7 +22,7 @@ const equal = (a: ObservedTransactionState, b: ObservedTransactionState) =>
 
 /** Core write-ahead policy. Its adapter bypasses transaction/history tracking; caller owns mutation.lock. */
 export class FileTransaction {
-  private plan: Journal = { version: 1, publish: null, entries: [] };
+  private plan: Journal = { publish: null, entries: [] };
   constructor(
     private readonly fs: FsAdapter,
     private readonly observe: (path: string) => Promise<ObservedTransactionState>,
@@ -64,13 +37,8 @@ export class FileTransaction {
       expected?: TransactionFileState;
     }[],
   ) {
-    if (this.plan.publish !== null)
-      throw new Error(
-        "Tent publication was interrupted; settle the transaction before another write",
-      );
     let changed = false;
     for (const change of changes) {
-      relativePath.parse(change.path);
       const current = await this.observe(change.path);
       if (current === "external")
         throw new Error(
@@ -105,7 +73,7 @@ export class FileTransaction {
   async finish() {
     if (!this.plan.entries.length) return;
     await this.fs.remove(TRANSACTION_PATH);
-    this.plan = { version: 1, publish: null, entries: [] };
+    this.plan = { publish: null, entries: [] };
   }
 
   private save() {
@@ -115,13 +83,11 @@ export class FileTransaction {
   /** Idempotent restart recovery. Keep the record until every owned path has been settled. */
   async recover(): Promise<string[]> {
     if (!(await this.fs.exists(TRANSACTION_PATH))) return readTransactionConflicts(this.fs);
-    const plan = journal.parse(JSON.parse(await this.fs.readFile(TRANSACTION_PATH)));
-    if (new Set(plan.entries.map((e) => e.path)).size !== plan.entries.length)
-      throw new Error("Invalid Tent transaction: duplicate paths");
+    const plan = JSON.parse(await this.fs.readFile(TRANSACTION_PATH)) as Journal;
     const forward = plan.publish !== null && (await this.published(plan.publish));
-    const desired = (item: Journal["entries"][number]) => (forward ? item.after : item.before);
+    const desired = (item: Entry) => (forward ? item.after : item.before);
     const conflicts = new Set<string>();
-    const matches = async (item: Journal["entries"][number]) => {
+    const matches = async (item: Entry) => {
       const current = await this.observe(item.path);
       if (equal(current, desired(item))) return "done";
       if (item.versions.some((v) => equal(v, current))) return "owned";
@@ -177,13 +143,13 @@ export class FileTransaction {
     const all = [...new Set([...previous, ...conflicts])].sort();
     if (all.length) await this.fs.writeFile(TRANSACTION_CONFLICTS_PATH, JSON.stringify(all) + "\n");
     await this.fs.remove(TRANSACTION_PATH);
-    this.plan = { version: 1, publish: null, entries: [] };
+    this.plan = { publish: null, entries: [] };
     return all;
   }
 }
 
 export async function readTransactionConflicts(fs: FsAdapter): Promise<string[]> {
   return (await fs.exists(TRANSACTION_CONFLICTS_PATH))
-    ? z.array(relativePath).parse(JSON.parse(await fs.readFile(TRANSACTION_CONFLICTS_PATH)))
+    ? (JSON.parse(await fs.readFile(TRANSACTION_CONFLICTS_PATH)) as string[])
     : [];
 }
