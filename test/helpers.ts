@@ -6,7 +6,6 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { TestContext } from "node:test";
 import type { FsAdapter } from "../src/core/store/adapter.js";
-import { NODE_MOVE_PENDING_PATH } from "../src/core/store/node-move-recovery.js";
 import type { NodeFs } from "../src/fs/node-fs.js";
 import { withFileMutationLock } from "../src/fs/mutation-lock.js";
 
@@ -65,7 +64,6 @@ export function injectWriteFailure(
     listDir: (dir) => inner.listDir(dir),
     readFile: (p) => inner.readFile(p),
     writeFile: async (p, content) => {
-      if (p === NODE_MOVE_PENDING_PATH) return inner.writeFile(p, content);
       writes += 1;
       if (writes === failOnWriteNumber) {
         throw new Error(`injected write failure #${failOnWriteNumber} on ${p}`);

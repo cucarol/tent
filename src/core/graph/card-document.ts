@@ -325,9 +325,7 @@ async function currentSources(fs: FsAdapter, card: CardDocument, published: Docu
   );
 }
 
-type CardAction =
-  { kind: "take"; roleId?: string } | { kind: "return"; roleId?: string; result: string };
-async function checkedCard(fs: FsAdapter, id: string, action?: CardAction) {
+async function checkedCard(fs: FsAdapter, id: string) {
   const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
     await fs.readBinary(cardPath(id)),
   );
@@ -344,31 +342,13 @@ async function checkedCard(fs: FsAdapter, id: string, action?: CardAction) {
   if (retained[1] instanceof Error) throw retained[1];
   const published = parseCardDocument(id, retained[0]!.raw);
   const latest = parseCardDocument(id, retained[1]!.raw);
-  let next: ReturnType<typeof stateOf> | undefined;
-  if (action?.kind === "take" && latest.data.state === "pending")
-    next = { ...stateOf(latest), state: "consumed", receivedBy: action.roleId };
-  else if (
-    action?.kind === "take" &&
-    latest.data.state === "returned" &&
-    latest.data.returnTo === action.roleId
-  )
-    next = { ...stateOf(latest), state: "closed" };
-  else if (
-    action?.kind === "return" &&
-    latest.data.state === "consumed" &&
-    latest.data.returnTo &&
-    latest.data.receivedBy === action.roleId
-  )
-    next = { ...stateOf(latest), state: "returned", result: action.result };
-  const recovery = next !== undefined && isDeepStrictEqual(stateOf(current), next);
-  validateRetainedCard(current, published, latest, recovery);
-  return { current, publishedVersion: versions.first, version: versions.latest, history, recovery };
+  validateRetainedCard(current, published, latest);
+  return { current, publishedVersion: versions.first, version: versions.latest, history };
 }
 function validateRetainedCard(
   current: CardDocument,
   published: CardDocument,
   latest: CardDocument,
-  recovery = false,
 ) {
   requireInput(published);
   if (published.data.state !== "pending") invalid("Initial Card publication is not pending");
@@ -380,7 +360,7 @@ function validateRetainedCard(
       "INPUT_CHANGED",
       "Published Card input changed; restore it and edit the requirement Nodes",
     );
-  if (!recovery && !isDeepStrictEqual(stateOf(current), stateOf(latest)))
+  if (!isDeepStrictEqual(stateOf(current), stateOf(latest)))
     throw new CardDocumentError(
       "STATE_CHANGED",
       "Card management fields differ from retained state; inspect the diff before reconciling",
@@ -500,10 +480,7 @@ export function takeCardDocument(
   return withTentMutation(
     fs,
     async () => {
-      const { current, history, publishedVersion, recovery } = await checkedCard(fs, id, {
-        kind: "take",
-        roleId,
-      });
+      const { current, history, publishedVersion } = await checkedCard(fs, id);
       if (roleId !== undefined) await roleAvailable(fs, roleId);
       const status = documentLifecycle(current.data).status;
       if (status !== "stable" && status !== "deprecated")
@@ -519,7 +496,7 @@ export function takeCardDocument(
         );
       const state = current.data.state;
       const nextState = receivingReturn ? "closed" : "consumed";
-      const replayed = state === nextState && !recovery;
+      const replayed = state === nextState;
       const raw =
         state === nextState
           ? current.raw
@@ -584,10 +561,7 @@ export function returnCardDocument(
           "RECEPTION_CONFLICT",
           "Return requires --role role-ID, the Role that took the Card.",
         );
-      const { current, history, recovery } = await checkedCard(fs, id, {
-        kind: "return",
-        ...input,
-      });
+      const { current, history } = await checkedCard(fs, id);
       if (input.roleId !== undefined) await roleAvailable(fs, input.roleId);
       if (documentLifecycle(current.data).status === null)
         cardConflict(current, "RECEPTION_CONFLICT", "Card is not current");
@@ -615,7 +589,7 @@ export function returnCardDocument(
           "RECEPTION_CONFLICT",
           `Card ${id} was already returned: ${current.data.result}. Put corrections in a Node, or send a new Card.`,
         );
-      const replayed = current.data.state !== "consumed" && !recovery;
+      const replayed = current.data.state !== "consumed";
       const fields =
         current.data.state === "consumed"
           ? { ...current.data, state: "returned" as const, result: input.result }

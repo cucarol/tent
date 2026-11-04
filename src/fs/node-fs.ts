@@ -85,13 +85,6 @@ export class NodeFs implements FsAdapter {
       ]);
   }
 
-  async recoverFileTransaction(): Promise<readonly string[] | undefined> {
-    const transaction = this.transactionScope.getStore();
-    if (!transaction) return undefined;
-    this.recoveryConflicts = await transaction.recover();
-    return this.recoveryConflicts;
-  }
-
   /** The owner closes its adapter after all requests/mutations have finished. */
   close(): Promise<void> {
     forgetScopedRead(this.readyScope);

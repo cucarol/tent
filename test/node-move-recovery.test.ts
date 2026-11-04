@@ -1,4 +1,4 @@
-import { testScratchRoot } from "./scratch.js";
+import { initializeFixtureHistory, testScratchRoot } from "./scratch.js";
 import { removeTestFixture } from "./node-fs.js";
 import { openTestFs } from "./node-fs.js";
 import assert from "node:assert/strict";
@@ -11,8 +11,6 @@ import { withTentMutation } from "../src/core/store/adapter.js";
 import { createNode, moveNode, renameNode } from "../src/core/graph/ops.js";
 import { scaffoldTent } from "../src/core/store/scaffold.js";
 import { loadTent } from "../src/core/store/tree.js";
-import { NODE_MOVE_PENDING_PATH } from "../src/core/store/node-move-recovery.js";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { MUTATION_LOCK_STALE_MS } from "../src/fs/mutation-lock.js";
 
 async function fixture(t: TestContext) {
@@ -23,6 +21,7 @@ async function fixture(t: TestContext) {
   const root = path.join(workspace, ".tent");
   const fsa = openTestFs(root);
   await scaffoldTent(fsa, { name: "recovery" });
+  await initializeFixtureHistory(root);
   const env = { fs: fsa, clock: { now: () => new Date().toISOString() }, tentName: "recovery" };
   await createNode(env, { parentPath: "", name: "parent", type: "prompt" });
   const child = await createNode(env, { parentPath: "parent", name: "child", type: "prompt" });
@@ -69,7 +68,6 @@ async function crash(f: Fixture, operation: string, point: string) {
     { encoding: "utf8", timeout: 30_000 },
   );
   assert.equal(result.status, 77, result.stderr || String(result.error));
-  assert.equal(await f.fsa.exists(NODE_MOVE_PENDING_PATH), true);
   // 保留真实退出进程的锁和 PID，只推进已有锁的过期时间，避免每个用例等待两分钟。
   const expired = new Date(Date.now() - MUTATION_LOCK_STALE_MS - 1000);
   await fs.utimes(path.join(f.root, "mutation.lock"), expired, expired);
@@ -81,97 +79,25 @@ async function assertRestored(f: Fixture) {
   assert.equal((await loadTent(f.fsa)).byId.get(f.child)?.path, "parent/child");
   assert.equal(await f.fsa.exists("dest/child"), false);
   assert.equal(await f.fsa.exists("parent/renamed"), false);
-  assert.equal(await f.fsa.exists(NODE_MOVE_PENDING_PATH), false);
 }
 
 for (const [operation, points] of [
-  ["move", ["move-1", "hub/hub.md", "order.json", "before-clear"]],
-  ["rename", ["move-1", "move-2", "hub/hub.md", "before-clear"]],
+  ["move", ["move-1", "hub/hub.md", "order.json"]],
+  ["rename", ["move-1", "move-2", "hub/hub.md"]],
 ] as const) {
   for (const point of points)
-    test(`${operation}: real process exit at ${point}, mutation restores and repeated recovery is harmless`, async (t) => {
+    test(`${operation}: real process exit at ${point}, the next write restores the old state`, async (t) => {
       const f = await fixture(t);
       await crash(f, operation, point);
-      await withTentMutation(f.fsa, async () => undefined);
-      await assertRestored(f);
       await withTentMutation(f.fsa, async () => undefined);
       await assertRestored(f);
     });
 }
 
-for (const point of ["hub/hub.md", "move-1", "before-clear"])
-  test(`recovery interrupted at ${point} remains restartable`, async (t) => {
-    const f = await fixture(t);
-    await crash(f, "move", "order.json");
-    await crash(f, "recover", point);
-    await withTentMutation(f.fsa, async () => undefined);
-    await assertRestored(f);
-  });
-
-for (const conflictPath of ["hub/hub.md", "order.json", "dest/child/child.md"])
-  test(`external edit to ${conflictPath} blocks whole recovery without overwrites`, async (t) => {
-    const f = await fixture(t);
-    await crash(f, "move", "order.json");
-    await f.fsa.writeFile(conflictPath, "external edit\n");
-    const paths = ["dest/child/child.md", "hub/hub.md", "order.json", NODE_MOVE_PENDING_PATH];
-    const before = await Promise.all(paths.map((p) => f.fsa.readFile(p)));
-    let wrote = false;
-    await assert.rejects(
-      withTentMutation(f.fsa, async () => {
-        wrote = true;
-      }),
-      /Pending Node move conflict/,
-    );
-    assert.equal(wrote, false);
-    assert.deepEqual(await Promise.all(paths.map((p) => f.fsa.readFile(p))), before);
-    assert.equal(await f.fsa.exists("parent/child"), false);
-  });
-
-test("unsupported journal version and recreated source directory are retained", async (t) => {
-  const f = await fixture(t);
-  await crash(f, "move", "move-1");
-  const pending = await f.fsa.readFile(NODE_MOVE_PENDING_PATH);
-  await f.fsa.writeFile(NODE_MOVE_PENDING_PATH, pending.replace('"version":1', '"version":2'));
-  await assert.rejects(withTentMutation(f.fsa, async () => undefined));
-  await f.fsa.writeFile(NODE_MOVE_PENDING_PATH, pending);
-  await f.fsa.mkdir("parent/child");
-  await assert.rejects(
-    withTentMutation(f.fsa, async () => undefined),
-    /directory identity/,
-  );
-  assert.equal(await f.fsa.readFile(NODE_MOVE_PENDING_PATH), pending);
-});
-
-test("ordinary successful move and rename remove their recovery records", async (t) => {
+test("ordinary successful move and rename rewrite links to the new path", async (t) => {
   const f = await fixture(t);
   await moveNode(f.env, f.child, f.dest, { mode: "inside" });
   await renameNode(f.env, f.child, "renamed");
   assert.equal((await loadTent(f.fsa)).byId.get(f.child)?.path, "dest/renamed");
   assert.match(await f.fsa.readFile("hub/hub.md"), /dest\/renamed\/renamed.md/);
-  assert.equal(await f.fsa.exists(NODE_MOVE_PENDING_PATH), false);
-});
-
-test("rename recovery survives interruption after restoring the identity filename", async (t) => {
-  const f = await fixture(t);
-  await crash(f, "rename", "before-clear");
-  await crash(f, "recover", "move-1");
-  await withTentMutation(f.fsa, async () => undefined);
-  await assertRestored(f);
-});
-
-test("recovery keeps pending until restored contents have been read back", async (t) => {
-  const f = await fixture(t);
-  await crash(f, "move", "order.json");
-  class DroppedWriteFs extends NodeFs {
-    override async writeFile(name: string, content: string) {
-      if (name !== "hub/hub.md") await super.writeFile(name, content);
-    }
-  }
-  await assert.rejects(
-    withTentMutation(new DroppedWriteFs(f.root), async () => undefined),
-    /Pending Node move conflict/,
-  );
-  assert.equal(await f.fsa.exists(NODE_MOVE_PENDING_PATH), true);
-  await withTentMutation(f.fsa, async () => undefined);
-  await assertRestored(f);
 });

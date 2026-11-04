@@ -490,6 +490,6 @@ test("scan fails explicitly without Workspace Git and reports invalid Node inspe
   const before = await snapshot(root);
   const brokenOrder = await runWorkspaceCommand("scan", [], { workspace: root });
   assert.equal(brokenOrder.exitCode, 1);
-  assert.match(brokenOrder.stderr, /explicit repair/);
+  assert.match(brokenOrder.stderr, /order\.json is not valid JSON/);
   assert.deepEqual(await snapshot(root), before);
 });

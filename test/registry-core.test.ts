@@ -279,42 +279,13 @@ test("Node write tags change only the document", async (t) => {
   assert.equal(await fsa.exists("tags.json"), false);
 });
 
-test("corrupt order registry is backed up and reset to default order", async (t) => {
+test("a broken order file names itself and how to fix it", async (t) => {
   const dir = await makeTent(t);
   const fsa = openTestFs(dir);
   await fs.writeFile(path.join(dir, "order.json"), "{not-json", "utf8");
-
-  const warnings = await captureConsoleError(async () => {
-    const { createNode } = await import("../src/core/graph/ops.js");
-    await createNode(
-      {
-        fs: fsa,
-        clock: { now: () => "2026-10-04T00:00:00.000Z" },
-        tentName: "wqb",
-      } as any,
-      { parentPath: "", name: "AfterBadOrder", type: "goal" },
-    );
-  });
-
-  assert.match(warnings.join("\n"), /order\.json was corrupt; backed up to order\.json\.corrupt-/);
-  assert.match(warnings.join("\n"), /and recovered\. Review it\./);
-  assert.equal(
-    (await fs.readdir(dir)).some((name) => name.startsWith("order.json.corrupt-")),
-    true,
+  await assert.rejects(
+    loadTent(fsa),
+    /\.tent\/order\.json is not valid JSON; fix it, or delete it to sort Nodes by name\./,
   );
-  assert.equal((await loadTent(fsa)).byPath.has("AfterBadOrder"), true);
+  assert.equal(await fs.readFile(path.join(dir, "order.json"), "utf8"), "{not-json");
 });
-
-async function captureConsoleError(action: () => Promise<void>): Promise<string[]> {
-  const original = console.error;
-  const messages: string[] = [];
-  console.error = (...args: unknown[]) => {
-    messages.push(args.map(String).join(" "));
-  };
-  try {
-    await action();
-  } finally {
-    console.error = original;
-  }
-  return messages;
-}

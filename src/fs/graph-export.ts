@@ -6,12 +6,7 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import type { Nodes } from "mdast";
 import * as z from "zod/v4";
 import { NodeFs } from "../fs/node-fs.js";
-import {
-  MUTATION_LOCK_PATH,
-  NODE_MOVE_PENDING_PATH,
-  DELETE_PENDING_PATH,
-  TEMP_DIR,
-} from "../core/base/paths.js";
+import { MUTATION_LOCK_PATH, TEMP_DIR } from "../core/base/paths.js";
 import { parseFrontmatter } from "../core/base/frontmatter.js";
 import { readOnlyFs, type FsAdapter } from "../core/store/adapter.js";
 import { loadTent } from "../core/store/tree.js";
@@ -181,13 +176,7 @@ export async function exportGraph(mount: GraphExportSource, input: unknown) {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  const capture = async () => {
-    if (await mount.env.fs.exists(NODE_MOVE_PENDING_PATH))
-      throw new Error("Finish the pending Node move before exporting");
-    if (await mount.env.fs.exists(DELETE_PENDING_PATH))
-      throw new Error("Finish the pending deletion before exporting");
-    return inventory(mount.systemRoot);
-  };
+  const capture = () => inventory(mount.systemRoot);
   const locked = <T>(action: () => Promise<T>) =>
     mount.env.fs.withLock!(MUTATION_LOCK_PATH, action);
   const files = await locked(capture);

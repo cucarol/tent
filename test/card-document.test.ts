@@ -285,51 +285,41 @@ test("Card Role filters retain unavailable handling for deprecated and unknown R
   }
 });
 
-test("take rolls back an unpublished transaction and still recovers legacy consumed bytes exactly once", async (t) => {
-  const { adapter, root } = await fixture(t);
-  for (const roleId of ["role-a"]) {
-    const card = await createCardDocument(adapter, {
-      cardId: "card-recoverrole",
-      prompt: "Keep the original input",
-      target: roleId,
-    });
-    const before = await adapter.readFile(card.path);
-    const beforeHead = await adapter.history.currentCommit();
-    let attemptedRaw: string | undefined;
-    const capture = adapter.history.captureUnlocked.bind(adapter.history);
-    adapter.history.captureUnlocked = async (changes, metadata) => {
-      if (metadata?.operation === "card.take") {
-        attemptedRaw = changes.find((change) => change.path === card.path)?.raw ?? undefined;
-        throw new Error("interrupted before publication");
-      }
-      return capture(changes, metadata);
-    };
-    await assert.rejects(
-      takeCardDocument(adapter, card.cardId, roleId),
-      /interrupted before publication/,
-    );
-    adapter.history.captureUnlocked = capture;
-    assert.equal(await adapter.readFile(card.path), before);
-    assert.equal(await adapter.history.currentCommit(), beforeHead);
-    assert.ok(attemptedRaw);
-    // A pre-transaction workspace may contain consumed bytes without a published reception.
-    await fs.writeFile(path.join(root, card.path), attemptedRaw);
-    const savedBytes = await adapter.readFile(card.path);
-    assert.equal(parseFrontmatter(savedBytes).data.state, "consumed");
-    assert.equal(parseFrontmatter(await adapter.history.read(card.version)).data.state, "pending");
-    assert.equal((await watchCardDocuments(adapter, roleId, 0))[0]!.cardId, card.cardId);
-    const taken = (await takeCardDocument(adapter, card.cardId, roleId)) as Record<string, any>;
-    assert.equal(taken.replayed, false);
-    assert.equal(await adapter.history.read(taken.version!), savedBytes);
-    assert.equal(await adapter.readFile(card.path), savedBytes);
-    assert.deepEqual(await watchCardDocuments(adapter, roleId, 0), []);
-    const head = await adapter.history.currentCommit();
-    assert.equal(
-      ((await takeCardDocument(adapter, card.cardId, roleId)) as Record<string, any>).replayed,
-      true,
-    );
-    assert.equal(await adapter.history.currentCommit(), head);
-  }
+test("take rolls back an unpublished transaction, then takes the Card exactly once", async (t) => {
+  const { adapter } = await fixture(t);
+  const roleId = "role-a";
+  const card = await createCardDocument(adapter, {
+    cardId: "card-recoverrole",
+    prompt: "Keep the original input",
+    target: roleId,
+  });
+  const before = await adapter.readFile(card.path);
+  const beforeHead = await adapter.history.currentCommit();
+  const capture = adapter.history.captureUnlocked.bind(adapter.history);
+  adapter.history.captureUnlocked = async (changes, metadata) => {
+    if (metadata?.operation === "card.take") throw new Error("interrupted before publication");
+    return capture(changes, metadata);
+  };
+  await assert.rejects(
+    takeCardDocument(adapter, card.cardId, roleId),
+    /interrupted before publication/,
+  );
+  adapter.history.captureUnlocked = capture;
+  assert.equal(await adapter.readFile(card.path), before);
+  assert.equal(await adapter.history.currentCommit(), beforeHead);
+  assert.equal((await watchCardDocuments(adapter, roleId, 0))[0]!.cardId, card.cardId);
+  const taken = (await takeCardDocument(adapter, card.cardId, roleId)) as Record<string, any>;
+  assert.equal(taken.replayed, false);
+  const savedBytes = await adapter.readFile(card.path);
+  assert.equal(parseFrontmatter(savedBytes).data.state, "consumed");
+  assert.equal(await adapter.history.read(taken.version!), savedBytes);
+  assert.deepEqual(await watchCardDocuments(adapter, roleId, 0), []);
+  const head = await adapter.history.currentCommit();
+  assert.equal(
+    ((await takeCardDocument(adapter, card.cardId, roleId)) as Record<string, any>).replayed,
+    true,
+  );
+  assert.equal(await adapter.history.currentCommit(), head);
   // History is SQLite; this fixture does not own a project Git index.
   assert.equal(
     (await adapter.history!.retainedPaths()).filter((file) => file.startsWith("cards/")).length,
@@ -337,7 +327,7 @@ test("take rolls back an unpublished transaction and still recovers legacy consu
   );
 });
 
-test("interrupted reception recovery rejects simultaneous status, target and input changes", async (t) => {
+test("take rejects bytes whose state, target or input differ from the retained Card", async (t) => {
   const { adapter } = await fixture(t);
   const card = await createCardDocument(adapter, {
     cardId: "card-recoverconflict",

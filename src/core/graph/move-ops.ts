@@ -1,17 +1,18 @@
-// Node 移动保持稳定 ID；路径、链接与排序的中断恢复由专用记录保护。
+// Node 移动保持稳定 ID；路径、链接与排序在同一次写入里改。
 
 import { withTentMutation } from "../store/adapter.js";
 import { parseFrontmatter, serializeFrontmatter, syncNodeTitle } from "../base/frontmatter.js";
 import { buildNodeIndex } from "../base/okf.js";
 import { rewriteMaterialPaths } from "../base/material.js";
-import { executeNodeMoveUnlocked, type NodeMoveWrite } from "../store/node-move-recovery.js";
 import type { OpsEnv } from "./ops-context.js";
-import { loadOrder, saveOrder, ROOT_KEY, ORDER_PATH } from "../store/order.js";
+import { loadOrder, saveOrder, ROOT_KEY } from "../store/order.js";
 import { isOperationalPath } from "../base/paths.js";
 import { validateNodeName } from "../store/scaffold.js";
 import {
+  applyNodeMove,
   rewriteNodeLinks,
   rewriteRoleAndNoteLinks,
+  type NodeMoveWrite,
   type RewriteNodeLinksOptions,
 } from "./rename-ops.js";
 import type { Node } from "../base/types.js";
@@ -43,7 +44,7 @@ export interface MoveNodeResult {
 /**
  * Move or reorder a Node by stable `node-`.
  * - `node-` / frontmatter id never change; folder stem (display name) is preserved
- * - reparent: move directory tree, rewrite path-based links, roll back on failure
+ * - reparent: move directory tree, rewrite path-based links
  * - same-parent reorder: order.json only — no link rewrite
  * - active Card consumption does not lock current Node structure; Git references retain their original context
  */
@@ -170,7 +171,7 @@ export async function moveNodeUnlocked(
     };
   }
 
-  // ---- Reparent: pathMap + link rewrite + FS move + order + rollback ----
+  // ---- Reparent: pathMap + link rewrite + FS move + order ----
   const subtree = collectSubtree(moved);
   const pathMap = new Map<string, string>();
   const materialMoves = new Map<string, string>();
@@ -220,12 +221,7 @@ export async function moveNodeUnlocked(
     syncNodeTitle(data, afterNodePath);
     const nextRaw = serializeFrontmatter(data, rewritten.body, keyOrder);
     if (nextRaw === raw) continue;
-    plannedWrites.push({
-      writePath: restyleFromNotePath,
-      originalPath: notePath,
-      originalContent: raw,
-      newContent: nextRaw,
-    });
+    plannedWrites.push({ path: restyleFromNotePath, before: raw, content: nextRaw });
     rewrittenNotes.push(afterNodePath);
   }
 
@@ -239,25 +235,12 @@ export async function moveNodeUnlocked(
       materialMoves,
     )),
   );
-  const orderBefore = await loadOrder(env.fs);
-  const orderContent = (await env.fs.exists(ORDER_PATH)) ? await env.fs.readFile(ORDER_PATH) : null;
-  if (JSON.stringify(JSON.parse(orderContent ?? "{}")) !== JSON.stringify(orderBefore))
-    throw new Error("Order changed while planning Node move.");
-  if (orderBefore[oldParentKey])
-    orderBefore[oldParentKey] = orderBefore[oldParentKey]!.filter((sid) => sid !== moved.id);
-  orderBefore[parentKey] = siblings;
-  plannedWrites.push({
-    originalPath: ORDER_PATH,
-    writePath: ORDER_PATH,
-    originalContent: orderContent,
-    newContent: JSON.stringify(orderBefore, null, 2) + "\n",
-  });
-  await executeNodeMoveUnlocked(env.fs, {
-    nodeId: moved.id,
-    oldPath,
-    newPath: destination,
-    writes: plannedWrites,
-  });
+  const order = await loadOrder(env.fs);
+  if (order[oldParentKey])
+    order[oldParentKey] = order[oldParentKey]!.filter((sid) => sid !== moved.id);
+  order[parentKey] = siblings;
+  await applyNodeMove(env.fs, oldPath, destination, plannedWrites);
+  await saveOrder(env.fs, order);
 
   const pathMapRecord: Record<string, string> = {};
   for (const [from, to] of pathMap) pathMapRecord[from] = to;

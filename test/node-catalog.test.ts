@@ -178,7 +178,7 @@ test("catalog reads never repair corrupt order files", async (t) => {
   await adapter.writeFile("A/A.md", raw("node-selected"));
   await adapter.writeFile("order.json", "{bad");
   const before = await adapter.listDir("");
-  await assert.rejects(loadNodeCatalog(adapter), /explicit repair/);
+  await assert.rejects(loadNodeCatalog(adapter), /order\.json is not valid JSON/);
   assert.equal(await adapter.readFile("order.json"), "{bad");
   assert.deepEqual(await adapter.listDir(""), before);
 });

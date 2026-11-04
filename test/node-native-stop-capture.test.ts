@@ -243,21 +243,3 @@ for (const failure of ["capture", "deleted history read"] as const) {
     assert.equal(await f.adapter.history.currentCommit(), before);
   });
 }
-
-for (const marker of ["node-move.pending.json", "delete.pending.json"]) {
-  test(`unsettled ${marker} rejects capture before a new Node enters history`, async (t) => {
-    const f = await fixture(t);
-    const raw = rawNode("node-newpending");
-    await f.write("New/New.md", raw);
-    await f.write(marker, "Unsettled recovery record");
-    const head = await f.adapter.history.currentCommit();
-    const capture = t.mock.method(f.adapter.history, "captureUnlocked", async () => {
-      throw new Error("Must not capture before recovery");
-    });
-    await assert.rejects(captureNativeNodeEdits(f.adapter), SyntaxError);
-    assert.equal(capture.mock.callCount(), 0);
-    assert.equal(await f.adapter.history.currentCommit(), head);
-    assert.equal(await f.adapter.readFile(marker), "Unsettled recovery record");
-    assert.equal(await f.adapter.readFile("New/New.md"), raw);
-  });
-}

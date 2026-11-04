@@ -5,12 +5,10 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { scaffoldInWorkspace } from "./scaffold.js";
+import { initializeFixtureHistory } from "./scratch.js";
 import { deleteNode } from "../src/core/graph/ops.js";
 import { loadTent } from "../src/core/store/tree.js";
-import { nodeNotePath } from "../src/core/base/paths.js";
-import { DELETE_PENDING_PATH } from "../src/core/store/delete-recovery.js";
 
 async function fixture(t: TestContext) {
   const scratch = path.resolve(testScratchRoot());
@@ -24,98 +22,38 @@ async function fixture(t: TestContext) {
     name: "delete",
     nodes: [{ id: "node-remove", name: "remove", type: "prompt", body: "original" }],
   });
+  await initializeFixtureHistory(path.join(root, ".tent"));
   const adapter = openTestFs(path.join(root, ".tent"));
   const env = { fs: adapter, tentName: "delete", clock: { now: () => "2026-09-21T00:00:00.000Z" } };
   await adapter.writeFile("order.json", JSON.stringify({ root: ["node-remove"] }));
   return { adapter, env, root };
 }
 
-test("unsupported deletion plans fail without changing original bytes", async (t) => {
-  const { adapter, env } = await fixture(t);
-  const pending = JSON.stringify({
-    kind: "card",
-    id: "card-old",
-    source: "cards/card-old.md",
-    committed: false,
-  });
-  await adapter.writeFile("cards/card-old.md", "historical input");
-  await adapter.writeFile("card-consumptions/card-old.json", "historical receipt");
-  await adapter.writeFile(DELETE_PENDING_PATH, pending);
-  const nodeBefore = await adapter.readFile("remove/remove.md");
-  await assert.rejects(deleteNode(env, "node-remove"), /Invalid input/);
-  assert.equal(await adapter.readFile(DELETE_PENDING_PATH), pending);
-  assert.equal(await adapter.readFile("cards/card-old.md"), "historical input");
-  assert.equal(await adapter.readFile("card-consumptions/card-old.json"), "historical receipt");
-  assert.equal(await adapter.readFile("remove/remove.md"), nodeBefore);
-});
-
-for (const point of [
-  "before-move",
-  "after-move",
-  "commit",
-  "order",
-  "cleanup",
-  "journal",
-] as const) {
-  test(`Node deletion resumes after ${point} I/O failure without losing the Node before its commit`, async (t) => {
+for (const point of ["order", "capture"] as const) {
+  test(`a Node deletion failing at ${point} restores the Node, and a retry deletes it`, async (t) => {
     const { adapter, env, root } = await fixture(t);
-    const move = adapter.move.bind(adapter),
-      write = adapter.writeFile.bind(adapter),
-      remove = adapter.remove.bind(adapter);
-    adapter.move = async (from, to) => {
-      if (point === "before-move") throw new Error("injected");
-      await move(from, to);
-      if (point === "after-move") throw new Error("injected");
-    };
+    const node = await adapter.readFile("remove/remove.md");
+    const order = await adapter.readFile("order.json");
+    const write = adapter.writeFile.bind(adapter),
+      capture = adapter.history.captureUnlocked.bind(adapter.history);
     adapter.writeFile = async (file, raw) => {
-      if (
-        (point === "commit" && file === DELETE_PENDING_PATH && JSON.parse(raw).committed) ||
-        (point === "order" && file === "order.json")
-      )
-        throw new Error("injected");
+      if (point === "order" && file === "order.json") throw new Error("injected");
       await write(file, raw);
     };
-    adapter.remove = async (file) => {
-      if (
-        (point === "cleanup" && file === "temp/delete-pending") ||
-        (point === "journal" && file === DELETE_PENDING_PATH)
-      )
-        throw new Error("injected");
-      await remove(file);
+    adapter.history.captureUnlocked = async (changes, metadata) => {
+      if (point === "capture" && metadata?.operation === "node.delete") throw new Error("injected");
+      return capture(changes, metadata);
     };
     await assert.rejects(() => deleteNode(env, "node-remove"), /injected/);
-    assert.equal(await adapter.exists(DELETE_PENDING_PATH), true);
-    if (point === "before-move") assert.ok((await loadTent(adapter)).byId.has("node-remove"));
+    assert.equal(await adapter.readFile("remove/remove.md"), node);
+    assert.equal(await adapter.readFile("order.json"), order);
+    assert.ok((await loadTent(adapter)).byId.has("node-remove"));
+    assert.ok(
+      (await adapter.history.changesInRange()).every((entry) => entry.operation !== "node.delete"),
+    );
     const restarted = openTestFs(path.join(root, ".tent"));
     await deleteNode({ ...env, fs: restarted }, "node-remove");
-    assert.equal(await restarted.exists(DELETE_PENDING_PATH), false);
     assert.equal((await loadTent(restarted)).byId.has("node-remove"), false);
+    assert.equal(await restarted.exists("remove"), false);
   });
 }
-
-test("old Node deletion refuses a reused identity or changed order", async (t) => {
-  const { adapter, env } = await fixture(t);
-  const old = (await loadTent(adapter)).byId.get("node-remove")!;
-  const raw = await adapter.readFile(nodeNotePath(old.path));
-  const write = adapter.writeFile.bind(adapter);
-  adapter.writeFile = async (file, value) => {
-    if (file === "order.json") throw new Error("interrupted");
-    await write(file, value);
-  };
-  await assert.rejects(() => deleteNode(env, old.id), /interrupted/);
-  adapter.writeFile = write;
-  const before = await adapter.readFile("order.json");
-  const changed = JSON.stringify({ root: ["node-replacement"] });
-  await adapter.writeFile("order.json", changed);
-  await assert.rejects(() => deleteNode(env, old.id), /Pending deletion conflict/);
-  assert.equal(await adapter.readFile("order.json"), changed);
-  await adapter.writeFile("order.json", before);
-  await adapter.mkdir("replacement");
-  await adapter.writeFile(
-    nodeNotePath("replacement"),
-    raw.replace("original", "new identity content"),
-  );
-  await assert.rejects(() => deleteNode(env, old.id), /reused Node identity/);
-  assert.match(await adapter.readFile(nodeNotePath("replacement")), /new identity content/);
-  assert.equal(await adapter.readFile("order.json"), before);
-});

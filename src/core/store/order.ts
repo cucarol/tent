@@ -4,23 +4,21 @@
 // 只为"被 user 拖动过的父级"留条目,其余按名字自然排,sidecar 保持稀疏。
 
 import { FsAdapter } from "./adapter.js";
-import { backupCorruptRegistry, warnRegistryRecovered } from "./registry-recovery.js";
 import { ORDER_PATH } from "../base/paths.js";
 
 export type OrderMap = Record<string, string[]>;
 export const ROOT_KEY = "__root__";
 export { ORDER_PATH };
 
-/** 正常路径只读扁平 order.json；嵌套 `.tent/order.json` 由一次性迁移搬迁。 */
 export async function loadOrder(fs: FsAdapter): Promise<OrderMap> {
   if (!(await fs.exists(ORDER_PATH))) return {};
+  const raw = await fs.readFile(ORDER_PATH);
   try {
-    return JSON.parse(await fs.readFile(ORDER_PATH));
+    return JSON.parse(raw);
   } catch {
-    const backupPath = await backupCorruptRegistry(fs, ORDER_PATH);
-    await saveOrder(fs, {});
-    warnRegistryRecovered(ORDER_PATH, backupPath, "recovered");
-    return {};
+    throw new Error(
+      `.tent/${ORDER_PATH} is not valid JSON; fix it, or delete it to sort Nodes by name.`,
+    );
   }
 }
 

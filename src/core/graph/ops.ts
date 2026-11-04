@@ -17,7 +17,6 @@ import { normalizeOptionalNodeType } from "../base/node-type.js";
 import { validateNodeName } from "../store/scaffold.js";
 import type { OpsEnv } from "./ops-context.js";
 import { ORDER_PATH } from "../base/paths.js";
-import { executeDeleteUnlocked, type DeleteWrite } from "../store/delete-recovery.js";
 import { canonicalDocumentReferences } from "./document-links.js";
 import type { CaptureMetadata } from "../store/history-port.js";
 import { captureDocumentUnlocked } from "../store/document-history.js";
@@ -139,35 +138,18 @@ export async function deleteNode(
 ): Promise<{ nodeId: string; path: string }> {
   return withTentMutation(
     env.fs,
-    async (recovered) => {
-      if (recovered?.kind === "node" && recovered.id === nodeId)
-        return { nodeId, path: recovered.source };
+    async () => {
       const tent = await loadTent(env.fs);
       const node = requireNodeById(tent, nodeId);
 
       const removedIds = collectSubtreeIds(node);
-      const writes: DeleteWrite[] = [];
       const order = await loadOrder(env.fs);
-      const beforeOrder = (await env.fs.exists(ORDER_PATH))
-        ? await env.fs.readFile(ORDER_PATH)
-        : null;
       for (const key of Object.keys(order)) {
         if (removedIds.has(key)) delete order[key];
         else order[key] = order[key].filter((id) => !removedIds.has(id));
       }
-      writes.push({
-        path: ORDER_PATH,
-        before: beforeOrder,
-        after: JSON.stringify(order, null, 2) + "\n",
-      });
-      await executeDeleteUnlocked(env.fs, {
-        kind: "node",
-        id: node.id,
-        source: node.path,
-        raw: await env.fs.readFile(nodeNotePath(node.path)),
-        writes,
-        nodeIds: [...removedIds],
-      });
+      await env.fs.remove(node.path);
+      await saveOrder(env.fs, order);
       return { nodeId, path: node.path };
     },
     { operation: "node.delete" },

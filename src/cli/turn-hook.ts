@@ -12,17 +12,13 @@ import {
   stopCoverageSections,
 } from "../core/return/stop-coverage.js";
 import { changedSections, settleSections } from "../fs/section-fingerprints.js";
-import {
-  captureNativeNodeEdits,
-  hasPendingNodeRecovery,
-} from "../core/graph/node-native-capture.js";
+import { captureNativeNodeEdits } from "../core/graph/node-native-capture.js";
 import { changedGoals } from "../core/return/stop-goals.js";
 import { hasDocumentHistory } from "../core/store/history-port.js";
 import { checkNodeWriteProblems } from "../fs/node-write-problems.js";
 import { withFileLockGuard } from "../fs/file-lock-guard.js";
 import { NodeFs } from "../fs/node-fs.js";
 export type TurnHookInput = { eventName: unknown; cwd: unknown; stopHookActive?: unknown };
-const noop = () => undefined;
 /** The host owns only its native envelope. Adjacent Stops observe one checkout. */
 export async function runTurnHook(
   _host: string,
@@ -58,15 +54,10 @@ export async function runTurnHook(
       // Capture keeps its own adapter so its invalid-edit marks cannot reach the coverage read.
       const captureFs = new NodeFs(systemRoot);
       try {
-        const capturing = captureNativeNodeEdits(captureFs);
         const [snapshotResult, coverageResult, captureResult] = await Promise.allSettled([
           observeStopChanges(systemRoot, checkout),
-          // An interrupted move or delete settles before coverage reads the graph.
-          hasPendingNodeRecovery(adapter).then(async (pending) => {
-            if (pending) await capturing.then(noop, noop);
-            return loadStopCoverage(systemRoot, workspaceRoot, adapter);
-          }),
-          capturing,
+          loadStopCoverage(systemRoot, workspaceRoot, adapter),
+          captureNativeNodeEdits(captureFs),
         ]);
         if (snapshotResult.status === "rejected") throw snapshotResult.reason;
         if (coverageResult.status === "rejected") throw coverageResult.reason;

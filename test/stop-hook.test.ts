@@ -8,7 +8,6 @@ import { syncBuiltinESMExports } from "node:module";
 import { promisify } from "node:util";
 import { runTurnHook } from "../src/cli/turn-hook.js";
 import { captureNativeNodeEdits } from "../src/core/graph/node-native-capture.js";
-import type { ObservationOptions } from "../src/core/store/adapter.js";
 import { NodeFs } from "../src/fs/node-fs.js";
 import { initializeTentWorkspace } from "../src/fs/workspace-init.js";
 import { openTestFs, removeTestFixture } from "./node-fs.js";
@@ -543,60 +542,53 @@ test("active Stop remains silent while capturing native edits and settling the c
   assert.equal(await f.stop(), undefined);
 });
 
-for (const failure of ["pending recovery", "Node read"] as const) {
-  test(`Stop ${failure} failures propagate and leave the source change available to retry`, async (t) => {
-    const f = await fixture(t);
-    await f.write("src/a.ts", "base");
-    const node = await f.node("Exact", "resource: ../../src/a.ts");
-    await f.seal();
-    await f.commit();
-    const before = await f.adapter.history.currentCommit();
-    const raw = node.raw + "\nPending valid native edit.\n";
-    await f.write(node.file, raw, f.systemRoot);
-    await f.write("src/a.ts", "changed");
-    let serialized = 0;
-    const emit = (reason: string) => {
-      serialized++;
-      return serialize(reason);
-    };
-    if (failure === "pending recovery") {
-      const marker = path.join(f.systemRoot, "node-move.pending.json");
-      await fs.writeFile(marker, "Unsettled native recovery");
-      await assert.rejects(
-        runTurnHook("codex", { eventName: "Stop", cwd: f.checkout }, emit),
-        SyntaxError,
-      );
-      assert.equal(await fs.readFile(marker, "utf8"), "Unsettled native recovery");
-      assert.equal(await f.adapter.history.currentCommit(), before);
-      await fs.unlink(marker);
-    } else {
-      const error = Object.assign(new Error("Controlled native Node read failure"), {
-        code: "EACCES",
-      });
-      const read = NodeFs.prototype.readFile;
-      const mocked = t.mock.method(
-        NodeFs.prototype,
-        "readFile",
-        function (this: NodeFs, file: string) {
-          if (file === node.file) throw error;
-          return read.call(this, file);
-        },
-      );
-      try {
-        await assert.rejects(
-          runTurnHook("codex", { eventName: "Stop", cwd: f.checkout }, emit),
-          (caught) => caught === error,
-        );
-        assert.equal(await f.adapter.history.currentCommit(), before);
-      } finally {
-        mocked.mock.restore();
-      }
-    }
-    assert.equal(serialized, 0, "a failed Stop cannot serialize a success reminder");
-    assert.equal(await f.stop(), f.pointers(["Exact"]));
-    const head = (await f.adapter.history.currentCommit())!;
-    assert.equal(await f.adapter.history.read({ commit: head, path: node.file }), raw);
+test("Stop Node read failures propagate and leave the source change available to retry", async (t) => {
+  const f = await fixture(t);
+  await f.write("src/a.ts", "base");
+  const node = await f.node("Exact", "resource: ../../src/a.ts");
+  await f.seal();
+  await f.commit();
+  const before = await f.adapter.history.currentCommit();
+  const raw = node.raw + "\nPending valid native edit.\n";
+  await f.write(node.file, raw, f.systemRoot);
+  await f.write("src/a.ts", "changed");
+  let serialized = 0;
+  const emit = (reason: string) => {
+    serialized++;
+    return serialize(reason);
+  };
+  const error = Object.assign(new Error("Controlled native Node read failure"), {
+    code: "EACCES",
   });
+  const read = NodeFs.prototype.readFile;
+  const mocked = t.mock.method(NodeFs.prototype, "readFile", function (this: NodeFs, file: string) {
+    if (file === node.file) throw error;
+    return read.call(this, file);
+  });
+  try {
+    await assert.rejects(
+      runTurnHook("codex", { eventName: "Stop", cwd: f.checkout }, emit),
+      (caught) => caught === error,
+    );
+    assert.equal(await f.adapter.history.currentCommit(), before);
+  } finally {
+    mocked.mock.restore();
+  }
+  assert.equal(serialized, 0, "a failed Stop cannot serialize a success reminder");
+  assert.equal(await f.stop(), f.pointers(["Exact"]));
+  const head = (await f.adapter.history.currentCommit())!;
+  assert.equal(await f.adapter.history.read({ commit: head, path: node.file }), raw);
+});
+
+/** Fails one Stop by breaking the order file every graph read needs, then removes it. */
+async function failOneStop(systemRoot: string, checkout: string) {
+  const order = path.join(systemRoot, "order.json");
+  await fs.writeFile(order, "{broken");
+  await assert.rejects(
+    runTurnHook("codex", { eventName: "Stop", cwd: checkout }, serialize),
+    /order\.json is not valid JSON/,
+  );
+  await fs.rm(order);
 }
 
 test("a failed first Git Stop preserves the HEAD section difference for its successful retry", async (t) => {
@@ -607,75 +599,10 @@ test("a failed first Git Stop preserves the HEAD section difference for its succ
   await f.seal();
   await f.commit();
   await f.write("docs/spec.md", "# Rules\nchanged rules\n# Other\nbase other\n");
-  const marker = path.join(f.systemRoot, "node-move.pending.json");
-  await fs.writeFile(marker, "Unsettled native recovery");
-  await assert.rejects(
-    runTurnHook("codex", { eventName: "Stop", cwd: f.checkout }, serialize),
-    SyntaxError,
-  );
-  await fs.unlink(marker);
+  await failOneStop(f.systemRoot, f.checkout);
   assert.equal(await f.stop(), f.pointers(["Section"]));
   assert.equal(await f.stop(), undefined);
 });
-
-for (const late of ["coverage", "recovery"] as const) {
-  test(`an interrupted Node write settles before Stop reads coverage when ${late} reaches the graph last`, async (t) => {
-    const f = await fixture(t);
-    await f.write("file.txt", "before");
-    const node = await f.node("A", "resource: ../../file.txt");
-    await f.seal();
-    await f.commit();
-    await f.write("file.txt", "after");
-    const interrupted = node.raw.replace("../../file.txt", "../../other.txt");
-    await fs.writeFile(node.absolute, interrupted);
-    await fs.writeFile(
-      path.join(f.systemRoot, "node-move.pending.json"),
-      JSON.stringify({
-        version: 1,
-        nodeId: "node-a",
-        oldPath: "A",
-        newPath: "A",
-        writes: [
-          {
-            originalPath: "A/A.md",
-            writePath: "A/A.md",
-            originalContent: node.raw,
-            newContent: interrupted,
-          },
-        ],
-      }),
-    );
-    const { observationScope, withLock } = NodeFs.prototype;
-    const wait = () => new Promise((resolve) => setTimeout(resolve, 200));
-    NodeFs.prototype.observationScope = async function <T>(
-      this: NodeFs,
-      action: () => Promise<T>,
-      options?: ObservationOptions,
-    ) {
-      if (late === "coverage" && options?.forceContent) await wait();
-      return observationScope.call<NodeFs, [() => Promise<T>, ObservationOptions?], Promise<T>>(
-        this,
-        action,
-        options,
-      );
-    };
-    NodeFs.prototype.withLock = async function <T>(
-      this: NodeFs,
-      lock: string,
-      action: () => Promise<T>,
-    ) {
-      if (late === "recovery") await wait();
-      return withLock.call<NodeFs, [string, () => Promise<T>], Promise<T>>(this, lock, action);
-    };
-    try {
-      assert.equal(await f.stop(), f.pointers(["A"]));
-    } finally {
-      NodeFs.prototype.observationScope = observationScope;
-      NodeFs.prototype.withLock = withLock;
-    }
-    assert.equal(await fs.readFile(node.absolute, "utf8"), node.raw);
-  });
-}
 
 test("missing section files do not block first Stop coverage; later creation is listed and deletion is reported once", async (t) => {
   const f = await fixture(t);
@@ -824,13 +751,7 @@ test("missing section files do not consume the HEAD baseline when the first Stop
   await f.seal();
   await f.commit();
   await f.write("docs/current.md", "# Rules\nChanged section\n");
-  const marker = path.join(f.systemRoot, "node-move.pending.json");
-  await fs.writeFile(marker, "Unsettled native recovery");
-  await assert.rejects(
-    runTurnHook("codex", { eventName: "Stop", cwd: f.checkout }, serialize),
-    SyntaxError,
-  );
-  await fs.unlink(marker);
+  await failOneStop(f.systemRoot, f.checkout);
   assert.equal(await f.stop(), f.pointers(["Current"]));
   assert.equal(await f.stop(), undefined);
 });

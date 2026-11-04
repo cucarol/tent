@@ -1,25 +1,12 @@
 import { hasDocumentHistory } from "../store/history-port.js";
 import type { DocumentHeaderObservation, FsAdapter } from "../store/adapter.js";
 import { documentHeader, loadNodeCatalog, type NodeCatalog } from "./node-catalog.js";
-import {
-  DELETE_PENDING_PATH,
-  MUTATION_LOCK_PATH,
-  NODE_MOVE_PENDING_PATH,
-  isNodeNotePath,
-  nodeNotePath,
-} from "../base/paths.js";
+import { MUTATION_LOCK_PATH, isNodeNotePath, nodeNotePath } from "../base/paths.js";
 import { parseFrontmatter } from "../base/frontmatter.js";
 import { assertNodeEdit } from "./node-document-write.js";
 import { ReaderError } from "./reader-error.js";
-import { recoverPendingNodeMoveUnlocked } from "../store/node-move-recovery.js";
-import { recoverPendingDeleteUnlocked } from "../store/delete-recovery.js";
 
 export type InvalidNativeNode = { path: string; nodeId?: string; reason: string };
-
-/** An interrupted move or delete waits for the next capture to settle it. */
-export async function hasPendingNodeRecovery(fs: FsAdapter) {
-  return (await fs.exists(NODE_MOVE_PENDING_PATH)) || (await fs.exists(DELETE_PENDING_PATH));
-}
 
 /** Command/hook boundary. Native saves retain document versions just like CLI saves. */
 export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
@@ -37,16 +24,6 @@ export async function captureNativeNodeEdits(fs: FsAdapter): Promise<{
     catalog: NodeCatalog;
   }> => {
     fs.invalidNodeEdits = new Map();
-    if (await hasPendingNodeRecovery(fs)) {
-      if (!locked && fs.withLock) return fs.withLock(MUTATION_LOCK_PATH, () => capture(true));
-      const recover = async () => {
-        await recoverPendingNodeMoveUnlocked(fs);
-        await recoverPendingDeleteUnlocked(fs);
-      };
-      if (fs.withDocumentHistory)
-        await fs.withDocumentHistory(recover, { operation: "workspace.recovery" });
-      else await recover();
-    }
     const observed = new Map<string, string>();
     const fingerprints = new Map<string, DocumentHeaderObservation>();
     const source = new Proxy(fs, {

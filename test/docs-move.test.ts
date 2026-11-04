@@ -1,10 +1,9 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import { testScratchRoot } from "./scratch.js";
+import { initializeFixtureHistory, testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { test } from "node:test";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { injectWriteFailure } from "./helpers.js";
 import type { FsAdapter } from "../src/core/store/adapter.js";
 import { createNode, moveNode } from "../src/core/graph/ops.js";
@@ -30,6 +29,7 @@ function envFor(fsa: FsAdapter, name = "x") {
 test("moveNode preserves the directory stem when title differs from its filename", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-title-"));
   t.after(() => removeTestFixture(dir, { recursive: true, force: true }));
+  await initializeFixtureHistory(dir);
   const fsa = openTestFs(dir);
   await scaffoldTent(fsa, { name: "x" });
   const env = envFor(fsa);
@@ -379,6 +379,7 @@ test("moveNode: injected write failure restores tree and note bytes", async (t) 
   t.after(() =>
     removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
+  await initializeFixtureHistory(dir);
   const base = openTestFs(dir);
   await scaffoldTent(base, { name: "x" });
   const setupEnv = envFor(base);
@@ -415,6 +416,49 @@ test("moveNode: injected write failure restores tree and note bytes", async (t) 
   const tent = await loadTent(base);
   assert.equal(tent.byId.get(a)?.path, "alpha");
 });
+
+for (const operation of ["move", "rename"] as const)
+  test(`${operation} undoes itself when an editor saves a document it planned to rewrite`, async (t) => {
+    const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-move-editor-"));
+    t.after(() =>
+      removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
+    );
+    await initializeFixtureHistory(dir);
+    const fsa = openTestFs(dir);
+    await scaffoldTent(fsa, { name: "x" });
+    const env = envFor(fsa);
+    const child = await createNode(env, { parentPath: "", name: "child", type: "prompt" });
+    const dest = await createNode(env, { parentPath: "", name: "dest", type: "goal" });
+    await createNode(env, {
+      parentPath: "",
+      name: "hub",
+      type: "prompt",
+      body: "[child](../child/child.md)\n",
+    });
+    const edited = `${await fsa.readFile("hub/hub.md")}\nSaved by an editor\n`;
+    const run = () =>
+      operation === "move"
+        ? moveNode(env, child, dest, { mode: "inside" })
+        : renameNode(env, child, "renamed");
+
+    const move = fsa.move.bind(fsa);
+    fsa.move = async (from, to) => {
+      await move(from, to);
+      await fs.writeFile(path.join(dir, "hub/hub.md"), edited);
+    };
+    await assert.rejects(run, /hub\/hub\.md changed during the move; run the command again/);
+    fsa.move = move;
+
+    assert.equal(await fsa.readFile("hub/hub.md"), edited);
+    assert.equal(await fsa.exists("child/child.md"), true);
+    assert.equal(await fsa.exists("dest/child"), false);
+    assert.equal(await fsa.exists("renamed"), false);
+
+    await run();
+    const rewritten = await fsa.readFile("hub/hub.md");
+    assert.match(rewritten, /Saved by an editor/);
+    assert.doesNotMatch(rewritten, /\.\.\/child\/child\.md/);
+  });
 
 test("attachments is an ordinary indexed Node name through move, place and rename", async (t) => {
   const dir = await fs.mkdtemp(path.join(testScratchRoot(), "tent-ordinary-name-"));

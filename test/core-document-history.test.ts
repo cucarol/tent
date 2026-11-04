@@ -8,9 +8,7 @@ import * as path from "node:path";
 import { initializeFixtureWorkspace } from "./scratch.js";
 import { renameNode, deleteNode } from "../src/core/graph/ops.js";
 import { withTentMutation } from "../src/core/store/adapter.js";
-import { DELETE_PENDING_PATH } from "../src/core/store/delete-recovery.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
-import { NODE_MOVE_PENDING_PATH } from "../src/core/store/node-move-recovery.js";
 import { parseFrontmatter } from "../src/core/base/frontmatter.js";
 import { editNode, readNodeFile } from "./node-edit.js";
 import { readNodeVersion } from "../src/core/read/node-version.js";
@@ -128,11 +126,10 @@ test("batch writes share a commit and history failures never report a successful
   assert.ok(retry.version);
   assert.match(retry.raw, /Capture failure/);
   assert.equal(await adapter.history!.read(retry.version), retry.raw);
-  // An unpublished deletion now shares the durable transaction rollback.
+  // An unpublished deletion rolls back with the durable transaction.
   const write = adapter.writeFile.bind(adapter);
   adapter.writeFile = async (file, raw) => {
-    if (file === DELETE_PENDING_PATH && JSON.parse(raw).committed)
-      throw new Error("interrupted delete");
+    if (file === "order.json") throw new Error("interrupted delete");
     return write(file, raw);
   };
   await assert.rejects(deleteNode(h.mount.env, original.nodeId), /interrupted delete/);
@@ -258,114 +255,3 @@ test("same-value metadata saves capture exact editor bytes with no document writ
   assert.ok(changed.version);
   assert.equal(await adapter.history!.read(changed.version), await adapter.readFile("A/A.md"));
 });
-
-for (const stage of [
-  "delete-before",
-  "delete-after",
-  "delete-conflict",
-  "move",
-  "corrupt-order",
-] as const) {
-  test(`pure document reads preserve document and recovery files during pending ${stage}`, async (t) => {
-    const h = await fixture(t),
-      { adapter } = h;
-    const write = adapter.writeFile.bind(adapter),
-      move = adapter.move.bind(adapter);
-    let legacyPlan: string | undefined;
-    const recordPlan = async (file: string, raw: string) => {
-      if ([NODE_MOVE_PENDING_PATH, DELETE_PENDING_PATH].includes(file)) legacyPlan = raw;
-      return write(file, raw);
-    };
-    adapter.writeFile = recordPlan;
-    if (stage === "corrupt-order") {
-      await adapter.writeFile("order.json", "invalid JSON");
-    } else if (stage === "move") {
-      // Seed the legacy structural record explicitly after the new transaction rolls back.
-      adapter.move = async (from, to) => {
-        if (from.startsWith("Moved")) throw new Error("injected pending move");
-        return move(from, to);
-      };
-      await assert.rejects(renameNode(h.mount.env, "node-bravo", "Moved"), /injected pending move/);
-      adapter.move = move;
-      adapter.writeFile = write;
-      assert.ok(legacyPlan);
-      await fs.writeFile(path.join(h.mount.systemRoot, NODE_MOVE_PENDING_PATH), legacyPlan);
-      assert.equal(await adapter.exists(NODE_MOVE_PENDING_PATH), true);
-    } else {
-      if (stage === "delete-before") {
-        adapter.move = async (from, to) => {
-          if (from === "B") throw new Error("injected pending delete");
-          return move(from, to);
-        };
-      } else {
-        adapter.writeFile = async (file, raw) => {
-          if (file === DELETE_PENDING_PATH && JSON.parse(raw).committed)
-            throw new Error("injected pending delete");
-          return recordPlan(file, raw);
-        };
-      }
-      await assert.rejects(deleteNode(h.mount.env, "node-bravo"), /injected pending delete/);
-      adapter.move = move;
-      adapter.writeFile = write;
-      assert.ok(legacyPlan);
-      await fs.writeFile(path.join(h.mount.systemRoot, DELETE_PENDING_PATH), legacyPlan);
-      if (stage !== "delete-before") {
-        await fs.mkdir(path.join(h.mount.systemRoot, "temp"), { recursive: true });
-        await fs.rename(
-          path.join(h.mount.systemRoot, "B"),
-          path.join(h.mount.systemRoot, "temp/delete-pending"),
-        );
-      }
-      assert.equal(await adapter.exists(DELETE_PENDING_PATH), true);
-      if (stage === "delete-conflict")
-        await adapter.writeFile("order.json", '{"__root__":["node-alpha"]}\n');
-    }
-    const snapshot = async () => {
-      const entries: Record<string, string> = {};
-      const walk = async (dir: string) => {
-        for (const entry of await fs.readdir(path.join(h.mount.systemRoot, dir), {
-          withFileTypes: true,
-        })) {
-          if (
-            entry.name === ".git" ||
-            entry.name === "mutation.lock" ||
-            entry.name.startsWith("mutation.lock.guard")
-          )
-            continue;
-          const file = path.posix.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            entries[file + "/"] = "directory";
-            await walk(file);
-          } else
-            entries[file] = (await fs.readFile(path.join(h.mount.systemRoot, file))).toString(
-              "base64",
-            );
-        }
-      };
-      await walk("");
-      return entries;
-    };
-    const before = await snapshot();
-    const inspect = () => readNodeFile(adapter, "node-alpha");
-    if (stage === "corrupt-order") {
-      await assert.rejects(inspect, /requires explicit repair/);
-      assert.deepEqual(await snapshot(), before);
-      return;
-    }
-    const result = await inspect();
-    assert.equal(result.nodeId, "node-alpha");
-    assert.deepEqual(await snapshot(), before);
-    if (stage === "delete-conflict")
-      await assert.rejects(
-        withTentMutation(adapter, async () => {}),
-        /Pending deletion conflict/,
-      );
-    else {
-      await withTentMutation(adapter, async () => {});
-      assert.equal(
-        await adapter.exists(stage === "move" ? NODE_MOVE_PENDING_PATH : DELETE_PENDING_PATH),
-        false,
-      );
-    }
-  });
-}

@@ -198,23 +198,6 @@ test("removed Node commands and creation flags reject without capturing or rewri
   );
 });
 
-test("create preserves an unsettled recovery record and fails before publishing a Node", async (t) => {
-  const { root, tent } = await fixture(t);
-  const parentFile = path.join(root, ".tent/Parent/Parent.md");
-  const parent = await fs.readFile(parentFile, "utf8");
-  const marker = path.join(root, ".tent/node-move.pending.json");
-  await fs.writeFile(marker, "Unsettled move record");
-  const head = await tent.history.currentCommit();
-  const result = await runNodeCommand("create", ["Blocked", "--type", "prompt"], {
-    workspace: root,
-  });
-  assert.equal(result.exitCode, 1);
-  assert.equal(await fs.readFile(marker, "utf8"), "Unsettled move record");
-  assert.equal(await fs.readFile(parentFile, "utf8"), parent);
-  assert.equal(await tent.history.currentCommit(), head);
-  await assert.rejects(fs.stat(path.join(root, ".tent/Blocked")), { code: "ENOENT" });
-});
-
 test("history --version prints exact complete bytes after moves and deletion and rejects missing paths", async (t) => {
   const { root, tent, cli } = await fixture(t);
   const body = "A full retained paragraph.\r\n".repeat(6000) + "trailing spaces  \r\n\r\n";

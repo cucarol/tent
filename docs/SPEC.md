@@ -46,7 +46,7 @@ Each save records the exact bytes of the changed Node, Role and Card documents a
 
 ### Safe writes and recovery
 
-Tent writers share one on-disk mutation lock. A CLI write waits briefly for a busy lock, then names the lock it could not take; a live process is never evicted for age alone. Before changing files, a write records the exact before and after bytes of every affected file in a transaction journal. Files and the history database are not one transaction: the next Tent command settles an interrupted write to all old or all new before it reads anything. Bytes matching neither are external edits; they are kept and reported, and recovery never deletes unexpected content. Process termination is covered; what survives a power loss depends on the filesystem.
+Tent writers share one on-disk mutation lock. A CLI write waits briefly for a busy lock, then names the lock it could not take; a live process is never evicted for age alone. Before changing files, a write records the exact before and after bytes of every affected file in a transaction journal. Files and the history database are not one transaction: the next Tent command settles an interrupted write to all old or all new before it reads anything. Bytes matching neither are external edits; they are kept and reported, and recovery never deletes unexpected content. A move or rename checks each document it rewrites against the bytes it planned from; if an editor saved in between, the whole operation is undone and the edit stays. Process termination is covered; what survives a power loss depends on the filesystem.
 
 Damaged or unsupported history fails explicitly.
 

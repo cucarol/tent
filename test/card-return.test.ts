@@ -156,20 +156,16 @@ test("Results count Unicode characters, reject multiline and preserve exact repl
   );
 });
 
-test("unpublished return and close roll back; legacy bytes recover exactly and simultaneous changes conflict", async (t) => {
+test("unpublished return and close roll back; a changed management field conflicts", async (t) => {
   const { adapter, create } = await fixture(t);
   const card = await create();
   await takeCardDocument(adapter, card.cardId, "role-worker");
   for (const operation of ["card.return", "card.take"]) {
     const before = await adapter.readFile(card.path);
     const beforeHead = await adapter.history.currentCommit();
-    let attemptedRaw: string | undefined;
     const capture = adapter.history.captureUnlocked.bind(adapter.history);
     adapter.history.captureUnlocked = async (changes, meta) => {
-      if (meta?.operation === operation) {
-        attemptedRaw = changes.find((change) => change.path === card.path)?.raw ?? undefined;
-        throw new Error("capture interrupted");
-      }
+      if (meta?.operation === operation) throw new Error("capture interrupted");
       return capture(changes, meta);
     };
     const act = () =>
@@ -180,21 +176,16 @@ test("unpublished return and close roll back; legacy bytes recover exactly and s
     adapter.history.captureUnlocked = capture;
     assert.equal(await adapter.readFile(card.path), before);
     assert.equal(await adapter.history.currentCommit(), beforeHead);
-    assert.ok(attemptedRaw);
-    // Explicit legacy partial delivery: no durable file transaction accompanies these bytes.
-    await adapter.writeFile(card.path, attemptedRaw);
-    const raw = await adapter.readFile(card.path);
-    const parsed = parseFrontmatter(raw);
+    const parsed = parseFrontmatter(before);
     await adapter.writeFile(
       card.path,
       serializeFrontmatter({ ...parsed.data, status: "deprecated" }, parsed.body),
     );
     await assert.rejects(act(), /management fields/);
-    await adapter.writeFile(card.path, raw);
-    const recovered = await act();
-    assert.equal(recovered.replayed, false);
-    assert.equal(await adapter.readFile(card.path), raw);
-    assert.equal(await adapter.history.read(recovered.version!), raw);
+    await adapter.writeFile(card.path, before);
+    const done = await act();
+    assert.equal(done.replayed, false);
+    assert.equal(await adapter.history.read(done.version!), await adapter.readFile(card.path));
     const head = await adapter.history.currentCommit();
     assert.equal((await act()).replayed, true);
     assert.equal(await adapter.history.currentCommit(), head);

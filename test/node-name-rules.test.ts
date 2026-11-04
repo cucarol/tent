@@ -10,13 +10,10 @@ import { validateNodeName } from "../src/core/store/scaffold.js";
 import { createNode, renameNode } from "../src/core/graph/ops.js";
 import { checkGraph } from "../src/core/check/graph-check.js";
 import { readOnlyFs } from "../src/core/store/adapter.js";
-import { NODE_MOVE_PENDING_PATH } from "../src/core/store/node-move-recovery.js";
 import { runNodeCommand } from "../src/cli/node-commands.js";
 import { runWorkspaceCommand } from "../src/cli/workspace-commands.js";
-import { NodeFs, SystemClock } from "../src/fs/node-fs.js";
-import { withFileMutationLock } from "../src/fs/mutation-lock.js";
+import { SystemClock } from "../src/fs/node-fs.js";
 import { testScratchRoot } from "./scratch.js";
-import { git } from "./helpers.js";
 
 const RAW_FAILURE = /ENOENT|update-index|Path escapes|Invalid input|"code"|\[\s*\{/;
 
@@ -228,22 +225,10 @@ test("create, rename and create draft reject superscript COM and LPT device name
   assert.notEqual(await head(), headBefore);
 });
 
-/**
- * Rename Parent to Renamed while the rename's Git capture fails. `publish` lets the real capture
- * publish HEAD first; `failRead` / `failHead` then break the follow-up HEAD check.
- * `failRollback` stops the rollback from writing its recovery record, which then reads as missing
- * or cannot be read at all.
- */
+/** Rename Parent to Renamed while the rename's capture fails; `publish` lets it publish first. */
 async function renameWithCaptureFailure(
   t: TestContext,
-  inject: {
-    publish: boolean;
-    failRead?: boolean;
-    failHead?: boolean;
-    failRollback?: "missing" | "unreadable";
-    legacy?: boolean;
-    external?: boolean;
-  },
+  inject: { publish: boolean; external?: boolean },
 ) {
   const context = await fixture(t);
   const { root, systemRoot, adapter, env, fileExists } = context;
@@ -261,48 +246,15 @@ async function renameWithCaptureFailure(
     body: "[Parent](../Parent/Parent.md)\n",
   });
   const before = await snapshot(systemRoot);
-  // Legacy adapters hold the same lock but have no durable file-transaction scope.
-  if (inject.legacy)
-    adapter.withLock = (lock, action) =>
-      withFileMutationLock(path.join(systemRoot, lock), action, {
-        waitMs: 8_000,
-        busyMessage: "Legacy fixture mutation lock busy",
-        acquireFailedMessage: "Legacy fixture mutation lock failed",
-      });
   const history = adapter.history;
   const head = await history.currentCommit();
   const capture = history.captureUnlocked.bind(history);
-  const read = history.read.bind(history);
-  const currentCommit = history.currentCommit.bind(history);
-  let failed = false;
   history.captureUnlocked = async (changes, metadata) => {
     if (metadata?.operation !== "node.rename") return capture(changes, metadata);
     if (inject.publish) await capture(changes, metadata);
     if (inject.external)
       await fs.writeFile(path.join(systemRoot, "Renamed/Renamed.md"), "EXTERNAL RENAME\n");
-    failed = true;
     throw new Error("simulated Git failure");
-  };
-  history.read = async (version) => {
-    if (failed && inject.failRead) throw new Error("simulated history read failure");
-    return read(version);
-  };
-  history.currentCommit = async () => {
-    if (failed && inject.failHead) throw new Error("simulated HEAD read failure");
-    return currentCommit();
-  };
-  const writeFile = adapter.writeFile;
-  const exists = adapter.exists;
-  const recordFault = (file: string) =>
-    failed && inject.failRollback !== undefined && file === NODE_MOVE_PENDING_PATH;
-  adapter.writeFile = async (file, content) => {
-    if (recordFault(file)) throw new Error("simulated recovery record write failure");
-    return writeFile.call(adapter, file, content);
-  };
-  adapter.exists = async (file) => {
-    if (recordFault(file) && inject.failRollback === "unreadable")
-      throw new Error("simulated recovery record read failure");
-    return exists.call(adapter, file);
   };
   let error: Error | undefined;
   try {
@@ -311,10 +263,6 @@ async function renameWithCaptureFailure(
     error = caught as Error;
   } finally {
     history.captureUnlocked = capture;
-    history.read = read;
-    history.currentCommit = currentCommit;
-    adapter.writeFile = writeFile;
-    adapter.exists = exists;
   }
   assert.ok(error, "the rename must report the capture failure");
   const mismatches = async () =>
@@ -328,12 +276,8 @@ async function renameWithCaptureFailure(
 test("a rename whose Git capture fails before HEAD changes is rolled back so disk and Tent Git keep the old name", async (t) => {
   const { systemRoot, adapter, env, parent, before, head, error, mismatches } =
     await renameWithCaptureFailure(t, { publish: false });
-  assert.match(
-    error.message,
-    /file transaction was settled against history publication[^]*simulated Git failure/,
-  );
+  assert.match(error.message, /simulated Git failure/);
   assert.deepEqual(await snapshot(systemRoot), before);
-  assert.equal(await adapter.exists(NODE_MOVE_PENDING_PATH), false);
   assert.equal(await adapter.exists("Renamed"), false);
   assert.equal(await adapter.history.currentCommit(), head);
   assert.deepEqual(await mismatches(), []);
@@ -342,66 +286,21 @@ test("a rename whose Git capture fails before HEAD changes is rolled back so dis
   assert.deepEqual(await mismatches(), []);
 });
 
-test("a rename whose capture fails after HEAD records it keeps the new name, even when the HEAD check cannot read Git", async (t) => {
-  for (const failRead of [true, false]) {
-    const { adapter, head, error, mismatches, headTree } = await renameWithCaptureFailure(t, {
-      publish: true,
-      failRead,
-    });
-    assert.notEqual(await adapter.history.currentCommit(), head);
-    assert.equal(await adapter.exists("Parent"), false);
-    assert.equal(await adapter.exists("Renamed/Renamed.md"), true);
-    assert.equal(await adapter.exists("Renamed/Child/Child.md"), true);
-    assert.equal(await adapter.exists(NODE_MOVE_PENDING_PATH), false);
-    assert.deepEqual(await headTree(), [
-      "Hub/Hub.md",
-      "Renamed/Child/Child.md",
-      "Renamed/Renamed.md",
-    ]);
-    assert.deepEqual(await mismatches(), [], `failRead=${failRead}`);
-    assert.match(
-      error.message,
-      /^Node rename to Renamed failed; its file transaction was settled against history publication[^]*simulated Git failure/,
-    );
-    assert.doesNotMatch(error.message, /rolled back/);
-  }
-});
-
-test("an unpublished rename restores the entire group even when a legacy HEAD probe fails", async (t) => {
-  const { systemRoot, adapter, before, head, error, mismatches } = await renameWithCaptureFailure(
-    t,
-    {
-      publish: false,
-      failHead: true,
-    },
-  );
-  assert.match(error.message, /file transaction was settled[^]*simulated Git failure/);
-  assert.deepEqual(await snapshot(systemRoot), before);
-  assert.equal(await adapter.history.currentCommit(), head);
-  assert.deepEqual(await mismatches(), []);
-});
-
-test("a legacy rename is not reversed when Tent Git HEAD cannot be read after its capture fails", async (t) => {
+test("a rename whose capture fails after history records it keeps the new name", async (t) => {
   const { adapter, head, error, mismatches, headTree } = await renameWithCaptureFailure(t, {
-    publish: false,
-    failHead: true,
-    legacy: true,
+    publish: true,
   });
-  assert.match(
-    error.message,
-    /^Node rename to Renamed is kept on disk because Tent history could not show whether it was recorded/,
-  );
-  assert.equal(await adapter.history.currentCommit(), head);
+  assert.notEqual(await adapter.history.currentCommit(), head);
   assert.equal(await adapter.exists("Parent"), false);
   assert.equal(await adapter.exists("Renamed/Renamed.md"), true);
-  assert.deepEqual(await headTree(), ["Hub/Hub.md", "Parent/Child/Child.md", "Parent/Parent.md"]);
-  // The undetermined state is left for workspace check to report, not rewritten in reverse.
-  assert.deepEqual(await mismatches(), [
-    "Parent/Child/Child.md git-only",
-    "Parent/Parent.md git-only",
-    "Renamed/Child/Child.md disk-only",
-    "Renamed/Renamed.md disk-only",
+  assert.equal(await adapter.exists("Renamed/Child/Child.md"), true);
+  assert.deepEqual(await headTree(), [
+    "Hub/Hub.md",
+    "Renamed/Child/Child.md",
+    "Renamed/Renamed.md",
   ]);
+  assert.deepEqual(await mismatches(), []);
+  assert.match(error.message, /simulated Git failure/);
 });
 
 test("rename failure preserves external bytes and reports conflicts while restoring the owned group", async (t) => {
@@ -409,7 +308,6 @@ test("rename failure preserves external bytes and reports conflicts while restor
     publish: false,
     external: true,
   });
-  assert.match(error.message, /External edits retained: [^]*Renamed\/Renamed\.md/);
   assert.match(error.message, /simulated Git failure/);
   assert.equal(await adapter.readFile("Renamed/Renamed.md"), "EXTERNAL RENAME\n");
   for (const [file, raw] of Object.entries(before)) assert.equal(await adapter.readFile(file), raw);
@@ -417,30 +315,13 @@ test("rename failure preserves external bytes and reports conflicts while restor
   assert.ok(adapter.recoveryConflicts.includes("Renamed/Renamed.md"));
 });
 
-test("a failed legacy rename rollback does not claim its recovery record was absent when Tent cannot tell", async (t) => {
-  for (const failRollback of ["missing", "unreadable"] as const) {
-    const { adapter, head, error, mismatches } = await renameWithCaptureFailure(t, {
-      publish: false,
-      failRollback,
-      legacy: true,
-    });
-    assert.match(
-      error.message,
-      /^Node rename to Renamed failed and could not be rolled back: [^]*; Tent could not determine whether a recovery record was saved, so run workspace check before the next write\. Cause: [^]*simulated Git failure/,
-      failRollback,
-    );
-    assert.doesNotMatch(error.message, /no recovery record was saved|record is kept/, failRollback);
-    assert.equal(await adapter.history.currentCommit(), head);
-    assert.equal(await adapter.exists(NODE_MOVE_PENDING_PATH), false);
-    assert.equal(await adapter.exists("Renamed/Renamed.md"), true);
-    // The unrecovered move stays visible to workspace check.
-    assert.deepEqual(await mismatches(), [
-      "Parent/Child/Child.md git-only",
-      "Parent/Parent.md git-only",
-      "Renamed/Child/Child.md disk-only",
-      "Renamed/Renamed.md disk-only",
-    ]);
-  }
+test("a rename cannot overwrite a file in its own folder that already has the new name", async (t) => {
+  const { adapter, env } = await fixture(t);
+  const id = await createNode(env, { parentPath: "", name: "Old", type: "goal" });
+  await adapter.writeFile("Old/New.md", "ordinary bytes");
+  await assert.rejects(renameNode(env, id, "New"), /Rename target already exists: Old\/New\.md/);
+  assert.equal(await adapter.readFile("Old/New.md"), "ordinary bytes");
+  assert.equal(await adapter.exists("New"), false);
 });
 
 test("Core read-only check reports native path mismatches and workspace check captures the valid move", async (t) => {

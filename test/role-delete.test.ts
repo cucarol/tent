@@ -16,7 +16,6 @@ import {
   returnCardDocument,
 } from "../src/core/graph/card-document.js";
 import { checkGraph } from "../src/core/check/graph-check.js";
-import { DELETE_PENDING_PATH, executeDeleteUnlocked } from "../src/core/store/delete-recovery.js";
 import { runRoleCommand, roleHelpText } from "../src/cli/role-commands.js";
 
 async function fixture(t: TestContext) {
@@ -106,7 +105,6 @@ test("pending Cards list every blocker; cancelling them permits deletion", async
     return true;
   });
   assert.equal(await adapter.history.currentCommit(), head);
-  assert.equal(await adapter.exists(DELETE_PENDING_PATH), false);
   await deprecateCardDocument(adapter, first.cardId);
   await deprecateCardDocument(adapter, second.cardId);
   const cancelled = await adapter.readFile(second.path);
@@ -147,7 +145,6 @@ test("unfinished returns protect both Roles and release each at its delivery bou
     });
   }
   assert.equal(await adapter.history.currentCommit(), head);
-  assert.equal(await adapter.exists(DELETE_PENDING_PATH), false);
   await deprecateCardDocument(adapter, cards[0]!.cardId);
   await returnCardDocument(adapter, cards[1]!.cardId, { roleId: worker.roleId, result: "done" });
   await deleteRole(adapter, worker.roleId);
@@ -204,115 +201,26 @@ test("CLI Role delete requires its id, names blocking Cards and reports a JSON d
   assert.match(roleHelpText(), /status: deprecated/);
 });
 
-for (const point of [
-  "before-move",
-  "after-move",
-  "commit",
-  "history",
-  "cleanup",
-  "journal",
-] as const) {
-  test(`Role deletion resumes after ${point} failure with one deletion history entry`, async (t) => {
-    const { adapter, role, systemRoot } = await fixture(t);
-    const before = await adapter.readFile(role.path);
-    const beforeHead = await adapter.history.currentCommit();
-    const move = adapter.move.bind(adapter),
-      write = adapter.writeFile.bind(adapter),
-      remove = adapter.remove.bind(adapter),
-      capture = adapter.history.captureUnlocked.bind(adapter.history);
-    adapter.move = async (from, to) => {
-      if (point === "before-move") throw new Error("injected");
-      await move(from, to);
-      if (point === "after-move") throw new Error("injected");
-    };
-    adapter.writeFile = async (file, raw) => {
-      if (point === "commit" && file === DELETE_PENDING_PATH && JSON.parse(raw).committed)
-        throw new Error("injected");
-      await write(file, raw);
-    };
-    adapter.history.captureUnlocked = async (changes, metadata) => {
-      if (point === "history" && metadata?.operation === "role.delete") throw new Error("injected");
-      return capture(changes, metadata);
-    };
-    adapter.remove = async (file) => {
-      if (
-        (point === "cleanup" && file === "temp/delete-pending") ||
-        (point === "journal" && file === DELETE_PENDING_PATH)
-      )
-        throw new Error("injected");
-      await remove(file);
-    };
-    await assert.rejects(deleteRole(adapter, role.roleId), /injected/);
-    const published = point === "cleanup" || point === "journal";
-    assert.equal(await adapter.exists(DELETE_PENDING_PATH), published);
-    if (published) {
-      assert.equal(await adapter.exists(role.path), false);
-      assert.notEqual(await adapter.history.currentCommit(), beforeHead);
-    } else {
-      assert.equal(await adapter.readFile(role.path), before);
-      assert.equal(await adapter.history.currentCommit(), beforeHead);
-      assert.equal(await adapter.exists("temp/delete-pending"), false);
-    }
-    const restarted = openTestFs(systemRoot);
-    await deleteRole(restarted, role.roleId);
-    assert.equal(await restarted.exists(role.path), false);
-    assert.equal(await restarted.exists(DELETE_PENDING_PATH), false);
-    assert.equal(await restarted.exists("temp/delete-pending"), false);
-    assert.equal(
-      (await restarted.history.changesInRange()).filter(
-        (entry) => entry.operation === "role.delete",
-      ).length,
-      1,
-    );
-  });
-}
-
-test("legacy Role recovery rejects changed isolated bytes and a recreated live identity", async (t) => {
+test("a Role deletion whose capture fails restores the Role, and a retry records one deletion", async (t) => {
   const { adapter, role, systemRoot } = await fixture(t);
-  const raw = await adapter.readFile(role.path);
-  const move = adapter.move.bind(adapter);
-  const write = adapter.writeFile.bind(adapter);
-  let legacyPlan: string | undefined;
-  adapter.writeFile = async (file, raw) => {
-    if (file === DELETE_PENDING_PATH) legacyPlan = raw;
-    return write(file, raw);
+  const before = await adapter.readFile(role.path);
+  const beforeHead = await adapter.history.currentCommit();
+  const capture = adapter.history.captureUnlocked.bind(adapter.history);
+  adapter.history.captureUnlocked = async (changes, metadata) => {
+    if (metadata?.operation === "role.delete") throw new Error("injected");
+    return capture(changes, metadata);
   };
-  adapter.move = async (from, to) => {
-    await move(from, to);
-    throw new Error("interrupted");
-  };
-  await assert.rejects(deleteRole(adapter, role.roleId), /interrupted/);
-  assert.ok(legacyPlan);
-  // The new transaction restored the live Role. Reconstruct a legacy interrupted isolation.
-  await fs.writeFile(path.join(systemRoot, DELETE_PENDING_PATH), legacyPlan);
-  await fs.mkdir(path.join(systemRoot, "temp"), { recursive: true });
-  await fs.rename(path.join(systemRoot, role.path), path.join(systemRoot, "temp/delete-pending"));
+  await assert.rejects(deleteRole(adapter, role.roleId), /injected/);
+  assert.equal(await adapter.readFile(role.path), before);
+  assert.equal(await adapter.history.currentCommit(), beforeHead);
   const restarted = openTestFs(systemRoot);
-  await restarted.writeFile("temp/delete-pending", raw + "changed");
-  await assert.rejects(deleteRole(restarted, role.roleId), /Pending deletion conflict/);
-  assert.equal(await restarted.readFile("temp/delete-pending"), raw + "changed");
-  await restarted.writeFile("temp/delete-pending", raw);
-  await restarted.writeFile(role.path, raw + "replacement");
-  await assert.rejects(deleteRole(restarted, role.roleId), /Pending deletion conflict/);
-  assert.equal(await restarted.readFile(role.path), raw + "replacement");
-  assert.equal(await restarted.exists(DELETE_PENDING_PATH), true);
-});
-
-test("Role delete plans cannot remove another path or introduce associated writes", async (t) => {
-  const { adapter, role } = await fixture(t);
-  const raw = await adapter.readFile(role.path);
-  await adapter.writeFile("other.md", raw);
-  for (const input of [
-    { source: "other.md", writes: [] },
-    { source: role.path, writes: [{ path: "order.json", before: null, after: "{}" }] },
-  ])
-    await assert.rejects(
-      executeDeleteUnlocked(adapter, { kind: "role", id: role.roleId, raw, ...input }),
-      /Pending deletion conflict/,
-    );
-  assert.equal(await adapter.readFile(role.path), raw);
-  assert.equal(await adapter.readFile("other.md"), raw);
-  assert.equal(await adapter.exists(DELETE_PENDING_PATH), false);
+  await deleteRole(restarted, role.roleId);
+  assert.equal(await restarted.exists(role.path), false);
+  assert.equal(
+    (await restarted.history.changesInRange()).filter((entry) => entry.operation === "role.delete")
+      .length,
+    1,
+  );
 });
 
 test("check reports each Card left waiting on a Role retired by a native edit", async (t) => {

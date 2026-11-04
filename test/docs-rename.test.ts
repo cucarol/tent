@@ -1,10 +1,9 @@
 import { openTestFs, removeTestFixture } from "./node-fs.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import { testScratchRoot } from "./scratch.js";
+import { initializeFixtureHistory, testScratchRoot } from "./scratch.js";
 import * as path from "node:path";
 import { test } from "node:test";
-import { NodeFs } from "../src/fs/node-fs.js";
 import { injectWriteFailure } from "./helpers.js";
 import type { FsAdapter } from "../src/core/store/adapter.js";
 import { createNode, renameNode } from "../src/core/graph/ops.js";
@@ -435,6 +434,7 @@ test("renameNode: injected write failure restores tree and every note byte-for-b
   t.after(() =>
     removeTestFixture(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }),
   );
+  await initializeFixtureHistory(dir);
   const base = openTestFs(dir);
   await scaffoldTent(base, { name: "x" });
   const setupEnv = envFor(base);

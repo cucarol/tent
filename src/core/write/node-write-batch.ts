@@ -1,6 +1,5 @@
 import { hasDocumentHistory } from "../store/history-port.js";
 import * as z from "zod/v4";
-import { readOnlyFs } from "../store/adapter.js";
 import { canonicalDocumentReferencesWithPaths } from "../graph/document-links.js";
 import { validateSystemMaterials, systemMaterialPath } from "../graph/material-target.js";
 import { materialLocator } from "../base/material.js";
@@ -27,8 +26,6 @@ import { validateNodeName } from "../store/scaffold.js";
 import { normalizeTagList } from "../base/tags.js";
 import { nodeMaterialWarnings } from "../graph/node-material-warnings.js";
 import { rewriteMarkdownDestinations } from "../base/links.js";
-import { recoverPendingNodeMoveUnlocked } from "../store/node-move-recovery.js";
-import { recoverPendingDeleteUnlocked } from "../store/delete-recovery.js";
 const requiredString = (field: string) =>
   z.string({ error: (issue) => (issue.input === undefined ? `${field} is required` : undefined) });
 const localRef = requiredString("ref").regex(/^[A-Za-z][A-Za-z0-9_-]*$/);
@@ -58,18 +55,6 @@ export type NodeWriteBatchResult = {
 };
 type PlannedNode = { nodeId: string; path: string; raw: string; parentId?: string };
 
-export class NodeBatchWriteError extends Error {
-  constructor(
-    readonly details: { paths: string[]; conflicts: string[] },
-    readonly causes: unknown[],
-  ) {
-    super(
-      `Batch save failed and rollback was incomplete; reread before retrying. Affected paths: ${details.paths.join(", ")}. Conflicts: ${details.conflicts.join(", ") || "none"}`,
-    );
-    this.name = "NodeBatchWriteError";
-  }
-}
-
 /** Validates a created item's name, naming the item when it is not a portable file name. */
 export function validateBatchItemName(ref: string, name: string, parentPath: string): string {
   try {
@@ -79,24 +64,12 @@ export function validateBatchItemName(ref: string, name: string, parentPath: str
   }
 }
 
-/** Shared batch mutation boundary; recovery precedes draft identity replay decisions. */
+/** Shared batch mutation boundary, outside NodeFs's automatic per-write history scope. */
 export function withNodeBatchMutation<T>(env: OpsEnv, operation: () => Promise<T>): Promise<T> {
-  // Batch owns rollback and capture; the automatic write finalizer would capture
+  // Batch owns capture; the automatic write finalizer would capture
   // intermediate preimages and turn a capture failure into a partial batch save.
   const fs = env.fs;
-  const action = async () => {
-    // Preserve the shared mutation entry's recovery capture, then keep the
-    // batch itself outside NodeFs's automatic per-write history scope.
-    const recover = async () => {
-      await recoverPendingNodeMoveUnlocked(env.fs);
-      await recoverPendingDeleteUnlocked(env.fs);
-    };
-    if (env.fs.withDocumentHistory)
-      await env.fs.withDocumentHistory(recover, { operation: "workspace.recovery" });
-    else await recover();
-    return operation();
-  };
-  return fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, action) : action();
+  return fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, operation) : operation();
 }
 
 export async function writeNodesBatchUnlocked(
@@ -229,142 +202,33 @@ export async function writeNodesBatchUnlocked(
         {},
       )),
     );
-  const order = await loadOrder(readOnlyFs(fs));
+  const order = await loadOrder(fs);
   for (const node of planned) {
     const key = node.parentId ?? ROOT_KEY;
     order[key] = [...(order[key] ?? []), node.nodeId];
   }
-  const afterOrder = creates.size ? JSON.stringify(order, null, 2) + "\n" : beforeOrder;
-  for (const node of planned)
-    if (await fs.exists(node.path))
-      throw new Error(`Node path appeared during batch save: ${node.path}`);
-  if (((await fs.exists(ORDER_PATH)) ? await fs.readFile(ORDER_PATH) : null) !== beforeOrder)
-    throw new Error("Node order changed during batch preparation");
+  const afterOrder = JSON.stringify(order, null, 2) + "\n";
+  const directories = [...createdPaths].sort((a, b) => a.split("/").length - b.split("/").length);
   await fs.prepareFileTransaction?.(
     [
       ...planned.map((n) => ({ path: nodeNotePath(n.path), before: null, after: n.raw })),
-      ...(afterOrder !== beforeOrder
-        ? [{ path: ORDER_PATH, before: beforeOrder, after: afterOrder }]
-        : []),
+      { path: ORDER_PATH, before: beforeOrder, after: afterOrder },
     ],
-    [...createdPaths].sort((a, b) => a.split("/").length - b.split("/").length),
+    directories,
   );
-  const attempted: PlannedNode[] = [],
-    directories: string[] = [];
-  let orderAttempted = false;
-  const history = fs.history && (await hasDocumentHistory(fs)) ? fs.history : undefined;
-  try {
-    for (const path of [...createdPaths].sort(
-      (a, b) => a.split("/").length - b.split("/").length,
-    )) {
-      if (await fs.exists(path)) throw new Error(`Node path appeared during batch save: ${path}`);
-      directories.push(path);
-      await fs.mkdir(path);
-    }
-    for (const node of planned) {
-      if (await fs.exists(nodeNotePath(node.path)))
-        throw new Error(`Node document appeared during batch save: ${nodeNotePath(node.path)}`);
-      attempted.push(node);
-      await fs.writeFile(nodeNotePath(node.path), node.raw);
-    }
-    if (afterOrder !== beforeOrder && afterOrder !== null) {
-      if (((await fs.exists(ORDER_PATH)) ? await fs.readFile(ORDER_PATH) : null) !== beforeOrder)
-        throw new Error("Node order changed during batch save");
-      orderAttempted = true;
-      await fs.writeFile(ORDER_PATH, afterOrder);
-    }
-    for (const node of planned)
-      if ((await fs.readFile(nodeNotePath(node.path))) !== node.raw)
-        throw new Error(`Node changed during batch save: ${node.path}`);
-    const results = planned.map((n) => ({
-      nodeId: n.nodeId,
-      path: n.path,
-      etag: contentEtag(n.raw),
-    }));
-    const captured = history
-      ? await history.captureUnlocked(
+  for (const path of directories) await fs.mkdir(path);
+  for (const node of planned) await fs.writeFile(nodeNotePath(node.path), node.raw);
+  await fs.writeFile(ORDER_PATH, afterOrder);
+  const captured =
+    fs.history && (await hasDocumentHistory(fs))
+      ? await fs.history.captureUnlocked(
           planned.map((n) => ({ path: nodeNotePath(n.path), raw: n.raw })),
           { operation: "node.write-many" },
         )
       : undefined;
-    return {
-      results,
-      ...(captured?.commit ? { commit: captured.commit } : {}),
-      ...(warnings.length ? { warnings } : {}),
-    };
-  } catch (error) {
-    const settled = await fs.recoverFileTransaction?.().catch((recovery) => {
-      throw new AggregateError(
-        [error, recovery],
-        `${String(error)}; recovery also failed: ${String(recovery)}`,
-      );
-    });
-    if (settled !== undefined) {
-      const paths = [...planned.map((n) => nodeNotePath(n.path)), ...directories, ORDER_PATH];
-      const conflicts = settled.filter((p) => paths.includes(p));
-      if (conflicts.length)
-        throw new NodeBatchWriteError({ paths, conflicts: [...conflicts] }, [error]);
-      throw error;
-    }
-    const failures: unknown[] = [],
-      conflicts: string[] = [];
-    async function restore(path: string, before: string | null, after: string) {
-      const current = (await fs.exists(path)) ? await fs.readFile(path) : null;
-      if (current === before) return;
-      if (current !== after) {
-        conflicts.push(path);
-        return;
-      }
-      if (before === null) await fs.remove(path);
-      else await fs.writeFile(path, before);
-    }
-    for (const node of attempted.reverse()) {
-      try {
-        await restore(nodeNotePath(node.path), null, node.raw);
-      } catch (rollback) {
-        failures.push(rollback);
-      }
-    }
-    if (orderAttempted) {
-      try {
-        await restore(ORDER_PATH, beforeOrder, afterOrder!);
-      } catch (rollback) {
-        failures.push(rollback);
-      }
-    }
-    for (const node of planned) {
-      if (attempted.includes(node)) continue;
-      try {
-        if (await fs.exists(nodeNotePath(node.path))) conflicts.push(nodeNotePath(node.path));
-      } catch (rollback) {
-        failures.push(rollback);
-      }
-    }
-    // Never infer physical directory ownership from listDir's Node inventory:
-    // it excludes Git files, and other entries can arrive after any inspection.
-    for (const path of directories.reverse()) {
-      try {
-        await fs.removeEmptyDir(path);
-      } catch (rollback) {
-        const code = (rollback as NodeJS.ErrnoException).code;
-        if (code === "ENOTEMPTY" || code === "EEXIST") conflicts.push(path);
-        else if (code !== "ENOENT") failures.push(rollback);
-      }
-    }
-    if (failures.length || conflicts.length)
-      throw new NodeBatchWriteError(
-        {
-          paths: [
-            ...new Set([
-              ...attempted.map((n) => nodeNotePath(n.path)),
-              ...directories,
-              ...(orderAttempted ? [ORDER_PATH] : []),
-            ]),
-          ],
-          conflicts: [...new Set(conflicts)],
-        },
-        [error, ...failures],
-      );
-    throw error;
-  }
+  return {
+    results: planned.map((n) => ({ nodeId: n.nodeId, path: n.path, etag: contentEtag(n.raw) })),
+    ...(captured?.commit ? { commit: captured.commit } : {}),
+    ...(warnings.length ? { warnings } : {}),
+  };
 }

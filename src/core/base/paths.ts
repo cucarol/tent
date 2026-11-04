@@ -8,8 +8,6 @@ export const TENT_SYSTEM_DIR = ".tent";
 export const ROLES_DIR = "roles";
 export const ORDER_PATH = "order.json";
 export const MUTATION_LOCK_PATH = "mutation.lock";
-export const NODE_MOVE_PENDING_PATH = "node-move.pending.json";
-export const DELETE_PENDING_PATH = "delete.pending.json";
 /** Structural marker for an initialized Tent system root. */
 export const INDEX_PATH = "index.md";
 /** Workspace identity and preserved custom settings. */
@@ -55,8 +53,6 @@ export function cardRecordPath(cardId: string): string {
 export const SYSTEM_REGISTRY_FILES = new Set([
   ORDER_PATH,
   MUTATION_LOCK_PATH,
-  NODE_MOVE_PENDING_PATH,
-  DELETE_PENDING_PATH,
   WORKSPACE_SETTINGS_PATH,
   INDEX_PATH,
 ]);

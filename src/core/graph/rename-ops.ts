@@ -1,4 +1,4 @@
-// Node 重命名保持稳定 ID；目录、身份文件与链接使用同一份中断恢复记录。
+// Node 重命名保持稳定 ID；目录、身份文件与链接在同一次写入里改。
 
 import { withTentMutation } from "../store/adapter.js";
 import type { FsAdapter } from "../store/adapter.js";
@@ -8,19 +8,13 @@ import { buildOkfNodeIndex } from "../base/okf-index.js";
 import { normalizeTarget, resolveTargetPath } from "../base/link-target.js";
 import { materialLocator, rewriteMaterialPaths } from "../base/material.js";
 import { rewriteMarkdownDestinations } from "../base/links.js";
-import {
-  executeNodeMoveUnlocked,
-  revertNodeMoveUnlocked,
-  NODE_MOVE_PENDING_PATH,
-  type NodeMoveWrite,
-  type PendingMove,
-} from "../store/node-move-recovery.js";
 import type { OpsEnv } from "./ops-context.js";
 import { isOperationalPath } from "../base/paths.js";
 import { validateNodeName } from "../store/scaffold.js";
 import type { Node } from "../base/types.js";
 import {
   nodeNotePath,
+  baseName,
   dirName,
   assertContentMutable,
   isContentMutable,
@@ -46,100 +40,39 @@ export interface RenameNodeResult {
  * - path-based Markdown links rewritten in the same mutation
  * - unqualified name targets rewrite only when Tent resolution uniquely hits this node
  * - refuses target collision, illegal names, operational paths
- * - on post-move failure: settle the file transaction; legacy adapters prove HEAD before reversing
  */
 export async function renameNode(
   env: OpsEnv,
   nodeIdOrPath: string,
   newNameRaw: string,
 ): Promise<RenameNodeResult> {
-  let moved: CompletedMove | undefined;
-  return withTentMutation(
-    env.fs,
-    async () =>
-      renameNodeUnlocked(env, nodeIdOrPath, newNameRaw, async (plan) => {
-        moved = { plan, head: await readHead(env.fs) };
-      }),
-    { operation: "node.rename" },
-    // Durable transactions own recovery; legacy adapters retain their structural rollback.
-    async (error) => {
-      if (!moved) return;
-      const { plan } = moved;
-      const cause = message(error).replace(
-        /^Tent files may already be saved, but history capture failed; reread before retrying: /,
-        "history capture failed: ",
-      );
-      const settled = await env.fs.recoverFileTransaction?.().catch((recovery) => {
-        throw new AggregateError(
-          [error, recovery],
-          `${cause}; recovery also failed: ${message(recovery)}`,
-        );
-      });
-      if (settled !== undefined)
-        throw new Error(
-          `Node rename to ${plan.newPath} failed; its file transaction was settled against history publication.${settled.length ? ` External edits retained: ${settled.join(", ")}.` : ""} Cause: ${cause}`,
-        );
-      const published = await renamePublished(env.fs, moved);
-      if (published)
-        throw new Error(
-          `Node rename to ${plan.newPath} is recorded in retained history and kept on disk, but finishing the history capture failed. Cause: ${cause}`,
-        );
-      if (published === undefined)
-        throw new Error(
-          `Node rename to ${plan.newPath} is kept on disk because Tent history could not show whether it was recorded; run workspace check before the next write. Cause: ${cause}`,
-        );
-      try {
-        await revertNodeMoveUnlocked(env.fs, plan);
-      } catch (rollback) {
-        // exists() cannot tell a missing record from an unreadable one, so only a found record is claimed.
-        const kept = await env.fs.exists(NODE_MOVE_PENDING_PATH).catch(() => false);
-        throw new Error(
-          `Node rename to ${plan.newPath} failed and could not be rolled back: ${message(rollback)}; ${kept ? "the recovery record is kept for the next write" : "Tent could not determine whether a recovery record was saved, so run workspace check before the next write"}. Cause: ${cause}`,
-        );
-      }
-      throw new Error(
-        `Node rename to ${plan.newPath} was rolled back; disk and Tent history keep ${plan.oldPath}. Cause: ${cause}`,
-      );
-    },
-  );
+  return withTentMutation(env.fs, () => renameNodeUnlocked(env, nodeIdOrPath, newNameRaw), {
+    operation: "node.rename",
+  });
 }
 
-function message(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+/** A document rewritten for its Node's new path; `path` is where it lives after the move. */
+export type NodeMoveWrite = { path: string; before: string; content: string };
 
-interface CompletedMove {
-  plan: PendingMove;
-  /** retained history read right after the move; undefined when it could not be read. */
-  head: string | null | undefined;
-}
-
-async function readHead(fs: FsAdapter): Promise<string | null | undefined> {
-  try {
-    return fs.history ? await fs.history.currentCommit() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * false only when HEAD is the commit read after the move, so the capture published nothing;
- * true when HEAD records the renamed identity document; undefined when neither can be shown.
- */
-async function renamePublished(
+/** Moves a Node's directory and identity document, then saves the rewritten documents. */
+export async function applyNodeMove(
   fs: FsAdapter,
-  { plan, head }: CompletedMove,
-): Promise<boolean | undefined> {
-  const current = await readHead(fs);
-  if (current === undefined) return undefined;
-  if (head !== undefined && current === head) return false;
-  const identity = plan.writes.find((write) => write.originalPath === nodeNotePath(plan.oldPath));
-  if (!current || !identity) return undefined;
-  try {
-    const retained = await fs.history!.read({ commit: current, path: identity.writePath });
-    return retained === identity.newContent ? true : undefined;
-  } catch {
-    return undefined;
+  oldPath: string,
+  newPath: string,
+  writes: readonly NodeMoveWrite[],
+): Promise<void> {
+  const movedIdentity = join(newPath, baseName(nodeNotePath(oldPath)));
+  const identity = nodeNotePath(newPath);
+  // A rename must not overwrite a file in its own folder that already has the new name.
+  if (movedIdentity !== identity && (await fs.exists(join(oldPath, baseName(identity)))))
+    throw new Error(`Rename target already exists: ${join(oldPath, baseName(identity))}.`);
+  await fs.move(oldPath, newPath);
+  if (movedIdentity !== identity) await fs.move(movedIdentity, identity);
+  for (const write of writes) {
+    // An editor does not hold the lock: a rewrite must not replace bytes saved after it was planned.
+    if ((await fs.readFile(write.path)) !== write.before)
+      throw new Error(`${write.path} changed during the move; run the command again.`);
+    await fs.writeFile(write.path, write.content);
   }
 }
 
@@ -147,7 +80,6 @@ async function renameNodeUnlocked(
   env: OpsEnv,
   nodeIdOrPath: string,
   newNameRaw: string,
-  onMoved: (plan: PendingMove) => Promise<void>,
 ): Promise<RenameNodeResult> {
   const tent = await loadTent(env.fs);
   const target = resolveRenameTarget(tent, nodeIdOrPath);
@@ -233,12 +165,7 @@ async function renameNodeUnlocked(
     syncNodeTitle(data, afterNodePath);
     const nextRaw = serializeFrontmatter(data, rewritten.body, keyOrder);
     if (nextRaw === raw) continue;
-    plannedWrites.push({
-      writePath: restyleFromNotePath,
-      originalPath: notePath,
-      originalContent: raw,
-      newContent: nextRaw,
-    });
+    plannedWrites.push({ path: restyleFromNotePath, before: raw, content: nextRaw });
     rewrittenNotes.push(afterNodePath);
   }
 
@@ -252,14 +179,7 @@ async function renameNodeUnlocked(
       materialMoves,
     )),
   );
-  await onMoved(
-    await executeNodeMoveUnlocked(env.fs, {
-      nodeId: target.id,
-      oldPath,
-      newPath,
-      writes: plannedWrites,
-    }),
-  );
+  await applyNodeMove(env.fs, oldPath, newPath, plannedWrites);
 
   // order.json is id-keyed — no path rewrite.
 
@@ -336,10 +256,9 @@ export async function rewriteRoleAndNoteLinks(
       const materialsChanged = rewriteMaterialPaths(data, path, path, materialMoves);
       if (rewritten.changed || materialsChanged)
         writes.push({
-          originalPath: path,
-          writePath: path,
-          originalContent: raw,
-          newContent: serializeFrontmatter(data, rewritten.body, keyOrder),
+          path,
+          before: raw,
+          content: serializeFrontmatter(data, rewritten.body, keyOrder),
         });
     }
   }

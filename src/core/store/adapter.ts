@@ -2,8 +2,6 @@
 
 import type { DocumentHistory } from "./history-port.js";
 import { MUTATION_LOCK_PATH } from "../base/paths.js";
-import { recoverPendingNodeMoveUnlocked } from "./node-move-recovery.js";
-import { recoverPendingDeleteUnlocked } from "./delete-recovery.js";
 import type { CaptureMetadata } from "./history-port.js";
 
 /** Prefix and decoded-text blob fingerprint from one current document observation. */
@@ -21,8 +19,6 @@ export interface FsAdapter {
   invalidNodeEdits?: ReadonlyMap<string, string>;
   /** External edits preserved while settling an interrupted file transaction. */
   readonly recoveryConflicts?: readonly string[];
-  /** Settle the current write's durable record under its already-held mutation lock. */
-  recoverFileTransaction?(): Promise<readonly string[] | undefined>;
   prepareFileTransaction?(
     writes: readonly { path: string; before: string | null; after: string | null }[],
     directories: readonly string[],
@@ -92,7 +88,6 @@ export function readOnlyFs(fs: FsAdapter): FsAdapter {
           "removeEmptyDir",
           "withLock",
           "prepareFileTransaction",
-          "recoverFileTransaction",
         ].includes(String(key))
       ) {
         return () => {
@@ -109,28 +104,11 @@ export function readOnlyFs(fs: FsAdapter): FsAdapter {
 
 export function withTentMutation<T>(
   fs: FsAdapter,
-  action: (recovered: Awaited<ReturnType<typeof recoverPendingDeleteUnlocked>>) => Promise<T>,
+  action: () => Promise<T>,
   metadata?: CaptureMetadata,
-  /** Runs under the lock, outside history tracking, after the action or its capture fails. */
-  onFailure?: (error: unknown) => Promise<void>,
 ): Promise<T> {
   // 唯一锁：始终 system root 下 mutation.lock，不使用嵌套 .tent/ 或其他路径。
-  const actionWithHistory = async () => {
-    const recovery = async () => {
-      await recoverPendingNodeMoveUnlocked(fs);
-      return recoverPendingDeleteUnlocked(fs);
-    };
-    const recovered = fs.withDocumentHistory
-      ? await fs.withDocumentHistory(recovery, { operation: "workspace.recovery" })
-      : await recovery();
-    try {
-      return fs.withDocumentHistory
-        ? await fs.withDocumentHistory(() => action(recovered), metadata)
-        : await action(recovered);
-    } catch (error) {
-      await onFailure?.(error);
-      throw error;
-    }
-  };
+  const actionWithHistory = () =>
+    fs.withDocumentHistory ? fs.withDocumentHistory(action, metadata) : action();
   return fs.withLock ? fs.withLock(MUTATION_LOCK_PATH, actionWithHistory) : actionWithHistory();
 }

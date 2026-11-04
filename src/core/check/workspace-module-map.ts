@@ -71,12 +71,7 @@ export async function checkWorkspaceModules(
             continue;
           }
           if (relative.includes("*") || isDirectoryMaterial(locator)) {
-            // Legacy resource paths may be bare; sources and the shared authority require an explicit address.
-            const address =
-              locator.kind === "path" && !/^(?:\.{1,2}\/|\/)/.test(occurrence.resource.trim())
-                ? "./" + occurrence.resource.trim()
-                : occurrence.resource;
-            const coverage = materialCoverage(address, owner, workspaceRoot);
+            const coverage = materialCoverage(occurrence.resource, owner, workspaceRoot);
             if (!coverage)
               throw new Error(
                 "Directory or prefix material requires a local Workspace address, one trailing * for a prefix, and no query or fragment",
