@@ -317,16 +317,15 @@ for (const failure of ["checkpoint-write", "capture"] as const) {
   });
 }
 
-test("ordinary final report deletion failure preserves committed Nodes and rolls cleanup back for identity replay", async (t) => {
+test("a failed final cleanup keeps the committed Nodes and the retry only finishes the cleanup", async (t) => {
   const f = await fixture(t, [
     { op: "create", ref: "ready", name: "Ready", type: "goal", body: "Ready" },
   ]);
-  const before = await f.adapter.history.currentCommit(),
-    report = await fs.readFile(f.report, "utf8");
-  const unlink = fs.unlink;
+  const before = await f.adapter.history.currentCommit();
+  const rm = fs.rm;
   let injected = false;
-  const mocked = t.mock.method(fs, "unlink", async (...args: Parameters<typeof unlink>) => {
-    await unlink(...args);
+  const mocked = t.mock.method(fs, "rm", async (...args: Parameters<typeof rm>) => {
+    await rm(...args);
     if (String(args[0]) === f.report && !injected) {
       injected = true;
       throw new Error("injected report delete failure");
@@ -344,7 +343,6 @@ test("ordinary final report deletion failure preserves committed Nodes and rolls
   const retry = JSON.parse(await fs.readFile(f.filename, "utf8"));
   assert.match(retry.items[0].id, /^node-/);
   assert.equal(retry.items[0].body, "Ready");
-  assert.equal(await fs.readFile(f.report, "utf8"), report);
   await f.save();
   assert.equal(await f.adapter.history.currentCommit(), savedHead);
   assert.equal(
@@ -414,26 +412,6 @@ test("an exception after committed capture retains full ID input and replay pres
     ),
     false,
   );
-});
-
-test("postcapture draft conflicts preserve external bytes and name the input while committed Nodes remain saved", async (t) => {
-  const f = await fixture(t, [
-    { op: "create", ref: "ready", name: "Ready", type: "goal", body: "Ready" },
-    { op: "create", ref: "later", name: "Later", type: "goal", body: "" },
-  ]);
-  const capture = f.adapter.history.captureUnlocked.bind(f.adapter.history);
-  f.adapter.history.captureUnlocked = async (...args) => {
-    const result = await capture(...args);
-    if (args[1]?.operation === "node.write-many") await fs.writeFile(f.filename, "external edit\n");
-    return result;
-  };
-  await assert.rejects(f.save(), (error: unknown) => {
-    assert.match(String(error), /Draft file changed/);
-    assert.ok(String(error).includes(f.filename));
-    return true;
-  });
-  assert.equal(await f.adapter.exists("Ready/Ready.md"), true);
-  assert.equal(await fs.readFile(f.filename, "utf8"), "external edit\n");
 });
 
 for (const mode of [

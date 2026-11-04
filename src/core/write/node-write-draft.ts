@@ -13,7 +13,6 @@ import {
 
 export interface NodeDraftStore {
   publish(remaining: NodeWriteBatchInput): Promise<void>;
-  rollback(): Promise<void>;
 }
 type DraftCreate = NodeWriteBatchInput["items"][number];
 
@@ -112,23 +111,8 @@ export function writeNodesDraft(
       reserved.add(item.id);
       allocated = true;
     }
-    async function checkpoint(next: NodeWriteBatchInput) {
-      try {
-        await store.publish(next);
-      } catch (error) {
-        try {
-          await store.rollback();
-        } catch (rollback) {
-          throw new AggregateError(
-            [error, rollback],
-            `${String(error)}; draft rollback also failed: ${String(rollback)}`,
-          );
-        }
-        throw error;
-      }
-    }
     // Retain every body before the first Node file can be written.
-    if (allocated) await checkpoint({ items });
+    if (allocated) await store.publish({ items });
     const savedRefs = new Map([...saved].map(([item, result]) => [`@${item.ref}`, result.nodeId]));
     const pending = structuredClone(selected.filter((item) => !saved.has(item)));
     replaceReferences(pending, savedRefs);
@@ -141,7 +125,7 @@ export function writeNodesDraft(
     const remaining = structuredClone(items.filter((item) => !selectedSet.has(item)));
     replaceReferences(remaining, completeRefs);
     // Capture has committed. A failed consume retains the ID checkpoint for a safe retry.
-    await checkpoint({ items: remaining });
+    await store.publish({ items: remaining });
     return { ...written, results };
   });
 }

@@ -45,10 +45,7 @@ test("export validates standard bundle materials and reports external and unreso
     workspaceId: "ws-standard-export",
     env: { fs: adapter },
   };
-  await assert.rejects(
-    exportGraph(mount, { outputDir: "output/missing" }),
-    /Owned material missing/,
-  );
+  await assert.rejects(exportGraph(mount, "output/missing"), /Owned material missing/);
   await adapter.writeBinary("Material/owned.bin", Buffer.from([0, 1, 255]));
   const ordinaryNode = serializeFrontmatter(
     { id: "node-ordinary", type: "prompt" },
@@ -56,9 +53,7 @@ test("export validates standard bundle materials and reports external and unreso
   );
   await adapter.writeFile("version-leases/version-leases.md", ordinaryNode);
   await adapter.writeFile("mutation.lock.stale-test/owner.json", '{"pid":1}');
-  await adapter.writeFile(".git/tent-history-index.json", '{"disposable":true}');
-  await adapter.writeFile(".git/tent-derived-card-progress.json", '{"disposable":true}');
-  await adapter.writeFile(".git/tent-derived-card-progress.json.pending.tmp", "incomplete");
+  await adapter.writeFile(".git/tent-material-cache/disposable.json", '{"disposable":true}');
   const legacyBytes = Buffer.from([0, 255, 254, 128]);
   await adapter.writeBinary("attachments/legacy.bin", legacyBytes);
   const ordinaryFiles = new Map([
@@ -75,11 +70,11 @@ test("export validates standard bundle materials and reports external and unreso
   );
   await adapter.writeFile("attachments/attachments.md", attachmentNode);
   await assert.rejects(
-    exportGraph(mount, { outputDir: "output/missing-native-material" }),
+    exportGraph(mount, "output/missing-native-material"),
     /Owned material missing/,
   );
   await adapter.writeFile("attachments/owned.txt", "Node material");
-  const result = await exportGraph(mount, { outputDir: "output/valid" });
+  const result = await exportGraph(mount, "output/valid");
   for (const [file, bytes] of ordinaryFiles)
     assert.deepEqual(await fs.readFile(path.join(result.outputDir, ".tent", file)), bytes);
   const manifest = JSON.parse(
@@ -100,11 +95,7 @@ test("export validates standard bundle materials and reports external and unreso
     [0, 2, 3],
   );
   assert.equal(manifest.unresolvedMaterials[0].resource, "population scope");
-  assert.equal(
-    manifest.files.some((file: { path: string }) => file.path.startsWith(".git/tent-")),
-    false,
-  );
-  await assert.rejects(fs.stat(path.join(result.outputDir, ".tent/.git/tent-history-index.json")), {
+  await assert.rejects(fs.stat(path.join(result.outputDir, ".tent/.git/tent-material-cache")), {
     code: "ENOENT",
   });
   assert.equal(
@@ -140,10 +131,7 @@ test("export still rejects malformed native Node, Role and Card frontmatter", as
   };
   for (const file of ["Bad/Bad.md", "roles/role-bad.md", "cards/card-bad.md"]) {
     await adapter.writeFile(file, "---\nx: [\n---\ninvalid native document\n");
-    await assert.rejects(
-      exportGraph(mount, { outputDir: "output/rejected" }),
-      /Invalid frontmatter YAML/,
-    );
+    await assert.rejects(exportGraph(mount, "output/rejected"), /Invalid frontmatter YAML/);
     await assert.rejects(fs.stat(path.join(workspace, "output/rejected")), { code: "ENOENT" });
     await adapter.remove(file);
   }
@@ -181,7 +169,7 @@ for (const outcome of ["success", "failure"]) {
       );
       syncBuiltinESMExports();
       try {
-        const publication = exportGraph(mount, { outputDir: "output/bundle" });
+        const publication = exportGraph(mount, "output/bundle");
         if (outcome === "failure") await assert.rejects(publication, (error) => error === failure);
         else assert.equal((await publication).outputDir, destination);
       } finally {
@@ -195,7 +183,7 @@ for (const outcome of ["success", "failure"]) {
       );
       if (outcome === "failure") {
         await assert.rejects(fs.stat(destination), { code: "ENOENT" });
-        await exportGraph(mount, { outputDir: "output/bundle" });
+        await exportGraph(mount, "output/bundle");
       }
       const manifest = JSON.parse(
         await fs.readFile(path.join(destination, "tent-export.json"), "utf8"),

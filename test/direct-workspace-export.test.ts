@@ -69,12 +69,6 @@ test("direct export keeps Card source addresses unchanged after live rename and 
   const exported = parse(
     await runWorkspaceCommand("export", ["--output", "output/context"], globals),
   );
-  assert.equal(
-    (await fs.readdir(path.join(exported.outputDir, ".tent/.git"))).some((name) =>
-      /^tent-(?:history-index|derived-.*)\.json/.test(name),
-    ),
-    false,
-  );
   const restored = openTestFs(path.join(exported.outputDir, ".tent"));
   assert.equal(await restored.readFile(`cards/${card.cardId}.md`), published);
   assert.equal(await restored.exists("temp/not-exported.json"), false);

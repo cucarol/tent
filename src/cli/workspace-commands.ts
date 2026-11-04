@@ -43,8 +43,6 @@ async function runWorkspaceCommandOpened(
       options: {
         output: { type: "string" },
         draft: { type: "string" },
-        limit: { type: "string" },
-        cursor: { type: "string" },
         help: { type: "boolean", short: "h" },
         workspace: { type: "string" },
         json: { type: "boolean" },
@@ -56,17 +54,7 @@ async function runWorkspaceCommandOpened(
     if (positionals.length) throw new Error(workspaceHelpText);
     if (values.draft !== undefined && sub !== "scan")
       throw new Error("--draft is only valid for workspace scan");
-    if (
-      sub === "scan" &&
-      [values.output, values.limit, values.cursor].some((value) => value !== undefined)
-    )
-      throw new Error(workspaceHelpText);
-    if (sub === "export" && (!values.output || values.limit || values.cursor))
-      throw new Error(workspaceHelpText);
-    if (
-      sub === "check" &&
-      [values.output, values.limit, values.cursor].some((value) => value !== undefined)
-    )
+    if (sub === "export" ? !values.output : values.output !== undefined)
       throw new Error(workspaceHelpText);
     const [{ resolveWorkspacePaths }, { NodeFs }, { readWorkspaceSettings }] = await Promise.all([
       import("./workspace-path.js"),
@@ -258,10 +246,7 @@ async function runWorkspaceCommandOpened(
     }
     await captureNodes();
     const { exportGraph } = await import("../fs/graph-export.js");
-    const result = await exportGraph(
-      { ...roots, workspaceId, env: { fs } },
-      { outputDir: values.output! },
-    );
+    const result = await exportGraph({ ...roots, workspaceId, env: { fs } }, values.output!);
     return {
       exitCode: 0,
       stdout:
