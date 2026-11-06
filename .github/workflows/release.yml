@@ -121,7 +121,7 @@ jobs:
             echo "vibe-tent@${RELEASE_TAG} is already on npm"
             exit 0
           fi
-          npm publish "release-assets/vibe-tent-${RELEASE_TAG}.tgz"
+          npm publish "./release-assets/vibe-tent-${RELEASE_TAG}.tgz"
 
   publish-github-release:
     needs: [verify-and-pack]
