@@ -2,7 +2,7 @@
   "id": "tent",
   "name": "Tent",
   "version": "0.2.1",
-  "description": "Maintain durable Node context, persistent Roles, and recorded prompt Cards in one local workspace.",
+  "description": "A context graph for your project: what you decided, and what came of it.",
   "author": "cucarol",
   "authorUrl": "https://github.com/cucarol"
 }

@@ -87,10 +87,6 @@ npm run plugin:build
 
 `tent --help` 列出全部命令；精确规则见 [docs/SPEC.md](docs/SPEC.md)。
 
-## 现状
-
-Tent 0.x 由一个人维护。文件格式和命令还可能变；[docs/SPEC.md](docs/SPEC.md) 是契约。
-
 ## 开发
 
 ```sh

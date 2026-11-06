@@ -87,10 +87,6 @@ Agents run these commands through the Skills; you rarely need to. `tent` is the 
 
 `tent --help` lists them; the exact rules are in [docs/SPEC.md](docs/SPEC.md).
 
-## Status
-
-Tent 0.x has one maintainer. The file format and commands may still change; [docs/SPEC.md](docs/SPEC.md) is the contract.
-
 ## Development
 
 ```sh

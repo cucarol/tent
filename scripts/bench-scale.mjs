@@ -53,9 +53,9 @@ window. SOURCE is fingerprinted before and after measurement; a failed sample
 or changed CLI/fixture makes the run fail while retaining collected samples.
 
 Examples (PowerShell; no implicit CLI selection):
-  $root = 'D:/cucarol/_code/Tent'
+  $root = (Get-Location).Path
   $bench = "$root/scripts/bench-scale.mjs"
-  $cli = "$root/.worktrees/judge-card-pointers/cli.mjs"
+  $cli = "$root/.worktrees/build-a/cli.mjs"
   node $bench generate --project-root $root --workspace "$root/.scratch/scale-1" --cli $cli --scale 1
   node $bench measure --project-root $root --fixture "$root/.scratch/scale-1" --workspace "$root/.scratch/scale-build-a" --cli $cli --label build-a --output "$root/.scratch/scale-build-a.json"
   # Repeat measure with a second explicit CLI, fresh workspace/output, same fixture.
