@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.CLAUDE_PLUGIN_ROOT,'hooks','session.mjs')).href)\" -- stop",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

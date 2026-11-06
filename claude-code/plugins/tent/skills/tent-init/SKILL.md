@@ -1,0 +1,17 @@
+---
+name: tent-init
+description: "Creates a Tent in a workspace, enables its Hooks and maps an existing project into parts. Use when asked to set up Tent for a project or map it."
+---
+
+# Tent Init
+
+Run `tent` as [access](../../skill-resources/references/access.md) shows.
+
+| When | Command | Read |
+| --- | --- | --- |
+| Pick the Workspace | The folder the user names, else the project root; reuse an existing `.tent/` | — |
+| Create the Tent | `tent new <root>`; it starts a Git repository when the folder is in none | `Created Tent` line |
+| Enable Hooks | Follow [Hooks](references/host-hooks.md) | `/hooks` |
+| The project already has files | [Map it](references/map.md) | the part tree from `tent workspace scan --json` |
+
+A project with no files yet starts with no Nodes; add them with tent-save as work settles things.

@@ -1,0 +1,9 @@
+{
+  "name": "tent",
+  "version": "0.2.1",
+  "description": "A context graph for your project: what you decided, and what came of it.",
+  "author": {
+    "name": "cucarol"
+  },
+  "license": "MIT"
+}

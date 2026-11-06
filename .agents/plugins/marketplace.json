@@ -1,0 +1,20 @@
+{
+  "name": "tent",
+  "interface": {
+    "displayName": "Tent"
+  },
+  "plugins": [
+    {
+      "name": "tent",
+      "source": {
+        "source": "local",
+        "path": "./codex/plugins/tent"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

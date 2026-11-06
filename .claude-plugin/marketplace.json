@@ -1,0 +1,12 @@
+{
+  "name": "tent",
+  "owner": {
+    "name": "cucarol"
+  },
+  "plugins": [
+    {
+      "name": "tent",
+      "source": "./claude-code/plugins/tent"
+    }
+  ]
+}
